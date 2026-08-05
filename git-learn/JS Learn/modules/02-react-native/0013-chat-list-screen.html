@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RN Lesson 13: Build the Chat List Screen — JS Learn</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">Module 2: React Native</a>
+      <span class="sep">›</span>
+      <span class="current">Lesson 13: Build the Chat List Screen</span>
+    </nav>
+
+    <!-- Header -->
+    <span class="badge">React Native · Lesson 13</span>
+    <h1 style="margin-top:0.5rem;">Build the Chat List Screen</h1>
+    <div class="lesson-meta">
+      <span>Capstone · Combines lessons 2–12</span>
+      <span>~50 min</span>
+      <span>Hands-on</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for your WhatsApp clone</div>
+      <p>The chat list is the first screen users see after logging in. It's the heart of WhatsApp — a scrollable list of every conversation, sorted by most recent, with unread counts, contact names, message previews, and a search bar. This capstone lesson combines everything you've learned in Module 2: FlatList, navigation, useState, useEffect, loading skeletons, error handling, pull-to-refresh, and search filtering. The result is a production-quality screen you'll wire directly to Firebase in Module 3.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 1 -->
+    <h2>1. What this screen needs to do</h2>
+
+    <p>Before writing a single line of code, list what the screen must do. Every feature maps back to a lesson you've already completed.</p>
+
+    <table>
+      <thead>
+        <tr><th>Feature</th><th>Lesson it came from</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Show a list of chat rows</td><td>Lesson 7 — FlatList</td></tr>
+        <tr><td>Skeleton while loading, error screen, empty state</td><td>Lesson 12 — Loading &amp; Error States</td></tr>
+        <tr><td>Search bar that filters the list as you type</td><td>Lesson 5 — useState (derived values)</td></tr>
+        <tr><td>Pull-to-refresh</td><td>Lesson 12 — Loading &amp; Error States</td></tr>
+        <tr><td>Tap a row → open message thread with chatId + chatName</td><td>Lesson 9 — Passing Data Between Screens</td></tr>
+        <tr><td>Unread count badge, green timestamp</td><td>Lesson 7 — FlatList</td></tr>
+        <tr><td>Custom green header (no React Navigation header)</td><td>Lesson 8 — Navigation</td></tr>
+        <tr><td>Keyboard dismisses when tapping a chat row</td><td>Lesson 4 — TextInput &amp; Keyboard</td></tr>
+      </tbody>
+    </table>
+
+    <hr>
+
+    <!-- Section 2 -->
+    <h2>2. Data shape</h2>
+
+    <p>This is the shape of a single chat object. In Module 3 this comes from a Firestore query — for now we use local data with the same shape so the switch requires zero UI changes.</p>
+
+    <pre><code>// One chat object — matches the Firestore document shape you'll use in Module 3
+{
+  id:          '1',              // Firestore document ID
+  name:        'Priya Sharma',   // contact's display name
+  preview:     'See you then!',  // last message text
+  time:        '10:32',          // last message time, formatted string
+  unread:      2,                // unread message count (0 = no badge)
+  avatarColor: '#128C7E',        // fallback colour when no photo
+  isGroup:     false,            // group vs direct message
+  online:      true,             // show online indicator dot
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 3 -->
+    <h2>3. State design</h2>
+
+    <p>Plan state before writing JSX. This screen needs:</p>
+
+    <pre><code>const [allChats,   setAllChats]   = useState([]);    // full list from Firebase
+const [loading,    setLoading]    = useState(true);
+const [error,      setError]      = useState(null);
+const [refreshing, setRefreshing] = useState(false);
+const [query,      setQuery]      = useState('');    // search input text
+
+// Derived — never stored in state, computed inline
+const filteredChats = query.trim()
+  ? allChats.filter(c =&gt;
+      c.name.toLowerCase().includes(query.toLowerCase()) ||
+      c.preview.toLowerCase().includes(query.toLowerCase())
+    )
+  : allChats;</code></pre>
+
+    <p><code>filteredChats</code> is derived from <code>allChats</code> and <code>query</code> — recomputed on every render, no extra <code>useEffect</code> needed. If <code>query</code> is empty, show everything.</p>
+
+    <hr>
+
+    <!-- Section 4 -->
+    <h2>4. The chat row component</h2>
+
+    <p>Extract the row into its own component so the FlatList <code>renderItem</code> stays clean. Components defined outside the screen function avoid being re-created on every render.</p>
+
+    <pre><code>function ChatRow({ chat, onPress }) {
+  return (
+    &lt;Pressable
+      style={({ pressed }) =&gt; [styles.row, pressed &amp;&amp; styles.rowPressed]}
+      onPress={onPress}
+    &gt;
+      {/* Avatar with optional online dot */}
+      &lt;View style={styles.avatarWrap}&gt;
+        &lt;View style={[styles.avatarCircle, { backgroundColor: chat.avatarColor }]}&gt;
+          &lt;Text style={styles.avatarLetter}&gt;{chat.name[0].toUpperCase()}&lt;/Text&gt;
+        &lt;/View&gt;
+        {chat.online &amp;&amp; &lt;View style={styles.onlineDot} /&gt;}
+      &lt;/View&gt;
+
+      {/* Name + preview */}
+      &lt;View style={styles.middle}&gt;
+        &lt;View style={styles.topRow}&gt;
+          &lt;Text style={styles.chatName} numberOfLines={1}&gt;{chat.name}&lt;/Text&gt;
+          {chat.isGroup &amp;&amp; &lt;Text style={styles.groupTag}&gt;Group&lt;/Text&gt;}
+        &lt;/View&gt;
+        &lt;Text style={styles.preview} numberOfLines={1}&gt;{chat.preview}&lt;/Text&gt;
+      &lt;/View&gt;
+
+      {/* Time + unread badge */}
+      &lt;View style={styles.right}&gt;
+        &lt;Text style={[styles.time, chat.unread &gt; 0 &amp;&amp; styles.timeGreen]}&gt;
+          {chat.time}
+        &lt;/Text&gt;
+        {chat.unread &gt; 0 &amp;&amp; (
+          &lt;View style={styles.badge}&gt;
+            &lt;Text style={styles.badgeText}&gt;{chat.unread}&lt;/Text&gt;
+          &lt;/View&gt;
+        )}
+      &lt;/View&gt;
+    &lt;/Pressable&gt;
+  );
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 5 -->
+    <h2>5. The search bar</h2>
+
+    <p>The search bar lives inside the header — same dark green background. It appears when the user taps a search icon. Use a simple <code>showSearch</code> boolean to toggle it.</p>
+
+    <pre><code>const [showSearch, setShowSearch] = useState(false);
+
+// Inside the header:
+{showSearch ? (
+  &lt;TextInput
+    style={styles.searchInput}
+    value={query}
+    onChangeText={setQuery}
+    placeholder="Search chats..."
+    placeholderTextColor="#b2dfdb"
+    autoFocus                         // keyboard opens automatically
+    returnKeyType="search"
+    onSubmitEditing={() =&gt; Keyboard.dismiss()}
+  /&gt;
+) : (
+  &lt;Text style={styles.headerTitle}&gt;WhatsApp&lt;/Text&gt;
+)}
+
+&lt;Pressable
+  onPress={() =&gt; {
+    setShowSearch(s =&gt; !s);
+    if (showSearch) setQuery('');     // clear search when closing
+  }}
+  style={styles.searchIcon}
+&gt;
+  &lt;Text style={styles.searchIconText}&gt;{showSearch ? '✕' : '🔍'}&lt;/Text&gt;
+&lt;/Pressable&gt;</code></pre>
+
+    <hr>
+
+    <!-- Section 6 -->
+    <h2>6. Total unread count in the tab bar badge</h2>
+
+    <p>WhatsApp shows the total unread count as a badge on the Chats tab icon. Pass it up to the navigator using <code>navigation.setOptions</code>.</p>
+
+    <pre><code>// Inside ChatListScreen, after allChats is loaded:
+useEffect(() =&gt; {
+  const totalUnread = allChats.reduce((sum, c) =&gt; sum + c.unread, 0);
+  navigation.setOptions({
+    tabBarBadge: totalUnread &gt; 0 ? totalUnread : undefined,
+    //                                          ↑ undefined removes the badge
+  });
+}, [allChats, navigation]);</code></pre>
+
+    <hr>
+
+    <!-- Section 7: Full working example -->
+    <h2>7. Full working example — production chat list screen</h2>
+
+    <p>This is the complete, production-quality chat list screen for your WhatsApp clone. It combines every technique from Module 2. Replace your entire <code>App.js</code> with this.</p>
+
+    <pre><code>import { useState, useEffect, useRef } from 'react';
+import { NavigationContainer } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { createBottomTabNavigator }   from '@react-navigation/bottom-tabs';
+import {
+  View, Text, FlatList, TextInput, Pressable,
+  StyleSheet, Animated, Keyboard,
+} from 'react-native';
+
+const Stack = createNativeStackNavigator();
+const Tab   = createBottomTabNavigator();
+
+// ── Sample data — same shape as Firestore documents ───────────────────────────
+const SAMPLE_CHATS = [
+  { id: '1', name: 'Priya Sharma',   preview: 'Perfect, see you then!',      time: '10:32',     unread: 2, avatarColor: '#075E54', isGroup: false, online: true  },
+  { id: '2', name: 'Rahul Mehta',    preview: 'I\'ll send the file now.',     time: '09:15',     unread: 0, avatarColor: '#128C7E', isGroup: false, online: false },
+  { id: '3', name: 'Family Group',   preview: 'Mom: Dinner at 7!',            time: 'Yesterday', unread: 5, avatarColor: '#25D366', isGroup: true,  online: false },
+  { id: '4', name: 'Work Team',      preview: 'Meeting moved to 3pm.',        time: 'Yesterday', unread: 0, avatarColor: '#667781', isGroup: true,  online: false },
+  { id: '5', name: 'Ananya Reddy',   preview: 'Thanks for your help!',        time: 'Monday',    unread: 1, avatarColor: '#e91e63', isGroup: false, online: true  },
+  { id: '6', name: 'Vikram Singh',   preview: 'Did you see the game?',        time: 'Sunday',    unread: 0, avatarColor: '#9c27b0', isGroup: false, online: false },
+  { id: '7', name: 'Dev Friends',    preview: 'Arjun: PR is ready to review', time: 'Sunday',    unread: 3, avatarColor: '#ff5722', isGroup: true,  online: false },
+];
+
+// ── Skeleton ──────────────────────────────────────────────────────────────────
+function SkeletonBlock({ width, height, borderRadius, style }) {
+  const opacity = useRef(new Animated.Value(0.4)).current;
+  useEffect(() =&gt; {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(opacity, { toValue: 1,   duration: 700, useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 0.4, duration: 700, useNativeDriver: true }),
+      ])
+    ).start();
+  }, []);
+  return (
+    &lt;Animated.View
+      style={[{ backgroundColor: '#e0e0e0' }, { width, height, borderRadius }, { opacity }, style]}
+    /&gt;
+  );
+}
+
+function ChatRowSkeleton() {
+  return (
+    &lt;View style={styles.row}&gt;
+      &lt;SkeletonBlock width={52} height={52} borderRadius={26} /&gt;
+      &lt;View style={{ flex: 1, marginLeft: 12 }}&gt;
+        &lt;SkeletonBlock width="55%" height={14} borderRadius={7} /&gt;
+        &lt;SkeletonBlock width="80%" height={12} borderRadius={6} style={{ marginTop: 8 }} /&gt;
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}
+
+// ── Chat row ──────────────────────────────────────────────────────────────────
+function ChatRow({ chat, onPress }) {
+  return (
+    &lt;Pressable
+      style={({ pressed }) =&gt; [styles.row, pressed &amp;&amp; styles.rowPressed]}
+      onPress={onPress}
+    &gt;
+      &lt;View style={styles.avatarWrap}&gt;
+        &lt;View style={[styles.avatarCircle, { backgroundColor: chat.avatarColor }]}&gt;
+          &lt;Text style={styles.avatarLetter}&gt;{chat.name[0].toUpperCase()}&lt;/Text&gt;
+        &lt;/View&gt;
+        {chat.online &amp;&amp; &lt;View style={styles.onlineDot} /&gt;}
+      &lt;/View&gt;
+
+      &lt;View style={styles.middle}&gt;
+        &lt;View style={styles.topRow}&gt;
+          &lt;Text style={styles.chatName} numberOfLines={1}&gt;{chat.name}&lt;/Text&gt;
+          {chat.isGroup &amp;&amp; &lt;Text style={styles.groupTag}&gt;Group&lt;/Text&gt;}
+        &lt;/View&gt;
+        &lt;Text style={styles.preview} numberOfLines={1}&gt;{chat.preview}&lt;/Text&gt;
+      &lt;/View&gt;
+
+      &lt;View style={styles.right}&gt;
+        &lt;Text style={[styles.time, chat.unread &gt; 0 &amp;&amp; styles.timeGreen]}&gt;
+          {chat.time}
+        &lt;/Text&gt;
+        {chat.unread &gt; 0 &amp;&amp; (
+          &lt;View style={styles.badge}&gt;
+            &lt;Text style={styles.badgeText}&gt;{chat.unread}&lt;/Text&gt;
+          &lt;/View&gt;
+        )}
+      &lt;/View&gt;
+    &lt;/Pressable&gt;
+  );
+}
+
+// ── Chat List Screen ──────────────────────────────────────────────────────────
+function ChatListScreen({ navigation }) {
+  const [allChats,   setAllChats]   = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [error,      setError]      = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [query,      setQuery]      = useState('');
+  const [showSearch, setShowSearch] = useState(false);
+
+  // Derived — filtered list, never stored in state
+  const filteredChats = query.trim()
+    ? allChats.filter(c =&gt;
+        c.name.toLowerCase().includes(query.toLowerCase()) ||
+        c.preview.toLowerCase().includes(query.toLowerCase())
+      )
+    : allChats;
+
+  // Total unread for tab badge
+  useEffect(() =&gt; {
+    const total = allChats.reduce((sum, c) =&gt; sum + c.unread, 0);
+    navigation.setOptions({
+      tabBarBadge: total &gt; 0 ? total : undefined,
+    });
+  }, [allChats, navigation]);
+
+  // Initial load
+  async function loadChats() {
+    setLoading(true);
+    setError(null);
+    try {
+      // TODO Module 3: replace with Firebase query
+      // const q = query(collection(db, 'chats'), orderBy('lastMessageAt', 'desc'));
+      // const snap = await getDocs(q);
+      // setAllChats(snap.docs.map(d =&gt; ({ id: d.id, ...d.data() })));
+      await new Promise(r =&gt; setTimeout(r, 1200));
+      setAllChats(SAMPLE_CHATS);
+    } catch {
+      setError('Could not load chats. Check your connection.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Pull-to-refresh
+  async function onRefresh() {
+    setRefreshing(true);
+    try {
+      await new Promise(r =&gt; setTimeout(r, 900));
+      setAllChats(SAMPLE_CHATS);
+    } catch {
+      // Non-fatal — list stays, show nothing (toast could go here)
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  useEffect(() =&gt; { loadChats(); }, []);
+
+  // ── Loading state ───────────────────────────────────────────────────────────
+  if (loading) {
+    return (
+      &lt;View style={styles.screen}&gt;
+        &lt;View style={styles.header}&gt;
+          &lt;Text style={styles.headerTitle}&gt;WhatsApp&lt;/Text&gt;
+        &lt;/View&gt;
+        {[1,2,3,4,5,6].map(i =&gt; &lt;ChatRowSkeleton key={i} /&gt;)}
+      &lt;/View&gt;
+    );
+  }
+
+  // ── Error state ─────────────────────────────────────────────────────────────
+  if (error) {
+    return (
+      &lt;View style={styles.screen}&gt;
+        &lt;View style={styles.header}&gt;
+          &lt;Text style={styles.headerTitle}&gt;WhatsApp&lt;/Text&gt;
+        &lt;/View&gt;
+        &lt;View style={styles.centre}&gt;
+          &lt;Text style={styles.errorIcon}&gt;⚠️&lt;/Text&gt;
+          &lt;Text style={styles.errorTitle}&gt;Something went wrong&lt;/Text&gt;
+          &lt;Text style={styles.errorMessage}&gt;{error}&lt;/Text&gt;
+          &lt;Pressable style={styles.retryBtn} onPress={loadChats}&gt;
+            &lt;Text style={styles.retryText}&gt;Try again&lt;/Text&gt;
+          &lt;/Pressable&gt;
+        &lt;/View&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  // ── Data state (including empty) ────────────────────────────────────────────
+  return (
+    &lt;View style={styles.screen}&gt;
+
+      {/* Header */}
+      &lt;View style={styles.header}&gt;
+        {showSearch ? (
+          &lt;TextInput
+            style={styles.searchInput}
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search chats..."
+            placeholderTextColor="#b2dfdb"
+            autoFocus
+            returnKeyType="search"
+            onSubmitEditing={() =&gt; Keyboard.dismiss()}
+          /&gt;
+        ) : (
+          &lt;Text style={styles.headerTitle}&gt;WhatsApp&lt;/Text&gt;
+        )}
+        &lt;Pressable
+          style={styles.searchIconBtn}
+          onPress={() =&gt; {
+            setShowSearch(s =&gt; !s);
+            if (showSearch) setQuery('');
+          }}
+        &gt;
+          &lt;Text style={styles.searchIconText}&gt;{showSearch ? '✕' : '🔍'}&lt;/Text&gt;
+        &lt;/Pressable&gt;
+      &lt;/View&gt;
+
+      {/* Search result count */}
+      {showSearch &amp;&amp; query.trim() ? (
+        &lt;View style={styles.resultBar}&gt;
+          &lt;Text style={styles.resultText}&gt;
+            {filteredChats.length === 0
+              ? 'No chats match'
+              : `${filteredChats.length} result${filteredChats.length !== 1 ? 's' : ''}`}
+          &lt;/Text&gt;
+        &lt;/View&gt;
+      ) : null}
+
+      {/* List */}
+      &lt;FlatList
+        data={filteredChats}
+        keyExtractor={item =&gt; item.id}
+        refreshing={refreshing}
+        onRefresh={onRefresh}
+        keyboardShouldPersistTaps="handled"
+        ItemSeparatorComponent={() =&gt; &lt;View style={styles.sep} /&gt;}
+        ListEmptyComponent={
+          &lt;View style={styles.emptyState}&gt;
+            {query.trim() ? (
+              // Empty because search found nothing
+              &lt;&gt;
+                &lt;Text style={styles.emptyIcon}&gt;🔍&lt;/Text&gt;
+                &lt;Text style={styles.emptyTitle}&gt;No results for "{query}"&lt;/Text&gt;
+                &lt;Text style={styles.emptySub}&gt;Try a different name or message.&lt;/Text&gt;
+              &lt;/&gt;
+            ) : (
+              // Empty because there are genuinely no chats
+              &lt;&gt;
+                &lt;Text style={styles.emptyIcon}&gt;💬&lt;/Text&gt;
+                &lt;Text style={styles.emptyTitle}&gt;No chats yet&lt;/Text&gt;
+                &lt;Text style={styles.emptySub}&gt;
+                  Tap the pencil icon to start your first conversation.
+                &lt;/Text&gt;
+              &lt;/&gt;
+            )}
+          &lt;/View&gt;
+        }
+        renderItem={({ item }) =&gt; (
+          &lt;ChatRow
+            chat={item}
+            onPress={() =&gt; {
+              Keyboard.dismiss();
+              navigation.navigate('MessageThread', {
+                chatId:   item.id,
+                chatName: item.name,
+                isGroup:  item.isGroup,
+              });
+            }}
+          /&gt;
+        )}
+      /&gt;
+
+    &lt;/View&gt;
+  );
+}
+
+// ── Placeholder screens ───────────────────────────────────────────────────────
+function MessageThreadScreen({ route, navigation }) {
+  const { chatId, chatName, isGroup = false } = route.params ?? {};
+  useEffect(() =&gt; { navigation.setOptions({ headerShown: false }); }, []);
+  return (
+    &lt;View style={styles.screen}&gt;
+      &lt;View style={styles.header}&gt;
+        &lt;Pressable onPress={() =&gt; navigation.goBack()} style={styles.backBtn}&gt;
+          &lt;Text style={styles.backArrow}&gt;←&lt;/Text&gt;
+        &lt;/Pressable&gt;
+        &lt;View&gt;
+          &lt;Text style={styles.headerTitle}&gt;{chatName}&lt;/Text&gt;
+          &lt;Text style={styles.headerSubSmall}&gt;{isGroup ? 'Group' : 'online'}&lt;/Text&gt;
+        &lt;/View&gt;
+      &lt;/View&gt;
+      &lt;View style={styles.centre}&gt;
+        &lt;Text style={{ fontSize: 16, color: '#667781' }}&gt;Messages for chat {chatId}&lt;/Text&gt;
+        &lt;Text style={{ fontSize: 13, color: '#aaa', marginTop: 6 }}&gt;Full thread coming in Lesson 14&lt;/Text&gt;
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}
+
+function CallsScreen()    { return &lt;View style={[styles.screen, styles.centre]}&gt;&lt;Text style={styles.tabLabel}&gt;📞 Calls&lt;/Text&gt;&lt;/View&gt;; }
+function StatusScreen()   { return &lt;View style={[styles.screen, styles.centre]}&gt;&lt;Text style={styles.tabLabel}&gt;⊙ Status&lt;/Text&gt;&lt;/View&gt;; }
+function SettingsScreen() { return &lt;View style={[styles.screen, styles.centre]}&gt;&lt;Text style={styles.tabLabel}&gt;⚙ Settings&lt;/Text&gt;&lt;/View&gt;; }
+
+// ── Navigators ────────────────────────────────────────────────────────────────
+function ChatsStack() {
+  return (
+    &lt;Stack.Navigator screenOptions={{ headerShown: false }}&gt;
+      &lt;Stack.Screen name="ChatList"      component={ChatListScreen} /&gt;
+      &lt;Stack.Screen name="MessageThread" component={MessageThreadScreen} /&gt;
+    &lt;/Stack.Navigator&gt;
+  );
+}
+
+export default function App() {
+  return (
+    &lt;NavigationContainer&gt;
+      &lt;Tab.Navigator
+        screenOptions={{
+          headerShown:             false,
+          tabBarActiveTintColor:   '#075E54',
+          tabBarInactiveTintColor: '#667781',
+          tabBarStyle:             { backgroundColor: '#fff', borderTopColor: '#e9edef' },
+        }}
+      &gt;
+        &lt;Tab.Screen
+          name="Chats"
+          component={ChatsStack}
+          options={{ tabBarIcon: ({ color }) =&gt; &lt;Text style={{ color, fontSize: 22 }}&gt;💬&lt;/Text&gt; }}
+        /&gt;
+        &lt;Tab.Screen
+          name="Calls"
+          component={CallsScreen}
+          options={{ tabBarIcon: ({ color }) =&gt; &lt;Text style={{ color, fontSize: 22 }}&gt;📞&lt;/Text&gt; }}
+        /&gt;
+        &lt;Tab.Screen
+          name="Status"
+          component={StatusScreen}
+          options={{ tabBarIcon: ({ color }) =&gt; &lt;Text style={{ color, fontSize: 22 }}&gt;⊙&lt;/Text&gt;  }}
+        /&gt;
+        &lt;Tab.Screen
+          name="Settings"
+          component={SettingsScreen}
+          options={{ tabBarIcon: ({ color }) =&gt; &lt;Text style={{ color, fontSize: 22 }}&gt;⚙&lt;/Text&gt;  }}
+        /&gt;
+      &lt;/Tab.Navigator&gt;
+    &lt;/NavigationContainer&gt;
+  );
+}
+
+// ── Styles ────────────────────────────────────────────────────────────────────
+const styles = StyleSheet.create({
+  screen:        { flex: 1, backgroundColor: '#fff' },
+  centre:        { flex: 1, alignItems: 'center', justifyContent: 'center' },
+
+  header:        { backgroundColor: '#075E54', paddingTop: 48, paddingBottom: 12, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center' },
+  headerTitle:   { flex: 1, color: '#fff', fontSize: 20, fontWeight: '700' },
+  headerSubSmall:{ color: '#b2dfdb', fontSize: 12, marginTop: 1 },
+  backBtn:       { marginRight: 10, padding: 4 },
+  backArrow:     { color: '#fff', fontSize: 22 },
+
+  searchInput:   { flex: 1, color: '#fff', fontSize: 16, paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: '#b2dfdb' },
+  searchIconBtn: { paddingLeft: 12, paddingVertical: 4 },
+  searchIconText:{ fontSize: 18 },
+
+  resultBar:     { backgroundColor: '#f0f2f5', paddingHorizontal: 16, paddingVertical: 6 },
+  resultText:    { fontSize: 13, color: '#667781' },
+
+  row:           { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12 },
+  rowPressed:    { backgroundColor: '#f5f5f5' },
+  avatarWrap:    { position: 'relative' },
+  avatarCircle:  { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center' },
+  avatarLetter:  { color: '#fff', fontSize: 22, fontWeight: '700' },
+  onlineDot:     { position: 'absolute', bottom: 1, right: 1, width: 13, height: 13, borderRadius: 7, backgroundColor: '#25D366', borderWidth: 2, borderColor: '#fff' },
+  middle:        { flex: 1, marginLeft: 12, marginRight: 8 },
+  topRow:        { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  chatName:      { flex: 1, fontSize: 16, fontWeight: '600', color: '#111' },
+  groupTag:      { fontSize: 11, color: '#667781', backgroundColor: '#f0f2f5', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4 },
+  preview:       { fontSize: 14, color: '#667781', marginTop: 2 },
+  right:         { alignItems: 'flex-end' },
+  time:          { fontSize: 12, color: '#667781' },
+  timeGreen:     { color: '#25D366', fontWeight: '600' },
+  badge:         { backgroundColor: '#25D366', borderRadius: 10, minWidth: 20, height: 20, alignItems: 'center', justifyContent: 'center', marginTop: 4, paddingHorizontal: 5 },
+  badgeText:     { color: '#fff', fontSize: 11, fontWeight: '700' },
+  sep:           { height: 1, backgroundColor: '#f0f2f5', marginLeft: 80 },
+
+  errorIcon:     { fontSize: 48, marginBottom: 12 },
+  errorTitle:    { fontSize: 18, fontWeight: '700', color: '#111', marginBottom: 8 },
+  errorMessage:  { fontSize: 14, color: '#667781', textAlign: 'center', marginBottom: 24, lineHeight: 20 },
+  retryBtn:      { backgroundColor: '#075E54', paddingHorizontal: 28, paddingVertical: 12, borderRadius: 8 },
+  retryText:     { color: '#fff', fontWeight: '700', fontSize: 15 },
+
+  emptyState:    { alignItems: 'center', paddingTop: 80, paddingHorizontal: 32 },
+  emptyIcon:     { fontSize: 56, marginBottom: 16 },
+  emptyTitle:    { fontSize: 20, fontWeight: '700', color: '#111', marginBottom: 8 },
+  emptySub:      { fontSize: 14, color: '#667781', textAlign: 'center', lineHeight: 20 },
+
+  tabLabel:      { fontSize: 28 },
+});</code></pre>
+
+    <p>Run this on your phone. You'll see 1.2 seconds of skeleton rows, then the full chat list with coloured avatars, online dots, unread badges, and a green tab badge showing the total unread count. Tap the 🔍 icon — the header switches to a search bar. Type "priya" — the list filters live. Tap ✕ — the search clears. Tap any row — it navigates to the thread screen with the correct name. Pull down to refresh.</p>
+
+    <div class="callout success">
+      <div class="callout-title">The three lines that change in Module 3</div>
+      <p>The entire screen stays identical. Only the inside of <code>loadChats</code> changes — the fake <code>await new Promise</code> becomes a real Firestore query. And in Module 3 you'll also add a real-time listener with <code>onSnapshot</code> so the list updates instantly when a new message arrives — without the user needing to pull to refresh.</p>
+    </div>
+
+    <hr>
+
+    <!-- Quiz -->
+    <h2>Quick check — test yourself</h2>
+    <p>Five questions on what you just read.</p>
+
+    <div id="rn-lesson-0013-quiz"></div>
+
+    <hr>
+
+    <!-- Resources -->
+    <h2>Primary resources for this lesson</h2>
+    <ul>
+      <li><a href="https://reactnative.dev/docs/flatlist" target="_blank" rel="noopener">FlatList — React Native docs</a></li>
+      <li><a href="https://reactnative.dev/docs/keyboard" target="_blank" rel="noopener">Keyboard — React Native docs</a></li>
+      <li><a href="https://reactnavigation.org/docs/bottom-tab-navigator#tabbarbage" target="_blank" rel="noopener">Tab bar badge — React Navigation docs</a></li>
+    </ul>
+
+    <div class="ask-teacher">
+      <strong>Anything unclear? Ask your teacher.</strong>
+      Common issues: (1) Tab badge doesn't appear — make sure you're calling <code>navigation.setOptions</code> from inside the <code>ChatListScreen</code> component that is registered directly in the Tab.Navigator (not from inside the Stack). The <code>navigation</code> prop in ChatListScreen belongs to the Chats tab — it can set <code>tabBarBadge</code>. (2) Search doesn't filter — confirm <code>filteredChats</code> is the variable passed to FlatList's <code>data</code> prop, not <code>allChats</code>. (3) Keyboard hides the search input — add <code>keyboardShouldPersistTaps="handled"</code> to the FlatList so tapping a row while the keyboard is open works correctly.
+    </div>
+
+    <hr>
+
+    <!-- Lesson nav -->
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="./0012-loading-and-error-states.html">← Lesson 12: Loading &amp; Error States</a>
+      <a href="./0014-message-thread-screen.html">Lesson 14: Build the Message Thread Screen →</a>
+    </nav>
+
+  </div><!-- .page-wrap -->
+
+  <script src="../../assets/quiz.js"></script>
+  <script>
+    createQuiz("rn-lesson-0013-quiz", [
+      {
+        question: "The chat list has a search bar. filteredChats is computed inline from allChats and query. Why is filteredChats NOT stored in useState?",
+        options: [
+          "React Native doesn't allow arrays in useState",
+          "It is derived data — it can always be computed from allChats and query, so storing it separately would create two sources of truth that could get out of sync",
+          "It would cause an infinite re-render loop if stored in state",
+          "FlatList only accepts derived values, not state variables"
+        ],
+        correct: 1,
+        explanation: "filteredChats is fully determined by allChats and query — given those two values you can always recompute it. Storing it in state would mean three pieces of state where only two are needed, and you'd have to remember to update all three in sync. Derived values should be computed inline (or with useMemo for expensive computations). This is the pattern from Lesson 5: never store what you can compute."
+      },
+      {
+        question: "The search bar is open and the user taps a chat row. The keyboard is still visible. Which FlatList prop ensures the onPress fires correctly instead of just dismissing the keyboard?",
+        options: [
+          "keyboardDismissMode='on-drag'",
+          "keyboardShouldPersistTaps='handled' — taps on interactive elements (Pressable) fire their handlers first, then dismiss the keyboard",
+          "dismissKeyboardOnPress={false}",
+          "scrollEnabled={false} while keyboard is open"
+        ],
+        correct: 1,
+        explanation: "By default, tapping anywhere outside a TextInput dismisses the keyboard and swallows the tap — so your onPress never fires. keyboardShouldPersistTaps='handled' changes this: taps on interactive elements (Pressable, TouchableOpacity, buttons) fire their handlers AND dismiss the keyboard. This is the correct value for lists where you want both keyboard dismissal and tap handling."
+      },
+      {
+        question: "You want the Chats tab icon to show a badge with the total unread count. Where do you call navigation.setOptions({ tabBarBadge: total })?",
+        options: [
+          "In App.js, on the Tab.Screen definition — set it as a static options prop",
+          "In a useEffect inside ChatListScreen, with allChats as a dependency — runs every time the chat list updates",
+          "In the ChatsStack navigator's screenOptions",
+          "In the MessageThreadScreen, since that's where read state changes"
+        ],
+        correct: 1,
+        explanation: "The navigation prop available inside ChatListScreen belongs to the Chats tab — it has authority to call setOptions on that tab, including tabBarBadge. Wrapping it in useEffect with [allChats] as a dependency means the badge updates every time the chat list data changes. Setting a static options prop on Tab.Screen wouldn't be dynamic. ChatsStack's screenOptions affects the stack header, not the tab."
+      },
+      {
+        question: "The search bar shows '0 results' when the query matches nothing. But when there are no chats at all (the array is genuinely empty), you want a different empty state message. How does the code distinguish these two cases inside ListEmptyComponent?",
+        options: [
+          "They can't be distinguished — ListEmptyComponent always shows the same message",
+          "Check query.trim() inside ListEmptyComponent — if it has a value, the list is empty because search found nothing; if it's empty string, there are genuinely no chats",
+          "Check allChats.length vs filteredChats.length — if they differ, it's a search empty",
+          "Use two separate FlatList components, one for search results and one for the full list"
+        ],
+        correct: 1,
+        explanation: "Inside ListEmptyComponent, query.trim() tells you why the list is empty. If query is non-empty, the user searched and found nothing — show '🔍 No results for X'. If query is empty, the data itself is empty — show the friendly onboarding message. This is why it's important to pass filteredChats to FlatList's data prop: when query is empty, filteredChats === allChats, so both cases are handled by the same FlatList."
+      },
+      {
+        question: "The ChatRow component is defined outside the ChatListScreen function. Why is this better than defining it inside?",
+        options: [
+          "Components defined outside can access the parent's state directly without props",
+          "Defining a component inside another component re-creates it as a new function reference on every render, causing React to unmount and remount it — defining it outside avoids this",
+          "React Native requires all components to be at the top level of the file",
+          "There is no difference — it is purely a style preference"
+        ],
+        correct: 1,
+        explanation: "When you define a component inside another function, React sees a new function reference every render and treats it as a completely different component type — causing it to unmount the old instance and mount a new one, losing any local state and causing unnecessary DOM operations. Defining ChatRow outside ChatListScreen means React recognises it as the same component across renders and simply updates props."
+      }
+    ]);
+  </script>
+
+</body>
+</html>

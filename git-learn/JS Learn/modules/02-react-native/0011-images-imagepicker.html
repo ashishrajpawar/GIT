@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RN Lesson 11: Images &amp; ImagePicker — JS Learn</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">Module 2: React Native</a>
+      <span class="sep">›</span>
+      <span class="current">Lesson 11: Images &amp; ImagePicker</span>
+    </nav>
+
+    <!-- Header -->
+    <span class="badge">React Native · Lesson 11</span>
+    <h1 style="margin-top:0.5rem;">Images &amp; ImagePicker</h1>
+    <div class="lesson-meta">
+      <span>expo-image-picker · Permissions · Gallery &amp; Camera · Avatar upload preview</span>
+      <span>~40 min</span>
+      <span>Hands-on</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for your WhatsApp clone</div>
+      <p>WhatsApp lets users set a profile photo, send images in chats, and update their status with a picture. All of these start the same way: pick an image from the gallery or take a photo with the camera. This lesson teaches you how to do that with <code>expo-image-picker</code>, how to handle the permissions the OS requires, and how to display the chosen image as a rounded avatar — the exact building block you'll reuse in the profile screen, the chat input bar, and the status screen.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 1 -->
+    <h2>1. Installing expo-image-picker</h2>
+
+    <p>Run this in your <code>whatsapp-clone</code> project terminal. Use <code>npx expo install</code> — it picks the version compatible with your Expo SDK.</p>
+
+    <pre><code>npx expo install expo-image-picker</code></pre>
+
+    <p>No other installation step is needed for Expo Go or EAS Build — Expo bundles the native camera and photo library modules automatically.</p>
+
+    <hr>
+
+    <!-- Section 2 -->
+    <h2>2. Permissions — asking before accessing the camera roll</h2>
+
+    <p>Both iOS and Android require explicit user permission before your app can access the camera or photo library. <code>expo-image-picker</code> gives you a hook for each.</p>
+
+    <pre><code>import * as ImagePicker from 'expo-image-picker';
+
+// Hook — gives you the current permission status + a function to request it
+const [mediaPermission, requestMediaPermission] =
+  ImagePicker.useMediaLibraryPermissions();
+
+const [cameraPermission, requestCameraPermission] =
+  ImagePicker.useCameraPermissions();</code></pre>
+
+    <p>The permission object has a <code>status</code> field:</p>
+
+    <table>
+      <thead>
+        <tr><th>status value</th><th>Meaning</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>'granted'</code></td><td>User allowed it — proceed</td></tr>
+        <tr><td><code>'denied'</code></td><td>User explicitly denied — show a message, don't ask again</td></tr>
+        <tr><td><code>'undetermined'</code></td><td>Never asked yet — call the request function</td></tr>
+      </tbody>
+    </table>
+
+    <pre><code>async function checkAndRequestPermission() {
+  if (mediaPermission?.status === 'granted') {
+    return true;   // already have it
+  }
+
+  if (mediaPermission?.status === 'denied') {
+    // Can't ask again — direct the user to Settings
+    Alert.alert(
+      'Permission required',
+      'Please allow photo access in your device Settings to choose a profile photo.',
+      [{ text: 'OK' }]
+    );
+    return false;
+  }
+
+  // First time asking
+  const result = await requestMediaPermission();
+  return result.status === 'granted';
+}</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">iOS vs Android permission behaviour</div>
+      <p>On iOS, once the user taps "Don't Allow", you can never show the system permission dialog again — you must direct them to Settings. On Android, you can ask twice before it becomes permanently denied. Always handle the <code>'denied'</code> case gracefully — never silently fail.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 3 -->
+    <h2>3. Picking from the gallery</h2>
+
+    <p>Call <code>ImagePicker.launchImageLibraryAsync()</code> to open the system photo picker. The user picks a photo and the function returns a result object.</p>
+
+    <pre><code>async function pickFromGallery() {
+  const hasPermission = await checkAndRequestPermission();
+  if (!hasPermission) return;
+
+  const result = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ['images'],        // only photos, not videos
+    allowsEditing: true,           // shows a crop UI after selection
+    aspect: [1, 1],                // square crop — good for avatars
+    quality: 0.8,                  // 0 = most compressed, 1 = original
+  });
+
+  if (!result.canceled) {
+    // result.assets is an array — [0] is the selected image
+    const uri = result.assets[0].uri;
+    setAvatarUri(uri);             // store the local file URI in state
+    console.log('Picked:', uri);
+  }
+  // If result.canceled is true, the user closed the picker — do nothing
+}</code></pre>
+
+    <div class="callout success">
+      <div class="callout-title">result.assets[0].uri</div>
+      <p>The <code>uri</code> is a local file path on the device, like <code>file:///var/mobile/Containers/...</code> on iOS or <code>content://...</code> on Android. You can pass it directly to an <code>&lt;Image source={{ uri }}&gt;</code> component. In Module 3 you'll upload this URI to Firebase Storage to get a permanent download URL.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 4 -->
+    <h2>4. Taking a photo with the camera</h2>
+
+    <p>Call <code>ImagePicker.launchCameraAsync()</code> — it opens the device camera directly. The API is nearly identical to the gallery picker.</p>
+
+    <pre><code>async function takePhoto() {
+  // Camera needs its own permission — separate from photo library
+  if (cameraPermission?.status !== 'granted') {
+    const result = await requestCameraPermission();
+    if (result.status !== 'granted') {
+      Alert.alert('Camera access denied', 'Enable camera access in Settings.');
+      return;
+    }
+  }
+
+  const result = await ImagePicker.launchCameraAsync({
+    allowsEditing: true,
+    aspect: [1, 1],
+    quality: 0.8,
+  });
+
+  if (!result.canceled) {
+    setAvatarUri(result.assets[0].uri);
+  }
+}</code></pre>
+
+    <p>The camera requires a <em>separate</em> permission from the photo library. Always request the right one — <code>useCameraPermissions()</code> for the camera, <code>useMediaLibraryPermissions()</code> for the gallery.</p>
+
+    <hr>
+
+    <!-- Section 5 -->
+    <h2>5. Displaying the image — Image component</h2>
+
+    <p>React Native's built-in <code>Image</code> component handles both local URIs (from the picker) and remote URLs (from Firebase Storage). Use <code>borderRadius</code> equal to half the width/height to make it a circle.</p>
+
+    <pre><code>import { Image, View, StyleSheet } from 'react-native';
+
+// Circular avatar — local URI or remote URL both work
+function Avatar({ uri, size = 80 }) {
+  if (!uri) {
+    // Fallback when no photo is set yet
+    return (
+      &lt;View style={[styles.avatarFallback, { width: size, height: size, borderRadius: size / 2 }]}&gt;
+        &lt;Text style={{ color: '#fff', fontSize: size * 0.4 }}&gt;A&lt;/Text&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  return (
+    &lt;Image
+      source={{ uri }}
+      style={{
+        width:        size,
+        height:       size,
+        borderRadius: size / 2,   // circle
+      }}
+    /&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  avatarFallback: {
+    backgroundColor: '#075E54',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});</code></pre>
+
+    <div class="callout">
+      <div class="callout-title">Always set explicit width and height on Image</div>
+      <p>Unlike web, React Native images have no intrinsic size — they will render as 0×0 and be invisible unless you give them explicit <code>width</code> and <code>height</code> (or <code>flex: 1</code>). This is one of the most common beginner traps.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 6 -->
+    <h2>6. Showing a choice: gallery or camera</h2>
+
+    <p>WhatsApp shows an action sheet when you tap the avatar — "Take photo" or "Choose from library". Use <code>Alert.alert</code> with multiple buttons to replicate this simply, or use a bottom sheet modal in a later lesson.</p>
+
+    <pre><code>import { Alert } from 'react-native';
+
+function showImageOptions() {
+  Alert.alert(
+    'Profile photo',
+    'How would you like to set your photo?',
+    [
+      { text: 'Take photo',           onPress: takePhoto },
+      { text: 'Choose from library',  onPress: pickFromGallery },
+      { text: 'Cancel', style: 'cancel' },
+    ]
+  );
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 7: Full working example -->
+    <h2>7. Full working example — profile photo picker</h2>
+
+    <p>This is a complete profile photo picker screen — the same component you'll use in your Settings / Profile screen. Tap the avatar circle to pick a photo from gallery or camera. The image previews immediately as a rounded avatar. Replace your entire <code>App.js</code> with this.</p>
+
+    <pre><code>import { useState } from 'react';
+import {
+  View, Text, Image, Pressable,
+  StyleSheet, Alert, Platform, ScrollView,
+} from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
+
+export default function App() {
+  const [avatarUri, setAvatarUri] = useState(null);
+  const [name,      setName]      = useState('Ashish');
+
+  const [mediaPermission,  requestMediaPermission]  = ImagePicker.useMediaLibraryPermissions();
+  const [cameraPermission, requestCameraPermission] = ImagePicker.useCameraPermissions();
+
+  // ── Permission helpers ──────────────────────────────────────────────────────
+  async function ensureMediaPermission() {
+    if (mediaPermission?.status === 'granted') return true;
+    if (mediaPermission?.status === 'denied') {
+      Alert.alert(
+        'Permission required',
+        'Please allow photo library access in Settings to choose a photo.',
+        [{ text: 'OK' }]
+      );
+      return false;
+    }
+    const result = await requestMediaPermission();
+    return result.status === 'granted';
+  }
+
+  async function ensureCameraPermission() {
+    if (cameraPermission?.status === 'granted') return true;
+    if (cameraPermission?.status === 'denied') {
+      Alert.alert(
+        'Permission required',
+        'Please allow camera access in Settings to take a photo.',
+        [{ text: 'OK' }]
+      );
+      return false;
+    }
+    const result = await requestCameraPermission();
+    return result.status === 'granted';
+  }
+
+  // ── Pickers ─────────────────────────────────────────────────────────────────
+  async function pickFromGallery() {
+    const ok = await ensureMediaPermission();
+    if (!ok) return;
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+
+    if (!result.canceled) {
+      setAvatarUri(result.assets[0].uri);
+    }
+  }
+
+  async function takePhoto() {
+    const ok = await ensureCameraPermission();
+    if (!ok) return;
+
+    const result = await ImagePicker.launchCameraAsync({
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+
+    if (!result.canceled) {
+      setAvatarUri(result.assets[0].uri);
+    }
+  }
+
+  function showImageOptions() {
+    Alert.alert(
+      'Profile photo',
+      'How would you like to update your photo?',
+      [
+        { text: 'Take photo',          onPress: takePhoto },
+        { text: 'Choose from library', onPress: pickFromGallery },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+  }
+
+  // ── UI ───────────────────────────────────────────────────────────────────────
+  return (
+    &lt;ScrollView contentContainerStyle={styles.container}&gt;
+
+      {/* Green header bar */}
+      &lt;View style={styles.header}&gt;
+        &lt;Text style={styles.headerTitle}&gt;Profile&lt;/Text&gt;
+      &lt;/View&gt;
+
+      {/* Avatar — tap to change */}
+      &lt;View style={styles.avatarSection}&gt;
+        &lt;Pressable onPress={showImageOptions} style={styles.avatarWrap}&gt;
+          {avatarUri ? (
+            &lt;Image source={{ uri: avatarUri }} style={styles.avatar} /&gt;
+          ) : (
+            &lt;View style={styles.avatarFallback}&gt;
+              &lt;Text style={styles.avatarLetter}&gt;{name[0]?.toUpperCase()}&lt;/Text&gt;
+            &lt;/View&gt;
+          )}
+          {/* Camera icon overlay */}
+          &lt;View style={styles.cameraOverlay}&gt;
+            &lt;Text style={styles.cameraIcon}&gt;📷&lt;/Text&gt;
+          &lt;/View&gt;
+        &lt;/Pressable&gt;
+
+        &lt;Text style={styles.tapHint}&gt;Tap to change photo&lt;/Text&gt;
+      &lt;/View&gt;
+
+      {/* Name display */}
+      &lt;View style={styles.infoSection}&gt;
+        &lt;Text style={styles.infoLabel}&gt;Name&lt;/Text&gt;
+        &lt;Text style={styles.infoValue}&gt;{name}&lt;/Text&gt;
+      &lt;/View&gt;
+
+      {/* Upload note */}
+      &lt;View style={styles.noteBox}&gt;
+        &lt;Text style={styles.noteText}&gt;
+          📦 Selected image URI is stored locally for now.{'\n'}
+          In Module 3 you'll upload it to Firebase Storage and save the download URL to Firestore.
+        &lt;/Text&gt;
+      &lt;/View&gt;
+
+      {/* Show the raw URI so you can see what was picked */}
+      {avatarUri ? (
+        &lt;View style={styles.uriBox}&gt;
+          &lt;Text style={styles.uriLabel}&gt;Local URI:&lt;/Text&gt;
+          &lt;Text style={styles.uriText} numberOfLines={3}&gt;{avatarUri}&lt;/Text&gt;
+        &lt;/View&gt;
+      ) : null}
+
+      {/* Permission status — useful while developing */}
+      &lt;View style={styles.permBox}&gt;
+        &lt;Text style={styles.permTitle}&gt;Permission status (dev info)&lt;/Text&gt;
+        &lt;Text style={styles.permText}&gt;
+          Media library: {mediaPermission?.status ?? 'not checked'}{'\n'}
+          Camera: {cameraPermission?.status ?? 'not checked'}
+        &lt;/Text&gt;
+      &lt;/View&gt;
+
+    &lt;/ScrollView&gt;
+  );
+}
+
+// ── Styles ────────────────────────────────────────────────────────────────────
+const styles = StyleSheet.create({
+  container:      { flexGrow: 1, backgroundColor: '#fff', paddingBottom: 40 },
+  header:         { backgroundColor: '#075E54', paddingTop: 48, paddingBottom: 16, paddingHorizontal: 20 },
+  headerTitle:    { color: '#fff', fontSize: 20, fontWeight: '700' },
+
+  avatarSection:  { alignItems: 'center', paddingTop: 36, paddingBottom: 20 },
+  avatarWrap:     { position: 'relative' },
+  avatar:         { width: 120, height: 120, borderRadius: 60 },
+  avatarFallback: { width: 120, height: 120, borderRadius: 60, backgroundColor: '#075E54', alignItems: 'center', justifyContent: 'center' },
+  avatarLetter:   { color: '#fff', fontSize: 48, fontWeight: '700' },
+  cameraOverlay:  { position: 'absolute', bottom: 0, right: 0, backgroundColor: '#25D366', width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#fff' },
+  cameraIcon:     { fontSize: 16 },
+  tapHint:        { marginTop: 10, fontSize: 13, color: '#667781' },
+
+  infoSection:    { paddingHorizontal: 24, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: '#f0f2f5' },
+  infoLabel:      { fontSize: 13, color: '#25D366', fontWeight: '600', marginBottom: 4 },
+  infoValue:      { fontSize: 17, color: '#111' },
+
+  noteBox:        { margin: 20, backgroundColor: '#e8f5e9', borderRadius: 10, padding: 14 },
+  noteText:       { fontSize: 13, color: '#2e7d32', lineHeight: 20 },
+
+  uriBox:         { marginHorizontal: 20, marginTop: 4, backgroundColor: '#f5f5f5', borderRadius: 8, padding: 12 },
+  uriLabel:       { fontSize: 11, color: '#999', marginBottom: 4, fontWeight: '600' },
+  uriText:        { fontSize: 11, color: '#333', fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace' },
+
+  permBox:        { marginHorizontal: 20, marginTop: 16, backgroundColor: '#f5f5f5', borderRadius: 8, padding: 12 },
+  permTitle:      { fontSize: 11, color: '#999', fontWeight: '600', marginBottom: 4 },
+  permText:       { fontSize: 12, color: '#555', lineHeight: 20 },
+});</code></pre>
+
+    <p>Run this. Tap the avatar circle — an alert sheet asks "Take photo" or "Choose from library". Grant permission when asked. The selected photo appears immediately as a rounded avatar with the camera icon overlay. The raw local URI is shown below so you can see what the picker returned.</p>
+
+    <div class="callout success">
+      <div class="callout-title">What Module 3 adds to this screen</div>
+      <p>Two lines in <code>pickFromGallery</code> and <code>takePhoto</code> change. After getting the URI, you call:<br>
+      <code>const downloadUrl = await uploadAvatarToFirebase(uri, userId);</code><br>
+      Then save that URL to the user's Firestore document. Every other screen in the app that shows the user's avatar just reads <code>user.avatarUrl</code> from Firestore — the photo automatically appears everywhere.</p>
+    </div>
+
+    <hr>
+
+    <!-- Quiz -->
+    <h2>Quick check — test yourself</h2>
+    <p>Five questions on what you just read.</p>
+
+    <div id="rn-lesson-0011-quiz"></div>
+
+    <hr>
+
+    <!-- Resources -->
+    <h2>Primary resources for this lesson</h2>
+    <ul>
+      <li><a href="https://docs.expo.dev/versions/latest/sdk/imagepicker/" target="_blank" rel="noopener">expo-image-picker — Expo docs</a></li>
+      <li><a href="https://reactnative.dev/docs/image" target="_blank" rel="noopener">Image component — React Native docs</a></li>
+      <li><a href="https://docs.expo.dev/guides/permissions/" target="_blank" rel="noopener">Permissions in Expo — guide</a></li>
+    </ul>
+
+    <div class="ask-teacher">
+      <strong>Anything unclear? Ask your teacher.</strong>
+      Common issues: (1) Image shows nothing — you forgot explicit <code>width</code> and <code>height</code> on the Image component. (2) Permission dialog never appears — you called <code>launchImageLibraryAsync</code> without calling <code>requestMediaPermission</code> first, or the simulator doesn't have photos; test on a real device. (3) Camera doesn't work in Expo Go on iOS simulator — the simulator has no camera; use a physical device or the gallery picker instead. (4) <code>result.assets</code> is undefined — you may be using an older version of expo-image-picker; run <code>npx expo install expo-image-picker</code> again to get the current SDK-compatible version.
+    </div>
+
+    <hr>
+
+    <!-- Lesson nav -->
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="./0010-forms-login-register.html">← Lesson 10: Forms — Login &amp; Register</a>
+      <a href="./0012-loading-and-error-states.html">Lesson 12: Loading &amp; Error States →</a>
+    </nav>
+
+  </div><!-- .page-wrap -->
+
+  <script src="../../assets/quiz.js"></script>
+  <script>
+    createQuiz("rn-lesson-0011-quiz", [
+      {
+        question: "You call ImagePicker.launchImageLibraryAsync() and the result object has canceled: true. What does this mean and what should your code do?",
+        options: [
+          "The permission was denied — show an error and redirect to Settings",
+          "The user closed the photo picker without selecting anything — do nothing, keep the previous avatar",
+          "The image file was corrupted — retry with a lower quality setting",
+          "The expo-image-picker package is not installed correctly — reinstall it"
+        ],
+        correct: 1,
+        explanation: "canceled: true simply means the user dismissed the picker without choosing a photo. This is normal expected behaviour — just return early and leave the current avatar unchanged. Only process the result when canceled is false, then read result.assets[0].uri."
+      },
+      {
+        question: "The user previously denied camera permission on iOS. Your app calls requestCameraPermission() again. What happens?",
+        options: [
+          "The system permission dialog appears again — iOS allows one retry",
+          "Nothing happens — iOS never shows the dialog again after a denial; you must direct the user to the Settings app",
+          "The permission is automatically granted after 24 hours",
+          "expo-image-picker throws an error that you must catch with try/catch"
+        ],
+        correct: 1,
+        explanation: "On iOS, once the user taps 'Don't Allow', the system permission dialog will never appear again for that app. You can only direct the user to Settings > Privacy > Camera to change the setting manually. Always check the status before calling the request function, and show an informative Alert when status is 'denied'."
+      },
+      {
+        question: "You want the image picker to open with a square crop tool so the result is always 1:1 (suitable for a round avatar). Which two options do you pass to launchImageLibraryAsync?",
+        options: [
+          "crop: true and shape: 'circle'",
+          "allowsEditing: true and aspect: [1, 1]",
+          "square: true and trim: 'auto'",
+          "cropMode: 'square' and resizeMode: '1:1'"
+        ],
+        correct: 1,
+        explanation: "allowsEditing: true shows the system's built-in crop/move UI after the user selects a photo. aspect: [1, 1] constrains that crop to a square. Together they ensure the returned image is always square, which looks correct when displayed in a circle avatar. Without allowsEditing the full original image is returned uncropped."
+      },
+      {
+        question: "You render <Image source={{ uri: avatarUri }} /> but the image is invisible on screen. What is the most likely cause?",
+        options: [
+          "The URI format is wrong — you need to add 'file://' in front of it",
+          "You forgot to set explicit width and height on the Image component — React Native images have no intrinsic size and render as 0x0 without them",
+          "Image requires an internet connection even for local file URIs",
+          "The image component only works inside a ScrollView"
+        ],
+        correct: 1,
+        explanation: "Unlike web browsers, React Native's Image component has no intrinsic (natural) size. If you don't specify width and height (or use flex: 1 inside a sized container), the image renders at 0×0 and appears invisible. Always give Image explicit dimensions."
+      },
+      {
+        question: "The photo library picker and the camera need separate permissions. Which hooks do you use for each?",
+        options: [
+          "Both use useMediaLibraryPermissions() — camera is included in the media library permission",
+          "useMediaLibraryPermissions() for the gallery, useCameraPermissions() for the camera — each permission is independent",
+          "usePermissions('media') and usePermissions('camera') — there is one generic hook with a string argument",
+          "No hooks needed — expo-image-picker requests permissions automatically when you call launchImageLibraryAsync or launchCameraAsync"
+        ],
+        correct: 1,
+        explanation: "expo-image-picker provides two separate hooks: useMediaLibraryPermissions() for reading the photo library, and useCameraPermissions() for the camera. They are independent OS-level permissions — granting one does not grant the other. Always request and check the correct permission before calling the corresponding launch function."
+      }
+    ]);
+  </script>
+
+</body>
+</html>

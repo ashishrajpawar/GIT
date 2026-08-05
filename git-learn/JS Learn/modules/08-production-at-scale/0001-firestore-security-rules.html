@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Production at Scale Lesson 1: Firestore Security Rules — JS Learn</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">Module 8: Production at Scale</a>
+      <span class="sep">›</span>
+      <span class="current">Lesson 1: Firestore Security Rules</span>
+    </nav>
+
+    <!-- Header -->
+    <span class="badge">Production at Scale · Lesson 1</span>
+    <h1 style="margin-top:0.5rem;">Firestore Security Rules</h1>
+    <div class="lesson-meta">
+      <span>Field validation · Rate limiting · Storage rules · Emulator testing · Deployment</span>
+      <span>~60 min</span>
+      <span>Hands-on</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for your WhatsApp clone</div>
+      <p>Right now, anyone with your Firebase config (which is in your app bundle — visible to anyone) could write <strong>anything</strong> to your database: fake messages from other users, 10MB text fields, messages at 100/second to spam a chat. Firestore Security Rules are the <strong>server-side bouncer</strong> — they run on Google's servers and reject bad requests before they touch your data. WhatsApp doesn't let you send messages as someone else, and neither should your app.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 1 -->
+    <h2>1. How security rules work</h2>
+
+    <p>Security rules are a file (<code>firestore.rules</code>) that you deploy to Firebase. Every read or write from your app goes through these rules on the server. If the rule says <strong>deny</strong>, the request fails — no matter what the client code says.</p>
+
+    <pre><code>// firestore.rules — the basic structure
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // This matches a specific collection
+    match /messages/{messageId} {
+      allow read: if request.auth != null;   // logged in?
+      allow create: if request.auth != null; // logged in?
+    }
+  }
+}</code></pre>
+
+    <h3>Key concepts</h3>
+    <table>
+      <thead>
+        <tr><th>Term</th><th>What it means</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>request.auth</code></td><td>The user making the request (null if not logged in)</td></tr>
+        <tr><td><code>request.auth.uid</code></td><td>Their Firebase Auth user ID</td></tr>
+        <tr><td><code>request.resource.data</code></td><td>The data being <strong>written</strong> (the incoming document)</td></tr>
+        <tr><td><code>resource.data</code></td><td>The data <strong>already in</strong> the database (before this write)</td></tr>
+        <tr><td><code>get()</code> / <code>exists()</code></td><td>Read another document during rule evaluation</td></tr>
+      </tbody>
+    </table>
+
+    <p><strong>Important:</strong> Rules are NOT filters. If you write <code>allow read: if resource.data.senderId == request.auth.uid</code>, it doesn't filter results — it rejects the entire query unless Firestore can guarantee every document in the result matches.</p>
+
+    <hr>
+
+    <!-- Section 2 -->
+    <h2>2. Protecting the users collection</h2>
+
+    <p>Your <code>users</code> collection has profiles (name, phone, avatar URL). Without rules, anyone could change anyone's name or read all phone numbers.</p>
+
+    <pre><code>match /users/{userId} {
+  // Anyone logged in can read profiles (for chat list, contact search)
+  allow read: if request.auth != null;
+
+  // Only the owner can create their own profile
+  allow create: if request.auth.uid == userId
+    && request.resource.data.keys().hasAll(['name', 'createdAt'])
+    && request.resource.data.name is string
+    && request.resource.data.name.size() >= 1
+    && request.resource.data.name.size() <= 50
+    && request.resource.data.createdAt == request.time;
+
+  // Only the owner can update, and they can't change createdAt or uid
+  allow update: if request.auth.uid == userId
+    && !request.resource.data.diff(resource.data).affectedKeys()
+        .hasAny(['createdAt', 'uid'])
+    && request.resource.data.name is string
+    && request.resource.data.name.size() >= 1
+    && request.resource.data.name.size() <= 50;
+
+  // Nobody can delete profiles (use a 'disabled' field instead)
+  allow delete: if false;
+}</code></pre>
+
+    <h3>What this prevents</h3>
+    <ul>
+      <li>Priya can't change Rahul's name to something offensive</li>
+      <li>Nobody can create a profile with a 10MB name field</li>
+      <li>Nobody can backdate their <code>createdAt</code> timestamp</li>
+      <li>Profiles can never be deleted (avoiding orphaned references)</li>
+    </ul>
+
+    <hr>
+
+    <!-- Section 3 -->
+    <h2>3. Securing chats and messages</h2>
+
+    <p>Messages need the strictest rules — they're the core of a messaging app and the biggest abuse vector.</p>
+
+    <pre><code>match /chats/{chatId} {
+  // Only chat participants can read the chat document
+  allow read: if request.auth.uid in resource.data.participants;
+
+  // Chat creation: you must be in the participants list
+  allow create: if request.auth.uid in request.resource.data.participants
+    && request.resource.data.participants.size() >= 2
+    && request.resource.data.participants.size() <= 256;
+
+  // Updates (last message preview, unread count)
+  allow update: if request.auth.uid in resource.data.participants;
+
+  allow delete: if false;
+
+  // Messages sub-collection
+  match /messages/{messageId} {
+    // Only participants of the parent chat can read messages
+    allow read: if request.auth.uid in
+      get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+
+    // Create: sender must be themselves, text must be valid
+    allow create: if request.auth.uid in
+        get(/databases/$(database)/documents/chats/$(chatId)).data.participants
+      && request.resource.data.senderId == request.auth.uid
+      && request.resource.data.text is string
+      && request.resource.data.text.size() >= 1
+      && request.resource.data.text.size() <= 4096
+      && request.resource.data.createdAt == request.time;
+
+    // Only sender can delete their own messages
+    allow delete: if resource.data.senderId == request.auth.uid;
+
+    // No editing messages (WhatsApp doesn't allow it for regular users)
+    allow update: if false;
+  }
+}</code></pre>
+
+    <h3>What this prevents</h3>
+    <ul>
+      <li>Nobody can read chats they're not part of</li>
+      <li>Nobody can send a message pretending to be someone else (<code>senderId == request.auth.uid</code>)</li>
+      <li>Messages can't exceed 4KB (prevents database abuse)</li>
+      <li>Timestamps are server-enforced (no backdating messages)</li>
+      <li>Only the sender can delete their own messages</li>
+    </ul>
+
+    <hr>
+
+    <!-- Section 4 -->
+    <h2>4. Rate limiting writes</h2>
+
+    <p>Without rate limits, a malicious user could send 1,000 messages per second and flood a chat. Firestore rules can enforce a cooldown using timestamps.</p>
+
+    <pre><code>match /chats/{chatId}/messages/{messageId} {
+  allow create: if request.auth.uid in
+      get(/databases/$(database)/documents/chats/$(chatId)).data.participants
+    && request.resource.data.senderId == request.auth.uid
+    && request.resource.data.text is string
+    && request.resource.data.text.size() >= 1
+    && request.resource.data.text.size() <= 4096
+    && request.resource.data.createdAt == request.time
+    // Rate limit: check user's last write timestamp
+    && (!exists(/databases/$(database)/documents/rateLimits/$(request.auth.uid))
+        || request.time > get(/databases/$(database)/documents/rateLimits/$(request.auth.uid)).data.lastWrite + duration.value(1, 's'));
+}</code></pre>
+
+    <h3>How the rate limit works</h3>
+    <ol>
+      <li>When a user sends a message, your app also writes to <code>rateLimits/{userId}</code> with <code>lastWrite: serverTimestamp()</code></li>
+      <li>The rule checks: has 1 second passed since their last write?</li>
+      <li>If not, the write is rejected — the user has to wait</li>
+    </ol>
+
+    <pre><code>// In your React Native code — update the rate limit doc on each send
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
+
+async function sendMessage(chatId, text) {
+  const userId = auth.currentUser.uid;
+  const batch = writeBatch(db);
+
+  // 1. Add the message
+  const msgRef = doc(collection(db, 'chats', chatId, 'messages'));
+  batch.set(msgRef, {
+    senderId: userId,
+    text: text.trim(),
+    createdAt: serverTimestamp(),
+  });
+
+  // 2. Update rate limit tracker
+  const rateLimitRef = doc(db, 'rateLimits', userId);
+  batch.set(rateLimitRef, { lastWrite: serverTimestamp() });
+
+  await batch.commit(); // Both writes happen atomically
+}</code></pre>
+
+    <pre><code>// Rate limit document rules
+match /rateLimits/{userId} {
+  // Only the owner can read/write their own rate limit
+  allow read, write: if request.auth.uid == userId;
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 5 -->
+    <h2>5. Firebase Storage rules</h2>
+
+    <p>Storage rules protect uploaded files (profile photos, image messages, voice notes). Without them, anyone could upload a 500MB file and blow up your bill.</p>
+
+    <pre><code>// storage.rules
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Profile photos: max 5MB, images only
+    match /profilePhotos/{userId}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth.uid == userId
+        && request.resource.size < 5 * 1024 * 1024  // 5MB
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // Chat images: max 10MB, images only
+    match /chatImages/{chatId}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.resource.size < 10 * 1024 * 1024  // 10MB
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // Voice notes: max 20MB, audio only
+    match /voiceNotes/{chatId}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.resource.size < 20 * 1024 * 1024  // 20MB
+        && request.resource.contentType.matches('audio/.*');
+    }
+
+    // Block everything else
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}</code></pre>
+
+    <h3>What this prevents</h3>
+    <ul>
+      <li>Uploading executables, scripts, or any non-media file</li>
+      <li>Uploading 500MB files that explode your Firebase bill</li>
+      <li>Uploading profile photos to someone else's path</li>
+      <li>Any access to paths you haven't explicitly allowed</li>
+    </ul>
+
+    <hr>
+
+    <!-- Section 6 -->
+    <h2>6. Testing rules with the Firebase Emulator</h2>
+
+    <p>Never deploy rules without testing them first. The Firebase Emulator lets you test rules locally — no real data at risk.</p>
+
+    <h3>Step 1: Install and start the emulator</h3>
+
+    <pre><code>// In your project terminal
+npm install -g firebase-tools
+firebase init emulators   // Select Firestore + Storage
+firebase emulators:start</code></pre>
+
+    <h3>Step 2: Write rule tests</h3>
+
+    <pre><code>// tests/firestore.rules.test.js
+const { initializeTestEnvironment, assertSucceeds, assertFails }
+  = require('@firebase/rules-unit-testing');
+
+let testEnv;
+
+beforeAll(async () => {
+  testEnv = await initializeTestEnvironment({
+    projectId: 'your-whatsapp-clone',
+    firestore: { rules: fs.readFileSync('firestore.rules', 'utf8') },
+  });
+});
+
+afterAll(async () => {
+  await testEnv.cleanup();
+});
+
+test('logged-in user can read their own chat', async () => {
+  const priyaDb = testEnv.authenticatedContext('priya123').firestore();
+
+  // First, set up the chat document as admin
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.firestore().doc('chats/chat1').set({
+      participants: ['priya123', 'rahul456'],
+      lastMessage: 'Hello!',
+    });
+  });
+
+  // Now test: Priya should be able to read this chat
+  await assertSucceeds(priyaDb.doc('chats/chat1').get());
+});
+
+test('user cannot read a chat they are not part of', async () => {
+  const strangerDb = testEnv.authenticatedContext('stranger789').firestore();
+
+  await assertFails(strangerDb.doc('chats/chat1').get());
+});
+
+test('user cannot send message as someone else', async () => {
+  const priyaDb = testEnv.authenticatedContext('priya123').firestore();
+
+  await assertFails(
+    priyaDb.collection('chats/chat1/messages').add({
+      senderId: 'rahul456',  // Priya pretending to be Rahul!
+      text: 'Hacked message',
+      createdAt: serverTimestamp(),
+    })
+  );
+});
+
+test('message text cannot exceed 4096 characters', async () => {
+  const priyaDb = testEnv.authenticatedContext('priya123').firestore();
+  const longText = 'A'.repeat(4097);
+
+  await assertFails(
+    priyaDb.collection('chats/chat1/messages').add({
+      senderId: 'priya123',
+      text: longText,
+      createdAt: serverTimestamp(),
+    })
+  );
+});</code></pre>
+
+    <h3>Step 3: Run the tests</h3>
+
+    <pre><code>// Run with the emulator
+firebase emulators:exec "npx jest tests/firestore.rules.test.js"</code></pre>
+
+    <hr>
+
+    <!-- Section 7 -->
+    <h2>7. The complete firestore.rules file</h2>
+
+    <p>Here's the full rules file for your WhatsApp clone, combining everything above:</p>
+
+    <pre><code>rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─── Helper functions ─────────────────────
+    function isLoggedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+
+    function isParticipant(chatId) {
+      return request.auth.uid in
+        get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+    }
+
+    // ─── Users ────────────────────────────────
+    match /users/{userId} {
+      allow read: if isLoggedIn();
+      allow create: if isOwner(userId)
+        && request.resource.data.keys().hasAll(['name', 'createdAt'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 1
+        && request.resource.data.name.size() <= 50
+        && request.resource.data.createdAt == request.time;
+      allow update: if isOwner(userId)
+        && !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(['createdAt', 'uid'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() <= 50;
+      allow delete: if false;
+    }
+
+    // ─── Chats ────────────────────────────────
+    match /chats/{chatId} {
+      allow read: if isLoggedIn()
+        && request.auth.uid in resource.data.participants;
+      allow create: if isLoggedIn()
+        && request.auth.uid in request.resource.data.participants
+        && request.resource.data.participants.size() >= 2
+        && request.resource.data.participants.size() <= 256;
+      allow update: if isLoggedIn()
+        && request.auth.uid in resource.data.participants;
+      allow delete: if false;
+
+      // Messages sub-collection
+      match /messages/{messageId} {
+        allow read: if isParticipant(chatId);
+        allow create: if isParticipant(chatId)
+          && request.resource.data.senderId == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() >= 1
+          && request.resource.data.text.size() <= 4096
+          && request.resource.data.createdAt == request.time;
+        allow delete: if resource.data.senderId == request.auth.uid;
+        allow update: if false;
+      }
+    }
+
+    // ─── Rate Limits ──────────────────────────
+    match /rateLimits/{userId} {
+      allow read, write: if isOwner(userId);
+    }
+
+    // ─── Reports (from Module 7) ─────────────
+    match /reports/{reportId} {
+      allow create: if isLoggedIn()
+        && request.resource.data.reporterId == request.auth.uid;
+      allow read, update, delete: if false; // Admin-only via Cloud Functions
+    }
+
+    // ─── Block everything else ────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 8 -->
+    <h2>8. Deploying rules safely</h2>
+
+    <h3>Step 1: Deploy to Firebase</h3>
+
+    <pre><code>// Deploy Firestore rules only (not functions, hosting, etc.)
+firebase deploy --only firestore:rules
+
+// Deploy Storage rules
+firebase deploy --only storage</code></pre>
+
+    <h3>Step 2: Monitor the rules in Firebase Console</h3>
+    <p>Go to <strong>Firebase Console → Firestore → Rules</strong> to see:</p>
+    <ul>
+      <li><strong>Rules Playground</strong> — simulate a request and see if it passes or fails</li>
+      <li><strong>Monitor tab</strong> — shows which rules are being hit and how many denials occur</li>
+    </ul>
+
+    <h3>Step 3: Gradual rollout strategy</h3>
+    <ol>
+      <li>Test thoroughly in the emulator first</li>
+      <li>Deploy rules to a <strong>staging</strong> Firebase project</li>
+      <li>Run your app against staging — make sure nothing breaks</li>
+      <li>Deploy to production</li>
+      <li>Monitor denials for 24 hours — if they spike, something's wrong</li>
+    </ol>
+
+    <div class="callout" style="background:#fff3cd; border-left-color:#ffc107;">
+      <div class="callout-title">⚠️ Common mistake: locking yourself out</div>
+      <p>If you deploy overly strict rules and your app starts failing, you can always redeploy looser rules immediately. Keep your previous working rules file in version control (git) so you can revert in 30 seconds.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 9: Full App.js -->
+    <h2>9. Full working example — rules + client code together</h2>
+
+    <p>Here's a complete <code>App.js</code> that demonstrates all the patterns working together — sending messages with proper fields so they pass the rules, rate limiting on the client side, and handling rule rejections gracefully.</p>
+
+    <pre><code>// App.js — Firestore Security Rules Demo
+// Replace your App.js with this to test rules in action
+
+import React, { useState, useEffect } from 'react';
+import {
+  View, Text, TextInput, FlatList, Pressable,
+  StyleSheet, Alert, ActivityIndicator, Platform,
+  KeyboardAvoidingView,
+} from 'react-native';
+import { initializeApp } from 'firebase/app';
+import {
+  getAuth, signInWithEmailAndPassword,
+} from 'firebase/auth';
+import {
+  getFirestore, collection, doc, addDoc, setDoc,
+  query, orderBy, limit, onSnapshot, serverTimestamp,
+  writeBatch,
+} from 'firebase/firestore';
+
+// ─── Firebase config (replace with yours) ──────
+const firebaseConfig = {
+  apiKey: 'YOUR_API_KEY',
+  authDomain: 'your-app.firebaseapp.com',
+  projectId: 'your-app',
+  storageBucket: 'your-app.appspot.com',
+  messagingSenderId: '123456789',
+  appId: '1:123456789:web:abc123',
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+// ─── WhatsApp colours ──────────────────────────
+const COLORS = {
+  darkGreen: '#075E54',
+  lightGreen: '#25D366',
+  bubbleGreen: '#DCF8C6',
+  chatBg: '#ECE5DD',
+  white: '#FFFFFF',
+};
+
+// ─── Send message with proper fields for rules ──
+async function sendMessage(chatId, text) {
+  const userId = auth.currentUser.uid;
+  const trimmed = text.trim();
+
+  // Client-side validation (matches what rules enforce)
+  if (trimmed.length === 0 || trimmed.length > 4096) {
+    throw new Error('Message must be 1–4096 characters');
+  }
+
+  const batch = writeBatch(db);
+
+  // 1. Create the message with required fields
+  const msgRef = doc(collection(db, 'chats', chatId, 'messages'));
+  batch.set(msgRef, {
+    senderId: userId,        // Must match auth.uid (rule enforced)
+    text: trimmed,           // 1–4096 chars (rule enforced)
+    createdAt: serverTimestamp(), // Must equal request.time (rule enforced)
+  });
+
+  // 2. Update rate limit tracker
+  const rateLimitRef = doc(db, 'rateLimits', userId);
+  batch.set(rateLimitRef, { lastWrite: serverTimestamp() });
+
+  // 3. Update chat's lastMessage preview
+  const chatRef = doc(db, 'chats', chatId);
+  batch.update(chatRef, {
+    lastMessage: trimmed.substring(0, 100),
+    lastMessageAt: serverTimestamp(),
+  });
+
+  try {
+    await batch.commit();
+  } catch (error) {
+    if (error.code === 'permission-denied') {
+      throw new Error(
+        'Message blocked by security rules. ' +
+        'Possible reasons: rate limited, not a participant, or invalid data.'
+      );
+    }
+    throw error;
+  }
+}
+
+// ─── Chat Screen Component ─────────────────────
+function ChatScreen({ chatId }) {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+  const [sending, setSending] = useState(false);
+  const [lastSentAt, setLastSentAt] = useState(0);
+
+  // Listen to messages in real-time
+  useEffect(() => {
+    const q = query(
+      collection(db, 'chats', chatId, 'messages'),
+      orderBy('createdAt', 'desc'),
+      limit(50)
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const msgs = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
+      setMessages(msgs);
+    });
+
+    return unsubscribe;
+  }, [chatId]);
+
+  // Send with client-side rate limiting
+  const handleSend = async () => {
+    if (!input.trim()) return;
+
+    // Client-side rate limit (1 message per second)
+    const now = Date.now();
+    if (now - lastSentAt < 1000) {
+      Alert.alert('Slow down!', 'You can send 1 message per second.');
+      return;
+    }
+
+    setSending(true);
+    try {
+      await sendMessage(chatId, input);
+      setInput('');
+      setLastSentAt(Date.now());
+    } catch (error) {
+      Alert.alert('Send failed', error.message);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const userId = auth.currentUser?.uid;
+
+  const renderMessage = ({ item }) => {
+    const isMine = item.senderId === userId;
+    return (
+      &lt;View style={[styles.bubble, isMine ? styles.myBubble : styles.theirBubble]}&gt;
+        &lt;Text style={styles.messageText}&gt;{item.text}&lt;/Text&gt;
+        &lt;Text style={styles.timeText}&gt;
+          {item.createdAt?.toDate?.()
+            ? item.createdAt.toDate().toLocaleTimeString([], {
+                hour: '2-digit', minute: '2-digit'
+              })
+            : 'Sending...'}
+        &lt;/Text&gt;
+      &lt;/View&gt;
+    );
+  };
+
+  return (
+    &lt;KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    &gt;
+      {/* Header */}
+      &lt;View style={styles.header}&gt;
+        &lt;Text style={styles.headerTitle}&gt;Priya&lt;/Text&gt;
+        &lt;Text style={styles.headerSubtitle}&gt;online&lt;/Text&gt;
+      &lt;/View&gt;
+
+      {/* Messages */}
+      &lt;FlatList
+        data={messages}
+        renderItem={renderMessage}
+        keyExtractor={(item) =&gt; item.id}
+        inverted
+        style={styles.messageList}
+        contentContainerStyle={{ paddingVertical: 10 }}
+      /&gt;
+
+      {/* Input bar */}
+      &lt;View style={styles.inputBar}&gt;
+        &lt;TextInput
+          style={styles.input}
+          value={input}
+          onChangeText={setInput}
+          placeholder="Type a message"
+          maxLength={4096}
+          multiline
+        /&gt;
+        &lt;Pressable
+          style={[styles.sendBtn, sending && { opacity: 0.5 }]}
+          onPress={handleSend}
+          disabled={sending}
+        &gt;
+          {sending
+            ? &lt;ActivityIndicator color={COLORS.white} size="small" /&gt;
+            : &lt;Text style={styles.sendText}&gt;Send&lt;/Text&gt;
+          }
+        &lt;/Pressable&gt;
+      &lt;/View&gt;
+    &lt;/KeyboardAvoidingView&gt;
+  );
+}
+
+// ─── Main App ─────────────────────────────────
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    // Auto-login for testing (use your demo account)
+    signInWithEmailAndPassword(auth, 'reviewer@yourapp.com', 'ReviewTest2026!')
+      .then((cred) => setUser(cred.user))
+      .catch((err) => Alert.alert('Login failed', err.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return (
+      &lt;View style={styles.center}&gt;
+        &lt;ActivityIndicator size="large" color={COLORS.darkGreen} /&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  if (!user) {
+    return (
+      &lt;View style={styles.center}&gt;
+        &lt;Text&gt;Not logged in&lt;/Text&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  // Replace 'chat1' with a real chat ID from your Firestore
+  return &lt;ChatScreen chatId="chat1" /&gt;;
+}
+
+// ─── Styles ───────────────────────────────────
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: COLORS.chatBg },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  header: {
+    backgroundColor: COLORS.darkGreen,
+    paddingTop: Platform.OS === 'ios' ? 50 : 30,
+    paddingBottom: 12,
+    paddingHorizontal: 16,
+  },
+  headerTitle: { color: COLORS.white, fontSize: 18, fontWeight: '700' },
+  headerSubtitle: { color: '#b2dfdb', fontSize: 13 },
+  messageList: { flex: 1, paddingHorizontal: 10 },
+  bubble: {
+    maxWidth: '75%',
+    padding: 10,
+    borderRadius: 8,
+    marginVertical: 3,
+  },
+  myBubble: {
+    backgroundColor: COLORS.bubbleGreen,
+    alignSelf: 'flex-end',
+    borderTopRightRadius: 0,
+  },
+  theirBubble: {
+    backgroundColor: COLORS.white,
+    alignSelf: 'flex-start',
+    borderTopLeftRadius: 0,
+  },
+  messageText: { fontSize: 15, color: '#303030' },
+  timeText: { fontSize: 11, color: '#999', marginTop: 4, alignSelf: 'flex-end' },
+  inputBar: {
+    flexDirection: 'row',
+    padding: 8,
+    backgroundColor: COLORS.white,
+    alignItems: 'flex-end',
+  },
+  input: {
+    flex: 1,
+    backgroundColor: '#f0f0f0',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
+    fontSize: 15,
+    maxHeight: 100,
+  },
+  sendBtn: {
+    backgroundColor: COLORS.lightGreen,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    marginLeft: 8,
+  },
+  sendText: { color: COLORS.white, fontWeight: '700', fontSize: 15 },
+});</code></pre>
+
+    <hr>
+
+    <!-- Section 10: Key Takeaways -->
+    <h2>10. Key takeaways</h2>
+
+    <ul>
+      <li><strong>Rules run on the server</strong> — client code can't bypass them</li>
+      <li><strong>Validate field types and sizes</strong> — prevent garbage data</li>
+      <li><strong>Enforce ownership</strong> — <code>senderId == request.auth.uid</code></li>
+      <li><strong>Use <code>request.time</code> for timestamps</strong> — prevents backdating</li>
+      <li><strong>Rate limit with a separate document</strong> — prevents spam floods</li>
+      <li><strong>Storage rules = file size + MIME type</strong> — prevents bill explosions</li>
+      <li><strong>Test with the Emulator before deploying</strong> — one bad rule locks everyone out</li>
+      <li><strong>Keep rules in version control</strong> — so you can revert fast</li>
+    </ul>
+
+    <hr>
+
+    <!-- Quiz -->
+    <h2>Test your knowledge</h2>
+    <div id="prod-lesson-0001-quiz"></div>
+
+    <hr>
+
+    <!-- Nav -->
+    <div class="nav-links">
+      <a href="../07-store-compliance-and-safety/0006-pre-submission-checklist.html">&larr; Previous: Pre-Submission Checklist</a>
+      <a href="./0002-pagination-and-data-limits.html">Next: Pagination &amp; Data Limits &rarr;</a>
+    </div>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script>
+    createQuiz('prod-lesson-0001-quiz', [
+      {
+        question: 'What does `request.resource.data` represent in a Firestore security rule?',
+        options: [
+          'The data already stored in the database',
+          'The data being written (the incoming document)',
+          'The Firebase Auth token',
+          'The client\'s IP address',
+        ],
+        answer: 1,
+      },
+      {
+        question: 'Why do we use `request.resource.data.senderId == request.auth.uid` in message rules?',
+        options: [
+          'To make messages load faster',
+          'To prevent users from sending messages as someone else',
+          'To enable offline messaging',
+          'To track read receipts',
+        ],
+        answer: 1,
+      },
+      {
+        question: 'How does the rate limiting pattern work in security rules?',
+        options: [
+          'It counts total messages per day in a Cloud Function',
+          'It checks a separate document\'s timestamp to enforce a cooldown between writes',
+          'It uses a counter field on the chat document',
+          'It relies on the client app to self-enforce the limit',
+        ],
+        answer: 1,
+      },
+      {
+        question: 'What happens if you deploy overly strict rules that break your app?',
+        options: [
+          'You must wait 24 hours for the rules to take effect',
+          'You need to create a new Firebase project',
+          'You can immediately redeploy corrected rules from your version control',
+          'You must contact Firebase support to unlock your database',
+        ],
+        answer: 2,
+      },
+      {
+        question: 'In Storage rules, `request.resource.contentType.matches(\'image/.*\')` prevents which attack?',
+        options: [
+          'Uploading executable files or scripts disguised as images',
+          'Uploading images that are too small',
+          'Downloading images without permission',
+          'Renaming image files after upload',
+        ],
+        answer: 0,
+      },
+    ]);
+  </script>
+</body>
+</html>

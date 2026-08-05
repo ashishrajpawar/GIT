@@ -1,0 +1,918 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Production at Scale Lesson 2: Pagination &amp; Data Limits — JS Learn</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">Module 8: Production at Scale</a>
+      <span class="sep">›</span>
+      <span class="current">Lesson 2: Pagination &amp; Data Limits</span>
+    </nav>
+
+    <!-- Header -->
+    <span class="badge">Production at Scale · Lesson 2</span>
+    <h1 style="margin-top:0.5rem;">Pagination &amp; Data Limits</h1>
+    <div class="lesson-meta">
+      <span>Cursor pagination · startAfter · Infinite scroll · Real-time tail · Read costs</span>
+      <span>~55 min</span>
+      <span>Hands-on</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for your WhatsApp clone</div>
+      <p>Right now your chat loads <strong>every single message</strong> at once. That's fine for 20 messages during testing — but a real conversation has 10,000+ messages. Loading all of them means: the app freezes for 5 seconds on open, uses 50MB of RAM, and costs you money (Firestore charges per document read). WhatsApp loads only the latest ~30 messages and fetches older ones when you scroll up. That's pagination — and it's what makes the app feel instant even in year-old group chats.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 1 -->
+    <h2>1. The problem: loading everything at once</h2>
+
+    <p>Here's what you might have now — a query with no limit:</p>
+
+    <pre><code>// ❌ BAD — loads ALL messages in the chat
+const q = query(
+  collection(db, 'chats', chatId, 'messages'),
+  orderBy('createdAt', 'desc')
+);
+
+onSnapshot(q, (snapshot) => {
+  // If there are 15,000 messages, this reads 15,000 documents
+  // Cost: 15,000 reads × $0.06 per 100K = $0.009 per chat open
+  // With 1,000 daily users opening 10 chats each = $90/day!
+  const msgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  setMessages(msgs);
+});</code></pre>
+
+    <h3>What goes wrong at scale</h3>
+    <table>
+      <thead>
+        <tr><th>Messages in chat</th><th>Load time</th><th>RAM used</th><th>Firestore reads</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>50</td><td>~0.3s</td><td>~2MB</td><td>50</td></tr>
+        <tr><td>1,000</td><td>~2s</td><td>~15MB</td><td>1,000</td></tr>
+        <tr><td>10,000</td><td>~8s</td><td>~80MB</td><td>10,000</td></tr>
+        <tr><td>50,000</td><td>Crash 💀</td><td>OOM</td><td>50,000</td></tr>
+      </tbody>
+    </table>
+
+    <hr>
+
+    <!-- Section 2 -->
+    <h2>2. Cursor-based pagination with <code>startAfter</code></h2>
+
+    <p>Instead of loading everything, load <strong>one page at a time</strong> (e.g. 30 messages). When the user scrolls up, load the next 30 — using a <strong>cursor</strong> to remember where you left off.</p>
+
+    <pre><code>import {
+  collection, query, orderBy, limit, startAfter,
+  getDocs,
+} from 'firebase/firestore';
+
+const PAGE_SIZE = 30;
+
+// Load the first page
+async function loadFirstPage(chatId) {
+  const q = query(
+    collection(db, 'chats', chatId, 'messages'),
+    orderBy('createdAt', 'desc'),  // newest first
+    limit(PAGE_SIZE)
+  );
+
+  const snapshot = await getDocs(q);
+  const messages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+  // The cursor is the LAST document in this page
+  const lastDoc = snapshot.docs[snapshot.docs.length - 1];
+
+  return { messages, lastDoc };
+}
+
+// Load the next page (older messages)
+async function loadNextPage(chatId, lastDoc) {
+  const q = query(
+    collection(db, 'chats', chatId, 'messages'),
+    orderBy('createdAt', 'desc'),
+    startAfter(lastDoc),  // Start after the cursor
+    limit(PAGE_SIZE)
+  );
+
+  const snapshot = await getDocs(q);
+  const messages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  const newLastDoc = snapshot.docs[snapshot.docs.length - 1] || null;
+
+  return { messages, lastDoc: newLastDoc };
+}</code></pre>
+
+    <h3>How the cursor works</h3>
+    <ol>
+      <li>First page: get the 30 newest messages. Save the last document as a "cursor"</li>
+      <li>Second page: <code>startAfter(cursor)</code> tells Firestore "give me 30 messages older than this one"</li>
+      <li>Third page: same thing, with the new cursor from page 2</li>
+      <li>When a page returns fewer than 30 results — you've reached the beginning of the chat</li>
+    </ol>
+
+    <div class="callout" style="background:#e8f5e9; border-left-color:#4caf50;">
+      <div class="callout-title">Why cursor > offset</div>
+      <p>Some databases use <code>OFFSET 30</code> to skip pages. Firestore doesn't support offset — and even if it did, offsets are slow (the database still reads and discards the skipped rows). Cursors jump directly to the right spot. WhatsApp, Signal, and Telegram all use cursor-based pagination.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 3 -->
+    <h2>3. Infinite scroll with FlatList</h2>
+
+    <p>Connect pagination to the UI: when the user scrolls near the top (older messages), fetch the next page automatically.</p>
+
+    <pre><code>import React, { useState, useEffect, useCallback } from 'react';
+import { FlatList, ActivityIndicator, View, Text } from 'react-native';
+
+function MessageList({ chatId }) {
+  const [messages, setMessages] = useState([]);
+  const [cursor, setCursor] = useState(null);    // last document for pagination
+  const [loading, setLoading] = useState(false);
+  const [hasMore, setHasMore] = useState(true);  // are there older messages?
+
+  const PAGE_SIZE = 30;
+
+  // Load initial page on mount
+  useEffect(() => {
+    loadInitial();
+  }, [chatId]);
+
+  async function loadInitial() {
+    setLoading(true);
+    const { messages: msgs, lastDoc } = await loadFirstPage(chatId);
+    setMessages(msgs);
+    setCursor(lastDoc);
+    setHasMore(msgs.length === PAGE_SIZE);
+    setLoading(false);
+  }
+
+  // Load more when user scrolls to the top
+  const loadMore = useCallback(async () => {
+    if (loading || !hasMore || !cursor) return;
+
+    setLoading(true);
+    const { messages: older, lastDoc } = await loadNextPage(chatId, cursor);
+
+    setMessages(prev => [...prev, ...older]); // Append older messages at the end
+    setCursor(lastDoc);
+    setHasMore(older.length === PAGE_SIZE);
+    setLoading(false);
+  }, [loading, hasMore, cursor, chatId]);
+
+  return (
+    &lt;FlatList
+      data={messages}
+      renderItem={({ item }) =&gt; &lt;MessageBubble message={item} /&gt;}
+      keyExtractor={(item) =&gt; item.id}
+      inverted                          // newest at the bottom
+      onEndReached={loadMore}           // fires when scrolling UP (because inverted)
+      onEndReachedThreshold={0.3}       // trigger when 30% from the top
+      ListFooterComponent={
+        loading ? &lt;ActivityIndicator style={{ padding: 20 }} /&gt; : null
+      }
+    /&gt;
+  );
+}</code></pre>
+
+    <h3>Why <code>inverted</code> + <code>onEndReached</code> works</h3>
+    <p>When a FlatList is <code>inverted</code>, the "end" of the list is visually at the <strong>top</strong> of the screen. So <code>onEndReached</code> fires when the user scrolls up — exactly when you want to load older messages.</p>
+
+    <hr>
+
+    <!-- Section 4 -->
+    <h2>4. Real-time tail + pagination (the WhatsApp pattern)</h2>
+
+    <p>There's a problem with pure pagination: if Priya sends you a message while you're scrolling up, you won't see it until you scroll back down and refresh. The solution: use a <strong>real-time listener for new messages</strong> combined with <strong>pagination for old messages</strong>.</p>
+
+    <pre><code>import {
+  collection, query, orderBy, limit, startAfter,
+  getDocs, onSnapshot, where, Timestamp,
+} from 'firebase/firestore';
+
+function useMessages(chatId) {
+  const [messages, setMessages] = useState([]);
+  const [cursor, setCursor] = useState(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [loading, setLoading] = useState(false);
+
+  const PAGE_SIZE = 30;
+
+  useEffect(() => {
+    let unsubscribe = null;
+
+    async function init() {
+      // 1. Load the first page (one-time fetch)
+      const q = query(
+        collection(db, 'chats', chatId, 'messages'),
+        orderBy('createdAt', 'desc'),
+        limit(PAGE_SIZE)
+      );
+      const snapshot = await getDocs(q);
+      const initial = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+      setMessages(initial);
+      setCursor(snapshot.docs[snapshot.docs.length - 1] || null);
+      setHasMore(initial.length === PAGE_SIZE);
+
+      // 2. Start real-time listener for NEW messages only
+      //    (messages created after our initial fetch)
+      const newestTimestamp = initial.length > 0
+        ? initial[0].createdAt
+        : Timestamp.now();
+
+      const realtimeQuery = query(
+        collection(db, 'chats', chatId, 'messages'),
+        orderBy('createdAt', 'asc'),
+        startAfter(newestTimestamp)
+      );
+
+      unsubscribe = onSnapshot(realtimeQuery, (snap) => {
+        const newMsgs = snap.docChanges()
+          .filter(change => change.type === 'added')
+          .map(change => ({ id: change.doc.id, ...change.doc.data() }));
+
+        if (newMsgs.length > 0) {
+          // Prepend new messages at the start (they're newer)
+          setMessages(prev => [...newMsgs.reverse(), ...prev]);
+        }
+      });
+    }
+
+    init();
+    return () => { if (unsubscribe) unsubscribe(); };
+  }, [chatId]);
+
+  // Load older messages (called by onEndReached)
+  const loadOlder = useCallback(async () => {
+    if (loading || !hasMore || !cursor) return;
+    setLoading(true);
+
+    const q = query(
+      collection(db, 'chats', chatId, 'messages'),
+      orderBy('createdAt', 'desc'),
+      startAfter(cursor),
+      limit(PAGE_SIZE)
+    );
+
+    const snapshot = await getDocs(q);
+    const older = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+    setMessages(prev => [...prev, ...older]);
+    setCursor(snapshot.docs[snapshot.docs.length - 1] || null);
+    setHasMore(older.length === PAGE_SIZE);
+    setLoading(false);
+  }, [loading, hasMore, cursor, chatId]);
+
+  return { messages, loadOlder, loading, hasMore };
+}</code></pre>
+
+    <h3>How this works</h3>
+    <table>
+      <thead>
+        <tr><th>Part</th><th>What it does</th><th>Type</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Initial fetch</td><td>Loads latest 30 messages</td><td>One-time <code>getDocs</code></td></tr>
+        <tr><td>Real-time tail</td><td>Listens for messages newer than the initial batch</td><td><code>onSnapshot</code> (live)</td></tr>
+        <tr><td>Load older</td><td>Fetches 30 more messages when user scrolls up</td><td>One-time <code>getDocs</code></td></tr>
+      </tbody>
+    </table>
+
+    <p>This is exactly how WhatsApp works: new messages pop in instantly (real-time), scrolling up loads history on demand (pagination).</p>
+
+    <hr>
+
+    <!-- Section 5 -->
+    <h2>5. Paginating the chat list</h2>
+
+    <p>The chat list also needs pagination. If a user has 500 conversations, loading all of them wastes reads and slows down the home screen.</p>
+
+    <pre><code>function useChatList(userId) {
+  const [chats, setChats] = useState([]);
+  const [cursor, setCursor] = useState(null);
+  const [hasMore, setHasMore] = useState(true);
+
+  const PAGE_SIZE = 20;
+
+  useEffect(() => {
+    // Real-time listener for the first page (most recent chats)
+    const q = query(
+      collection(db, 'chats'),
+      where('participants', 'array-contains', userId),
+      orderBy('lastMessageAt', 'desc'),
+      limit(PAGE_SIZE)
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const chatList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setChats(chatList);
+      setCursor(snapshot.docs[snapshot.docs.length - 1] || null);
+      setHasMore(chatList.length === PAGE_SIZE);
+    });
+
+    return unsubscribe;
+  }, [userId]);
+
+  const loadMoreChats = useCallback(async () => {
+    if (!hasMore || !cursor) return;
+
+    const q = query(
+      collection(db, 'chats'),
+      where('participants', 'array-contains', userId),
+      orderBy('lastMessageAt', 'desc'),
+      startAfter(cursor),
+      limit(PAGE_SIZE)
+    );
+
+    const snapshot = await getDocs(q);
+    const older = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+    setChats(prev => [...prev, ...older]);
+    setCursor(snapshot.docs[snapshot.docs.length - 1] || null);
+    setHasMore(older.length === PAGE_SIZE);
+  }, [hasMore, cursor, userId]);
+
+  return { chats, loadMoreChats, hasMore };
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 6 -->
+    <h2>6. Firestore read cost awareness</h2>
+
+    <p>Firestore charges <strong>per document read</strong>. Understanding costs helps you make pagination decisions.</p>
+
+    <h3>Firestore pricing (Blaze plan)</h3>
+    <table>
+      <thead>
+        <tr><th>Operation</th><th>Free tier (daily)</th><th>After free tier</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Document reads</td><td>50,000/day</td><td>$0.06 per 100,000</td></tr>
+        <tr><td>Document writes</td><td>20,000/day</td><td>$0.18 per 100,000</td></tr>
+        <tr><td>Document deletes</td><td>20,000/day</td><td>$0.02 per 100,000</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Cost examples for your WhatsApp clone</h3>
+    <table>
+      <thead>
+        <tr><th>Scenario</th><th>Without pagination</th><th>With pagination (30/page)</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>User opens a 5,000-message chat</td>
+          <td>5,000 reads</td>
+          <td>30 reads</td>
+        </tr>
+        <tr>
+          <td>1,000 users each open 5 chats/day</td>
+          <td>25,000,000 reads/day = <strong>$15/day</strong></td>
+          <td>150,000 reads/day = <strong>$0.09/day</strong></td>
+        </tr>
+        <tr>
+          <td>User scrolls up 3 pages</td>
+          <td>Already loaded everything</td>
+          <td>90 additional reads</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout" style="background:#fff3cd; border-left-color:#ffc107;">
+      <div class="callout-title">⚠️ Real-time listeners also count as reads</div>
+      <p>Each document delivered by <code>onSnapshot</code> counts as a read. If you listen to 30 messages and one changes, that's 1 read (just the changed doc). But the <strong>initial snapshot</strong> counts as 30 reads. This is why we limit the real-time listener to only new messages (the "tail") rather than re-listening to the full history.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 7 -->
+    <h2>7. Document count limits and guards</h2>
+
+    <p>Beyond pagination, you should enforce limits on how much data exists:</p>
+
+    <pre><code>// In your security rules — limit group chat participants
+match /chats/{chatId} {
+  allow create: if request.resource.data.participants.size() <= 256;
+  allow update: if request.resource.data.participants.size() <= 256;
+}
+
+// In your client code — enforce message length before sending
+function validateMessage(text) {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return { valid: false, error: 'Message is empty' };
+  if (trimmed.length > 4096) return { valid: false, error: 'Message too long (max 4096 chars)' };
+  return { valid: true, text: trimmed };
+}
+
+// Limit status updates per user (prevent spam)
+async function postStatus(userId, content) {
+  // Check how many statuses the user has in the last 24 hours
+  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const q = query(
+    collection(db, 'statuses'),
+    where('userId', '==', userId),
+    where('createdAt', '>', Timestamp.fromDate(oneDayAgo))
+  );
+
+  const snapshot = await getDocs(q);
+  if (snapshot.size >= 30) {
+    throw new Error('Maximum 30 status updates per 24 hours');
+  }
+
+  // Proceed with posting...
+}</code></pre>
+
+    <h3>Recommended limits for your WhatsApp clone</h3>
+    <table>
+      <thead>
+        <tr><th>What</th><th>Limit</th><th>Why</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Message text</td><td>4,096 chars</td><td>Prevents storing huge text blobs</td></tr>
+        <tr><td>Group participants</td><td>256</td><td>WhatsApp's limit; keeps queries fast</td></tr>
+        <tr><td>Chat list page</td><td>20 chats</td><td>More than fills one screen</td></tr>
+        <tr><td>Message page</td><td>30 messages</td><td>Balances UX speed vs. scroll needs</td></tr>
+        <tr><td>Status updates/day</td><td>30</td><td>Prevents spamming the status feed</td></tr>
+        <tr><td>Profile name</td><td>50 chars</td><td>Prevents layout-breaking names</td></tr>
+        <tr><td>Image upload</td><td>10 MB</td><td>Keeps Storage costs manageable</td></tr>
+      </tbody>
+    </table>
+
+    <hr>
+
+    <!-- Section 8: Full App.js -->
+    <h2>8. Full working example — paginated message thread</h2>
+
+    <p>Here's a complete <code>App.js</code> demonstrating the real-time tail + infinite scroll pattern. Paste this into your project to see pagination in action.</p>
+
+    <pre><code>// App.js — Pagination & Data Limits Demo
+// Shows: cursor pagination, real-time new messages, infinite scroll
+
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  View, Text, TextInput, FlatList, Pressable,
+  StyleSheet, Alert, ActivityIndicator, Platform,
+  KeyboardAvoidingView,
+} from 'react-native';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
+import {
+  getFirestore, collection, doc, query, orderBy,
+  limit, startAfter, getDocs, onSnapshot, addDoc,
+  serverTimestamp, Timestamp, writeBatch,
+} from 'firebase/firestore';
+
+// ─── Firebase config (replace with yours) ──────
+const firebaseConfig = {
+  apiKey: 'YOUR_API_KEY',
+  authDomain: 'your-app.firebaseapp.com',
+  projectId: 'your-app',
+  storageBucket: 'your-app.appspot.com',
+  messagingSenderId: '123456789',
+  appId: '1:123456789:web:abc123',
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+const PAGE_SIZE = 30;
+
+const COLORS = {
+  darkGreen: '#075E54',
+  lightGreen: '#25D366',
+  bubbleGreen: '#DCF8C6',
+  chatBg: '#ECE5DD',
+  white: '#FFFFFF',
+};
+
+// ─── Custom hook: paginated messages + real-time tail ──
+function useMessages(chatId) {
+  const [messages, setMessages] = useState([]);
+  const [cursor, setCursor] = useState(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+
+  useEffect(() => {
+    let unsubscribe = null;
+
+    async function init() {
+      try {
+        // Step 1: Fetch the latest PAGE_SIZE messages (one-time)
+        const initialQuery = query(
+          collection(db, 'chats', chatId, 'messages'),
+          orderBy('createdAt', 'desc'),
+          limit(PAGE_SIZE)
+        );
+
+        const snapshot = await getDocs(initialQuery);
+        const initial = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data(),
+        }));
+
+        setMessages(initial);
+        setCursor(snapshot.docs[snapshot.docs.length - 1] || null);
+        setHasMore(initial.length === PAGE_SIZE);
+        setInitialLoading(false);
+
+        // Step 2: Real-time listener for messages NEWER than our fetch
+        const newestTimestamp = initial.length > 0 && initial[0].createdAt
+          ? initial[0].createdAt
+          : Timestamp.now();
+
+        const tailQuery = query(
+          collection(db, 'chats', chatId, 'messages'),
+          orderBy('createdAt', 'asc'),
+          startAfter(newestTimestamp)
+        );
+
+        unsubscribe = onSnapshot(tailQuery, (snap) => {
+          const newMsgs = snap.docChanges()
+            .filter(change => change.type === 'added')
+            .map(change => ({ id: change.doc.id, ...change.doc.data() }));
+
+          if (newMsgs.length > 0) {
+            setMessages(prev => [...newMsgs.reverse(), ...prev]);
+          }
+        });
+      } catch (error) {
+        Alert.alert('Error loading messages', error.message);
+        setInitialLoading(false);
+      }
+    }
+
+    init();
+    return () => { if (unsubscribe) unsubscribe(); };
+  }, [chatId]);
+
+  // Load older messages when user scrolls up
+  const loadOlder = useCallback(async () => {
+    if (loading || !hasMore || !cursor) return;
+    setLoading(true);
+
+    try {
+      const olderQuery = query(
+        collection(db, 'chats', chatId, 'messages'),
+        orderBy('createdAt', 'desc'),
+        startAfter(cursor),
+        limit(PAGE_SIZE)
+      );
+
+      const snapshot = await getDocs(olderQuery);
+      const older = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
+
+      setMessages(prev => [...prev, ...older]);
+      setCursor(snapshot.docs[snapshot.docs.length - 1] || null);
+      setHasMore(older.length === PAGE_SIZE);
+    } catch (error) {
+      Alert.alert('Error loading older messages', error.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [loading, hasMore, cursor, chatId]);
+
+  return { messages, loadOlder, loading, hasMore, initialLoading };
+}
+
+// ─── Send message ──────────────────────────────
+async function sendMessage(chatId, text) {
+  const trimmed = text.trim();
+  if (trimmed.length === 0 || trimmed.length > 4096) {
+    throw new Error('Message must be 1–4096 characters');
+  }
+
+  const userId = auth.currentUser.uid;
+  const batch = writeBatch(db);
+
+  const msgRef = doc(collection(db, 'chats', chatId, 'messages'));
+  batch.set(msgRef, {
+    senderId: userId,
+    text: trimmed,
+    createdAt: serverTimestamp(),
+  });
+
+  const chatRef = doc(db, 'chats', chatId);
+  batch.update(chatRef, {
+    lastMessage: trimmed.substring(0, 100),
+    lastMessageAt: serverTimestamp(),
+  });
+
+  await batch.commit();
+}
+
+// ─── Chat Screen ───────────────────────────────
+function ChatScreen({ chatId }) {
+  const { messages, loadOlder, loading, hasMore, initialLoading } = useMessages(chatId);
+  const [input, setInput] = useState('');
+  const [sending, setSending] = useState(false);
+
+  const userId = auth.currentUser?.uid;
+
+  const handleSend = async () => {
+    if (!input.trim()) return;
+    setSending(true);
+    try {
+      await sendMessage(chatId, input);
+      setInput('');
+    } catch (error) {
+      Alert.alert('Send failed', error.message);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const renderMessage = ({ item }) => {
+    const isMine = item.senderId === userId;
+    return (
+      &lt;View style={[styles.bubble, isMine ? styles.myBubble : styles.theirBubble]}&gt;
+        &lt;Text style={styles.messageText}&gt;{item.text}&lt;/Text&gt;
+        &lt;Text style={styles.timeText}&gt;
+          {item.createdAt?.toDate?.()
+            ? item.createdAt.toDate().toLocaleTimeString([], {
+                hour: '2-digit', minute: '2-digit',
+              })
+            : 'Sending...'}
+        &lt;/Text&gt;
+      &lt;/View&gt;
+    );
+  };
+
+  const renderFooter = () => {
+    if (loading) {
+      return (
+        &lt;View style={styles.footerLoader}&gt;
+          &lt;ActivityIndicator size="small" color={COLORS.darkGreen} /&gt;
+          &lt;Text style={styles.footerText}&gt;Loading older messages...&lt;/Text&gt;
+        &lt;/View&gt;
+      );
+    }
+    if (!hasMore && messages.length > PAGE_SIZE) {
+      return (
+        &lt;View style={styles.footerLoader}&gt;
+          &lt;Text style={styles.footerText}&gt;— Beginning of conversation —&lt;/Text&gt;
+        &lt;/View&gt;
+      );
+    }
+    return null;
+  };
+
+  if (initialLoading) {
+    return (
+      &lt;View style={styles.center}&gt;
+        &lt;ActivityIndicator size="large" color={COLORS.darkGreen} /&gt;
+        &lt;Text style={{ marginTop: 10, color: '#666' }}&gt;Loading chat...&lt;/Text&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  return (
+    &lt;KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    &gt;
+      {/* Header */}
+      &lt;View style={styles.header}&gt;
+        &lt;Text style={styles.headerTitle}&gt;Priya&lt;/Text&gt;
+        &lt;Text style={styles.headerSubtitle}&gt;
+          {messages.length} messages loaded
+        &lt;/Text&gt;
+      &lt;/View&gt;
+
+      {/* Messages with infinite scroll */}
+      &lt;FlatList
+        data={messages}
+        renderItem={renderMessage}
+        keyExtractor={(item) =&gt; item.id}
+        inverted
+        style={styles.messageList}
+        contentContainerStyle={{ paddingVertical: 10 }}
+        onEndReached={loadOlder}
+        onEndReachedThreshold={0.3}
+        ListFooterComponent={renderFooter}
+      /&gt;
+
+      {/* Input bar */}
+      &lt;View style={styles.inputBar}&gt;
+        &lt;TextInput
+          style={styles.input}
+          value={input}
+          onChangeText={setInput}
+          placeholder="Type a message"
+          maxLength={4096}
+          multiline
+        /&gt;
+        &lt;Pressable
+          style={[styles.sendBtn, sending && { opacity: 0.5 }]}
+          onPress={handleSend}
+          disabled={sending}
+        &gt;
+          {sending
+            ? &lt;ActivityIndicator color={COLORS.white} size="small" /&gt;
+            : &lt;Text style={styles.sendText}&gt;Send&lt;/Text&gt;
+          }
+        &lt;/Pressable&gt;
+      &lt;/View&gt;
+    &lt;/KeyboardAvoidingView&gt;
+  );
+}
+
+// ─── Main App ─────────────────────────────────
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    signInWithEmailAndPassword(auth, 'reviewer@yourapp.com', 'ReviewTest2026!')
+      .then((cred) => setUser(cred.user))
+      .catch((err) => Alert.alert('Login failed', err.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return (
+      &lt;View style={styles.center}&gt;
+        &lt;ActivityIndicator size="large" color={COLORS.darkGreen} /&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  if (!user) {
+    return (
+      &lt;View style={styles.center}&gt;
+        &lt;Text&gt;Not logged in&lt;/Text&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  return &lt;ChatScreen chatId="chat1" /&gt;;
+}
+
+// ─── Styles ───────────────────────────────────
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: COLORS.chatBg },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  header: {
+    backgroundColor: COLORS.darkGreen,
+    paddingTop: Platform.OS === 'ios' ? 50 : 30,
+    paddingBottom: 12,
+    paddingHorizontal: 16,
+  },
+  headerTitle: { color: COLORS.white, fontSize: 18, fontWeight: '700' },
+  headerSubtitle: { color: '#b2dfdb', fontSize: 13 },
+  messageList: { flex: 1, paddingHorizontal: 10 },
+  bubble: {
+    maxWidth: '75%',
+    padding: 10,
+    borderRadius: 8,
+    marginVertical: 3,
+  },
+  myBubble: {
+    backgroundColor: COLORS.bubbleGreen,
+    alignSelf: 'flex-end',
+    borderTopRightRadius: 0,
+  },
+  theirBubble: {
+    backgroundColor: COLORS.white,
+    alignSelf: 'flex-start',
+    borderTopLeftRadius: 0,
+  },
+  messageText: { fontSize: 15, color: '#303030' },
+  timeText: { fontSize: 11, color: '#999', marginTop: 4, alignSelf: 'flex-end' },
+  inputBar: {
+    flexDirection: 'row',
+    padding: 8,
+    backgroundColor: COLORS.white,
+    alignItems: 'flex-end',
+  },
+  input: {
+    flex: 1,
+    backgroundColor: '#f0f0f0',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
+    fontSize: 15,
+    maxHeight: 100,
+  },
+  sendBtn: {
+    backgroundColor: COLORS.lightGreen,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    marginLeft: 8,
+  },
+  sendText: { color: COLORS.white, fontWeight: '700', fontSize: 15 },
+  footerLoader: {
+    paddingVertical: 16,
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  footerText: { color: '#888', fontSize: 13 },
+});</code></pre>
+
+    <hr>
+
+    <!-- Section 9: Key Takeaways -->
+    <h2>9. Key takeaways</h2>
+
+    <ul>
+      <li><strong>Never load all documents</strong> — always use <code>limit()</code></li>
+      <li><strong>Cursor pagination with <code>startAfter</code></strong> — fast and Firestore-native</li>
+      <li><strong>Real-time tail + pagination</strong> — new messages appear live, old messages load on demand</li>
+      <li><strong><code>inverted</code> FlatList + <code>onEndReached</code></strong> — triggers when scrolling UP</li>
+      <li><strong>Track <code>hasMore</code></strong> — stop fetching when you reach the beginning</li>
+      <li><strong>Firestore charges per read</strong> — pagination saves real money at scale</li>
+      <li><strong>Set hard limits everywhere</strong> — message length, page size, group size, uploads</li>
+    </ul>
+
+    <hr>
+
+    <!-- Quiz -->
+    <h2>Test your knowledge</h2>
+    <div id="prod-lesson-0002-quiz"></div>
+
+    <hr>
+
+    <!-- Nav -->
+    <div class="nav-links">
+      <a href="./0001-firestore-security-rules.html">&larr; Previous: Firestore Security Rules</a>
+      <a href="./0003-offline-support.html">Next: Offline Support &amp; Network Handling &rarr;</a>
+    </div>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script>
+    createQuiz('prod-lesson-0002-quiz', [
+      {
+        question: 'What does `startAfter(lastDoc)` do in a Firestore query?',
+        options: [
+          'Skips a fixed number of documents (like SQL OFFSET)',
+          'Returns documents created after a specific date only',
+          'Begins results after the given document snapshot (cursor-based pagination)',
+          'Filters out documents that match the given document',
+        ],
+        answer: 2,
+      },
+      {
+        question: 'In an inverted FlatList, when does `onEndReached` fire?',
+        options: [
+          'When the user scrolls to the bottom (newest messages)',
+          'When the user scrolls to the top (oldest messages)',
+          'Every time a new message is added',
+          'When the component first mounts',
+        ],
+        answer: 1,
+      },
+      {
+        question: 'Why do we use a real-time listener (onSnapshot) for NEW messages but getDocs for older messages?',
+        options: [
+          'onSnapshot is faster than getDocs for all queries',
+          'New messages need to appear instantly; old messages only load when the user scrolls up',
+          'getDocs doesn\'t work with the startAfter parameter',
+          'onSnapshot is cheaper than getDocs in terms of Firestore billing',
+        ],
+        answer: 1,
+      },
+      {
+        question: 'How do you know there are no more older messages to load?',
+        options: [
+          'Firestore returns an error code when there are no more documents',
+          'The returned page has fewer documents than PAGE_SIZE',
+          'The cursor becomes a negative number',
+          'You must manually count all documents in the collection first',
+        ],
+        answer: 1,
+      },
+      {
+        question: 'Loading 10,000 messages without pagination costs roughly how much more per chat open than loading 30?',
+        options: [
+          'About the same (Firestore doesn\'t charge per read)',
+          'About 2× more expensive',
+          'About 333× more reads (10,000 vs 30)',
+          'About 10× more expensive',
+        ],
+        answer: 2,
+      },
+    ]);
+  </script>
+</body>
+</html>

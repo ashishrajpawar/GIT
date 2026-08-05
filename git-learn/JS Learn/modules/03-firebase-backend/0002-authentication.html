@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Firebase Lesson 2: Authentication — JS Learn</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">Module 3: Firebase Backend</a>
+      <span class="sep">›</span>
+      <span class="current">Lesson 2: Authentication</span>
+    </nav>
+
+    <!-- Header -->
+    <span class="badge">Firebase · Lesson 2</span>
+    <h1 style="margin-top:0.5rem;">Authentication — Sign Up, Log In, Log Out</h1>
+    <div class="lesson-meta">
+      <span>createUserWithEmailAndPassword · signInWithEmailAndPassword · onAuthStateChanged · signOut</span>
+      <span>~45 min</span>
+      <span>Hands-on</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for your WhatsApp clone</div>
+      <p>In Module 2 you built Login and Register screens that faked the network delay with <code>setTimeout</code> and always succeeded. Now you replace those two lines with real Firebase Auth calls. After this lesson, users can create real accounts, log in on any device, and stay logged in across app restarts — Firebase remembers the session automatically. You also get a unique user ID (<code>uid</code>) for every account, which becomes the key that links each user to their chats and messages in Firestore.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 1 -->
+    <h2>1. The three Firebase Auth functions you need</h2>
+
+    <table>
+      <thead>
+        <tr><th>Function</th><th>When to call it</th><th>Returns</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>createUserWithEmailAndPassword(auth, email, password)</code></td><td>Register screen — new user</td><td>Promise → <code>UserCredential</code></td></tr>
+        <tr><td><code>signInWithEmailAndPassword(auth, email, password)</code></td><td>Login screen — existing user</td><td>Promise → <code>UserCredential</code></td></tr>
+        <tr><td><code>signOut(auth)</code></td><td>Settings screen — log out button</td><td>Promise → void</td></tr>
+      </tbody>
+    </table>
+
+    <p>All three are <code>async</code> — they talk to Firebase servers and return a Promise. Always <code>await</code> them inside a <code>try/catch</code>.</p>
+
+    <hr>
+
+    <!-- Section 2 -->
+    <h2>2. Registering a new user</h2>
+
+    <p>This replaces the <code>await new Promise(r =&gt; setTimeout(r, 1200))</code> fake delay in your <code>RegisterScreen</code> from Lesson 10.</p>
+
+    <pre><code>import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
+import { auth } from './firebase';
+
+async function handleRegister() {
+  const errors = validate({ name, email, password, isRegister: true });
+  if (Object.keys(errors).length &gt; 0) { setFormErrors(errors); return; }
+
+  setLoading(true);
+  try {
+    // 1. Create the account — Firebase stores email + hashed password
+    const credential = await createUserWithEmailAndPassword(auth, email, password);
+
+    // 2. Save the display name on the Firebase user profile
+    await updateProfile(credential.user, { displayName: name });
+
+    // 3. Navigate into the app — replace so back doesn't return to Register
+    navigation.replace('Main');
+
+  } catch (err) {
+    setFormErrors({ general: friendlyAuthError(err.code) });
+  } finally {
+    setLoading(false);
+  }
+}</code></pre>
+
+    <p><code>credential.user</code> is the newly created Firebase user object. It has a <code>uid</code> (unique ID), <code>email</code>, and after <code>updateProfile</code>, a <code>displayName</code>. You'll store the <code>uid</code> in Firestore documents in Lesson 3.</p>
+
+    <hr>
+
+    <!-- Section 3 -->
+    <h2>3. Logging in an existing user</h2>
+
+    <p>This replaces the fake delay in your <code>LoginScreen</code>.</p>
+
+    <pre><code>import { signInWithEmailAndPassword } from 'firebase/auth';
+import { auth } from './firebase';
+
+async function handleLogin() {
+  const errors = validate({ email, password, isRegister: false });
+  if (Object.keys(errors).length &gt; 0) { setFormErrors(errors); return; }
+
+  setLoading(true);
+  try {
+    await signInWithEmailAndPassword(auth, email, password);
+    // On success, auth.currentUser is now set — navigate to main app
+    navigation.replace('Main');
+
+  } catch (err) {
+    setFormErrors({ general: friendlyAuthError(err.code) });
+  } finally {
+    setLoading(false);
+  }
+}</code></pre>
+
+    <div class="callout success">
+      <div class="callout-title">You don't need to store the user yourself</div>
+      <p>After a successful <code>signInWithEmailAndPassword</code>, Firebase stores the session on the device automatically. <code>auth.currentUser</code> is set immediately and stays set across app restarts — until the user signs out. You don't need AsyncStorage or any manual session management.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 4 -->
+    <h2>4. Handling Firebase Auth error codes</h2>
+
+    <p>When a Firebase Auth call fails, <code>err.code</code> is a string like <code>'auth/wrong-password'</code>. Map these to friendly messages — never show the raw Firebase error string to users.</p>
+
+    <pre><code>function friendlyAuthError(code) {
+  switch (code) {
+    case 'auth/email-already-in-use':
+      return 'An account with this email already exists. Try logging in instead.';
+    case 'auth/invalid-email':
+      return 'That email address is not valid.';
+    case 'auth/weak-password':
+      return 'Password must be at least 6 characters.';
+    case 'auth/user-not-found':
+    case 'auth/wrong-password':
+    case 'auth/invalid-credential':
+      // Combine these — never tell an attacker which one was wrong
+      return 'Incorrect email or password. Please try again.';
+    case 'auth/too-many-requests':
+      return 'Too many failed attempts. Please wait a moment and try again.';
+    case 'auth/network-request-failed':
+      return 'No internet connection. Check your network and try again.';
+    default:
+      return 'Something went wrong. Please try again.';
+  }
+}</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">Never distinguish "user not found" from "wrong password"</div>
+      <p>Telling a user "no account with that email" is a security risk — it lets attackers enumerate which email addresses have accounts. Always return the same message for both <code>auth/user-not-found</code> and <code>auth/wrong-password</code>: "Incorrect email or password."</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 5 -->
+    <h2>5. Staying logged in — onAuthStateChanged</h2>
+
+    <p>The most important Firebase Auth feature: <code>onAuthStateChanged</code> fires every time the user's authentication state changes — when they log in, when they log out, and <em>when the app starts</em> if they were previously logged in.</p>
+
+    <p>This is how you implement "stay logged in" — the app checks the auth state on startup and skips the Login screen if there's already an active session.</p>
+
+    <pre><code>import { onAuthStateChanged } from 'firebase/auth';
+import { auth } from './firebase';
+
+// In your root App component
+export default function App() {
+  const [user,          setUser]          = useState(null);
+  const [authChecked,   setAuthChecked]   = useState(false);
+  //                                        ↑ true once we know if logged in or not
+
+  useEffect(() =&gt; {
+    // Subscribe — fires immediately with current state, then on every change
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) =&gt; {
+      setUser(firebaseUser);       // null = logged out, object = logged in
+      setAuthChecked(true);        // we now know the auth state
+    });
+
+    return unsubscribe;            // unsubscribe when App unmounts (cleanup)
+  }, []);
+
+  // Show nothing while Firebase checks the session — avoids a login flash
+  if (!authChecked) return null;
+
+  return (
+    &lt;NavigationContainer&gt;
+      &lt;Stack.Navigator screenOptions={{ headerShown: false }}&gt;
+        {user ? (
+          // Logged in — go straight to main app
+          &lt;Stack.Screen name="Main" component={MainTabs} /&gt;
+        ) : (
+          // Logged out — show auth screens
+          &lt;&gt;
+            &lt;Stack.Screen name="Login"    component={LoginScreen} /&gt;
+            &lt;Stack.Screen name="Register" component={RegisterScreen} /&gt;
+          &lt;/&gt;
+        )}
+      &lt;/Stack.Navigator&gt;
+    &lt;/NavigationContainer&gt;
+  );
+}</code></pre>
+
+    <div class="callout success">
+      <div class="callout-title">Conditional navigator — the right way to handle auth state</div>
+      <p>Rather than calling <code>navigation.navigate</code> from inside the login handler, you let the navigator itself react to <code>user</code> state. When <code>user</code> becomes non-null (login succeeds), the navigator automatically shows <code>MainTabs</code>. When <code>user</code> becomes null (sign out), it automatically shows <code>LoginScreen</code>. No <code>navigation.replace</code> needed — the screens switch by themselves. This is the pattern recommended by React Navigation for auth flows.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 6 -->
+    <h2>6. Reading the current user anywhere in the app</h2>
+
+    <p>Once logged in, you can read the current user from <code>auth.currentUser</code> anywhere. The most useful fields:</p>
+
+    <pre><code>import { auth } from './firebase';
+
+const user = auth.currentUser;
+
+user.uid          // "abc123xyz..." — unique ID, used as Firestore document key
+user.email        // "priya@example.com"
+user.displayName  // "Priya Sharma" — set via updateProfile
+user.photoURL     // profile photo URL — set via updateProfile or Storage upload</code></pre>
+
+    <p>You'll use <code>user.uid</code> constantly in Lesson 3 — it's how you query "only this user's chats" from Firestore.</p>
+
+    <hr>
+
+    <!-- Section 7 -->
+    <h2>7. Signing out</h2>
+
+    <pre><code>import { signOut } from 'firebase/auth';
+import { auth } from './firebase';
+
+async function handleSignOut() {
+  try {
+    await signOut(auth);
+    // onAuthStateChanged fires with null — navigator switches to Login automatically
+  } catch (err) {
+    Alert.alert('Sign out failed', 'Please try again.');
+  }
+}</code></pre>
+
+    <p>Because the <code>onAuthStateChanged</code> pattern is in place, you don't call <code>navigation.navigate('Login')</code> after signing out. Setting <code>user</code> to <code>null</code> via the listener causes the navigator to swap screens automatically.</p>
+
+    <hr>
+
+    <!-- Section 8: Full working example -->
+    <h2>8. Full working example — real auth wired into your app</h2>
+
+    <p>This is your complete <code>App.js</code> with real Firebase Authentication replacing the fake delays from Module 2. The Login and Register screens are identical to Lesson 10 — only the two async calls inside the handlers change. Replace your entire <code>App.js</code> with this.</p>
+
+    <pre><code>import { useState, useEffect } from 'react';
+import { NavigationContainer } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { createBottomTabNavigator }   from '@react-navigation/bottom-tabs';
+import {
+  View, Text, TextInput, Pressable, StyleSheet,
+  KeyboardAvoidingView, ScrollView, Platform, ActivityIndicator, Alert,
+} from 'react-native';
+
+// Firebase imports
+import {
+  onAuthStateChanged,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  updateProfile,
+  signOut,
+} from 'firebase/auth';
+import { auth } from './firebase';   // your firebase.js from Lesson 1
+
+const Stack = createNativeStackNavigator();
+const Tab   = createBottomTabNavigator();
+
+// ── Auth error helper ─────────────────────────────────────────────────────────
+function friendlyAuthError(code) {
+  switch (code) {
+    case 'auth/email-already-in-use':  return 'An account with this email already exists.';
+    case 'auth/invalid-email':         return 'That email address is not valid.';
+    case 'auth/weak-password':         return 'Password must be at least 6 characters.';
+    case 'auth/user-not-found':
+    case 'auth/wrong-password':
+    case 'auth/invalid-credential':    return 'Incorrect email or password. Please try again.';
+    case 'auth/too-many-requests':     return 'Too many attempts. Please wait and try again.';
+    case 'auth/network-request-failed':return 'No internet connection. Check your network.';
+    default:                           return 'Something went wrong. Please try again.';
+  }
+}
+
+// ── Validation (same as Lesson 10) ────────────────────────────────────────────
+function validate({ name = '', email, password, isRegister }) {
+  const errors = {};
+  if (isRegister &amp;&amp; name.trim().length &lt; 2)
+    errors.name = 'Name must be at least 2 characters';
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!email.trim())                     errors.email    = 'Email is required';
+  else if (!emailRegex.test(email.trim()))errors.email   = 'Enter a valid email address';
+  if (!password)                         errors.password = 'Password is required';
+  else if (password.length &lt; 6)          errors.password = 'Password must be at least 6 characters';
+  return errors;
+}
+
+// ── Screen: Login ─────────────────────────────────────────────────────────────
+function LoginScreen({ navigation }) {
+  const [email,      setEmail]      = useState('');
+  const [password,   setPassword]   = useState('');
+  const [formErrors, setFormErrors] = useState({});
+  const [loading,    setLoading]    = useState(false);
+
+  function clearError(field) {
+    if (formErrors[field]) setFormErrors(prev =&gt; ({ ...prev, [field]: '' }));
+  }
+
+  async function handleLogin() {
+    const errors = validate({ email, password, isRegister: false });
+    if (Object.keys(errors).length &gt; 0) { setFormErrors(errors); return; }
+
+    setLoading(true);
+    try {
+      await signInWithEmailAndPassword(auth, email.trim(), password);
+      // onAuthStateChanged fires → navigator switches to MainTabs automatically
+    } catch (err) {
+      setFormErrors({ general: friendlyAuthError(err.code) });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    &lt;KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}&gt;
+      &lt;ScrollView contentContainerStyle={styles.formScroll} keyboardShouldPersistTaps="handled"&gt;
+        &lt;View style={styles.logoArea}&gt;
+          &lt;View style={styles.logoCircle}&gt;&lt;Text style={styles.logoEmoji}&gt;💬&lt;/Text&gt;&lt;/View&gt;
+          &lt;Text style={styles.appName}&gt;WhatsApp&lt;/Text&gt;
+        &lt;/View&gt;
+        &lt;Text style={styles.formTitle}&gt;Log in to your account&lt;/Text&gt;
+        {formErrors.general ? (
+          &lt;View style={styles.generalError}&gt;
+            &lt;Text style={styles.generalErrorText}&gt;{formErrors.general}&lt;/Text&gt;
+          &lt;/View&gt;
+        ) : null}
+        &lt;Text style={styles.label}&gt;Email&lt;/Text&gt;
+        &lt;TextInput style={[styles.input, formErrors.email &amp;&amp; styles.inputError]}
+          value={email} onChangeText={t =&gt; { setEmail(t); clearError('email'); }}
+          placeholder="you@example.com" placeholderTextColor="#aaa"
+          keyboardType="email-address" autoCapitalize="none" autoCorrect={false}
+          returnKeyType="next"
+        /&gt;
+        {formErrors.email ? &lt;Text style={styles.errorText}&gt;{formErrors.email}&lt;/Text&gt; : null}
+        &lt;Text style={styles.label}&gt;Password&lt;/Text&gt;
+        &lt;TextInput style={[styles.input, formErrors.password &amp;&amp; styles.inputError]}
+          value={password} onChangeText={t =&gt; { setPassword(t); clearError('password'); }}
+          placeholder="At least 6 characters" placeholderTextColor="#aaa"
+          secureTextEntry returnKeyType="done" onSubmitEditing={handleLogin}
+        /&gt;
+        {formErrors.password ? &lt;Text style={styles.errorText}&gt;{formErrors.password}&lt;/Text&gt; : null}
+        &lt;Pressable style={[styles.button, loading &amp;&amp; styles.buttonDisabled]}
+          onPress={handleLogin} disabled={loading}&gt;
+          {loading ? &lt;ActivityIndicator color="#fff" /&gt; : &lt;Text style={styles.buttonText}&gt;LOG IN&lt;/Text&gt;}
+        &lt;/Pressable&gt;
+        &lt;Pressable style={styles.switchLink} onPress={() =&gt; navigation.navigate('Register')}&gt;
+          &lt;Text style={styles.switchText}&gt;Don't have an account? &lt;Text style={styles.switchBold}&gt;Register&lt;/Text&gt;&lt;/Text&gt;
+        &lt;/Pressable&gt;
+      &lt;/ScrollView&gt;
+    &lt;/KeyboardAvoidingView&gt;
+  );
+}
+
+// ── Screen: Register ──────────────────────────────────────────────────────────
+function RegisterScreen({ navigation }) {
+  const [name,       setName]       = useState('');
+  const [email,      setEmail]      = useState('');
+  const [password,   setPassword]   = useState('');
+  const [formErrors, setFormErrors] = useState({});
+  const [loading,    setLoading]    = useState(false);
+
+  function clearError(field) {
+    if (formErrors[field]) setFormErrors(prev =&gt; ({ ...prev, [field]: '' }));
+  }
+
+  async function handleRegister() {
+    const errors = validate({ name, email, password, isRegister: true });
+    if (Object.keys(errors).length &gt; 0) { setFormErrors(errors); return; }
+
+    setLoading(true);
+    try {
+      const credential = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      await updateProfile(credential.user, { displayName: name.trim() });
+      // onAuthStateChanged fires → navigator switches to MainTabs automatically
+    } catch (err) {
+      setFormErrors({ general: friendlyAuthError(err.code) });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    &lt;KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}&gt;
+      &lt;ScrollView contentContainerStyle={styles.formScroll} keyboardShouldPersistTaps="handled"&gt;
+        &lt;View style={styles.logoArea}&gt;
+          &lt;View style={styles.logoCircle}&gt;&lt;Text style={styles.logoEmoji}&gt;💬&lt;/Text&gt;&lt;/View&gt;
+          &lt;Text style={styles.appName}&gt;WhatsApp&lt;/Text&gt;
+        &lt;/View&gt;
+        &lt;Text style={styles.formTitle}&gt;Create your account&lt;/Text&gt;
+        {formErrors.general ? (
+          &lt;View style={styles.generalError}&gt;
+            &lt;Text style={styles.generalErrorText}&gt;{formErrors.general}&lt;/Text&gt;
+          &lt;/View&gt;
+        ) : null}
+        &lt;Text style={styles.label}&gt;Your name&lt;/Text&gt;
+        &lt;TextInput style={[styles.input, formErrors.name &amp;&amp; styles.inputError]}
+          value={name} onChangeText={t =&gt; { setName(t); clearError('name'); }}
+          placeholder="Priya Sharma" placeholderTextColor="#aaa"
+          autoCapitalize="words" returnKeyType="next"
+        /&gt;
+        {formErrors.name ? &lt;Text style={styles.errorText}&gt;{formErrors.name}&lt;/Text&gt; : null}
+        &lt;Text style={styles.label}&gt;Email&lt;/Text&gt;
+        &lt;TextInput style={[styles.input, formErrors.email &amp;&amp; styles.inputError]}
+          value={email} onChangeText={t =&gt; { setEmail(t); clearError('email'); }}
+          placeholder="you@example.com" placeholderTextColor="#aaa"
+          keyboardType="email-address" autoCapitalize="none" autoCorrect={false}
+          returnKeyType="next"
+        /&gt;
+        {formErrors.email ? &lt;Text style={styles.errorText}&gt;{formErrors.email}&lt;/Text&gt; : null}
+        &lt;Text style={styles.label}&gt;Password&lt;/Text&gt;
+        &lt;TextInput style={[styles.input, formErrors.password &amp;&amp; styles.inputError]}
+          value={password} onChangeText={t =&gt; { setPassword(t); clearError('password'); }}
+          placeholder="At least 6 characters" placeholderTextColor="#aaa"
+          secureTextEntry returnKeyType="done" onSubmitEditing={handleRegister}
+        /&gt;
+        {formErrors.password ? &lt;Text style={styles.errorText}&gt;{formErrors.password}&lt;/Text&gt; : null}
+        &lt;Pressable style={[styles.button, loading &amp;&amp; styles.buttonDisabled]}
+          onPress={handleRegister} disabled={loading}&gt;
+          {loading ? &lt;ActivityIndicator color="#fff" /&gt; : &lt;Text style={styles.buttonText}&gt;CREATE ACCOUNT&lt;/Text&gt;}
+        &lt;/Pressable&gt;
+        &lt;Pressable style={styles.switchLink} onPress={() =&gt; navigation.goBack()}&gt;
+          &lt;Text style={styles.switchText}&gt;Already have an account? &lt;Text style={styles.switchBold}&gt;Log in&lt;/Text&gt;&lt;/Text&gt;
+        &lt;/Pressable&gt;
+      &lt;/ScrollView&gt;
+    &lt;/KeyboardAvoidingView&gt;
+  );
+}
+
+// ── Screen: Settings (with sign out) ─────────────────────────────────────────
+function SettingsScreen() {
+  const user = auth.currentUser;
+
+  async function handleSignOut() {
+    try {
+      await signOut(auth);
+      // onAuthStateChanged fires with null → navigator switches to Login
+    } catch {
+      Alert.alert('Sign out failed', 'Please try again.');
+    }
+  }
+
+  return (
+    &lt;View style={styles.settingsScreen}&gt;
+      &lt;View style={styles.settingsHeader}&gt;
+        &lt;Text style={styles.settingsTitle}&gt;Settings&lt;/Text&gt;
+      &lt;/View&gt;
+      &lt;View style={styles.profileRow}&gt;
+        &lt;View style={styles.profileAvatar}&gt;
+          &lt;Text style={styles.profileAvatarLetter}&gt;
+            {(user?.displayName ?? user?.email ?? '?')[0].toUpperCase()}
+          &lt;/Text&gt;
+        &lt;/View&gt;
+        &lt;View&gt;
+          &lt;Text style={styles.profileName}&gt;{user?.displayName ?? 'No name set'}&lt;/Text&gt;
+          &lt;Text style={styles.profileEmail}&gt;{user?.email}&lt;/Text&gt;
+          &lt;Text style={styles.profileUid}&gt;uid: {user?.uid?.slice(0, 12)}...&lt;/Text&gt;
+        &lt;/View&gt;
+      &lt;/View&gt;
+      &lt;Pressable style={styles.signOutBtn} onPress={handleSignOut}&gt;
+        &lt;Text style={styles.signOutText}&gt;Sign out&lt;/Text&gt;
+      &lt;/Pressable&gt;
+    &lt;/View&gt;
+  );
+}
+
+// ── Placeholder tabs ──────────────────────────────────────────────────────────
+function ChatListScreen() {
+  return (
+    &lt;View style={[styles.flex, { alignItems: 'center', justifyContent: 'center' }]}&gt;
+      &lt;Text style={{ fontSize: 18, fontWeight: '700', color: '#075E54' }}&gt;💬 Chats&lt;/Text&gt;
+      &lt;Text style={{ color: '#667781', marginTop: 8 }}&gt;Real chat list coming in Lesson 3&lt;/Text&gt;
+      &lt;Text style={{ color: '#aaa', marginTop: 4, fontSize: 12 }}&gt;
+        Logged in as: {auth.currentUser?.displayName ?? auth.currentUser?.email}
+      &lt;/Text&gt;
+    &lt;/View&gt;
+  );
+}
+function CallsScreen()  { return &lt;View style={[styles.flex, { alignItems:'center', justifyContent:'center' }]}&gt;&lt;Text style={{ fontSize: 28 }}&gt;📞 Calls&lt;/Text&gt;&lt;/View&gt;; }
+function StatusScreen() { return &lt;View style={[styles.flex, { alignItems:'center', justifyContent:'center' }]}&gt;&lt;Text style={{ fontSize: 28 }}&gt;⊙ Status&lt;/Text&gt;&lt;/View&gt;; }
+
+function MainTabs() {
+  return (
+    &lt;Tab.Navigator screenOptions={{ headerShown: false, tabBarActiveTintColor: '#075E54', tabBarInactiveTintColor: '#667781' }}&gt;
+      &lt;Tab.Screen name="Chats"    component={ChatListScreen} options={{ tabBarIcon: ({ color }) =&gt; &lt;Text style={{ color, fontSize: 22 }}&gt;💬&lt;/Text&gt; }} /&gt;
+      &lt;Tab.Screen name="Calls"    component={CallsScreen}    options={{ tabBarIcon: ({ color }) =&gt; &lt;Text style={{ color, fontSize: 22 }}&gt;📞&lt;/Text&gt; }} /&gt;
+      &lt;Tab.Screen name="Status"   component={StatusScreen}   options={{ tabBarIcon: ({ color }) =&gt; &lt;Text style={{ color, fontSize: 22 }}&gt;⊙&lt;/Text&gt;  }} /&gt;
+      &lt;Tab.Screen name="Settings" component={SettingsScreen} options={{ tabBarIcon: ({ color }) =&gt; &lt;Text style={{ color, fontSize: 22 }}&gt;⚙&lt;/Text&gt;  }} /&gt;
+    &lt;/Tab.Navigator&gt;
+  );
+}
+
+// ── Root App — conditional navigator based on auth state ──────────────────────
+export default function App() {
+  const [user,        setUser]        = useState(undefined);
+  //                                    ↑ undefined = not checked yet
+  //                                      null      = checked, logged out
+  //                                      object    = checked, logged in
+
+  useEffect(() =&gt; {
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) =&gt; {
+      setUser(firebaseUser ?? null);
+    });
+    return unsubscribe;   // cleanup listener when App unmounts
+  }, []);
+
+  // Blank screen while Firebase checks the persisted session
+  // Prevents a flash of the Login screen for already-logged-in users
+  if (user === undefined) return &lt;View style={[styles.flex, styles.splash]} /&gt;;
+
+  return (
+    &lt;NavigationContainer&gt;
+      &lt;Stack.Navigator screenOptions={{ headerShown: false }}&gt;
+        {user ? (
+          &lt;Stack.Screen name="Main" component={MainTabs} /&gt;
+        ) : (
+          &lt;&gt;
+            &lt;Stack.Screen name="Login"    component={LoginScreen} /&gt;
+            &lt;Stack.Screen name="Register" component={RegisterScreen} /&gt;
+          &lt;/&gt;
+        )}
+      &lt;/Stack.Navigator&gt;
+    &lt;/NavigationContainer&gt;
+  );
+}
+
+// ── Styles ────────────────────────────────────────────────────────────────────
+const styles = StyleSheet.create({
+  flex:             { flex: 1, backgroundColor: '#fff' },
+  splash:           { backgroundColor: '#075E54' },
+
+  formScroll:       { flexGrow: 1, paddingHorizontal: 28, paddingTop: 60, paddingBottom: 40 },
+  logoArea:         { alignItems: 'center', marginBottom: 32 },
+  logoCircle:       { width: 80, height: 80, borderRadius: 40, backgroundColor: '#075E54', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
+  logoEmoji:        { fontSize: 38 },
+  appName:          { fontSize: 24, fontWeight: '700', color: '#075E54' },
+  formTitle:        { fontSize: 18, fontWeight: '600', color: '#111', marginBottom: 24 },
+  label:            { fontSize: 13, fontWeight: '600', color: '#667781', marginBottom: 4, marginLeft: 2 },
+  input:            { borderWidth: 1.5, borderColor: '#ddd', borderRadius: 10, paddingHorizontal: 14, paddingVertical: Platform.OS === 'ios' ? 14 : 10, fontSize: 15, color: '#111', marginBottom: 4 },
+  inputError:       { borderColor: '#e53935' },
+  errorText:        { color: '#e53935', fontSize: 12, marginBottom: 10, marginLeft: 2 },
+  generalError:     { backgroundColor: '#fdecea', borderRadius: 8, padding: 12, marginBottom: 16 },
+  generalErrorText: { color: '#c62828', fontSize: 13 },
+  button:           { backgroundColor: '#075E54', borderRadius: 10, paddingVertical: 15, alignItems: 'center', marginTop: 8 },
+  buttonDisabled:   { backgroundColor: '#aaa' },
+  buttonText:       { color: '#fff', fontSize: 15, fontWeight: '700', letterSpacing: 0.8 },
+  switchLink:       { marginTop: 20, alignItems: 'center' },
+  switchText:       { color: '#667781', fontSize: 14 },
+  switchBold:       { color: '#075E54', fontWeight: '700' },
+
+  settingsScreen:   { flex: 1, backgroundColor: '#fff' },
+  settingsHeader:   { backgroundColor: '#075E54', paddingTop: 48, paddingBottom: 14, paddingHorizontal: 20 },
+  settingsTitle:    { color: '#fff', fontSize: 20, fontWeight: '700' },
+  profileRow:       { flexDirection: 'row', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: '#f0f2f5' },
+  profileAvatar:    { width: 64, height: 64, borderRadius: 32, backgroundColor: '#075E54', alignItems: 'center', justifyContent: 'center', marginRight: 16 },
+  profileAvatarLetter: { color: '#fff', fontSize: 28, fontWeight: '700' },
+  profileName:      { fontSize: 18, fontWeight: '700', color: '#111' },
+  profileEmail:     { fontSize: 14, color: '#667781', marginTop: 2 },
+  profileUid:       { fontSize: 11, color: '#aaa', marginTop: 2, fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace' },
+  signOutBtn:       { margin: 20, backgroundColor: '#e53935', borderRadius: 10, paddingVertical: 14, alignItems: 'center' },
+  signOutText:      { color: '#fff', fontSize: 15, fontWeight: '700' },
+});</code></pre>
+
+    <p>Run this. The app opens on a dark green splash for a moment while Firebase checks the session, then shows Login (no previous session). Register with a real email and password — check the Firebase console under Authentication → Users and you'll see the new account. Log in — the app switches to the main tabs. Open Settings — your name, email, and uid are shown. Tap Sign out — the app immediately returns to Login. Reopen the app — you go straight to Login (session was cleared). Try registering with the same email twice — the error "An account with this email already exists" appears.</p>
+
+    <div class="callout success">
+      <div class="callout-title">Your app now has real user accounts</div>
+      <p>Every user who registers gets a permanent <code>uid</code> in Firebase. This uid is the key that will link to their chats, messages, and profile photo in Firestore and Storage. In Lesson 3 you use it to query "show me only the chats this user is part of."</p>
+    </div>
+
+    <hr>
+
+    <!-- Quiz -->
+    <h2>Quick check — test yourself</h2>
+    <p>Five questions on what you just read.</p>
+
+    <div id="firebase-lesson-0002-quiz"></div>
+
+    <hr>
+
+    <!-- Resources -->
+    <h2>Primary resources for this lesson</h2>
+    <ul>
+      <li><a href="https://firebase.google.com/docs/auth/web/password-auth" target="_blank" rel="noopener">Firebase Auth — email/password sign-in</a></li>
+      <li><a href="https://firebase.google.com/docs/auth/web/manage-users" target="_blank" rel="noopener">Firebase Auth — manage users (updateProfile, currentUser)</a></li>
+      <li><a href="https://reactnavigation.org/docs/auth-flow" target="_blank" rel="noopener">React Navigation — authentication flow</a></li>
+    </ul>
+
+    <div class="ask-teacher">
+      <strong>Anything unclear? Ask your teacher.</strong>
+      Common issues: (1) <code>auth/invalid-credential</code> on correct password — this is the new Firebase error code that replaces the old <code>auth/wrong-password</code>; the <code>friendlyAuthError</code> function already handles it. (2) App always shows Login even after registering — check that <code>onAuthStateChanged</code> is subscribed in <code>App.js</code> and that <code>user</code> starts as <code>undefined</code> (not <code>null</code>), so the splash shows while Firebase checks the session. (3) <code>updateProfile</code> throws — make sure you're passing <code>credential.user</code> (the user object), not <code>credential</code> (the credential wrapper). (4) Sign out doesn't navigate to Login — confirm you're using the conditional navigator pattern, not <code>navigation.navigate</code>.
+    </div>
+
+    <hr>
+
+    <!-- Lesson nav -->
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="./0001-firebase-setup.html">← Lesson 1: Firebase Project Setup</a>
+      <a href="./0003-firestore-chat-list.html">Lesson 3: Firestore — Real-Time Chat List →</a>
+    </nav>
+
+  </div><!-- .page-wrap -->
+
+  <script src="../../assets/quiz.js"></script>
+  <script>
+    createQuiz("firebase-lesson-0002-quiz", [
+      {
+        question: "A user registers successfully. onAuthStateChanged fires with the new user object. What happens to the navigator — and why don't you need to call navigation.replace('Main')?",
+        options: [
+          "Nothing — you still need to call navigation.replace('Main') inside handleRegister after the Firebase call succeeds",
+          "The user state variable becomes non-null, and the conditional navigator renders MainTabs instead of the auth screens — the switch is automatic",
+          "React Navigation detects the Firebase auth change and navigates automatically without any state change",
+          "onAuthStateChanged only fires on login, not on registration — you need a separate listener"
+        ],
+        correct: 1,
+        explanation: "The conditional navigator renders either the auth screens or MainTabs based on the user state variable. When onAuthStateChanged fires with the new user, setUser(firebaseUser) updates user from null to an object. React re-renders App, the condition user ? MainTabs : LoginScreen evaluates to MainTabs, and React Navigation transitions automatically. No navigation.replace needed."
+      },
+      {
+        question: "The user opens the app after previously logging in. What value does user have while Firebase is checking the persisted session, and why does this matter?",
+        options: [
+          "null — same as logged out, so Login screen shows briefly before switching to Main",
+          "undefined — the app renders a blank splash screen while checking, preventing a flash of the Login screen for already-logged-in users",
+          "The previous user object — Firebase restores it instantly from memory",
+          "An empty object {} — Firebase returns a placeholder until the real user loads"
+        ],
+        correct: 1,
+        explanation: "user starts as undefined (not null). The render checks if (user === undefined) return blank splash. This keeps the screen blank while onAuthStateChanged checks the persisted session. Once it fires — even if it returns null — user becomes either null (show Login) or a user object (show Main). Without this, a logged-in user would see a flash of the Login screen every time they open the app."
+      },
+      {
+        question: "A user tries to register with an email that already has an account. Firebase throws with err.code = 'auth/email-already-in-use'. What message should you show?",
+        options: [
+          "Show the raw Firebase error message — it is already user-friendly",
+          "'An account with this email already exists. Try logging in instead.' — a friendly message that doesn't expose internal system details",
+          "'Error code auth/email-already-in-use' — include the code so the user can look it up",
+          "Nothing — silently log the error and let the user try again"
+        ],
+        correct: 1,
+        explanation: "Always map Firebase error codes to friendly messages via a switch statement. Never show raw error codes or Firebase's internal message strings — they are designed for developers, not users. The friendlyAuthError function handles this translation. For auth/email-already-in-use, telling the user to try logging in is actionable and helpful."
+      },
+      {
+        question: "Why should you never show different error messages for 'user not found' vs 'wrong password' on the login form?",
+        options: [
+          "Firebase combines them into one error code so you can't distinguish them anyway",
+          "Showing 'no account with that email' lets attackers enumerate which email addresses have accounts — always return the same message for both",
+          "Different messages would confuse users who have forgotten their email",
+          "Firebase terms of service require a single combined error message"
+        ],
+        correct: 1,
+        explanation: "If your login form says 'no account with that email', an attacker can try many email addresses and learn which ones are registered. This is called user enumeration. Combining auth/user-not-found and auth/wrong-password into 'Incorrect email or password' prevents this — the attacker learns nothing about whether the email exists. This is standard security practice."
+      },
+      {
+        question: "The user taps Sign Out. You call await signOut(auth). How does the app navigate back to the Login screen?",
+        options: [
+          "signOut returns a navigation action — you pass it to navigation.dispatch",
+          "You call navigation.reset({ routes: [{ name: 'Login' }] }) after signOut succeeds",
+          "onAuthStateChanged fires with null → setUser(null) → the conditional navigator renders the auth screens automatically",
+          "You need to call navigation.navigate('Login') in the finally block of the sign-out handler"
+        ],
+        correct: 2,
+        explanation: "signOut clears the Firebase session, which triggers onAuthStateChanged with null. setUser(null) updates the user state, React re-renders App, and the conditional navigator now renders the Login/Register screens instead of MainTabs. React Navigation handles the transition. No manual navigation call needed — the navigator reacts to state."
+      }
+    ]);
+  </script>
+
+</body>
+</html>

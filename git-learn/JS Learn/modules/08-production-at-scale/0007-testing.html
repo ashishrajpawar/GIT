@@ -1,0 +1,1010 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Production at Scale Lesson 7: Testing Your App — JS Learn</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">Module 8: Production at Scale</a>
+      <span class="sep">›</span>
+      <span class="current">Lesson 7: Testing Your App</span>
+    </nav>
+
+    <!-- Header -->
+    <span class="badge">Production at Scale · Lesson 7</span>
+    <h1 style="margin-top:0.5rem;">Testing Your App</h1>
+    <div class="lesson-meta">
+      <span>Jest · Unit tests · Component tests · Firebase Emulator · QA checklist</span>
+      <span>~60 min</span>
+      <span>Hands-on</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for your WhatsApp clone</div>
+      <p>You've added dozens of features — messaging, calls, groups, notifications, offline support. Every time you fix a bug or add something new, you risk <strong>breaking something that already works</strong>. Without tests, the only way to know is to manually tap through every screen on every update. Tests catch these regressions automatically in seconds. WhatsApp has thousands of automated tests — that's how they ship updates to 2 billion users without breaking existing features.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 1 -->
+    <h2>1. Types of tests and what to use each for</h2>
+
+    <table>
+      <thead>
+        <tr><th>Type</th><th>What it tests</th><th>Speed</th><th>Tools</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Unit tests</strong></td>
+          <td>Individual functions (pure logic)</td>
+          <td>~1ms each</td>
+          <td>Jest</td>
+        </tr>
+        <tr>
+          <td><strong>Component tests</strong></td>
+          <td>UI components render and respond to interaction</td>
+          <td>~50ms each</td>
+          <td>React Native Testing Library</td>
+        </tr>
+        <tr>
+          <td><strong>Integration tests</strong></td>
+          <td>App code + Firebase working together</td>
+          <td>~500ms each</td>
+          <td>Firebase Emulator + Jest</td>
+        </tr>
+        <tr>
+          <td><strong>Manual QA</strong></td>
+          <td>Full flows on a real device</td>
+          <td>Minutes</td>
+          <td>Your eyes + checklist</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p><strong>The testing pyramid:</strong> Write many unit tests (fast, cheap), some component tests (medium), few integration tests (slow, expensive), and a focused manual QA checklist for things only humans can judge.</p>
+
+    <hr>
+
+    <!-- Section 2 -->
+    <h2>2. Setting up Jest with Expo</h2>
+
+    <h3>Step 1: Install testing dependencies</h3>
+
+    <pre><code>npx expo install jest-expo jest @testing-library/react-native @testing-library/jest-native</code></pre>
+
+    <h3>Step 2: Configure in package.json</h3>
+
+    <pre><code>// package.json
+{
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch"
+  },
+  "jest": {
+    "preset": "jest-expo",
+    "setupFilesAfterFramework": [
+      "@testing-library/jest-native/extend-expect"
+    ],
+    "transformIgnorePatterns": [
+      "node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@sentry/react-native)"
+    ]
+  }
+}</code></pre>
+
+    <h3>Step 3: Create your first test file</h3>
+
+    <pre><code>// __tests__/example.test.js
+test('1 + 1 equals 2', () => {
+  expect(1 + 1).toBe(2);
+});
+
+// Run it:
+// npm test</code></pre>
+
+    <h3>File naming convention</h3>
+    <pre><code>src/
+  utils/
+    formatTime.js
+    formatTime.test.js       ← test file lives next to the code
+  components/
+    MessageBubble.js
+    MessageBubble.test.js
+  screens/
+    ChatScreen.js
+    ChatScreen.test.js</code></pre>
+
+    <hr>
+
+    <!-- Section 3 -->
+    <h2>3. Unit testing utility functions</h2>
+
+    <p>Start with the easiest tests — pure functions with no dependencies. Your WhatsApp clone has several:</p>
+
+    <pre><code>// src/utils/formatTime.js
+export function formatMessageTime(timestamp) {
+  if (!timestamp) return '';
+  const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+export function formatLastSeen(timestamp) {
+  if (!timestamp) return 'unknown';
+  const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+  const now = new Date();
+  const diffMs = now - date;
+  const diffMins = Math.floor(diffMs / 60000);
+
+  if (diffMins < 1) return 'just now';
+  if (diffMins < 60) return `${diffMins} min ago`;
+  if (diffMins < 1440) return `${Math.floor(diffMins / 60)} hours ago`;
+  return date.toLocaleDateString();
+}
+
+export function truncateText(text, maxLength = 100) {
+  if (!text) return '';
+  if (text.length <= maxLength) return text;
+  return text.substring(0, maxLength - 3) + '...';
+}
+
+export function validateMessage(text) {
+  const trimmed = (text || '').trim();
+  if (trimmed.length === 0) return { valid: false, error: 'Message is empty' };
+  if (trimmed.length > 4096) return { valid: false, error: 'Message too long' };
+  return { valid: true, text: trimmed };
+}</code></pre>
+
+    <pre><code>// src/utils/formatTime.test.js
+import { formatLastSeen, truncateText, validateMessage } from './formatTime';
+
+describe('formatLastSeen', () => {
+  test('returns "just now" for timestamps less than 1 minute ago', () => {
+    const thirtySecondsAgo = new Date(Date.now() - 30000);
+    expect(formatLastSeen(thirtySecondsAgo)).toBe('just now');
+  });
+
+  test('returns minutes for timestamps less than 1 hour ago', () => {
+    const tenMinutesAgo = new Date(Date.now() - 600000);
+    expect(formatLastSeen(tenMinutesAgo)).toBe('10 min ago');
+  });
+
+  test('returns hours for timestamps less than 1 day ago', () => {
+    const threeHoursAgo = new Date(Date.now() - 10800000);
+    expect(formatLastSeen(threeHoursAgo)).toBe('3 hours ago');
+  });
+
+  test('returns "unknown" for null/undefined', () => {
+    expect(formatLastSeen(null)).toBe('unknown');
+    expect(formatLastSeen(undefined)).toBe('unknown');
+  });
+});
+
+describe('truncateText', () => {
+  test('returns full text if under max length', () => {
+    expect(truncateText('Hello Priya', 100)).toBe('Hello Priya');
+  });
+
+  test('truncates and adds ellipsis if over max length', () => {
+    const long = 'A'.repeat(200);
+    const result = truncateText(long, 100);
+    expect(result.length).toBe(100);
+    expect(result.endsWith('...')).toBe(true);
+  });
+
+  test('handles empty/null input', () => {
+    expect(truncateText('')).toBe('');
+    expect(truncateText(null)).toBe('');
+  });
+});
+
+describe('validateMessage', () => {
+  test('rejects empty messages', () => {
+    expect(validateMessage('')).toEqual({ valid: false, error: 'Message is empty' });
+    expect(validateMessage('   ')).toEqual({ valid: false, error: 'Message is empty' });
+  });
+
+  test('rejects messages over 4096 characters', () => {
+    const longMsg = 'A'.repeat(4097);
+    expect(validateMessage(longMsg)).toEqual({ valid: false, error: 'Message too long' });
+  });
+
+  test('accepts valid messages and trims whitespace', () => {
+    expect(validateMessage('  Hello Priya!  ')).toEqual({
+      valid: true,
+      text: 'Hello Priya!',
+    });
+  });
+
+  test('accepts message at exactly 4096 characters', () => {
+    const maxMsg = 'A'.repeat(4096);
+    expect(validateMessage(maxMsg).valid).toBe(true);
+  });
+});</code></pre>
+
+    <hr>
+
+    <!-- Section 4 -->
+    <h2>4. Component tests with React Native Testing Library</h2>
+
+    <p>Component tests verify that your UI renders correctly and responds to user interaction — without needing a real phone.</p>
+
+    <pre><code>// src/components/MessageBubble.js
+import React from 'react';
+import { View, Text, StyleSheet } from 'react-native';
+
+export function MessageBubble({ message, isMine }) {
+  const isPending = !message.createdAt;
+
+  return (
+    &lt;View
+      style={[styles.bubble, isMine ? styles.mine : styles.theirs]}
+      testID="message-bubble"
+    &gt;
+      &lt;Text testID="message-text"&gt;{message.text}&lt;/Text&gt;
+      &lt;Text testID="message-time"&gt;
+        {isPending ? 'Sending...' : formatTime(message.createdAt)}
+      &lt;/Text&gt;
+      {isMine && (
+        &lt;Text testID="message-status"&gt;
+          {isPending ? '🕐' : '✓✓'}
+        &lt;/Text&gt;
+      )}
+    &lt;/View&gt;
+  );
+}
+
+function formatTime(timestamp) {
+  if (!timestamp?.toDate) return '';
+  return timestamp.toDate().toLocaleTimeString([], {
+    hour: '2-digit', minute: '2-digit',
+  });
+}
+
+const styles = StyleSheet.create({
+  bubble: { maxWidth: '75%', padding: 10, borderRadius: 8, marginVertical: 3 },
+  mine: { backgroundColor: '#DCF8C6', alignSelf: 'flex-end' },
+  theirs: { backgroundColor: '#FFFFFF', alignSelf: 'flex-start' },
+});</code></pre>
+
+    <pre><code>// src/components/MessageBubble.test.js
+import React from 'react';
+import { render, screen } from '@testing-library/react-native';
+import { MessageBubble } from './MessageBubble';
+
+describe('MessageBubble', () => {
+  const mockTimestamp = {
+    toDate: () => new Date('2026-08-05T14:30:00'),
+  };
+
+  test('renders message text', () => {
+    render(
+      &lt;MessageBubble
+        message={{ text: 'Hello Priya!', createdAt: mockTimestamp }}
+        isMine={true}
+      /&gt;
+    );
+
+    expect(screen.getByTestId('message-text')).toHaveTextContent('Hello Priya!');
+  });
+
+  test('shows "Sending..." when message has no timestamp (pending)', () => {
+    render(
+      &lt;MessageBubble
+        message={{ text: 'Hi there', createdAt: null }}
+        isMine={true}
+      /&gt;
+    );
+
+    expect(screen.getByTestId('message-time')).toHaveTextContent('Sending...');
+  });
+
+  test('shows clock emoji for pending own messages', () => {
+    render(
+      &lt;MessageBubble
+        message={{ text: 'Pending msg', createdAt: null }}
+        isMine={true}
+      /&gt;
+    );
+
+    expect(screen.getByTestId('message-status')).toHaveTextContent('🕐');
+  });
+
+  test('shows double tick for sent own messages', () => {
+    render(
+      &lt;MessageBubble
+        message={{ text: 'Sent msg', createdAt: mockTimestamp }}
+        isMine={true}
+      /&gt;
+    );
+
+    expect(screen.getByTestId('message-status')).toHaveTextContent('✓✓');
+  });
+
+  test('does not show status indicator for received messages', () => {
+    render(
+      &lt;MessageBubble
+        message={{ text: 'From Rahul', createdAt: mockTimestamp }}
+        isMine={false}
+      /&gt;
+    );
+
+    expect(screen.queryByTestId('message-status')).toBeNull();
+  });
+});</code></pre>
+
+    <h3>Testing user interaction</h3>
+
+    <pre><code>// src/components/SendBar.test.js
+import React from 'react';
+import { render, screen, fireEvent } from '@testing-library/react-native';
+import { SendBar } from './SendBar';
+
+describe('SendBar', () => {
+  test('calls onSend with trimmed text when send is pressed', () => {
+    const mockSend = jest.fn();
+    render(&lt;SendBar onSend={mockSend} /&gt;);
+
+    const input = screen.getByPlaceholderText('Type a message');
+    fireEvent.changeText(input, '  Hello Priya!  ');
+
+    const sendBtn = screen.getByTestId('send-button');
+    fireEvent.press(sendBtn);
+
+    expect(mockSend).toHaveBeenCalledWith('Hello Priya!');
+  });
+
+  test('does not call onSend for empty messages', () => {
+    const mockSend = jest.fn();
+    render(&lt;SendBar onSend={mockSend} /&gt;);
+
+    const sendBtn = screen.getByTestId('send-button');
+    fireEvent.press(sendBtn);
+
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  test('clears input after successful send', () => {
+    const mockSend = jest.fn();
+    render(&lt;SendBar onSend={mockSend} /&gt;);
+
+    const input = screen.getByPlaceholderText('Type a message');
+    fireEvent.changeText(input, 'Hello');
+    fireEvent.press(screen.getByTestId('send-button'));
+
+    expect(input.props.value).toBe('');
+  });
+
+  test('disables send button while sending', () => {
+    render(&lt;SendBar onSend={jest.fn()} sending={true} /&gt;);
+
+    const sendBtn = screen.getByTestId('send-button');
+    expect(sendBtn.props.accessibilityState?.disabled).toBe(true);
+  });
+});</code></pre>
+
+    <hr>
+
+    <!-- Section 5 -->
+    <h2>5. Integration tests with Firebase Emulator</h2>
+
+    <p>Integration tests verify that your app code works correctly with real Firebase — but using the local emulator so you don't affect production data.</p>
+
+    <pre><code>// __tests__/integration/messaging.test.js
+import { initializeTestEnvironment, assertSucceeds, assertFails }
+  from '@firebase/rules-unit-testing';
+import { collection, addDoc, getDocs, query, orderBy, serverTimestamp }
+  from 'firebase/firestore';
+
+let testEnv;
+let priyaDb, rahulDb;
+
+beforeAll(async () => {
+  testEnv = await initializeTestEnvironment({
+    projectId: 'test-whatsapp-clone',
+    firestore: {
+      rules: require('fs').readFileSync('firestore.rules', 'utf8'),
+      host: 'localhost',
+      port: 8080,
+    },
+  });
+});
+
+beforeEach(async () => {
+  await testEnv.clearFirestore();
+
+  // Set up a chat between Priya and Rahul
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await db.doc('chats/chat1').set({
+      participants: ['priya123', 'rahul456'],
+      lastMessage: '',
+      lastMessageAt: null,
+    });
+  });
+
+  priyaDb = testEnv.authenticatedContext('priya123').firestore();
+  rahulDb = testEnv.authenticatedContext('rahul456').firestore();
+});
+
+afterAll(async () => {
+  await testEnv.cleanup();
+});
+
+describe('Messaging', () => {
+  test('participant can send a message to their chat', async () => {
+    await assertSucceeds(
+      addDoc(collection(priyaDb, 'chats/chat1/messages'), {
+        senderId: 'priya123',
+        text: 'Hello Rahul!',
+        createdAt: serverTimestamp(),
+      })
+    );
+  });
+
+  test('participant cannot impersonate another user', async () => {
+    await assertFails(
+      addDoc(collection(priyaDb, 'chats/chat1/messages'), {
+        senderId: 'rahul456', // Priya trying to send as Rahul
+        text: 'Fake message',
+        createdAt: serverTimestamp(),
+      })
+    );
+  });
+
+  test('non-participant cannot read messages', async () => {
+    const strangerDb = testEnv.authenticatedContext('stranger789').firestore();
+
+    await assertFails(
+      getDocs(collection(strangerDb, 'chats/chat1/messages'))
+    );
+  });
+
+  test('messages are ordered by createdAt', async () => {
+    // Send messages with slight delay
+    await addDoc(collection(priyaDb, 'chats/chat1/messages'), {
+      senderId: 'priya123',
+      text: 'First message',
+      createdAt: serverTimestamp(),
+    });
+
+    await addDoc(collection(rahulDb, 'chats/chat1/messages'), {
+      senderId: 'rahul456',
+      text: 'Second message',
+      createdAt: serverTimestamp(),
+    });
+
+    const q = query(
+      collection(priyaDb, 'chats/chat1/messages'),
+      orderBy('createdAt', 'asc')
+    );
+    const snapshot = await getDocs(q);
+    const messages = snapshot.docs.map(d => d.data().text);
+
+    expect(messages).toEqual(['First message', 'Second message']);
+  });
+
+  test('message text cannot exceed 4096 characters', async () => {
+    await assertFails(
+      addDoc(collection(priyaDb, 'chats/chat1/messages'), {
+        senderId: 'priya123',
+        text: 'A'.repeat(4097),
+        createdAt: serverTimestamp(),
+      })
+    );
+  });
+});</code></pre>
+
+    <h3>Running integration tests</h3>
+
+    <pre><code>// Start the emulator and run tests in one command
+firebase emulators:exec "npx jest __tests__/integration/ --forceExit"</code></pre>
+
+    <hr>
+
+    <!-- Section 6 -->
+    <h2>6. Mocking Firebase for unit/component tests</h2>
+
+    <p>For unit and component tests you don't want to run the emulator — it's too slow. Instead, mock Firebase:</p>
+
+    <pre><code>// __mocks__/firebase/firestore.js
+// This file automatically replaces 'firebase/firestore' in all tests
+
+export const getFirestore = jest.fn(() => ({}));
+export const collection = jest.fn();
+export const doc = jest.fn();
+export const addDoc = jest.fn(() => Promise.resolve({ id: 'mock-id' }));
+export const getDocs = jest.fn(() => Promise.resolve({ docs: [], size: 0 }));
+export const onSnapshot = jest.fn((query, callback) => {
+  // Immediately fire with empty snapshot
+  callback({ docs: [], docChanges: () => [] });
+  return jest.fn(); // unsubscribe function
+});
+export const query = jest.fn();
+export const orderBy = jest.fn();
+export const limit = jest.fn();
+export const where = jest.fn();
+export const serverTimestamp = jest.fn(() => ({ _type: 'serverTimestamp' }));
+export const writeBatch = jest.fn(() => ({
+  set: jest.fn(),
+  update: jest.fn(),
+  delete: jest.fn(),
+  commit: jest.fn(() => Promise.resolve()),
+}));</code></pre>
+
+    <pre><code>// __mocks__/firebase/auth.js
+export const getAuth = jest.fn(() => ({
+  currentUser: { uid: 'test-user-123', email: 'test@example.com' },
+}));
+export const signInWithEmailAndPassword = jest.fn(() =>
+  Promise.resolve({ user: { uid: 'test-user-123' } })
+);
+export const signOut = jest.fn(() => Promise.resolve());</code></pre>
+
+    <p>With these mocks in place, your component tests run in milliseconds without needing Firebase at all.</p>
+
+    <hr>
+
+    <!-- Section 7 -->
+    <h2>7. Manual QA checklist</h2>
+
+    <p>Automated tests can't catch everything — visual glitches, "feels wrong" interactions, and complex multi-device flows need human testing. Use this checklist before every release:</p>
+
+    <h3>Critical path (test every release)</h3>
+    <table>
+      <thead>
+        <tr><th>#</th><th>Test</th><th>Pass?</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>1</td><td>Fresh install → sign up → lands on chat list</td><td>☐</td></tr>
+        <tr><td>2</td><td>Log out → log back in → chats still there</td><td>☐</td></tr>
+        <tr><td>3</td><td>Send text message → appears on recipient's device</td><td>☐</td></tr>
+        <tr><td>4</td><td>Send image → appears with preview on both sides</td><td>☐</td></tr>
+        <tr><td>5</td><td>Voice call connects → audio works both ways</td><td>☐</td></tr>
+        <tr><td>6</td><td>Push notification arrives when app is backgrounded</td><td>☐</td></tr>
+        <tr><td>7</td><td>Turn on airplane mode → send message → turn off → message delivers</td><td>☐</td></tr>
+        <tr><td>8</td><td>Block a user → their messages no longer appear</td><td>☐</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Platform-specific (test on both iOS AND Android)</h3>
+    <table>
+      <thead>
+        <tr><th>#</th><th>Test</th><th>iOS</th><th>Android</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>9</td><td>Keyboard doesn't cover the text input</td><td>☐</td><td>☐</td></tr>
+        <tr><td>10</td><td>Incoming call shows native call UI</td><td>☐</td><td>☐</td></tr>
+        <tr><td>11</td><td>Long message wraps correctly (no clipping)</td><td>☐</td><td>☐</td></tr>
+        <tr><td>12</td><td>App resumes correctly after background (no blank screen)</td><td>☐</td><td>☐</td></tr>
+        <tr><td>13</td><td>Shadows display on headers and buttons</td><td>☐</td><td>☐</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Edge cases</h3>
+    <table>
+      <thead>
+        <tr><th>#</th><th>Test</th><th>Pass?</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>14</td><td>Very long name (50 chars) doesn't break layout</td><td>☐</td></tr>
+        <tr><td>15</td><td>Empty chat list shows helpful empty state</td><td>☐</td></tr>
+        <tr><td>16</td><td>Open chat with 0 messages → works, no crash</td><td>☐</td></tr>
+        <tr><td>17</td><td>Rapidly tap send 5 times → no duplicate messages</td><td>☐</td></tr>
+        <tr><td>18</td><td>Rotate device → chat doesn't lose scroll position</td><td>☐</td></tr>
+      </tbody>
+    </table>
+
+    <hr>
+
+    <!-- Section 8 -->
+    <h2>8. What to test before every release</h2>
+
+    <pre><code>// Add to package.json scripts:
+{
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:integration": "firebase emulators:exec 'npx jest __tests__/integration/ --forceExit'",
+    "prerelease": "npm run test && npm run test:integration"
+  }
+}</code></pre>
+
+    <h3>Release testing flow</h3>
+    <ol>
+      <li><code>npm run prerelease</code> — runs all automated tests</li>
+      <li>Fix any failures (don't ship with failing tests!)</li>
+      <li>Build with EAS: <code>eas build --platform all</code></li>
+      <li>Install on a test device (both iOS and Android)</li>
+      <li>Run through the manual QA checklist above</li>
+      <li>If everything passes → submit to stores</li>
+    </ol>
+
+    <div class="callout" style="background:#e8f5e9; border-left-color:#4caf50;">
+      <div class="callout-title">Start small, grow over time</div>
+      <p>You don't need 100% test coverage on day one. Start with: (1) tests for utility functions (easiest), (2) tests for the MessageBubble component (most reused), and (3) one integration test for send-message flow. Add more tests whenever you fix a bug — write a test that would have caught it, then fix it. Over time your test suite grows organically.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 9: Full App.js -->
+    <h2>9. Full working example — testable app structure</h2>
+
+    <p>Here's how to structure your app so it's easy to test — logic separated from UI, components accept props instead of reaching into Firebase directly.</p>
+
+    <pre><code>// App.js — Testable Architecture Demo
+// Key pattern: separate logic (hooks/utils) from presentation (components)
+// This makes components testable without Firebase mocks
+
+import React, { useState, useEffect } from 'react';
+import {
+  View, Text, TextInput, FlatList, Pressable,
+  StyleSheet, Alert, ActivityIndicator, Platform,
+  KeyboardAvoidingView,
+} from 'react-native';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
+import {
+  getFirestore, collection, doc, query, orderBy,
+  limit, onSnapshot, serverTimestamp, writeBatch,
+} from 'firebase/firestore';
+
+// ─── Firebase config ───────────────────────────
+const firebaseConfig = {
+  apiKey: 'YOUR_API_KEY',
+  authDomain: 'your-app.firebaseapp.com',
+  projectId: 'your-app',
+  storageBucket: 'your-app.appspot.com',
+  messagingSenderId: '123456789',
+  appId: '1:123456789:web:abc123',
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+const COLORS = {
+  darkGreen: '#075E54',
+  lightGreen: '#25D366',
+  bubbleGreen: '#DCF8C6',
+  chatBg: '#ECE5DD',
+  white: '#FFFFFF',
+};
+
+// ─── TESTABLE UTILITY FUNCTIONS ────────────────
+// These are pure functions — easy to unit test!
+
+export function validateMessage(text) {
+  const trimmed = (text || '').trim();
+  if (trimmed.length === 0) return { valid: false, error: 'Message is empty' };
+  if (trimmed.length > 4096) return { valid: false, error: 'Message too long (max 4096)' };
+  return { valid: true, text: trimmed };
+}
+
+export function formatMessageTime(timestamp) {
+  if (!timestamp) return 'Sending...';
+  const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+export function getMessageStatus(message, userId) {
+  if (message.senderId !== userId) return null; // not my message
+  if (!message.createdAt) return 'pending';
+  return 'sent';
+}
+
+// ─── TESTABLE COMPONENTS ───────────────────────
+// These accept data via props — no Firebase dependency inside!
+
+export function MessageBubble({ text, time, status, isMine }) {
+  return (
+    &lt;View
+      style={[styles.bubble, isMine ? styles.myBubble : styles.theirBubble]}
+      testID="message-bubble"
+    &gt;
+      &lt;Text style={styles.messageText} testID="message-text"&gt;{text}&lt;/Text&gt;
+      &lt;View style={styles.metaRow}&gt;
+        &lt;Text style={styles.timeText} testID="message-time"&gt;{time}&lt;/Text&gt;
+        {status && (
+          &lt;Text testID="message-status"&gt;
+            {status === 'pending' ? '🕐' : '✓✓'}
+          &lt;/Text&gt;
+        )}
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}
+
+export function SendBar({ onSend, sending }) {
+  const [input, setInput] = useState('');
+
+  const handlePress = () => {
+    const result = validateMessage(input);
+    if (!result.valid) return;
+    onSend(result.text);
+    setInput('');
+  };
+
+  return (
+    &lt;View style={styles.inputBar}&gt;
+      &lt;TextInput
+        style={styles.input}
+        value={input}
+        onChangeText={setInput}
+        placeholder="Type a message"
+        maxLength={4096}
+        multiline
+        testID="message-input"
+      /&gt;
+      &lt;Pressable
+        style={[styles.sendBtn, sending &amp;&amp; { opacity: 0.5 }]}
+        onPress={handlePress}
+        disabled={sending}
+        testID="send-button"
+        accessibilityState={{ disabled: sending }}
+      &gt;
+        {sending
+          ? &lt;ActivityIndicator color={COLORS.white} size="small" /&gt;
+          : &lt;Text style={styles.sendText}&gt;Send&lt;/Text&gt;
+        }
+      &lt;/Pressable&gt;
+    &lt;/View&gt;
+  );
+}
+
+// ─── HOOK (connects Firebase to components) ────
+function useMessages(chatId) {
+  const [messages, setMessages] = useState([]);
+
+  useEffect(() => {
+    const q = query(
+      collection(db, 'chats', chatId, 'messages'),
+      orderBy('createdAt', 'desc'),
+      limit(50)
+    );
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setMessages(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+    return unsubscribe;
+  }, [chatId]);
+
+  return messages;
+}
+
+// ─── SCREEN (wires hook data to testable components) ──
+function ChatScreen({ chatId }) {
+  const messages = useMessages(chatId);
+  const [sending, setSending] = useState(false);
+  const userId = auth.currentUser?.uid;
+
+  const handleSend = async (text) => {
+    setSending(true);
+    try {
+      const batch = writeBatch(db);
+      const msgRef = doc(collection(db, 'chats', chatId, 'messages'));
+      batch.set(msgRef, {
+        senderId: userId,
+        text,
+        createdAt: serverTimestamp(),
+      });
+      await batch.commit();
+    } catch (error) {
+      Alert.alert('Send failed', error.message);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    &lt;KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    &gt;
+      &lt;View style={styles.header}&gt;
+        &lt;Text style={styles.headerTitle}&gt;Priya&lt;/Text&gt;
+      &lt;/View&gt;
+
+      &lt;FlatList
+        data={messages}
+        renderItem={({ item }) =&gt; (
+          &lt;MessageBubble
+            text={item.text}
+            time={formatMessageTime(item.createdAt)}
+            status={getMessageStatus(item, userId)}
+            isMine={item.senderId === userId}
+          /&gt;
+        )}
+        keyExtractor={(item) =&gt; item.id}
+        inverted
+        style={styles.messageList}
+      /&gt;
+
+      &lt;SendBar onSend={handleSend} sending={sending} /&gt;
+    &lt;/KeyboardAvoidingView&gt;
+  );
+}
+
+// ─── Main App ─────────────────────────────────
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    signInWithEmailAndPassword(auth, 'reviewer@yourapp.com', 'ReviewTest2026!')
+      .then((cred) => setUser(cred.user))
+      .catch((err) => Alert.alert('Login failed', err.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return (
+      &lt;View style={styles.center}&gt;
+        &lt;ActivityIndicator size="large" color={COLORS.darkGreen} /&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  if (!user) {
+    return (
+      &lt;View style={styles.center}&gt;
+        &lt;Text&gt;Not logged in&lt;/Text&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  return &lt;ChatScreen chatId="chat1" /&gt;;
+}
+
+// ─── Styles ───────────────────────────────────
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: COLORS.chatBg },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  header: {
+    backgroundColor: COLORS.darkGreen,
+    paddingTop: Platform.OS === 'ios' ? 50 : 30,
+    paddingBottom: 12,
+    paddingHorizontal: 16,
+  },
+  headerTitle: { color: COLORS.white, fontSize: 18, fontWeight: '700' },
+  messageList: { flex: 1, paddingHorizontal: 10 },
+  bubble: {
+    maxWidth: '75%',
+    padding: 10,
+    borderRadius: 8,
+    marginVertical: 3,
+  },
+  myBubble: {
+    backgroundColor: COLORS.bubbleGreen,
+    alignSelf: 'flex-end',
+    borderTopRightRadius: 0,
+  },
+  theirBubble: {
+    backgroundColor: COLORS.white,
+    alignSelf: 'flex-start',
+    borderTopLeftRadius: 0,
+  },
+  messageText: { fontSize: 15, color: '#303030' },
+  metaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 4 },
+  timeText: { fontSize: 11, color: '#999' },
+  inputBar: {
+    flexDirection: 'row',
+    padding: 8,
+    backgroundColor: COLORS.white,
+    alignItems: 'flex-end',
+  },
+  input: {
+    flex: 1,
+    backgroundColor: '#f0f0f0',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
+    fontSize: 15,
+    maxHeight: 100,
+  },
+  sendBtn: {
+    backgroundColor: COLORS.lightGreen,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    marginLeft: 8,
+  },
+  sendText: { color: COLORS.white, fontWeight: '700', fontSize: 15 },
+});</code></pre>
+
+    <hr>
+
+    <!-- Section 10: Key Takeaways -->
+    <h2>10. Key takeaways</h2>
+
+    <ul>
+      <li><strong>Testing pyramid:</strong> many unit tests, some component tests, few integration tests</li>
+      <li><strong>Jest + jest-expo</strong> — the standard test runner for Expo projects</li>
+      <li><strong>Unit test pure functions first</strong> — formatTime, validateMessage, truncateText</li>
+      <li><strong>React Native Testing Library</strong> — test components by what the user sees (text, testID)</li>
+      <li><strong>Firebase Emulator for integration tests</strong> — real rules, fake data, no production risk</li>
+      <li><strong>Mock Firebase for fast component tests</strong> — components shouldn't care where data comes from</li>
+      <li><strong>Separate logic from UI</strong> — pure functions + dumb components = easy testing</li>
+      <li><strong>Manual QA checklist before every release</strong> — 18 checks covering critical paths and edge cases</li>
+      <li><strong>Test when you fix bugs</strong> — write the test first, then fix the code; prevents regressions</li>
+    </ul>
+
+    <hr>
+
+    <!-- Quiz -->
+    <h2>Test your knowledge</h2>
+    <div id="prod-lesson-0007-quiz"></div>
+
+    <hr>
+
+    <!-- Nav -->
+    <div class="nav-links">
+      <a href="./0006-monitoring-and-crash-reporting.html">&larr; Previous: Monitoring &amp; Crash Reporting</a>
+      <a href="./0008-media-compression-and-storage.html">Next: Media Compression &amp; Storage Optimization &rarr;</a>
+    </div>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script>
+    createQuiz('prod-lesson-0007-quiz', [
+      {
+        question: 'What is the main advantage of unit tests over integration tests?',
+        options: [
+          'Unit tests catch more bugs',
+          'Unit tests are extremely fast (milliseconds) and have no external dependencies',
+          'Unit tests don\'t require any setup',
+          'Unit tests replace the need for manual QA',
+        ],
+        answer: 1,
+      },
+      {
+        question: 'Why do we mock Firebase in component tests instead of using the Emulator?',
+        options: [
+          'The Emulator doesn\'t work with React Native',
+          'Mocking is faster — component tests should run in milliseconds, not need a running emulator process',
+          'Firebase mocks are more accurate than the Emulator',
+          'You can only use the Emulator for security rules tests',
+        ],
+        answer: 1,
+      },
+      {
+        question: 'What makes a component "testable" in the pattern shown in this lesson?',
+        options: [
+          'It uses TypeScript for type safety',
+          'It accepts data via props instead of reaching into Firebase directly — so you can test it with any fake data',
+          'It has fewer than 50 lines of code',
+          'It uses testID on every single element',
+        ],
+        answer: 1,
+      },
+      {
+        question: 'When should you add a new automated test?',
+        options: [
+          'Only at the start of a project, before writing any feature code',
+          'Every time you find and fix a bug — write a test that would have caught it',
+          'Only when the app has more than 1,000 users',
+          'Only for functions that have failed in production three or more times',
+        ],
+        answer: 1,
+      },
+      {
+        question: 'What does `assertFails()` verify in a Firebase Emulator test?',
+        options: [
+          'That the Firebase SDK throws a JavaScript error',
+          'That the Firestore security rules DENY the operation (it would be rejected in production)',
+          'That the test function will fail the test suite',
+          'That the Emulator is not running',
+        ],
+        answer: 1,
+      },
+    ]);
+  </script>
+</body>
+</html>

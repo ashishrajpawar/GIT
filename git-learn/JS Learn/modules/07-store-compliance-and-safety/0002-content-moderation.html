@@ -1,0 +1,1131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Store Compliance Lesson 2: Content Moderation — JS Learn</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">Module 7: Store Compliance &amp; Safety</a>
+      <span class="sep">›</span>
+      <span class="current">Lesson 2: Content Moderation</span>
+    </nav>
+
+    <!-- Header -->
+    <span class="badge">Store Compliance · Lesson 2</span>
+    <h1 style="margin-top:0.5rem;">Content Moderation System</h1>
+    <div class="lesson-meta">
+      <span>Admin review · Auto-hide · Banning users · Moderation policy · Store Q&amp;A</span>
+      <span>~55 min</span>
+      <span>Hands-on</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for your WhatsApp clone</div>
+      <p>In Lesson 1 you built the ability for users to report content. Now what? Apple and Google <strong>will ask you</strong> during review: "How does your app handle reported content?" If your answer is "we don't" — rejected. You need a moderation system that receives reports, auto-hides dangerous content, and gives you (the admin) a way to review and act. This lesson builds that entire pipeline — from the moment a report lands in Firestore to the moment a banned user can no longer send messages.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 1 -->
+    <h2>1. The moderation pipeline — overview</h2>
+
+    <p>Here's what happens when someone reports a message in your app:</p>
+
+    <pre><code>User reports message
+       ↓
+Report saved to /reports (status: 'pending')
+       ↓
+Auto-hide check: does this user have 3+ pending reports?
+       ↓  YES → auto-hide their messages (status: 'auto-hidden')
+       ↓  NO  → wait for admin review
+       ↓
+Admin reviews in moderation dashboard
+       ↓
+Action taken: dismiss / warn / ban user
+       ↓
+If banned → user's account is disabled</code></pre>
+
+    <p>You don't need a huge team. For a new app with under 10,000 users, <strong>you are the admin</strong>. The system just needs to exist and work — Apple doesn't require a 24/7 moderation team for indie apps.</p>
+
+    <hr>
+
+    <!-- Section 2 -->
+    <h2>2. Extended reports schema</h2>
+
+    <p>In Lesson 1 you created a basic report document. Let's extend it with moderation fields:</p>
+
+    <pre><code>// Firestore document: /reports/{autoId}
+{
+  // --- From Lesson 1 (user-submitted) ---
+  reportedBy: 'priya123',
+  reportedUser: 'spam789',
+  chatId: 'chat_abc',
+  messageId: 'msg_xyz',
+  messageText: 'Buy cheap watches...',
+  reason: 'spam',
+  details: 'Keeps sending ads every day',
+  status: 'pending',               // pending → reviewed → actioned → dismissed
+  createdAt: Timestamp,
+
+  // --- New: moderation fields (admin-set) ---
+  reviewedBy: null,                // admin UID who reviewed
+  reviewedAt: null,                // when it was reviewed
+  action: null,                    // 'dismissed' | 'warned' | 'hidden' | 'banned'
+  adminNotes: null                 // private notes from admin
+}</code></pre>
+
+    <p>The <code>status</code> field drives the pipeline:</p>
+    <ul>
+      <li><code>pending</code> — new report, not yet reviewed</li>
+      <li><code>auto-hidden</code> — system auto-hid the content (threshold reached)</li>
+      <li><code>reviewed</code> — admin looked at it</li>
+      <li><code>actioned</code> — admin took action (warn, hide, or ban)</li>
+      <li><code>dismissed</code> — admin decided it's not a violation</li>
+    </ul>
+
+    <hr>
+
+    <!-- Section 3 -->
+    <h2>3. Tracking report counts per user</h2>
+
+    <p>To auto-hide and ban, you need to know how many reports a user has. Add a counter to their profile:</p>
+
+    <pre><code>// Firestore document: /users/{uid}
+{
+  uid: 'spam789',
+  displayName: 'Spammer',
+  // ... other fields ...
+  blockedUsers: [],
+  reportCount: 5,          // total reports received
+  isBanned: false,         // set to true by admin
+  isHidden: false          // set to true by auto-hide threshold
+}</code></pre>
+
+    <p>Increment <code>reportCount</code> when a new report is filed against them:</p>
+
+    <pre><code>import { doc, updateDoc, increment } from 'firebase/firestore';
+
+async function incrementReportCount(reportedUserUid) {
+  await updateDoc(doc(db, 'users', reportedUserUid), {
+    reportCount: increment(1),
+  });
+}</code></pre>
+
+    <p>Call this right after creating the report document (in the <code>reportUser</code> function from Lesson 1):</p>
+
+    <pre><code>async function reportUser({ reportedUser, chatId, messageId, messageText, reason, details }) {
+  // 1. Create the report
+  await addDoc(collection(db, 'reports'), {
+    reportedBy: auth.currentUser.uid,
+    reportedUser,
+    chatId: chatId || null,
+    messageId: messageId || null,
+    messageText: messageText || null,
+    reason,
+    details: details || '',
+    status: 'pending',
+    createdAt: serverTimestamp(),
+  });
+
+  // 2. Increment their report count
+  await incrementReportCount(reportedUser);
+
+  // 3. Check auto-hide threshold
+  await checkAutoHide(reportedUser);
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 4 -->
+    <h2>4. Auto-hide — hiding content after N reports</h2>
+
+    <p>If a user gets 3 or more pending reports, automatically hide their messages from other users. This protects your community while you review:</p>
+
+    <pre><code>import { doc, getDoc, updateDoc } from 'firebase/firestore';
+
+const AUTO_HIDE_THRESHOLD = 3;
+
+async function checkAutoHide(reportedUserUid) {
+  const userDoc = await getDoc(doc(db, 'users', reportedUserUid));
+  const userData = userDoc.data();
+
+  if (userData.reportCount >= AUTO_HIDE_THRESHOLD && !userData.isHidden) {
+    await updateDoc(doc(db, 'users', reportedUserUid), {
+      isHidden: true,
+    });
+  }
+}</code></pre>
+
+    <p>Then on the client, filter out hidden users the same way you filter blocked users:</p>
+
+    <pre><code>// When rendering messages in a group chat
+const visibleMessages = messages.filter(msg => {
+  // Skip messages from users I've blocked
+  if (blockedUsers.includes(msg.senderId)) return false;
+
+  // Skip messages from hidden/banned users (fetch their profile flag)
+  if (hiddenUserIds.includes(msg.senderId)) return false;
+
+  return true;
+});</code></pre>
+
+    <p>To get hidden user IDs efficiently, listen to the users who are in your chats and check their <code>isHidden</code> or <code>isBanned</code> flags.</p>
+
+    <hr>
+
+    <!-- Section 5 -->
+    <h2>5. Admin role — identifying yourself as admin</h2>
+
+    <p>You need a way to mark certain users as admins so they can access the moderation dashboard. The simplest approach for a small app: store admin UIDs in Firestore and check in security rules.</p>
+
+    <pre><code>// Firestore document: /config/admins
+{
+  uids: ['your-uid-here', 'co-admin-uid']
+}</code></pre>
+
+    <p>Security rules to allow admin access to reports:</p>
+
+    <pre><code>// firestore.rules
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper: is the current user an admin?
+    function isAdmin() {
+      return request.auth.uid in get(/databases/$(database)/documents/config/admins).data.uids;
+    }
+
+    // Reports: users can create, only admins can read/update
+    match /reports/{reportId} {
+      allow create: if request.auth != null
+        && request.resource.data.reportedBy == request.auth.uid
+        && request.resource.data.status == 'pending';
+
+      allow read: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // Config: only admins can read (so non-admins can't see the admin list)
+    match /config/{docId} {
+      allow read: if isAdmin();
+      allow write: if false; // change via Firebase Console only
+    }
+  }
+}</code></pre>
+
+    <p><strong>Important:</strong> The <code>isAdmin()</code> function does one extra document read per rule check. This is fine for admin operations (rare) but don't use it on every message write (too expensive).</p>
+
+    <hr>
+
+    <!-- Section 6 -->
+    <h2>6. Moderation dashboard — reviewing reports</h2>
+
+    <p>Build a simple screen (accessible only to admin users) that lists pending reports:</p>
+
+    <pre><code>import { useState, useEffect } from 'react';
+import { View, Text, FlatList, Pressable, Alert, StyleSheet } from 'react-native';
+import {
+  collection, query, where, orderBy, onSnapshot,
+  doc, updateDoc, serverTimestamp
+} from 'firebase/firestore';
+import { auth, db } from './firebaseConfig';
+
+function ModerationDashboard() {
+  const [reports, setReports] = useState([]);
+
+  useEffect(() => {
+    const reportsQuery = query(
+      collection(db, 'reports'),
+      where('status', 'in', ['pending', 'auto-hidden']),
+      orderBy('createdAt', 'desc')
+    );
+
+    const unsub = onSnapshot(reportsQuery, (snapshot) => {
+      setReports(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    return unsub;
+  }, []);
+
+  async function handleAction(reportId, reportedUser, action) {
+    // Update the report
+    await updateDoc(doc(db, 'reports', reportId), {
+      status: 'actioned',
+      action,
+      reviewedBy: auth.currentUser.uid,
+      reviewedAt: serverTimestamp(),
+    });
+
+    // If banning, update the user's profile
+    if (action === 'banned') {
+      await updateDoc(doc(db, 'users', reportedUser), {
+        isBanned: true,
+      });
+    }
+
+    // If dismissing, mark as dismissed instead
+    if (action === 'dismissed') {
+      await updateDoc(doc(db, 'reports', reportId), {
+        status: 'dismissed',
+        action: 'dismissed',
+        reviewedBy: auth.currentUser.uid,
+        reviewedAt: serverTimestamp(),
+      });
+    }
+  }
+
+  function confirmAction(reportId, reportedUser, action) {
+    const messages = {
+      dismissed: 'This will dismiss the report. The user will not be affected.',
+      warned: 'This will mark the report as reviewed. Consider messaging the user a warning.',
+      banned: 'This will BAN the user permanently. They will not be able to send messages.',
+    };
+
+    Alert.alert(
+      `${action.charAt(0).toUpperCase() + action.slice(1)}?`,
+      messages[action],
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: action === 'banned' ? 'Ban User' : 'Confirm',
+          style: action === 'banned' ? 'destructive' : 'default',
+          onPress: () => handleAction(reportId, reportedUser, action),
+        },
+      ]
+    );
+  }
+
+  function renderReport({ item }) {
+    return (
+      &lt;View style={styles.reportCard}&gt;
+        &lt;View style={styles.reportHeader}&gt;
+          &lt;Text style={styles.reasonBadge}&gt;{item.reason}&lt;/Text&gt;
+          &lt;Text style={styles.date}&gt;
+            {item.createdAt?.toDate?.()?.toLocaleDateString() || 'Just now'}
+          &lt;/Text&gt;
+        &lt;/View&gt;
+
+        &lt;Text style={styles.label}&gt;Reported user:&lt;/Text&gt;
+        &lt;Text style={styles.value}&gt;{item.reportedUser}&lt;/Text&gt;
+
+        &lt;Text style={styles.label}&gt;Reported by:&lt;/Text&gt;
+        &lt;Text style={styles.value}&gt;{item.reportedBy}&lt;/Text&gt;
+
+        {item.messageText && (
+          &lt;&gt;
+            &lt;Text style={styles.label}&gt;Message content:&lt;/Text&gt;
+            &lt;Text style={styles.messagePreview}&gt;"{item.messageText}"&lt;/Text&gt;
+          &lt;/&gt;
+        )}
+
+        {item.details && (
+          &lt;&gt;
+            &lt;Text style={styles.label}&gt;Details:&lt;/Text&gt;
+            &lt;Text style={styles.value}&gt;{item.details}&lt;/Text&gt;
+          &lt;/&gt;
+        )}
+
+        &lt;View style={styles.actions}&gt;
+          &lt;Pressable
+            style={styles.dismissBtn}
+            onPress={() =&gt; confirmAction(item.id, item.reportedUser, 'dismissed')}
+          &gt;
+            &lt;Text style={styles.dismissText}&gt;Dismiss&lt;/Text&gt;
+          &lt;/Pressable&gt;
+          &lt;Pressable
+            style={styles.warnBtn}
+            onPress={() =&gt; confirmAction(item.id, item.reportedUser, 'warned')}
+          &gt;
+            &lt;Text style={styles.warnText}&gt;Warn&lt;/Text&gt;
+          &lt;/Pressable&gt;
+          &lt;Pressable
+            style={styles.banBtn}
+            onPress={() =&gt; confirmAction(item.id, item.reportedUser, 'banned')}
+          &gt;
+            &lt;Text style={styles.banText}&gt;Ban&lt;/Text&gt;
+          &lt;/Pressable&gt;
+        &lt;/View&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  return (
+    &lt;View style={styles.container}&gt;
+      &lt;View style={styles.header}&gt;
+        &lt;Text style={styles.headerTitle}&gt;Moderation Dashboard&lt;/Text&gt;
+        &lt;Text style={styles.headerCount}&gt;{reports.length} pending&lt;/Text&gt;
+      &lt;/View&gt;
+      &lt;FlatList
+        data={reports}
+        keyExtractor={(item) =&gt; item.id}
+        renderItem={renderReport}
+        contentContainerStyle={styles.list}
+        ListEmptyComponent={
+          &lt;Text style={styles.empty}&gt;No pending reports. All clear! 🎉&lt;/Text&gt;
+        }
+      /&gt;
+    &lt;/View&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#f8f9fa' },
+  header: {
+    backgroundColor: '#075E54',
+    paddingTop: 50,
+    paddingBottom: 16,
+    paddingHorizontal: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  headerTitle: { color: '#fff', fontSize: 20, fontWeight: '700' },
+  headerCount: { color: '#DCF8C6', fontSize: 14, fontWeight: '600' },
+  list: { padding: 16 },
+  reportCard: {
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    padding: 16,
+    marginBottom: 12,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+  },
+  reportHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  reasonBadge: {
+    backgroundColor: '#dc3545',
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    textTransform: 'uppercase',
+  },
+  date: { fontSize: 12, color: '#999' },
+  label: { fontSize: 12, color: '#666', marginTop: 8, fontWeight: '600' },
+  value: { fontSize: 14, color: '#333', marginTop: 2 },
+  messagePreview: {
+    fontSize: 14,
+    color: '#333',
+    marginTop: 4,
+    fontStyle: 'italic',
+    backgroundColor: '#f8f8f8',
+    padding: 8,
+    borderRadius: 4,
+  },
+  actions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 16,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0',
+  },
+  dismissBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#6c757d',
+  },
+  dismissText: { color: '#6c757d', fontSize: 13, fontWeight: '600' },
+  warnBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 6,
+    backgroundColor: '#ffc107',
+  },
+  warnText: { color: '#333', fontSize: 13, fontWeight: '600' },
+  banBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 6,
+    backgroundColor: '#dc3545',
+  },
+  banText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  empty: { textAlign: 'center', padding: 40, color: '#999', fontSize: 16 },
+});</code></pre>
+
+    <hr>
+
+    <!-- Section 7 -->
+    <h2>7. Enforcing bans — blocking a banned user from sending</h2>
+
+    <p>When a user is banned (<code>isBanned: true</code>), they should not be able to send messages. Enforce this in security rules:</p>
+
+    <pre><code>// firestore.rules — updated message creation rule
+match /chats/{chatId}/messages/{messageId} {
+  allow create: if request.auth.uid == request.resource.data.senderId
+    && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.members
+    && !isBanned(request.auth.uid)
+    && !senderIsBlocked(chatId);
+}
+
+// Helper: check if user is banned
+function isBanned(uid) {
+  return get(/databases/$(database)/documents/users/$(uid)).data.isBanned == true;
+}</code></pre>
+
+    <p>On the client side, show a banned message if the current user is banned:</p>
+
+    <pre><code>function ChatScreen() {
+  const [myProfile, setMyProfile] = useState(null);
+
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, 'users', auth.currentUser.uid), (snap) => {
+      setMyProfile(snap.data());
+    });
+    return unsub;
+  }, []);
+
+  if (myProfile?.isBanned) {
+    return (
+      &lt;View style={styles.bannedContainer}&gt;
+        &lt;Text style={styles.bannedTitle}&gt;Account Suspended&lt;/Text&gt;
+        &lt;Text style={styles.bannedMessage}&gt;
+          Your account has been suspended due to violations of our community guidelines.
+          If you believe this is a mistake, contact support at support@yourapp.com.
+        &lt;/Text&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  // ... normal chat UI
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 8 -->
+    <h2>8. Banning with Firebase Auth (stronger enforcement)</h2>
+
+    <p>Firestore rules prevent writes, but a truly banned user should be signed out entirely. Firebase Auth lets you <strong>disable an account</strong> — but only from the server side (Admin SDK). For now, the client-side <code>isBanned</code> check works. In Module 8 (Cloud Functions), you'll add server-side account disabling:</p>
+
+    <pre><code>// Cloud Function (you'll build this in Module 8, Lesson 4)
+// This runs on the server, not in the app
+const admin = require('firebase-admin');
+
+exports.banUser = functions.firestore
+  .document('users/{uid}')
+  .onUpdate(async (change, context) => {
+    const before = change.before.data();
+    const after = change.after.data();
+
+    // If isBanned just became true, disable the Auth account
+    if (!before.isBanned && after.isBanned) {
+      await admin.auth().updateUser(context.params.uid, {
+        disabled: true,
+      });
+    }
+  });</code></pre>
+
+    <p>For now, the Firestore <code>isBanned</code> flag + security rules are enough to pass store review. The Cloud Function makes it airtight later.</p>
+
+    <hr>
+
+    <!-- Section 9 -->
+    <h2>9. What to tell Apple and Google about moderation</h2>
+
+    <p>Both stores ask you to describe your moderation process. Here's exactly what to write:</p>
+
+    <h3>Apple — App Review Notes (in App Store Connect)</h3>
+
+    <pre><code>Content Moderation:
+- Users can block any other user (Settings → Blocked Contacts)
+- Users can report messages or users for: spam, harassment,
+  hate speech, inappropriate content, or other reasons
+- Reports are stored in our database and reviewed by the admin team
+- Users with 3+ reports are auto-hidden pending review
+- Confirmed violators are permanently banned (account disabled)
+- All user-generated content is text, images, and audio messages
+  sent in private 1:1 or group chats
+- The app does not have public/discoverable content feeds</code></pre>
+
+    <h3>Google Play — Data Safety / App Content section</h3>
+
+    <pre><code>User-Generated Content Declaration:
+Q: Does your app contain user-generated content?
+A: Yes
+
+Q: How is UGC moderated?
+A: Users can report content directly from the app. Reports
+   are reviewed by our moderation team. Content that violates
+   community guidelines is removed and repeat offenders are
+   banned. Users can also block other users at any time.
+
+Q: Is UGC accessible to other users?
+A: Only within private chats (not publicly discoverable)</code></pre>
+
+    <hr>
+
+    <!-- Section 10 -->
+    <h2>10. Writing your moderation policy</h2>
+
+    <p>Create a simple "Community Guidelines" page (you can host it alongside your privacy policy). This is what you link to when stores ask:</p>
+
+    <pre><code>&lt;!-- community-guidelines.html --&gt;
+&lt;h1&gt;Community Guidelines&lt;/h1&gt;
+
+&lt;h2&gt;What's not allowed&lt;/h2&gt;
+&lt;ul&gt;
+  &lt;li&gt;Spam or unsolicited advertising&lt;/li&gt;
+  &lt;li&gt;Harassment, bullying, or threats&lt;/li&gt;
+  &lt;li&gt;Hate speech based on race, religion, gender, or orientation&lt;/li&gt;
+  &lt;li&gt;Sexually explicit content&lt;/li&gt;
+  &lt;li&gt;Content that promotes violence or illegal activities&lt;/li&gt;
+  &lt;li&gt;Impersonation of other people&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h2&gt;What happens if you violate these guidelines&lt;/h2&gt;
+&lt;ol&gt;
+  &lt;li&gt;&lt;strong&gt;First offence:&lt;/strong&gt; Warning sent to your account&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Repeated offences:&lt;/strong&gt; Content hidden from other users&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Severe or ongoing:&lt;/strong&gt; Account permanently banned&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;h2&gt;How to report&lt;/h2&gt;
+&lt;p&gt;Long-press any message or open the chat menu (⋮) to report
+a user or specific message. You can also block users at any time.&lt;/p&gt;
+
+&lt;h2&gt;Appeals&lt;/h2&gt;
+&lt;p&gt;If you believe your account was banned in error, contact us
+at support@yourapp.com with your registered email address.&lt;/p&gt;</code></pre>
+
+    <hr>
+
+    <!-- Section 11 -->
+    <h2>11. Accessing the moderation dashboard</h2>
+
+    <p>Add a "Moderation" option in Settings that only appears for admin users:</p>
+
+    <pre><code>import { useState, useEffect } from 'react';
+import { doc, getDoc } from 'firebase/firestore';
+import { auth, db } from './firebaseConfig';
+
+function useIsAdmin() {
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    async function checkAdmin() {
+      const adminDoc = await getDoc(doc(db, 'config', 'admins'));
+      if (adminDoc.exists()) {
+        const adminUids = adminDoc.data().uids || [];
+        setIsAdmin(adminUids.includes(auth.currentUser.uid));
+      }
+    }
+    checkAdmin();
+  }, []);
+
+  return isAdmin;
+}
+
+// In your Settings screen:
+function SettingsScreen({ navigation }) {
+  const isAdmin = useIsAdmin();
+
+  return (
+    &lt;View&gt;
+      {/* ... normal settings items ... */}
+
+      {isAdmin && (
+        &lt;Pressable
+          style={styles.settingsItem}
+          onPress={() =&gt; navigation.navigate('Moderation')}
+        &gt;
+          &lt;Text style={styles.settingsText}&gt;Moderation Dashboard&lt;/Text&gt;
+          &lt;Text style={styles.settingsSubtext}&gt;Review reports&lt;/Text&gt;
+        &lt;/Pressable&gt;
+      )}
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 12 -->
+    <h2>12. Full runnable example — moderation dashboard with actions</h2>
+
+    <p>This is a complete <code>App.js</code> showing the moderation dashboard. Admin logs in and sees all pending reports with dismiss/warn/ban buttons:</p>
+
+    <pre><code>import { useState, useEffect } from 'react';
+import {
+  View, Text, FlatList, Pressable, Alert, Platform, StyleSheet
+} from 'react-native';
+import { initializeApp } from 'firebase/app';
+import {
+  getFirestore, collection, doc, query, where, orderBy,
+  onSnapshot, updateDoc, getDoc, serverTimestamp, increment
+} from 'firebase/firestore';
+import { getAuth } from 'firebase/auth';
+
+const app = initializeApp({ /* your config */ });
+const db = getFirestore(app);
+const auth = getAuth(app);
+
+// ─── Admin Check ────────────────────────────────────────────
+function useIsAdmin() {
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function check() {
+      const adminDoc = await getDoc(doc(db, 'config', 'admins'));
+      if (adminDoc.exists()) {
+        setIsAdmin(adminDoc.data().uids?.includes(auth.currentUser.uid));
+      }
+      setLoading(false);
+    }
+    check();
+  }, []);
+
+  return { isAdmin, loading };
+}
+
+// ─── Moderation Actions ─────────────────────────────────────
+async function dismissReport(reportId) {
+  await updateDoc(doc(db, 'reports', reportId), {
+    status: 'dismissed',
+    action: 'dismissed',
+    reviewedBy: auth.currentUser.uid,
+    reviewedAt: serverTimestamp(),
+  });
+}
+
+async function warnUser(reportId) {
+  await updateDoc(doc(db, 'reports', reportId), {
+    status: 'actioned',
+    action: 'warned',
+    reviewedBy: auth.currentUser.uid,
+    reviewedAt: serverTimestamp(),
+  });
+}
+
+async function banUser(reportId, reportedUserUid) {
+  // Mark report as actioned
+  await updateDoc(doc(db, 'reports', reportId), {
+    status: 'actioned',
+    action: 'banned',
+    reviewedBy: auth.currentUser.uid,
+    reviewedAt: serverTimestamp(),
+  });
+
+  // Ban the user
+  await updateDoc(doc(db, 'users', reportedUserUid), {
+    isBanned: true,
+  });
+}
+
+// ─── Main App ───────────────────────────────────────────────
+export default function App() {
+  const { isAdmin, loading } = useIsAdmin();
+  const [reports, setReports] = useState([]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    const reportsQuery = query(
+      collection(db, 'reports'),
+      where('status', 'in', ['pending', 'auto-hidden']),
+      orderBy('createdAt', 'desc')
+    );
+
+    const unsub = onSnapshot(reportsQuery, (snapshot) => {
+      setReports(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    return unsub;
+  }, [isAdmin]);
+
+  if (loading) {
+    return (
+      &lt;View style={styles.center}&gt;
+        &lt;Text&gt;Loading...&lt;/Text&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      &lt;View style={styles.center}&gt;
+        &lt;Text style={styles.noAccess}&gt;Admin access required.&lt;/Text&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  function handleAction(reportId, reportedUser, action) {
+    const labels = { dismissed: 'Dismiss', warned: 'Warn', banned: 'Ban permanently' };
+    Alert.alert(
+      `${labels[action]}?`,
+      action === 'banned'
+        ? 'This will permanently ban the user. They cannot send messages.'
+        : action === 'warned'
+        ? 'This marks the report as reviewed with a warning.'
+        : 'This dismisses the report with no action.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Confirm',
+          style: action === 'banned' ? 'destructive' : 'default',
+          onPress: () => {
+            if (action === 'dismissed') dismissReport(reportId);
+            else if (action === 'warned') warnUser(reportId);
+            else if (action === 'banned') banUser(reportId, reportedUser);
+          },
+        },
+      ]
+    );
+  }
+
+  function renderReport({ item }) {
+    const dateStr = item.createdAt?.toDate?.()?.toLocaleDateString() || 'Just now';
+
+    return (
+      &lt;View style={styles.card}&gt;
+        &lt;View style={styles.cardHeader}&gt;
+          &lt;View style={[styles.badge, styles[`badge_${item.reason}`]]}&gt;
+            &lt;Text style={styles.badgeText}&gt;{item.reason}&lt;/Text&gt;
+          &lt;/View&gt;
+          &lt;Text style={styles.dateText}&gt;{dateStr}&lt;/Text&gt;
+        &lt;/View&gt;
+
+        &lt;Text style={styles.fieldLabel}&gt;Reported user&lt;/Text&gt;
+        &lt;Text style={styles.fieldValue}&gt;{item.reportedUser}&lt;/Text&gt;
+
+        &lt;Text style={styles.fieldLabel}&gt;Reported by&lt;/Text&gt;
+        &lt;Text style={styles.fieldValue}&gt;{item.reportedBy}&lt;/Text&gt;
+
+        {item.messageText ? (
+          &lt;&gt;
+            &lt;Text style={styles.fieldLabel}&gt;Message&lt;/Text&gt;
+            &lt;Text style={styles.quotedMessage}&gt;"{item.messageText}"&lt;/Text&gt;
+          &lt;/&gt;
+        ) : null}
+
+        {item.details ? (
+          &lt;&gt;
+            &lt;Text style={styles.fieldLabel}&gt;Details&lt;/Text&gt;
+            &lt;Text style={styles.fieldValue}&gt;{item.details}&lt;/Text&gt;
+          &lt;/&gt;
+        ) : null}
+
+        &lt;View style={styles.actionRow}&gt;
+          &lt;Pressable
+            style={[styles.actionBtn, styles.actionDismiss]}
+            onPress={() =&gt; handleAction(item.id, item.reportedUser, 'dismissed')}
+          &gt;
+            &lt;Text style={styles.actionDismissText}&gt;Dismiss&lt;/Text&gt;
+          &lt;/Pressable&gt;
+
+          &lt;Pressable
+            style={[styles.actionBtn, styles.actionWarn]}
+            onPress={() =&gt; handleAction(item.id, item.reportedUser, 'warned')}
+          &gt;
+            &lt;Text style={styles.actionWarnText}&gt;Warn&lt;/Text&gt;
+          &lt;/Pressable&gt;
+
+          &lt;Pressable
+            style={[styles.actionBtn, styles.actionBan]}
+            onPress={() =&gt; handleAction(item.id, item.reportedUser, 'banned')}
+          &gt;
+            &lt;Text style={styles.actionBanText}&gt;Ban&lt;/Text&gt;
+          &lt;/Pressable&gt;
+        &lt;/View&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  return (
+    &lt;View style={styles.container}&gt;
+      &lt;View style={styles.screenHeader}&gt;
+        &lt;Text style={styles.screenTitle}&gt;Moderation&lt;/Text&gt;
+        &lt;Text style={styles.pendingCount}&gt;
+          {reports.length} pending report{reports.length !== 1 ? 's' : ''}
+        &lt;/Text&gt;
+      &lt;/View&gt;
+
+      &lt;FlatList
+        data={reports}
+        keyExtractor={(item) =&gt; item.id}
+        renderItem={renderReport}
+        contentContainerStyle={styles.listContent}
+        ListEmptyComponent={
+          &lt;View style={styles.emptyContainer}&gt;
+            &lt;Text style={styles.emptyText}&gt;No pending reports&lt;/Text&gt;
+            &lt;Text style={styles.emptySubtext}&gt;All clear — nothing to review.&lt;/Text&gt;
+          &lt;/View&gt;
+        }
+      /&gt;
+    &lt;/View&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#f4f6f8' },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  noAccess: { fontSize: 16, color: '#666' },
+  screenHeader: {
+    backgroundColor: '#075E54',
+    paddingTop: Platform.OS === 'ios' ? 54 : 34,
+    paddingBottom: 16,
+    paddingHorizontal: 20,
+  },
+  screenTitle: { color: '#fff', fontSize: 22, fontWeight: '700' },
+  pendingCount: { color: '#DCF8C6', fontSize: 13, marginTop: 4 },
+  listContent: { padding: 14 },
+  card: {
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    padding: 16,
+    marginBottom: 14,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  badge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4 },
+  badge_spam: { backgroundColor: '#ffc107' },
+  badge_harassment: { backgroundColor: '#dc3545' },
+  badge_hate: { backgroundColor: '#6f42c1' },
+  badge_inappropriate: { backgroundColor: '#fd7e14' },
+  badge_other: { backgroundColor: '#6c757d' },
+  badgeText: { color: '#fff', fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
+  dateText: { fontSize: 12, color: '#999' },
+  fieldLabel: { fontSize: 11, color: '#888', fontWeight: '600', marginTop: 8 },
+  fieldValue: { fontSize: 14, color: '#333', marginTop: 2 },
+  quotedMessage: {
+    fontSize: 14,
+    color: '#555',
+    fontStyle: 'italic',
+    backgroundColor: '#f9f9f9',
+    padding: 8,
+    borderRadius: 4,
+    marginTop: 4,
+  },
+  actionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 16,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0',
+  },
+  actionBtn: { paddingVertical: 9, paddingHorizontal: 16, borderRadius: 6 },
+  actionDismiss: { borderWidth: 1, borderColor: '#6c757d' },
+  actionDismissText: { color: '#6c757d', fontSize: 13, fontWeight: '600' },
+  actionWarn: { backgroundColor: '#ffc107' },
+  actionWarnText: { color: '#333', fontSize: 13, fontWeight: '600' },
+  actionBan: { backgroundColor: '#dc3545' },
+  actionBanText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  emptyContainer: { alignItems: 'center', paddingTop: 60 },
+  emptyText: { fontSize: 18, fontWeight: '600', color: '#333' },
+  emptySubtext: { fontSize: 14, color: '#999', marginTop: 6 },
+});</code></pre>
+
+    <hr>
+
+    <!-- Section 13 -->
+    <h2>13. Complete Firestore rules — putting it all together</h2>
+
+    <p>Here are the full security rules with blocking, banning, and reports integrated:</p>
+
+    <pre><code>rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─── Helper functions ─────────────────────────
+    function isAdmin() {
+      return request.auth.uid in get(/databases/$(database)/documents/config/admins).data.uids;
+    }
+
+    function isBanned(uid) {
+      return get(/databases/$(database)/documents/users/$(uid)).data.isBanned == true;
+    }
+
+    function senderIsBlocked(chatId) {
+      let chat = get(/databases/$(database)/documents/chats/$(chatId)).data;
+      let others = chat.members.removeAll([request.auth.uid]);
+      return others.size() == 1
+        && request.auth.uid in get(/databases/$(database)/documents/users/$(others[0])).data.blockedUsers;
+    }
+
+    // ─── Users ────────────────────────────────────
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth.uid == userId;
+      allow update: if request.auth.uid == userId || isAdmin();
+    }
+
+    // ─── Chats ────────────────────────────────────
+    match /chats/{chatId} {
+      allow read: if request.auth.uid in resource.data.members;
+      allow create: if request.auth.uid in request.resource.data.members
+        && !isBanned(request.auth.uid);
+      allow update: if request.auth.uid in resource.data.members
+        && !isBanned(request.auth.uid);
+
+      match /messages/{messageId} {
+        allow read: if request.auth.uid in
+          get(/databases/$(database)/documents/chats/$(chatId)).data.members;
+        allow create: if request.auth.uid == request.resource.data.senderId
+          && !isBanned(request.auth.uid)
+          && !senderIsBlocked(chatId);
+      }
+    }
+
+    // ─── Reports ──────────────────────────────────
+    match /reports/{reportId} {
+      allow create: if request.auth != null
+        && request.resource.data.reportedBy == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.reason in
+           ['spam', 'harassment', 'hate', 'inappropriate', 'other'];
+      allow read, update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // ─── Config (admin list) ──────────────────────
+    match /config/{docId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+  }
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 14 -->
+    <h2>14. Testing your moderation system</h2>
+
+    <p>Before submitting to the stores, test these scenarios:</p>
+
+    <table style="width:100%;border-collapse:collapse;">
+      <thead>
+        <tr style="border-bottom:2px solid #e0e0e0;">
+          <th style="text-align:left;padding:8px;">Scenario</th>
+          <th style="text-align:left;padding:8px;">Expected result</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid #f0f0f0;">
+          <td style="padding:8px;">User A reports User B once</td>
+          <td style="padding:8px;">Report appears in dashboard, User B unaffected</td>
+        </tr>
+        <tr style="border-bottom:1px solid #f0f0f0;">
+          <td style="padding:8px;">User B gets 3 reports total</td>
+          <td style="padding:8px;">User B's <code>isHidden: true</code>, messages hidden for others</td>
+        </tr>
+        <tr style="border-bottom:1px solid #f0f0f0;">
+          <td style="padding:8px;">Admin dismisses a report</td>
+          <td style="padding:8px;">Report disappears from pending list</td>
+        </tr>
+        <tr style="border-bottom:1px solid #f0f0f0;">
+          <td style="padding:8px;">Admin bans a user</td>
+          <td style="padding:8px;"><code>isBanned: true</code> on profile, user sees "Account Suspended"</td>
+        </tr>
+        <tr style="border-bottom:1px solid #f0f0f0;">
+          <td style="padding:8px;">Banned user tries to send a message</td>
+          <td style="padding:8px;">Security rules reject the write</td>
+        </tr>
+        <tr>
+          <td style="padding:8px;">Non-admin tries to open dashboard</td>
+          <td style="padding:8px;">"Admin access required" message</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <hr>
+
+    <!-- Quiz -->
+    <h2>Quiz</h2>
+    <div id="compliance-lesson-0002-quiz"></div>
+
+    <hr>
+
+    <!-- Nav -->
+    <div class="nav-links">
+      <a href="./0001-block-and-report-users.html">&larr; Lesson 1: Block &amp; Report Users</a>
+      <a href="./0003-forgot-password-and-security.html">Lesson 3: Forgot Password &amp; Account Security &rarr;</a>
+    </div>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script>
+    createQuiz('compliance-lesson-0002-quiz', [
+      {
+        question: 'What happens when a user reaches 3 reports in the auto-hide system?',
+        options: [
+          'Their account is immediately deleted',
+          'Their isHidden flag is set to true and messages are hidden from other users',
+          'They receive a push notification warning',
+          'Nothing — only admin action can affect a user'
+        ],
+        answer: 1
+      },
+      {
+        question: 'Where should you store admin UIDs for the moderation system?',
+        options: [
+          'Hardcoded in the app\'s source code',
+          'In AsyncStorage on the admin\'s phone',
+          'In a /config/admins Firestore document, checked by security rules',
+          'In a .env file in the Expo project'
+        ],
+        answer: 2
+      },
+      {
+        question: 'What should you tell Apple when they ask "How does your app handle reported content?"',
+        options: [
+          'We don\'t moderate — users handle it themselves',
+          'Reports are reviewed by our team; repeated violators are warned then banned; users can block anyone',
+          'We use AI to automatically delete all reported messages',
+          'We rely on Apple to moderate for us'
+        ],
+        answer: 1
+      },
+      {
+        question: 'Why is banning a user in Firestore (isBanned: true) not enough by itself for a production app?',
+        options: [
+          'Firestore doesn\'t support boolean fields',
+          'A determined user could bypass the app and write directly via the REST API unless security rules also block them',
+          'The banned user\'s phone will crash',
+          'Apple requires account deletion, not banning'
+        ],
+        answer: 1
+      },
+      {
+        question: 'Why should the moderation dashboard ONLY be visible to admin users?',
+        options: [
+          'Regular users would see other people\'s reports, exposing private data and the identity of reporters',
+          'It would slow down the app for non-admin users',
+          'Apple requires the dashboard to be hidden',
+          'Non-admin users would accidentally ban themselves'
+        ],
+        answer: 0
+      }
+    ]);
+  </script>
+</body>
+</html>

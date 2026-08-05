@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Production at Scale Lesson 3: Offline Support &amp; Network Handling — JS Learn</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">Module 8: Production at Scale</a>
+      <span class="sep">›</span>
+      <span class="current">Lesson 3: Offline Support &amp; Network Handling</span>
+    </nav>
+
+    <!-- Header -->
+    <span class="badge">Production at Scale · Lesson 3</span>
+    <h1 style="margin-top:0.5rem;">Offline Support &amp; Network Handling</h1>
+    <div class="lesson-meta">
+      <span>Firestore persistence · NetInfo · Offline queue · Connecting UI · Conflict resolution</span>
+      <span>~55 min</span>
+      <span>Hands-on</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for your WhatsApp clone</div>
+      <p>Your users ride the metro, enter elevators, and live in areas with patchy signal. If your app shows a blank screen or crashes when offline, they'll switch to the real WhatsApp. The real WhatsApp works <strong>seamlessly offline</strong>: you can read old messages, type new ones, and they send automatically when connectivity returns. That's what we're building in this lesson — an app that feels alive even without internet.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 1 -->
+    <h2>1. Firestore offline persistence</h2>
+
+    <p>Good news: Firestore has <strong>built-in offline support</strong>. Once enabled, it caches every document your app has read — so if the user goes offline, they can still see their messages.</p>
+
+    <h3>Enabling persistence in React Native</h3>
+
+    <pre><code>// In your firebase config file (run this BEFORE any Firestore reads)
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore';
+import { initializeApp } from 'firebase/app';
+
+const app = initializeApp(firebaseConfig);
+
+// Enable persistent cache (data survives app restarts)
+const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({
+    tabManager: persistentMultipleTabManager(),
+  }),
+});
+
+// That's it! Now:
+// ✅ Previously loaded messages are available offline
+// ✅ Writes queue up and sync when back online
+// ✅ onSnapshot listeners fire from cache while offline</code></pre>
+
+    <h3>What happens automatically</h3>
+    <table>
+      <thead>
+        <tr><th>Situation</th><th>Firestore behaviour</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>User goes offline</td><td>Reads come from local cache; writes queue locally</td></tr>
+        <tr><td>User comes back online</td><td>Queued writes sync to server in order; listeners get fresh data</td></tr>
+        <tr><td>App is killed and reopened offline</td><td>Cache persists on disk; data still available</td></tr>
+        <tr><td>Conflicting write while offline</td><td>Last-write-wins when syncing (more on this in Section 6)</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout" style="background:#e8f5e9; border-left-color:#4caf50;">
+      <div class="callout-title">Cache size</div>
+      <p>The default cache size is 100MB. For a messaging app, this is plenty — about 50,000 messages. You can increase it with <code>cacheSizeBytes</code> if needed, but the default works well.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 2 -->
+    <h2>2. Detecting network state with NetInfo</h2>
+
+    <p>Firestore handles caching, but your <strong>UI</strong> needs to know the network state too — to show a "Connecting..." banner, disable the send button gracefully, or queue voice messages differently.</p>
+
+    <h3>Install NetInfo</h3>
+
+    <pre><code>npx expo install @react-native-community/netinfo</code></pre>
+
+    <h3>Using NetInfo</h3>
+
+    <pre><code>import NetInfo from '@react-native-community/netinfo';
+import { useState, useEffect } from 'react';
+
+function useNetworkStatus() {
+  const [isConnected, setIsConnected] = useState(true);
+  const [connectionType, setConnectionType] = useState('unknown');
+
+  useEffect(() => {
+    // Subscribe to network state changes
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      setIsConnected(state.isConnected);
+      setConnectionType(state.type); // 'wifi', 'cellular', 'none', etc.
+    });
+
+    return unsubscribe;
+  }, []);
+
+  return { isConnected, connectionType };
+}
+
+// Usage in a component:
+function ChatHeader({ contactName }) {
+  const { isConnected } = useNetworkStatus();
+
+  return (
+    &lt;View style={styles.header}&gt;
+      &lt;Text style={styles.headerTitle}&gt;{contactName}&lt;/Text&gt;
+      {!isConnected && (
+        &lt;View style={styles.offlineBanner}&gt;
+          &lt;Text style={styles.offlineText}&gt;Connecting...&lt;/Text&gt;
+        &lt;/View&gt;
+      )}
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <h3>Network state values</h3>
+    <table>
+      <thead>
+        <tr><th><code>state.type</code></th><th>Meaning</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>'wifi'</code></td><td>Connected via WiFi</td></tr>
+        <tr><td><code>'cellular'</code></td><td>Connected via mobile data (4G/5G)</td></tr>
+        <tr><td><code>'none'</code></td><td>No internet connection</td></tr>
+        <tr><td><code>'unknown'</code></td><td>State not yet determined (brief, on app start)</td></tr>
+      </tbody>
+    </table>
+
+    <hr>
+
+    <!-- Section 3 -->
+    <h2>3. The "Connecting..." banner (WhatsApp style)</h2>
+
+    <p>WhatsApp shows a subtle banner at the top of the chat list when offline. It disappears the moment connectivity returns. Here's how to build it:</p>
+
+    <pre><code>import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, Animated, StyleSheet } from 'react-native';
+import NetInfo from '@react-native-community/netinfo';
+
+function ConnectingBanner() {
+  const [isConnected, setIsConnected] = useState(true);
+  const slideAnim = useRef(new Animated.Value(-40)).current; // starts hidden
+
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      setIsConnected(state.isConnected);
+    });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    // Slide down when offline, slide up when back online
+    Animated.timing(slideAnim, {
+      toValue: isConnected ? -40 : 0,
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
+  }, [isConnected]);
+
+  return (
+    &lt;Animated.View
+      style={[
+        styles.banner,
+        { transform: [{ translateY: slideAnim }] },
+      ]}
+    &gt;
+      &lt;Text style={styles.bannerText}&gt;
+        Connecting...
+      &lt;/Text&gt;
+    &lt;/Animated.View&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  banner: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 40,
+    backgroundColor: '#ffcc02',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 100,
+  },
+  bannerText: {
+    color: '#333',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+});</code></pre>
+
+    <hr>
+
+    <!-- Section 4 -->
+    <h2>4. Offline message queue with pending indicators</h2>
+
+    <p>When a user sends a message offline, Firestore queues it locally. But the user needs to <strong>see</strong> that it's pending — like WhatsApp's single grey tick (clock icon) that turns into ticks when delivered.</p>
+
+    <pre><code>import { onSnapshot, doc } from 'firebase/firestore';
+
+// When you send a message, Firestore returns immediately (from cache)
+// But the serverTimestamp will be null until it syncs
+function MessageBubble({ message, isMine }) {
+  // A message without a createdAt timestamp hasn't synced yet
+  const isPending = !message.createdAt;
+
+  return (
+    &lt;View style={[styles.bubble, isMine ? styles.myBubble : styles.theirBubble]}&gt;
+      &lt;Text style={styles.messageText}&gt;{message.text}&lt;/Text&gt;
+      &lt;View style={styles.metaRow}&gt;
+        &lt;Text style={styles.timeText}&gt;
+          {isPending
+            ? 'Sending...'
+            : message.createdAt.toDate().toLocaleTimeString([], {
+                hour: '2-digit', minute: '2-digit',
+              })}
+        &lt;/Text&gt;
+        {isMine && (
+          &lt;Text style={[styles.tick, isPending && styles.tickPending]}&gt;
+            {isPending ? '🕐' : '✓✓'}
+          &lt;/Text&gt;
+        )}
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <h3>How <code>serverTimestamp()</code> behaves offline</h3>
+    <ol>
+      <li>You call <code>addDoc</code> with <code>createdAt: serverTimestamp()</code></li>
+      <li>Firestore writes to local cache immediately — but <code>createdAt</code> is <code>null</code></li>
+      <li>Your <code>onSnapshot</code> fires with the cached doc (createdAt = null)</li>
+      <li>When connectivity returns, the doc syncs and <code>createdAt</code> gets the real server time</li>
+      <li>Your <code>onSnapshot</code> fires again with the real timestamp</li>
+    </ol>
+
+    <p>This means you can use <code>message.createdAt === null</code> as a reliable "pending" indicator — no extra state needed!</p>
+
+    <hr>
+
+    <!-- Section 5 -->
+    <h2>5. Handling the send button while offline</h2>
+
+    <p>Should you disable the send button when offline? <strong>No!</strong> WhatsApp lets you send messages offline — they queue and send later. But you should handle it differently for different content types:</p>
+
+    <pre><code>function useSendMessage(chatId) {
+  const { isConnected } = useNetworkStatus();
+
+  async function send(text) {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    // Text messages: always allow (Firestore queues them)
+    const msgRef = doc(collection(db, 'chats', chatId, 'messages'));
+    await setDoc(msgRef, {
+      senderId: auth.currentUser.uid,
+      text: trimmed,
+      createdAt: serverTimestamp(),
+    });
+    // This returns immediately from cache — the message appears in the UI
+  }
+
+  async function sendImage(imageUri) {
+    if (!isConnected) {
+      // Images need upload — can't queue a file upload offline
+      Alert.alert(
+        'No connection',
+        'Image will be sent when you reconnect.',
+        [{ text: 'OK' }]
+      );
+      // Save to a local pending queue (we'll build this below)
+      await savePendingUpload({ type: 'image', uri: imageUri, chatId });
+      return;
+    }
+
+    // Upload normally when online...
+  }
+
+  async function sendVoiceNote(audioUri) {
+    if (!isConnected) {
+      Alert.alert(
+        'No connection',
+        'Voice note will be sent when you reconnect.'
+      );
+      await savePendingUpload({ type: 'voice', uri: audioUri, chatId });
+      return;
+    }
+
+    // Upload normally when online...
+  }
+
+  return { send, sendImage, sendVoiceNote };
+}</code></pre>
+
+    <h3>Pending uploads queue</h3>
+
+    <pre><code>import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const PENDING_KEY = 'pending_uploads';
+
+// Save a pending upload to local storage
+async function savePendingUpload(item) {
+  const existing = await AsyncStorage.getItem(PENDING_KEY);
+  const queue = existing ? JSON.parse(existing) : [];
+  queue.push({ ...item, queuedAt: Date.now() });
+  await AsyncStorage.setItem(PENDING_KEY, JSON.stringify(queue));
+}
+
+// Process pending uploads when back online
+async function processPendingUploads() {
+  const existing = await AsyncStorage.getItem(PENDING_KEY);
+  if (!existing) return;
+
+  const queue = JSON.parse(existing);
+  const remaining = [];
+
+  for (const item of queue) {
+    try {
+      if (item.type === 'image') {
+        await uploadAndSendImage(item.chatId, item.uri);
+      } else if (item.type === 'voice') {
+        await uploadAndSendVoice(item.chatId, item.uri);
+      }
+      // Success — don't add to remaining
+    } catch (error) {
+      // Failed — keep in queue for next retry
+      remaining.push(item);
+    }
+  }
+
+  await AsyncStorage.setItem(PENDING_KEY, JSON.stringify(remaining));
+}
+
+// Trigger processing when network comes back
+function useProcessPendingOnReconnect() {
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      if (state.isConnected) {
+        processPendingUploads();
+      }
+    });
+    return unsubscribe;
+  }, []);
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 6 -->
+    <h2>6. Conflict resolution</h2>
+
+    <p>What happens when two devices edit the same document while offline? For example, Priya changes her profile name on her phone (offline) and her tablet (also offline), then both come online.</p>
+
+    <h3>Firestore's default: last-write-wins</h3>
+    <p>Whoever syncs last overwrites the other. For most fields in a messaging app, this is fine:</p>
+
+    <table>
+      <thead>
+        <tr><th>Data type</th><th>Conflict risk</th><th>Solution</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Messages</td><td>None — each message is a new document</td><td>No conflict possible</td></tr>
+        <tr><td>Profile name</td><td>Low — users rarely edit on two devices</td><td>Last-write-wins is fine</td></tr>
+        <tr><td>Unread count</td><td>High — multiple devices updating</td><td>Use <code>increment()</code></td></tr>
+        <tr><td>Typing indicator</td><td>None — ephemeral, gets overwritten constantly</td><td>Last-write-wins is fine</td></tr>
+        <tr><td>Group members list</td><td>Medium — two admins add/remove</td><td>Use <code>arrayUnion()</code> / <code>arrayRemove()</code></td></tr>
+      </tbody>
+    </table>
+
+    <h3>Using atomic operations to avoid conflicts</h3>
+
+    <pre><code>import { updateDoc, increment, arrayUnion, arrayRemove } from 'firebase/firestore';
+
+// ❌ BAD — overwrites the count (conflict-prone)
+await updateDoc(chatRef, { unreadCount: currentCount + 1 });
+
+// ✅ GOOD — atomic increment (safe even offline/concurrent)
+await updateDoc(chatRef, { unreadCount: increment(1) });
+
+// ❌ BAD — overwrites the entire array
+await updateDoc(chatRef, { participants: [...current, newUserId] });
+
+// ✅ GOOD — adds to array without reading it first
+await updateDoc(chatRef, { participants: arrayUnion(newUserId) });
+
+// ✅ GOOD — removes from array without reading it first
+await updateDoc(chatRef, { participants: arrayRemove(leftUserId) });</code></pre>
+
+    <p><strong>Rule of thumb:</strong> If a field is updated by multiple users or devices, never overwrite it — use <code>increment()</code>, <code>arrayUnion()</code>, or <code>arrayRemove()</code>. These are safe even when offline because Firestore replays them correctly on sync.</p>
+
+    <hr>
+
+    <!-- Section 7 -->
+    <h2>7. Firestore snapshot metadata — cache vs server</h2>
+
+    <p>You can check whether data came from cache or the server:</p>
+
+    <pre><code>import { onSnapshot } from 'firebase/firestore';
+
+onSnapshot(messagesQuery, (snapshot) => {
+  // Did this data come from cache or the server?
+  const fromCache = snapshot.metadata.fromCache;
+
+  if (fromCache) {
+    // Data is from local cache — user might be offline
+    // or the server hasn't responded yet
+    console.log('Showing cached data');
+  } else {
+    // Fresh from the server
+    console.log('Data is live from Firestore');
+  }
+
+  // You can also check if there are pending writes
+  const hasPendingWrites = snapshot.metadata.hasPendingWrites;
+  if (hasPendingWrites) {
+    console.log('Some writes haven\'t synced yet');
+  }
+});
+
+// To get metadata change events, pass includeMetadataChanges
+onSnapshot(
+  messagesQuery,
+  { includeMetadataChanges: true }, // fires when metadata changes too
+  (snapshot) => {
+    // Now you'll get a callback when data transitions from cache → server
+  }
+);</code></pre>
+
+    <h3>When to use this</h3>
+    <ul>
+      <li>Show a subtle "cached" indicator on the chat list header</li>
+      <li>Change the tick colour from grey (pending) to blue (synced)</li>
+      <li>Log whether users are hitting cache or server for performance monitoring</li>
+    </ul>
+
+    <hr>
+
+    <!-- Section 8: Full App.js -->
+    <h2>8. Full working example — offline-capable chat</h2>
+
+    <pre><code>// App.js — Offline Support & Network Handling Demo
+// Shows: offline persistence, connecting banner, pending indicators,
+// network detection, and automatic sync on reconnect
+
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  View, Text, TextInput, FlatList, Pressable,
+  StyleSheet, Alert, ActivityIndicator, Platform,
+  KeyboardAvoidingView, Animated,
+} from 'react-native';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
+import {
+  initializeFirestore, persistentLocalCache,
+  persistentMultipleTabManager,
+  collection, doc, query, orderBy, limit,
+  onSnapshot, setDoc, serverTimestamp, writeBatch,
+} from 'firebase/firestore';
+import NetInfo from '@react-native-community/netinfo';
+
+// ─── Firebase config ───────────────────────────
+const firebaseConfig = {
+  apiKey: 'YOUR_API_KEY',
+  authDomain: 'your-app.firebaseapp.com',
+  projectId: 'your-app',
+  storageBucket: 'your-app.appspot.com',
+  messagingSenderId: '123456789',
+  appId: '1:123456789:web:abc123',
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+
+// Enable offline persistence
+const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({
+    tabManager: persistentMultipleTabManager(),
+  }),
+});
+
+const COLORS = {
+  darkGreen: '#075E54',
+  lightGreen: '#25D366',
+  bubbleGreen: '#DCF8C6',
+  chatBg: '#ECE5DD',
+  white: '#FFFFFF',
+};
+
+// ─── Network status hook ───────────────────────
+function useNetworkStatus() {
+  const [isConnected, setIsConnected] = useState(true);
+
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      setIsConnected(state.isConnected);
+    });
+    return unsubscribe;
+  }, []);
+
+  return isConnected;
+}
+
+// ─── Connecting Banner ─────────────────────────
+function ConnectingBanner() {
+  const isConnected = useNetworkStatus();
+  const slideAnim = useRef(new Animated.Value(-36)).current;
+
+  useEffect(() => {
+    Animated.timing(slideAnim, {
+      toValue: isConnected ? -36 : 0,
+      duration: 250,
+      useNativeDriver: true,
+    }).start();
+  }, [isConnected]);
+
+  return (
+    &lt;Animated.View
+      style={[styles.banner, { transform: [{ translateY: slideAnim }] }]}
+    &gt;
+      &lt;ActivityIndicator size="small" color="#333" /&gt;
+      &lt;Text style={styles.bannerText}&gt;Connecting...&lt;/Text&gt;
+    &lt;/Animated.View&gt;
+  );
+}
+
+// ─── Message bubble with pending indicator ─────
+function MessageBubble({ message, isMine }) {
+  const isPending = !message.createdAt;
+
+  return (
+    &lt;View style={[styles.bubble, isMine ? styles.myBubble : styles.theirBubble]}&gt;
+      &lt;Text style={styles.messageText}&gt;{message.text}&lt;/Text&gt;
+      &lt;View style={styles.metaRow}&gt;
+        &lt;Text style={styles.timeText}&gt;
+          {isPending
+            ? 'Sending...'
+            : message.createdAt.toDate().toLocaleTimeString([], {
+                hour: '2-digit', minute: '2-digit',
+              })}
+        &lt;/Text&gt;
+        {isMine &amp;&amp; (
+          &lt;Text style={styles.tick}&gt;
+            {isPending ? '🕐' : '✓✓'}
+          &lt;/Text&gt;
+        )}
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}
+
+// ─── Chat Screen ───────────────────────────────
+function ChatScreen({ chatId }) {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+  const [sending, setSending] = useState(false);
+  const [fromCache, setFromCache] = useState(false);
+  const isConnected = useNetworkStatus();
+
+  const userId = auth.currentUser?.uid;
+
+  useEffect(() => {
+    const q = query(
+      collection(db, 'chats', chatId, 'messages'),
+      orderBy('createdAt', 'desc'),
+      limit(50)
+    );
+
+    // includeMetadataChanges: true → fires when cache/server status changes
+    const unsubscribe = onSnapshot(
+      q,
+      { includeMetadataChanges: true },
+      (snapshot) => {
+        const msgs = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setMessages(msgs);
+        setFromCache(snapshot.metadata.fromCache);
+      }
+    );
+
+    return unsubscribe;
+  }, [chatId]);
+
+  const handleSend = async () => {
+    const trimmed = input.trim();
+    if (!trimmed) return;
+
+    setSending(true);
+    try {
+      const batch = writeBatch(db);
+
+      const msgRef = doc(collection(db, 'chats', chatId, 'messages'));
+      batch.set(msgRef, {
+        senderId: userId,
+        text: trimmed,
+        createdAt: serverTimestamp(),
+      });
+
+      const chatRef = doc(db, 'chats', chatId);
+      batch.update(chatRef, {
+        lastMessage: trimmed.substring(0, 100),
+        lastMessageAt: serverTimestamp(),
+      });
+
+      await batch.commit();
+      setInput('');
+    } catch (error) {
+      Alert.alert('Send failed', error.message);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    &lt;KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    &gt;
+      {/* Header */}
+      &lt;View style={styles.header}&gt;
+        &lt;Text style={styles.headerTitle}&gt;Priya&lt;/Text&gt;
+        &lt;Text style={styles.headerSubtitle}&gt;
+          {!isConnected
+            ? 'Waiting for network...'
+            : fromCache
+              ? 'Updating...'
+              : 'online'}
+        &lt;/Text&gt;
+      &lt;/View&gt;
+
+      {/* Connecting banner */}
+      &lt;ConnectingBanner /&gt;
+
+      {/* Messages */}
+      &lt;FlatList
+        data={messages}
+        renderItem={({ item }) =&gt; (
+          &lt;MessageBubble message={item} isMine={item.senderId === userId} /&gt;
+        )}
+        keyExtractor={(item) =&gt; item.id}
+        inverted
+        style={styles.messageList}
+        contentContainerStyle={{ paddingVertical: 10 }}
+      /&gt;
+
+      {/* Input bar */}
+      &lt;View style={styles.inputBar}&gt;
+        &lt;TextInput
+          style={styles.input}
+          value={input}
+          onChangeText={setInput}
+          placeholder={isConnected ? 'Type a message' : 'Type a message (will send when online)'}
+          maxLength={4096}
+          multiline
+        /&gt;
+        &lt;Pressable
+          style={[styles.sendBtn, sending &amp;&amp; { opacity: 0.5 }]}
+          onPress={handleSend}
+          disabled={sending}
+        &gt;
+          {sending
+            ? &lt;ActivityIndicator color={COLORS.white} size="small" /&gt;
+            : &lt;Text style={styles.sendText}&gt;Send&lt;/Text&gt;
+          }
+        &lt;/Pressable&gt;
+      &lt;/View&gt;
+    &lt;/KeyboardAvoidingView&gt;
+  );
+}
+
+// ─── Main App ─────────────────────────────────
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    signInWithEmailAndPassword(auth, 'reviewer@yourapp.com', 'ReviewTest2026!')
+      .then((cred) =&gt; setUser(cred.user))
+      .catch((err) =&gt; Alert.alert('Login failed', err.message))
+      .finally(() =&gt; setLoading(false));
+  }, []);
+
+  if (loading) {
+    return (
+      &lt;View style={styles.center}&gt;
+        &lt;ActivityIndicator size="large" color={COLORS.darkGreen} /&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  if (!user) {
+    return (
+      &lt;View style={styles.center}&gt;
+        &lt;Text&gt;Not logged in&lt;/Text&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  return &lt;ChatScreen chatId="chat1" /&gt;;
+}
+
+// ─── Styles ───────────────────────────────────
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: COLORS.chatBg },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  header: {
+    backgroundColor: COLORS.darkGreen,
+    paddingTop: Platform.OS === 'ios' ? 50 : 30,
+    paddingBottom: 12,
+    paddingHorizontal: 16,
+  },
+  headerTitle: { color: COLORS.white, fontSize: 18, fontWeight: '700' },
+  headerSubtitle: { color: '#b2dfdb', fontSize: 13 },
+  banner: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 88 : 68,
+    left: 0,
+    right: 0,
+    height: 36,
+    backgroundColor: '#ffcc02',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+    zIndex: 100,
+  },
+  bannerText: { color: '#333', fontSize: 13, fontWeight: '600' },
+  messageList: { flex: 1, paddingHorizontal: 10 },
+  bubble: {
+    maxWidth: '75%',
+    padding: 10,
+    borderRadius: 8,
+    marginVertical: 3,
+  },
+  myBubble: {
+    backgroundColor: COLORS.bubbleGreen,
+    alignSelf: 'flex-end',
+    borderTopRightRadius: 0,
+  },
+  theirBubble: {
+    backgroundColor: COLORS.white,
+    alignSelf: 'flex-start',
+    borderTopLeftRadius: 0,
+  },
+  messageText: { fontSize: 15, color: '#303030' },
+  metaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 4 },
+  timeText: { fontSize: 11, color: '#999' },
+  tick: { fontSize: 12, color: '#4fc3f7' },
+  inputBar: {
+    flexDirection: 'row',
+    padding: 8,
+    backgroundColor: COLORS.white,
+    alignItems: 'flex-end',
+  },
+  input: {
+    flex: 1,
+    backgroundColor: '#f0f0f0',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
+    fontSize: 15,
+    maxHeight: 100,
+  },
+  sendBtn: {
+    backgroundColor: COLORS.lightGreen,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    marginLeft: 8,
+  },
+  sendText: { color: COLORS.white, fontWeight: '700', fontSize: 15 },
+});</code></pre>
+
+    <hr>
+
+    <!-- Section 9: Key Takeaways -->
+    <h2>9. Key takeaways</h2>
+
+    <ul>
+      <li><strong>Enable <code>persistentLocalCache</code></strong> — one line gives you offline reads and write queueing</li>
+      <li><strong><code>@react-native-community/netinfo</code></strong> — detects WiFi/cellular/none in real-time</li>
+      <li><strong>"Connecting..." banner</strong> — animate in/out based on network state</li>
+      <li><strong><code>serverTimestamp()</code> is null while offline</strong> — use this as your "pending" indicator</li>
+      <li><strong>Text messages work offline</strong> — Firestore queues them automatically</li>
+      <li><strong>File uploads need a manual queue</strong> — save to AsyncStorage, process on reconnect</li>
+      <li><strong>Use <code>increment()</code> and <code>arrayUnion()</code></strong> — avoids conflicts on shared fields</li>
+      <li><strong><code>snapshot.metadata.fromCache</code></strong> — tells you if data is cached or fresh</li>
+    </ul>
+
+    <hr>
+
+    <!-- Quiz -->
+    <h2>Test your knowledge</h2>
+    <div id="prod-lesson-0003-quiz"></div>
+
+    <hr>
+
+    <!-- Nav -->
+    <div class="nav-links">
+      <a href="./0002-pagination-and-data-limits.html">&larr; Previous: Pagination &amp; Data Limits</a>
+      <a href="./0004-cloud-functions.html">Next: Cloud Functions — Server-Side Logic &rarr;</a>
+    </div>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script>
+    createQuiz('prod-lesson-0003-quiz', [
+      {
+        question: 'What does Firestore do when a user writes a document while offline?',
+        options: [
+          'Throws an error and rejects the write',
+          'Queues the write locally and syncs it when connectivity returns',
+          'Sends the write to a backup server via SMS',
+          'Discards the write and shows an alert',
+        ],
+        answer: 1,
+      },
+      {
+        question: 'How can you tell if a message hasn\'t synced to the server yet?',
+        options: [
+          'The document ID will be null',
+          'The createdAt field (set with serverTimestamp()) will be null',
+          'Firestore adds an "isPending" field automatically',
+          'You must manually track pending state in a separate array',
+        ],
+        answer: 1,
+      },
+      {
+        question: 'Why should you use `increment(1)` instead of reading the current value and writing currentValue + 1?',
+        options: [
+          'increment() is faster to type',
+          'increment() is an atomic operation that avoids conflicts when multiple devices update the same field',
+          'Firestore doesn\'t allow you to write numbers directly',
+          'increment() uses less storage space',
+        ],
+        answer: 1,
+      },
+      {
+        question: 'Why can\'t image/voice uploads be handled the same way as text messages offline?',
+        options: [
+          'Firestore doesn\'t support images at all',
+          'Images are too large for the local cache',
+          'File uploads to Firebase Storage require an active network connection — they can\'t be queued like Firestore writes',
+          'Users aren\'t allowed to send images offline by App Store rules',
+        ],
+        answer: 2,
+      },
+      {
+        question: 'What does `snapshot.metadata.fromCache` tell you?',
+        options: [
+          'Whether the Firestore SDK is installed correctly',
+          'Whether the data came from the local cache (offline) or the server (live)',
+          'How old the cached data is in seconds',
+          'Whether the user has cleared their app cache recently',
+        ],
+        answer: 1,
+      },
+    ]);
+  </script>
+</body>
+</html>

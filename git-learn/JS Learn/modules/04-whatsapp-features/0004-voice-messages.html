@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WhatsApp Features Lesson 4: Voice Messages — JS Learn</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">Module 4: WhatsApp Features</a>
+      <span class="sep">›</span>
+      <span class="current">Lesson 4: Voice Messages</span>
+    </nav>
+
+    <!-- Header -->
+    <span class="badge">WhatsApp Features · Lesson 4</span>
+    <h1 style="margin-top:0.5rem;">Voice Messages</h1>
+    <div class="lesson-meta">
+      <span>expo-av recording · Upload to Storage · Audio message bubble · Play/pause · Duration display</span>
+      <span>~55 min</span>
+      <span>Hands-on</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for your WhatsApp clone</div>
+      <p>Voice messages are WhatsApp's second most popular message type after text. Hold the mic button, speak, release to send — it's faster than typing and more personal. Under the hood: the phone records audio using <code>expo-av</code>, uploads the file to Firebase Storage, saves the download URL as a message in Firestore, and the recipient streams playback with a progress bar. This lesson builds the complete voice message flow — recording, uploading, the green audio bubble with play/pause button and duration, and smooth playback.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 1 -->
+    <h2>1. Installing expo-av</h2>
+
+    <p><code>expo-av</code> is Expo's audio/video library. It handles recording microphone input and playing audio files — both local and remote URLs.</p>
+
+    <pre><code>npx expo install expo-av</code></pre>
+
+    <p>You also need to request microphone permission on both platforms:</p>
+
+    <pre><code>import { Audio } from 'expo-av';
+
+async function requestMicPermission() {
+  const { status } = await Audio.requestPermissionsAsync();
+  if (status !== 'granted') {
+    Alert.alert('Permission needed', 'Microphone access is required for voice messages');
+    return false;
+  }
+  return true;
+}</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">Platform note</div>
+      <p>On iOS, the first time your app requests the mic, the system shows a permission dialog. On Android 13+, the <code>RECORD_AUDIO</code> permission is also prompted at runtime. Both are handled by <code>Audio.requestPermissionsAsync()</code> automatically.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 2 -->
+    <h2>2. Recording audio</h2>
+
+    <p>The recording flow: user presses the mic button → recording starts → user releases → recording stops → you get a local file URI.</p>
+
+    <pre><code>import { Audio } from 'expo-av';
+
+let recording = null;
+
+async function startRecording() {
+  const hasPermission = await requestMicPermission();
+  if (!hasPermission) return;
+
+  // Configure audio mode for recording
+  await Audio.setAudioModeAsync({
+    allowsRecordingIOS: true,
+    playsInSilentModeIOS: true,
+  });
+
+  // Create and start the recording
+  const { recording: newRecording } = await Audio.Recording.createAsync(
+    Audio.RecordingOptionsPresets.HIGH_QUALITY
+  );
+  recording = newRecording;
+}
+
+async function stopRecording() {
+  if (!recording) return null;
+
+  await recording.stopAndUnloadAsync();
+
+  // Reset audio mode so playback works
+  await Audio.setAudioModeAsync({
+    allowsRecordingIOS: false,
+  });
+
+  const uri = recording.getURI(); // e.g. file:///data/.../recording.m4a
+  const { durationMillis } = await recording.getStatusAsync();
+
+  recording = null;
+  return { uri, durationMillis };
+}</code></pre>
+
+    <p><strong>Key points:</strong></p>
+    <ul>
+      <li><code>Audio.RecordingOptionsPresets.HIGH_QUALITY</code> — records in AAC/M4A format, which is small and plays on both iOS and Android</li>
+      <li><code>allowsRecordingIOS: true</code> — must be set before recording starts on iOS</li>
+      <li><code>allowsRecordingIOS: false</code> — must be reset after recording, or playback won't work on iOS (common gotcha!)</li>
+      <li><code>getURI()</code> — returns the local file path of the recorded audio</li>
+    </ul>
+
+    <hr>
+
+    <!-- Section 3 -->
+    <h2>3. Uploading audio to Firebase Storage</h2>
+
+    <p>Same pattern as image upload from Module 3 Lesson 5 — convert to blob, upload, get download URL:</p>
+
+    <pre><code>import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { storage } from './firebaseConfig';
+
+async function uploadVoiceMessage(localUri, chatId) {
+  // Convert local file to blob
+  const response = await fetch(localUri);
+  const blob = await response.blob();
+
+  // Create a unique path in Storage
+  const filename = `voice_${Date.now()}.m4a`;
+  const storageRef = ref(storage, `chats/${chatId}/voice/${filename}`);
+
+  // Upload with progress tracking
+  return new Promise((resolve, reject) => {
+    const uploadTask = uploadBytesResumable(storageRef, blob);
+
+    uploadTask.on('state_changed',
+      (snapshot) => {
+        const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+        console.log(`Upload: ${progress.toFixed(0)}%`);
+      },
+      (error) => reject(error),
+      async () => {
+        const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+        resolve(downloadURL);
+      }
+    );
+  });
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 4 -->
+    <h2>4. Saving the voice message to Firestore</h2>
+
+    <p>A voice message is a regular message document with <code>type: 'audio'</code> and extra audio-specific fields:</p>
+
+    <pre><code>import { addDoc, collection, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+
+async function sendVoiceMessage(chatId, audioURL, durationMs, senderName) {
+  await addDoc(collection(db, 'chats', chatId, 'messages'), {
+    type: 'audio',
+    audioURL: audioURL,
+    duration: durationMs,  // duration in milliseconds
+    text: '🎤 Voice message',  // fallback for notifications/preview
+    senderId: auth.currentUser.uid,
+    senderName: senderName,
+    timestamp: serverTimestamp(),
+    reactions: {},
+    readBy: [auth.currentUser.uid],
+    deletedFor: [],
+    deletedForEveryone: false,
+  });
+
+  await updateDoc(doc(db, 'chats', chatId), {
+    lastMessage: {
+      text: `${senderName}: 🎤 Voice message`,
+      timestamp: serverTimestamp(),
+    },
+  });
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 5 -->
+    <h2>5. Playing back audio</h2>
+
+    <p>To play a voice message, create a <code>Sound</code> object from the remote URL and control playback:</p>
+
+    <pre><code>import { Audio } from 'expo-av';
+
+async function playAudio(audioURL, onProgress, onFinish) {
+  const { sound } = await Audio.Sound.createAsync(
+    { uri: audioURL },
+    { shouldPlay: true }   // start playing immediately
+  );
+
+  // Track playback progress
+  sound.setOnPlaybackStatusUpdate((status) => {
+    if (status.isLoaded) {
+      if (status.didJustFinish) {
+        onFinish();
+        sound.unloadAsync();  // free memory
+      } else if (status.isPlaying) {
+        const progress = status.positionMillis / status.durationMillis;
+        onProgress(progress); // 0 to 1
+      }
+    }
+  });
+
+  return sound;
+}
+
+// Pause/resume
+async function togglePlayback(sound, isPlaying) {
+  if (isPlaying) {
+    await sound.pauseAsync();
+  } else {
+    await sound.playAsync();
+  }
+}</code></pre>
+
+    <p><strong>Memory management:</strong> Always call <code>sound.unloadAsync()</code> when playback finishes or the component unmounts. Leaked Sound objects cause memory issues, especially if the user scrolls through many voice messages.</p>
+
+    <hr>
+
+    <!-- Section 6 -->
+    <h2>6. Formatting duration</h2>
+
+    <p>Voice messages show duration like "0:34" or "1:05". Here's the formatter:</p>
+
+    <pre><code>function formatDuration(millis) {
+  if (!millis || millis <= 0) return '0:00';
+  const totalSeconds = Math.floor(millis / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+}
+
+// Examples:
+// formatDuration(34000)  → '0:34'
+// formatDuration(65000)  → '1:05'
+// formatDuration(125000) → '2:05'</code></pre>
+
+    <hr>
+
+    <!-- Section 7 -->
+    <h2>7. The voice message bubble component</h2>
+
+    <p>WhatsApp's audio bubble has: play/pause button, a progress bar, and the duration. Here's the component:</p>
+
+    <pre><code>function VoiceMessageBubble({ message, isMe }) {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [sound, setSound] = useState(null);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (sound) sound.unloadAsync();
+    };
+  }, [sound]);
+
+  async function handlePlay() {
+    if (isPlaying && sound) {
+      await sound.pauseAsync();
+      setIsPlaying(false);
+      return;
+    }
+
+    if (sound) {
+      await sound.playAsync();
+      setIsPlaying(true);
+      return;
+    }
+
+    // First play — load the audio
+    const { sound: newSound } = await Audio.Sound.createAsync(
+      { uri: message.audioURL },
+      { shouldPlay: true }
+    );
+    setSound(newSound);
+    setIsPlaying(true);
+
+    newSound.setOnPlaybackStatusUpdate((status) => {
+      if (status.isLoaded) {
+        if (status.didJustFinish) {
+          setIsPlaying(false);
+          setProgress(0);
+        } else {
+          setProgress(status.positionMillis / status.durationMillis);
+        }
+      }
+    });
+  }
+
+  return (
+    &lt;View style={[audioBubbleStyles.container, isMe ? audioBubbleStyles.sent : audioBubbleStyles.received]}&gt;
+      {/* Play/Pause button */}
+      &lt;Pressable style={audioBubbleStyles.playBtn} onPress={handlePlay}&gt;
+        &lt;Text style={audioBubbleStyles.playIcon}&gt;
+          {isPlaying ? '⏸' : '▶️'}
+        &lt;/Text&gt;
+      &lt;/Pressable&gt;
+
+      {/* Progress bar + duration */}
+      &lt;View style={audioBubbleStyles.trackArea}&gt;
+        &lt;View style={audioBubbleStyles.track}&gt;
+          &lt;View style={[audioBubbleStyles.trackFill, { width: `${progress * 100}%` }]} /&gt;
+        &lt;/View&gt;
+        &lt;Text style={audioBubbleStyles.duration}&gt;
+          {formatDuration(message.duration)}
+        &lt;/Text&gt;
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}
+
+const audioBubbleStyles = StyleSheet.create({
+  container: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    borderRadius: 8,
+    marginVertical: 3,
+    maxWidth: '75%',
+  },
+  sent: { backgroundColor: '#DCF8C6', alignSelf: 'flex-end' },
+  received: { backgroundColor: '#FFFFFF', alignSelf: 'flex-start' },
+  playBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#25D366',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  playIcon: { fontSize: 18 },
+  trackArea: { flex: 1, marginLeft: 10 },
+  track: {
+    height: 4,
+    backgroundColor: '#C0C0C0',
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  trackFill: {
+    height: '100%',
+    backgroundColor: '#075E54',
+    borderRadius: 2,
+  },
+  duration: {
+    fontSize: 12,
+    color: '#667781',
+    marginTop: 4,
+  },
+});</code></pre>
+
+    <hr>
+
+    <!-- Section 8 -->
+    <h2>8. The recording button with hold-to-record</h2>
+
+    <p>WhatsApp uses press-and-hold for recording. In React Native, you use <code>onPressIn</code> (finger down) and <code>onPressOut</code> (finger up):</p>
+
+    <pre><code>function RecordButton({ onRecordingComplete }) {
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const timerRef = useRef(null);
+
+  async function handlePressIn() {
+    const started = await startRecording();
+    if (!started) return;
+    setIsRecording(true);
+    setRecordingDuration(0);
+
+    // Update duration display every second
+    timerRef.current = setInterval(() => {
+      setRecordingDuration((prev) => prev + 1000);
+    }, 1000);
+  }
+
+  async function handlePressOut() {
+    if (!isRecording) return;
+    clearInterval(timerRef.current);
+    setIsRecording(false);
+
+    const result = await stopRecording();
+    if (result && result.durationMillis > 1000) {
+      // Only send if recording is longer than 1 second
+      onRecordingComplete(result);
+    }
+  }
+
+  return (
+    &lt;View style={recordStyles.wrapper}&gt;
+      {isRecording &amp;&amp; (
+        &lt;View style={recordStyles.indicator}&gt;
+          &lt;Text style={recordStyles.recordingDot}&gt;●&lt;/Text&gt;
+          &lt;Text style={recordStyles.timerText}&gt;
+            {formatDuration(recordingDuration)}
+          &lt;/Text&gt;
+        &lt;/View&gt;
+      )}
+      &lt;Pressable
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
+        style={[recordStyles.micBtn, isRecording &amp;&amp; recordStyles.micBtnActive]}
+      &gt;
+        &lt;Text style={recordStyles.micIcon}&gt;🎤&lt;/Text&gt;
+      &lt;/Pressable&gt;
+    &lt;/View&gt;
+  );
+}
+
+const recordStyles = StyleSheet.create({
+  wrapper: { flexDirection: 'row', alignItems: 'center' },
+  indicator: { flexDirection: 'row', alignItems: 'center', marginRight: 8 },
+  recordingDot: { color: '#FF0000', fontSize: 12, marginRight: 4 },
+  timerText: { fontSize: 14, color: '#667781' },
+  micBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#25D366',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  micBtnActive: { backgroundColor: '#FF0000' },
+  micIcon: { fontSize: 20 },
+});</code></pre>
+
+    <div class="callout">
+      <div class="callout-title">The 1-second minimum</div>
+      <p>We discard recordings shorter than 1 second — these are accidental taps, not intentional messages. WhatsApp does the same thing.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 9: Full runnable App.js -->
+    <h2>9. Full runnable App.js — Voice messages with record, upload &amp; playback</h2>
+
+    <p>Copy this entire file and replace your <code>App.js</code>. It shows a chat thread where you can hold the mic button to record, release to send, and tap play on received voice messages.</p>
+
+    <pre><code>// App.js — Full runnable example: Voice Messages
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  View, Text, TextInput, FlatList, Pressable,
+  StyleSheet, Alert, KeyboardAvoidingView, Platform
+} from 'react-native';
+import { Audio } from 'expo-av';
+
+// Firebase imports
+import { initializeApp } from 'firebase/app';
+import { getAuth, onAuthStateChanged } from 'firebase/auth';
+import {
+  getFirestore, doc, getDoc, addDoc, updateDoc,
+  collection, query, orderBy, onSnapshot, serverTimestamp
+} from 'firebase/firestore';
+import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+
+// ─── Firebase config ────────────────────────────────────────────────
+const firebaseConfig = {
+  apiKey: 'YOUR_API_KEY',
+  authDomain: 'YOUR_PROJECT.firebaseapp.com',
+  projectId: 'YOUR_PROJECT_ID',
+  storageBucket: 'YOUR_PROJECT.appspot.com',
+  messagingSenderId: '123456789',
+  appId: '1:123456789:web:abcdef',
+};
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const storage = getStorage(app);
+
+const DEMO_CHAT_ID = 'demo-chat-001';
+
+// ─── Helpers ────────────────────────────────────────────────────────
+function formatDuration(millis) {
+  if (!millis || millis <= 0) return '0:00';
+  const totalSeconds = Math.floor(millis / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+}
+
+// ─── Voice Message Bubble ───────────────────────────────────────────
+function VoiceMessageBubble({ message, isMe }) {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const soundRef = useRef(null);
+
+  useEffect(() => {
+    return () => { if (soundRef.current) soundRef.current.unloadAsync(); };
+  }, []);
+
+  async function handlePlay() {
+    if (isPlaying && soundRef.current) {
+      await soundRef.current.pauseAsync();
+      setIsPlaying(false);
+      return;
+    }
+    if (soundRef.current) {
+      await soundRef.current.playAsync();
+      setIsPlaying(true);
+      return;
+    }
+
+    const { sound } = await Audio.Sound.createAsync(
+      { uri: message.audioURL },
+      { shouldPlay: true }
+    );
+    soundRef.current = sound;
+    setIsPlaying(true);
+
+    sound.setOnPlaybackStatusUpdate((status) => {
+      if (status.isLoaded) {
+        if (status.didJustFinish) {
+          setIsPlaying(false);
+          setProgress(0);
+          soundRef.current = null;
+          sound.unloadAsync();
+        } else {
+          setProgress(status.positionMillis / (status.durationMillis || 1));
+        }
+      }
+    });
+  }
+
+  return (
+    &lt;View style={[styles.audioBubble, isMe ? styles.sent : styles.received]}&gt;
+      &lt;Pressable style={styles.playBtn} onPress={handlePlay}&gt;
+        &lt;Text style={styles.playIcon}&gt;{isPlaying ? '⏸' : '▶️'}&lt;/Text&gt;
+      &lt;/Pressable&gt;
+      &lt;View style={styles.trackArea}&gt;
+        &lt;View style={styles.track}&gt;
+          &lt;View style={[styles.trackFill, { width: `${progress * 100}%` }]} /&gt;
+        &lt;/View&gt;
+        &lt;Text style={styles.durationText}&gt;{formatDuration(message.duration)}&lt;/Text&gt;
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}
+
+// ─── Main Chat Screen ───────────────────────────────────────────────
+function ChatScreen() {
+  const [messages, setMessages] = useState([]);
+  const [text, setText] = useState('');
+  const [myName, setMyName] = useState('You');
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordTime, setRecordTime] = useState(0);
+  const [uploading, setUploading] = useState(false);
+  const recordingRef = useRef(null);
+  const timerRef = useRef(null);
+  const flatListRef = useRef(null);
+
+  const currentUid = auth.currentUser?.uid || 'user1';
+
+  useEffect(() => {
+    async function loadName() {
+      const snap = await getDoc(doc(db, 'users', currentUid));
+      if (snap.exists()) setMyName(snap.data().displayName);
+    }
+    loadName();
+
+    const q = query(
+      collection(db, 'chats', DEMO_CHAT_ID, 'messages'),
+      orderBy('timestamp', 'asc')
+    );
+    const unsub = onSnapshot(q, (snapshot) => {
+      const msgs = [];
+      snapshot.forEach((docSnap) => msgs.push({ id: docSnap.id, ...docSnap.data() }));
+      setMessages(msgs);
+    });
+    return unsub;
+  }, []);
+
+  // ── Text message ──
+  async function sendTextMessage() {
+    if (text.trim() === '') return;
+    const msgText = text.trim();
+    setText('');
+
+    await addDoc(collection(db, 'chats', DEMO_CHAT_ID, 'messages'), {
+      type: 'text',
+      text: msgText,
+      senderId: currentUid,
+      senderName: myName,
+      timestamp: serverTimestamp(),
+      reactions: {},
+      readBy: [currentUid],
+      deletedFor: [],
+      deletedForEveryone: false,
+    });
+    await updateDoc(doc(db, 'chats', DEMO_CHAT_ID), {
+      lastMessage: { text: `${myName}: ${msgText}`, timestamp: serverTimestamp() },
+    });
+  }
+
+  // ── Recording ──
+  async function handleRecordStart() {
+    const { status } = await Audio.requestPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Microphone access is required');
+      return;
+    }
+
+    await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+    const { recording } = await Audio.Recording.createAsync(
+      Audio.RecordingOptionsPresets.HIGH_QUALITY
+    );
+    recordingRef.current = recording;
+    setIsRecording(true);
+    setRecordTime(0);
+    timerRef.current = setInterval(() => setRecordTime((p) => p + 1000), 1000);
+  }
+
+  async function handleRecordStop() {
+    if (!recordingRef.current) return;
+    clearInterval(timerRef.current);
+    setIsRecording(false);
+
+    await recordingRef.current.stopAndUnloadAsync();
+    await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+
+    const uri = recordingRef.current.getURI();
+    const status = await recordingRef.current.getStatusAsync();
+    recordingRef.current = null;
+
+    if (status.durationMillis < 1000) return; // too short
+
+    // Upload and send
+    setUploading(true);
+    try {
+      const response = await fetch(uri);
+      const blob = await response.blob();
+      const filename = `voice_${Date.now()}.m4a`;
+      const storageRef = ref(storage, `chats/${DEMO_CHAT_ID}/voice/${filename}`);
+
+      const uploadTask = uploadBytesResumable(storageRef, blob);
+      await new Promise((resolve, reject) => {
+        uploadTask.on('state_changed', null, reject, resolve);
+      });
+      const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+
+      await addDoc(collection(db, 'chats', DEMO_CHAT_ID, 'messages'), {
+        type: 'audio',
+        audioURL: downloadURL,
+        duration: status.durationMillis,
+        text: '🎤 Voice message',
+        senderId: currentUid,
+        senderName: myName,
+        timestamp: serverTimestamp(),
+        reactions: {},
+        readBy: [currentUid],
+        deletedFor: [],
+        deletedForEveryone: false,
+      });
+      await updateDoc(doc(db, 'chats', DEMO_CHAT_ID), {
+        lastMessage: { text: `${myName}: 🎤 Voice message`, timestamp: serverTimestamp() },
+      });
+    } catch (err) {
+      Alert.alert('Error', 'Failed to send voice message');
+    }
+    setUploading(false);
+  }
+
+  return (
+    &lt;KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    &gt;
+      {/* Header */}
+      &lt;View style={styles.header}&gt;
+        &lt;Text style={styles.headerTitle}&gt;Voice Messages Demo&lt;/Text&gt;
+        &lt;Text style={styles.headerSubtitle}&gt;Hold mic button to record&lt;/Text&gt;
+      &lt;/View&gt;
+
+      {/* Messages */}
+      &lt;FlatList
+        ref={flatListRef}
+        data={messages}
+        keyExtractor={(item) =&gt; item.id}
+        style={styles.messageList}
+        onContentSizeChange={() =&gt; flatListRef.current?.scrollToEnd()}
+        renderItem={({ item }) =&gt; {
+          const isMe = item.senderId === currentUid;
+          if (item.type === 'audio') {
+            return &lt;VoiceMessageBubble message={item} isMe={isMe} /&gt;;
+          }
+          return (
+            &lt;View style={[styles.bubble, isMe ? styles.sent : styles.received]}&gt;
+              &lt;Text style={styles.msgText}&gt;{item.text}&lt;/Text&gt;
+              &lt;Text style={styles.timeText}&gt;
+                {item.timestamp?.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              &lt;/Text&gt;
+            &lt;/View&gt;
+          );
+        }}
+        ListEmptyComponent={
+          &lt;Text style={styles.emptyText}&gt;Send a voice message!&lt;/Text&gt;
+        }
+      /&gt;
+
+      {/* Recording indicator */}
+      {isRecording &amp;&amp; (
+        &lt;View style={styles.recordingBar}&gt;
+          &lt;Text style={styles.recordingDot}&gt;● &lt;/Text&gt;
+          &lt;Text style={styles.recordingText}&gt;Recording {formatDuration(recordTime)}&lt;/Text&gt;
+        &lt;/View&gt;
+      )}
+
+      {uploading &amp;&amp; (
+        &lt;View style={styles.recordingBar}&gt;
+          &lt;Text style={styles.recordingText}&gt;Uploading voice message...&lt;/Text&gt;
+        &lt;/View&gt;
+      )}
+
+      {/* Input bar */}
+      &lt;View style={styles.inputBar}&gt;
+        &lt;TextInput
+          style={styles.input}
+          value={text}
+          onChangeText={setText}
+          placeholder="Type a message"
+          multiline
+        /&gt;
+        {text.trim().length > 0 ? (
+          &lt;Pressable style={styles.sendBtn} onPress={sendTextMessage}&gt;
+            &lt;Text style={styles.sendText}&gt;Send&lt;/Text&gt;
+          &lt;/Pressable&gt;
+        ) : (
+          &lt;Pressable
+            style={[styles.micBtn, isRecording &amp;&amp; styles.micBtnActive]}
+            onPressIn={handleRecordStart}
+            onPressOut={handleRecordStop}
+          &gt;
+            &lt;Text style={styles.micIcon}&gt;🎤&lt;/Text&gt;
+          &lt;/Pressable&gt;
+        )}
+      &lt;/View&gt;
+    &lt;/KeyboardAvoidingView&gt;
+  );
+}
+
+// ─── App Entry ──────────────────────────────────────────────────────
+export default function App() {
+  const [user, setUser] = useState(null);
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => setUser(u));
+    return unsub;
+  }, []);
+
+  if (!user) {
+    return (
+      &lt;View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}&gt;
+        &lt;Text style={{ fontSize: 18, color: '#667781' }}&gt;
+          Please log in (Module 3 Lesson 2)
+        &lt;/Text&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  return &lt;ChatScreen /&gt;;
+}
+
+// ─── Styles ─────────────────────────────────────────────────────────
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#FFFFFF' },
+  header: {
+    backgroundColor: '#075E54',
+    paddingTop: 48,
+    paddingBottom: 16,
+    paddingHorizontal: 16,
+  },
+  headerTitle: { color: '#FFFFFF', fontSize: 20, fontWeight: 'bold' },
+  headerSubtitle: { color: '#FFFFFFCC', fontSize: 13, marginTop: 2 },
+  messageList: { flex: 1, backgroundColor: '#ECE5DD', padding: 8 },
+  bubble: { maxWidth: '78%', padding: 10, borderRadius: 8, marginVertical: 3 },
+  sent: { backgroundColor: '#DCF8C6', alignSelf: 'flex-end', borderTopRightRadius: 0 },
+  received: { backgroundColor: '#FFFFFF', alignSelf: 'flex-start', borderTopLeftRadius: 0 },
+  audioBubble: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    borderRadius: 8,
+    marginVertical: 3,
+    maxWidth: '78%',
+  },
+  playBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#25D366',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  playIcon: { fontSize: 16 },
+  trackArea: { flex: 1, marginLeft: 10 },
+  track: {
+    height: 4,
+    backgroundColor: '#C0C0C0',
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  trackFill: { height: '100%', backgroundColor: '#075E54', borderRadius: 2 },
+  durationText: { fontSize: 12, color: '#667781', marginTop: 4 },
+  msgText: { fontSize: 16, color: '#000000' },
+  timeText: { fontSize: 11, color: '#667781', alignSelf: 'flex-end', marginTop: 4 },
+  inputBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 8,
+    backgroundColor: '#F0F0F0',
+  },
+  input: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    fontSize: 16,
+    maxHeight: 100,
+  },
+  sendBtn: {
+    backgroundColor: '#25D366',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    marginLeft: 8,
+  },
+  sendText: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },
+  micBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#25D366',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 8,
+  },
+  micBtnActive: { backgroundColor: '#FF3B30' },
+  micIcon: { fontSize: 20 },
+  recordingBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    backgroundColor: '#FFF3F3',
+  },
+  recordingDot: { color: '#FF0000', fontSize: 14 },
+  recordingText: { color: '#667781', fontSize: 14 },
+  emptyText: { textAlign: 'center', marginTop: 40, color: '#667781', fontSize: 16 },
+});</code></pre>
+
+    <hr>
+
+    <!-- Section 10: Quiz -->
+    <h2>10. Quiz</h2>
+    <div id="wa-lesson-0004-quiz"></div>
+
+    <hr>
+
+    <!-- Lesson nav -->
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="./0003-message-features.html">← Lesson 3: Message Features</a>
+      <a href="./0005-status-stories.html">Lesson 5: Status (Stories) →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script>
+    createQuiz('wa-lesson-0004-quiz', [
+      {
+        question: 'Why must you set allowsRecordingIOS back to false after recording stops?',
+        options: [
+          'To free up storage space',
+          'It is required by Apple App Store guidelines',
+          'If left true, audio playback will not work on iOS',
+          'The recording file will be corrupted'
+        ],
+        answer: 2
+      },
+      {
+        question: 'What format does expo-av record audio in when using HIGH_QUALITY preset?',
+        options: [
+          'MP3',
+          'WAV (uncompressed)',
+          'AAC/M4A',
+          'OGG Vorbis'
+        ],
+        answer: 2
+      },
+      {
+        question: 'Why do we discard recordings shorter than 1 second?',
+        options: [
+          'Firebase Storage rejects files smaller than 1 second',
+          'They are accidental taps, not intentional voice messages',
+          'expo-av cannot save recordings under 1 second',
+          'Short recordings use too much bandwidth'
+        ],
+        answer: 1
+      },
+      {
+        question: 'What must you call when a Sound object finishes playing or the component unmounts?',
+        options: [
+          'sound.deleteAsync()',
+          'sound.stopAsync()',
+          'sound.unloadAsync()',
+          'Audio.clearSound(sound)'
+        ],
+        answer: 2
+      },
+      {
+        question: 'How does the input bar decide whether to show the Send button or the Mic button?',
+        options: [
+          'It checks if the user has microphone permission',
+          'It always shows both buttons side by side',
+          'If the text input has content, show Send; if empty, show Mic',
+          'The user toggles between modes with a switch'
+        ],
+        answer: 2
+      }
+    ]);
+  </script>
+</body>
+</html>

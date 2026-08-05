@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RN Lesson 9: Passing Data Between Screens — JS Learn</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">Module 2: React Native</a>
+      <span class="sep">›</span>
+      <span class="current">Lesson 9: Passing Data Between Screens</span>
+    </nav>
+
+    <!-- Header -->
+    <span class="badge">React Native · Lesson 9</span>
+    <h1 style="margin-top:0.5rem;">Passing Data Between Screens</h1>
+    <div class="lesson-meta">
+      <span>route.params · useRoute · navigation.setOptions · callbacks</span>
+      <span>~35 min</span>
+      <span>Hands-on</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for your WhatsApp clone</div>
+      <p>When a user taps Priya's chat row, the message thread screen needs to know it's Priya's chat — not Rahul's. It needs her name to show in the header, her <code>chatId</code> to load her messages from Firebase, and her avatar. In Lesson 8 you learned the basic pattern. This lesson goes deep: what data is safe to pass, how to read it cleanly, how to update the header title dynamically, and how to pass a callback <em>back</em> to the previous screen — the exact patterns your WhatsApp clone will use every day.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 1 -->
+    <h2>1. What are route params — and what to pass</h2>
+
+    <p>When you call <code>navigation.navigate('MessageThread', { chatId: '1', chatName: 'Priya Sharma' })</code>, that second argument is the <strong>params object</strong>. React Navigation stores it and makes it available in the target screen via <code>route.params</code>.</p>
+
+    <p>The rule for what to pass is simple: <strong>pass the minimum needed to identify the data, not the data itself.</strong></p>
+
+    <table>
+      <thead>
+        <tr><th>Safe to pass</th><th>Do NOT pass</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>IDs: <code>chatId</code>, <code>userId</code>, <code>messageId</code></td><td>Large arrays of messages — slows down navigation</td></tr>
+        <tr><td>Short display strings: <code>chatName</code>, <code>avatarUri</code></td><td>Functions / callbacks (use the pattern in Section 5)</td></tr>
+        <tr><td>Booleans: <code>isGroup: true</code></td><td>Class instances or objects with methods</td></tr>
+        <tr><td>Numbers: <code>unreadCount: 3</code></td><td>React components or JSX</td></tr>
+      </tbody>
+    </table>
+
+    <p>Pass the <code>chatId</code>, navigate to the thread screen, then load the messages from Firebase inside that screen using <code>useEffect</code>. The thread screen is responsible for its own data — the chat list screen only hands off the key.</p>
+
+    <hr>
+
+    <!-- Section 2 -->
+    <h2>2. Reading params — two ways</h2>
+
+    <p>There are two ways to read params in a screen component. Both work; pick one and stick to it.</p>
+
+    <h3>Method A — the route prop (most common)</h3>
+
+    <p>Every screen registered in a navigator receives <code>route</code> and <code>navigation</code> as props automatically. Destructure <code>route.params</code> at the top of the component.</p>
+
+    <pre><code>function MessageThreadScreen({ route, navigation }) {
+  // Destructure everything you need from params
+  const { chatId, chatName, isGroup } = route.params;
+
+  return (
+    &lt;View&gt;
+      &lt;Text&gt;{chatName}&lt;/Text&gt;
+      &lt;Text&gt;Chat ID: {chatId}&lt;/Text&gt;
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <h3>Method B — the useRoute hook</h3>
+
+    <p>If you have a component that is <em>not</em> a registered screen (e.g. a child component rendered inside a screen), it doesn't receive the <code>route</code> prop. Use the <code>useRoute</code> hook instead.</p>
+
+    <pre><code>import { useRoute } from '@react-navigation/native';
+
+// Works in any component, not just top-level screens
+function ChatHeader() {
+  const route = useRoute();
+  const { chatName } = route.params;
+
+  return (
+    &lt;View style={styles.header}&gt;
+      &lt;Text style={styles.headerTitle}&gt;{chatName}&lt;/Text&gt;
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">useRoute only works inside NavigationContainer</div>
+      <p><code>useRoute()</code> throws an error if called outside a navigator. Only use it in components that are rendered inside a screen that is inside a NavigationContainer.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 3 -->
+    <h2>3. Default params — handling missing data safely</h2>
+
+    <p>What if a screen is opened without all the params it expects? Always provide defaults so the app doesn't crash.</p>
+
+    <pre><code>function MessageThreadScreen({ route }) {
+  // Provide defaults with destructuring fallbacks
+  const {
+    chatId   = '',
+    chatName = 'Unknown',
+    isGroup  = false,
+    avatarUri = null,
+  } = route.params ?? {};
+  //                 ↑ ?? {} protects against route.params being undefined
+  //                   (can happen in deep links or during testing)
+
+  return (
+    &lt;View&gt;
+      &lt;Text&gt;Chat with {chatName}&lt;/Text&gt;
+      {isGroup &amp;&amp; &lt;Text&gt;Group chat&lt;/Text&gt;}
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <div class="callout success">
+      <div class="callout-title">The ?? {} pattern</div>
+      <p><code>route.params ?? {}</code> means "use <code>route.params</code> if it exists, otherwise use an empty object". Without this, destructuring <code>undefined</code> throws a TypeError. This is especially important for screens that can be opened via deep links, where params may not be set.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 4 -->
+    <h2>4. Updating the header title dynamically</h2>
+
+    <p>The message thread header should show the contact's name — not a hard-coded string from the navigator definition. Use <code>navigation.setOptions</code> inside <code>useEffect</code> to set it once the screen mounts.</p>
+
+    <pre><code>import { useEffect } from 'react';
+
+function MessageThreadScreen({ route, navigation }) {
+  const { chatId, chatName } = route.params;
+
+  // Update the navigation header once we know the chat name
+  useEffect(() =&gt; {
+    navigation.setOptions({
+      title:           chatName,
+      headerStyle:     { backgroundColor: '#075E54' },
+      headerTintColor: '#fff',
+    });
+  }, [chatName, navigation]);
+  //  ↑ Re-run if chatName changes (rare, but correct)
+
+  return &lt;View&gt;...&lt;/View&gt;;
+}</code></pre>
+
+    <p>You can also set options directly on the <code>&lt;Stack.Screen&gt;</code> definition using a function that receives the route:</p>
+
+    <pre><code>// In your navigator definition — static approach
+&lt;Stack.Screen
+  name="MessageThread"
+  component={MessageThreadScreen}
+  options={({ route }) =&gt; ({
+    title:           route.params.chatName,
+    headerStyle:     { backgroundColor: '#075E54' },
+    headerTintColor: '#fff',
+  })}
+/&gt;</code></pre>
+
+    <p>Both approaches work. The <code>navigation.setOptions</code> pattern is more flexible — you can call it anywhere in the component, including after async data loads.</p>
+
+    <hr>
+
+    <!-- Section 5 -->
+    <h2>5. Passing a callback back to the previous screen</h2>
+
+    <p>Sometimes the destination screen needs to send data <em>back</em> to the screen that opened it. Example: the message thread screen marks all messages as read — the chat list screen should update its unread count badge.</p>
+
+    <p>You cannot pass functions directly as route params (they are not serialisable). The clean solution is to use <code>navigation.navigate</code> with params on the way back:</p>
+
+    <h3>Pattern A — pass data back via navigate</h3>
+
+    <pre><code>// MessageThreadScreen — passing data back when leaving
+function MessageThreadScreen({ route, navigation }) {
+  const { chatId } = route.params;
+
+  function markAsRead() {
+    // Navigate back AND pass data to the previous screen
+    navigation.navigate('ChatList', {
+      markedReadChatId: chatId,   // ChatList picks this up from route.params
+    });
+  }
+
+  return (
+    &lt;Pressable onPress={markAsRead}&gt;
+      &lt;Text&gt;Mark as read and go back&lt;/Text&gt;
+    &lt;/Pressable&gt;
+  );
+}
+
+// ChatListScreen — reading the data passed back
+function ChatListScreen({ route, navigation }) {
+  const [chats, setChats] = useState(INITIAL_CHATS);
+
+  // Watch for markedReadChatId coming back from the thread screen
+  useEffect(() =&gt; {
+    if (route.params?.markedReadChatId) {
+      setChats(prev =&gt; prev.map(c =&gt;
+        c.id === route.params.markedReadChatId
+          ? { ...c, unread: 0 }
+          : c
+      ));
+    }
+  }, [route.params?.markedReadChatId]);
+
+  return &lt;View&gt;...&lt;/View&gt;;
+}</code></pre>
+
+    <h3>Pattern B — use a ref callback (advanced)</h3>
+
+    <p>For more complex two-way communication (e.g. a contact picker that needs to return to a form), store a callback in a <code>useRef</code> on the parent, pass a signal via params, and handle it in <code>useEffect</code>. This is an advanced pattern — Pattern A covers most real WhatsApp use cases.</p>
+
+    <div class="callout">
+      <div class="callout-title">For your WhatsApp clone: stick to Pattern A</div>
+      <p>Passing a <code>markedReadChatId</code> back when leaving the thread is all you need. Firebase will handle real-time unread counts in Module 3 — then you won't need this pattern at all because the data will sync automatically.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 6 -->
+    <h2>6. The useNavigation hook</h2>
+
+    <p>Like <code>useRoute</code>, there is a <code>useNavigation</code> hook for accessing the <code>navigation</code> object in non-screen components.</p>
+
+    <pre><code>import { useNavigation } from '@react-navigation/native';
+
+// A send button component that is NOT a registered screen
+function SendButton({ chatId, chatName }) {
+  const navigation = useNavigation();
+
+  return (
+    &lt;Pressable
+      style={styles.sendBtn}
+      onPress={() =&gt; navigation.navigate('MessageThread', { chatId, chatName })}
+    &gt;
+      &lt;Text style={styles.sendText}&gt;Open chat&lt;/Text&gt;
+    &lt;/Pressable&gt;
+  );
+}</code></pre>
+
+    <p>Use <code>useNavigation</code> when you need to navigate from a child component that is not itself a registered screen — for example, a chat row component, a notification banner, or a button inside a modal.</p>
+
+    <hr>
+
+    <!-- Section 7 -->
+    <h2>7. Navigating between tabs</h2>
+
+    <p>Your app has nested navigators — the Chats tab contains a stack. When you need to navigate to a screen in a <em>different tab</em>, you navigate to the tab first, then to the screen inside it.</p>
+
+    <pre><code>// From the Settings tab — navigate to a specific chat
+navigation.navigate('Chats', {           // first: go to the Chats TAB
+  screen: 'MessageThread',               // then: navigate to this SCREEN inside Chats
+  params: {                              // params for MessageThread
+    chatId:   '1',
+    chatName: 'Priya Sharma',
+  },
+});
+
+// From anywhere — jump to a tab without specifying a nested screen
+navigation.navigate('Calls');   // just open the Calls tab</code></pre>
+
+    <p>This nested <code>navigate</code> syntax — passing <code>screen</code> and <code>params</code> as properties — is what you'll use when a push notification arrives and needs to deep-link the user into a specific conversation from any tab.</p>
+
+    <hr>
+
+    <!-- Section 8: Full working example -->
+    <h2>8. Full working example — tap a chat, open the thread, go back</h2>
+
+    <p>This example ties together everything in this lesson: a chat list that passes <code>chatId</code> and <code>chatName</code> to the thread screen, a dynamic header, and an "unread cleared" signal passed back to the list when the user returns. Replace your entire <code>App.js</code> with this.</p>
+
+    <pre><code>import { useState, useEffect } from 'react';
+import { NavigationContainer } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { createBottomTabNavigator }   from '@react-navigation/bottom-tabs';
+import {
+  View, Text, FlatList, Pressable, StyleSheet
+} from 'react-native';
+
+const Stack = createNativeStackNavigator();
+const Tab   = createBottomTabNavigator();
+
+// ── Sample data ───────────────────────────────────────────────────────────────
+const INITIAL_CHATS = [
+  { id: '1', name: 'Priya Sharma',  preview: 'Perfect, see you then!',  time: '10:32',    unread: 2, isGroup: false },
+  { id: '2', name: 'Rahul Mehta',   preview: 'Check out this article',  time: '09:15',    unread: 0, isGroup: false },
+  { id: '3', name: 'Family Group',  preview: 'Mom: Dinner at 7!',       time: 'Yesterday',unread: 5, isGroup: true  },
+  { id: '4', name: 'Work Team',     preview: 'Meeting moved to 3pm',    time: 'Yesterday',unread: 0, isGroup: true  },
+];
+
+// ── Screen: Chat List ─────────────────────────────────────────────────────────
+function ChatListScreen({ route, navigation }) {
+  const [chats, setChats] = useState(INITIAL_CHATS);
+
+  // Watch for markedReadChatId coming back from MessageThreadScreen
+  useEffect(() =&gt; {
+    const clearedId = route.params?.markedReadChatId;
+    if (clearedId) {
+      setChats(prev =&gt; prev.map(c =&gt;
+        c.id === clearedId ? { ...c, unread: 0 } : c
+      ));
+    }
+  }, [route.params?.markedReadChatId]);
+
+  return (
+    &lt;View style={styles.screen}&gt;
+      &lt;View style={styles.header}&gt;
+        &lt;Text style={styles.headerTitle}&gt;WhatsApp&lt;/Text&gt;
+        &lt;Text style={styles.headerSub}&gt;
+          {chats.reduce((sum, c) =&gt; sum + c.unread, 0)} unread
+        &lt;/Text&gt;
+      &lt;/View&gt;
+
+      &lt;FlatList
+        data={chats}
+        keyExtractor={item =&gt; item.id}
+        ItemSeparatorComponent={() =&gt; &lt;View style={styles.sep} /&gt;}
+        renderItem={({ item }) =&gt; (
+          &lt;Pressable
+            style={({ pressed }) =&gt; [styles.row, pressed &amp;&amp; styles.rowPressed]}
+            onPress={() =&gt; navigation.navigate('MessageThread', {
+              chatId:   item.id,
+              chatName: item.name,
+              isGroup:  item.isGroup,
+            })}
+          &gt;
+            &lt;View style={styles.avatarCircle}&gt;
+              &lt;Text style={styles.avatarLetter}&gt;{item.name[0]}&lt;/Text&gt;
+            &lt;/View&gt;
+            &lt;View style={styles.middle}&gt;
+              &lt;View style={styles.topRow}&gt;
+                &lt;Text style={styles.name}&gt;{item.name}&lt;/Text&gt;
+                {item.isGroup &amp;&amp; (
+                  &lt;Text style={styles.groupBadge}&gt;Group&lt;/Text&gt;
+                )}
+              &lt;/View&gt;
+              &lt;Text style={styles.preview} numberOfLines={1}&gt;{item.preview}&lt;/Text&gt;
+            &lt;/View&gt;
+            &lt;View style={styles.right}&gt;
+              &lt;Text style={[styles.time, item.unread &gt; 0 &amp;&amp; styles.timeGreen]}&gt;
+                {item.time}
+              &lt;/Text&gt;
+              {item.unread &gt; 0 &amp;&amp; (
+                &lt;View style={styles.badge}&gt;
+                  &lt;Text style={styles.badgeText}&gt;{item.unread}&lt;/Text&gt;
+                &lt;/View&gt;
+              )}
+            &lt;/View&gt;
+          &lt;/Pressable&gt;
+        )}
+      /&gt;
+    &lt;/View&gt;
+  );
+}
+
+// ── Screen: Message Thread ────────────────────────────────────────────────────
+function MessageThreadScreen({ route, navigation }) {
+  // Safely destructure with fallback in case params are missing
+  const {
+    chatId   = '',
+    chatName = 'Unknown',
+    isGroup  = false,
+  } = route.params ?? {};
+
+  // Set the custom green header once the screen mounts
+  useEffect(() =&gt; {
+    navigation.setOptions({ headerShown: false });
+  }, []);
+
+  // Simulated messages — in Module 3 these come from Firebase
+  const messages = [
+    { id: 'm1', text: 'Hey! Are you free tomorrow?',  sender: 'them' },
+    { id: 'm2', text: 'Yes, I\'m free after 3pm.',    sender: 'me'   },
+    { id: 'm3', text: 'Perfect, see you then!',        sender: 'them' },
+  ];
+
+  function goBackAndMarkRead() {
+    // Pass markedReadChatId back so ChatList can clear the badge
+    navigation.navigate('ChatList', { markedReadChatId: chatId });
+  }
+
+  return (
+    &lt;View style={styles.screen}&gt;
+      {/* Custom green header */}
+      &lt;View style={styles.header}&gt;
+        &lt;Pressable onPress={goBackAndMarkRead} style={styles.backBtn}&gt;
+          &lt;Text style={styles.backArrow}&gt;←&lt;/Text&gt;
+        &lt;/Pressable&gt;
+        &lt;View style={styles.avatarCircleSmall}&gt;
+          &lt;Text style={styles.avatarLetterSmall}&gt;{chatName[0]}&lt;/Text&gt;
+        &lt;/View&gt;
+        &lt;View style={styles.headerInfo}&gt;
+          &lt;Text style={styles.headerTitle}&gt;{chatName}&lt;/Text&gt;
+          &lt;Text style={styles.headerSub}&gt;
+            {isGroup ? 'Group · tap for info' : 'online'}
+          &lt;/Text&gt;
+        &lt;/View&gt;
+      &lt;/View&gt;
+
+      {/* Message bubbles */}
+      &lt;FlatList
+        data={messages}
+        keyExtractor={item =&gt; item.id}
+        contentContainerStyle={styles.messageList}
+        style={{ backgroundColor: '#ECE5DD' }}
+        renderItem={({ item }) =&gt; (
+          &lt;View style={[
+            styles.bubble,
+            item.sender === 'me' ? styles.bubbleMe : styles.bubbleThem,
+          ]}&gt;
+            &lt;Text style={styles.bubbleText}&gt;{item.text}&lt;/Text&gt;
+          &lt;/View&gt;
+        )}
+      /&gt;
+
+      {/* Footer showing the params received */}
+      &lt;View style={styles.footer}&gt;
+        &lt;Text style={styles.footerText}&gt;
+          chatId: {chatId} · isGroup: {String(isGroup)}
+        &lt;/Text&gt;
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}
+
+// ── Placeholder screens ───────────────────────────────────────────────────────
+function CallsScreen() {
+  return (
+    &lt;View style={[styles.screen, styles.centre]}&gt;
+      &lt;Text style={styles.tabPlaceholder}&gt;📞 Calls&lt;/Text&gt;
+      &lt;Text style={styles.placeholderSub}&gt;Coming in Module 5&lt;/Text&gt;
+    &lt;/View&gt;
+  );
+}
+function StatusScreen() {
+  return (
+    &lt;View style={[styles.screen, styles.centre]}&gt;
+      &lt;Text style={styles.tabPlaceholder}&gt;⊙ Status&lt;/Text&gt;
+      &lt;Text style={styles.placeholderSub}&gt;Coming in Module 4&lt;/Text&gt;
+    &lt;/View&gt;
+  );
+}
+function SettingsScreen() {
+  return (
+    &lt;View style={[styles.screen, styles.centre]}&gt;
+      &lt;Text style={styles.tabPlaceholder}&gt;⚙ Settings&lt;/Text&gt;
+      &lt;Text style={styles.placeholderSub}&gt;Coming in Module 4&lt;/Text&gt;
+    &lt;/View&gt;
+  );
+}
+
+// ── Navigators ────────────────────────────────────────────────────────────────
+function ChatsStack() {
+  return (
+    &lt;Stack.Navigator screenOptions={{ headerShown: false }}&gt;
+      &lt;Stack.Screen name="ChatList"      component={ChatListScreen} /&gt;
+      &lt;Stack.Screen name="MessageThread" component={MessageThreadScreen} /&gt;
+    &lt;/Stack.Navigator&gt;
+  );
+}
+
+export default function App() {
+  return (
+    &lt;NavigationContainer&gt;
+      &lt;Tab.Navigator
+        screenOptions={{
+          headerShown:             false,
+          tabBarActiveTintColor:   '#075E54',
+          tabBarInactiveTintColor: '#667781',
+          tabBarStyle:             { backgroundColor: '#fff', borderTopColor: '#e9edef' },
+        }}
+      &gt;
+        &lt;Tab.Screen
+          name="Chats"
+          component={ChatsStack}
+          options={{ tabBarIcon: ({ color }) =&gt; &lt;Text style={{ color, fontSize: 22 }}&gt;💬&lt;/Text&gt; }}
+        /&gt;
+        &lt;Tab.Screen
+          name="Calls"
+          component={CallsScreen}
+          options={{ tabBarIcon: ({ color }) =&gt; &lt;Text style={{ color, fontSize: 22 }}&gt;📞&lt;/Text&gt; }}
+        /&gt;
+        &lt;Tab.Screen
+          name="Status"
+          component={StatusScreen}
+          options={{ tabBarIcon: ({ color }) =&gt; &lt;Text style={{ color, fontSize: 22 }}&gt;⊙&lt;/Text&gt; }}
+        /&gt;
+        &lt;Tab.Screen
+          name="Settings"
+          component={SettingsScreen}
+          options={{ tabBarIcon: ({ color }) =&gt; &lt;Text style={{ color, fontSize: 22 }}&gt;⚙&lt;/Text&gt; }}
+        /&gt;
+      &lt;/Tab.Navigator&gt;
+    &lt;/NavigationContainer&gt;
+  );
+}
+
+// ── Styles ────────────────────────────────────────────────────────────────────
+const styles = StyleSheet.create({
+  screen:            { flex: 1, backgroundColor: '#fff' },
+  centre:            { alignItems: 'center', justifyContent: 'center' },
+  header:            { backgroundColor: '#075E54', paddingTop: 48, paddingBottom: 12, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center' },
+  headerTitle:       { color: '#fff', fontSize: 18, fontWeight: '700' },
+  headerSub:         { color: '#b2dfdb', fontSize: 12, marginTop: 1 },
+  headerInfo:        { flex: 1 },
+  backBtn:           { marginRight: 8, padding: 4 },
+  backArrow:         { color: '#fff', fontSize: 22 },
+  avatarCircle:      { width: 52, height: 52, borderRadius: 26, backgroundColor: '#128C7E', alignItems: 'center', justifyContent: 'center' },
+  avatarLetter:      { color: '#fff', fontSize: 22, fontWeight: '700' },
+  avatarCircleSmall: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#128C7E', alignItems: 'center', justifyContent: 'center', marginRight: 10 },
+  avatarLetterSmall: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  row:               { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12 },
+  rowPressed:        { backgroundColor: '#f5f5f5' },
+  topRow:            { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  middle:            { flex: 1, marginLeft: 12, marginRight: 8 },
+  name:              { fontSize: 16, fontWeight: '600', color: '#111' },
+  groupBadge:        { fontSize: 11, color: '#667781', backgroundColor: '#f0f2f5', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4 },
+  preview:           { fontSize: 14, color: '#667781', marginTop: 2 },
+  right:             { alignItems: 'flex-end' },
+  time:              { fontSize: 12, color: '#667781' },
+  timeGreen:         { color: '#25D366', fontWeight: '600' },
+  badge:             { backgroundColor: '#25D366', borderRadius: 10, minWidth: 20, height: 20, alignItems: 'center', justifyContent: 'center', marginTop: 4, paddingHorizontal: 5 },
+  badgeText:         { color: '#fff', fontSize: 11, fontWeight: '700' },
+  sep:               { height: 1, backgroundColor: '#f0f2f5', marginLeft: 80 },
+  messageList:       { padding: 12, paddingBottom: 20 },
+  bubble:            { maxWidth: '75%', borderRadius: 8, padding: 10, marginBottom: 6 },
+  bubbleMe:          { backgroundColor: '#DCF8C6', alignSelf: 'flex-end', borderBottomRightRadius: 2 },
+  bubbleThem:        { backgroundColor: '#fff', alignSelf: 'flex-start', borderBottomLeftRadius: 2 },
+  bubbleText:        { fontSize: 15, color: '#111' },
+  footer:            { backgroundColor: '#f0f2f5', padding: 10, alignItems: 'center' },
+  footerText:        { fontSize: 12, color: '#667781', fontFamily: 'monospace' },
+  tabPlaceholder:    { fontSize: 32, marginBottom: 8 },
+  placeholderSub:    { fontSize: 13, color: '#667781' },
+});</code></pre>
+
+    <p>Run this. Tap a chat row — notice the thread header shows the correct name and whether it's a group. The footer shows the raw params so you can see exactly what was passed. Tap the back arrow — the unread badge on that chat row disappears in the list.</p>
+
+    <div class="callout success">
+      <div class="callout-title">What just happened</div>
+      <p>The chat list passed <code>{ chatId, chatName, isGroup }</code> to the thread screen. The thread read those params, built a custom header with them, and when going back passed <code>markedReadChatId</code> to the list. The list's <code>useEffect</code> watched for that param and cleared the badge. This is the full data-passing loop your real app will use — before Firebase takes over in Module 3.</p>
+    </div>
+
+    <hr>
+
+    <!-- Quiz -->
+    <h2>Quick check — test yourself</h2>
+    <p>Five questions on what you just read.</p>
+
+    <div id="rn-lesson-0009-quiz"></div>
+
+    <hr>
+
+    <!-- Resources -->
+    <h2>Primary resources for this lesson</h2>
+    <ul>
+      <li><a href="https://reactnavigation.org/docs/params" target="_blank" rel="noopener">React Navigation — Passing parameters to routes</a></li>
+      <li><a href="https://reactnavigation.org/docs/use-route" target="_blank" rel="noopener">useRoute hook — docs</a></li>
+      <li><a href="https://reactnavigation.org/docs/navigation-prop#setoptions" target="_blank" rel="noopener">navigation.setOptions — docs</a></li>
+      <li><a href="https://reactnavigation.org/docs/nesting-navigators#navigating-to-a-screen-in-a-nested-navigator" target="_blank" rel="noopener">Navigating to nested screens — docs</a></li>
+    </ul>
+
+    <div class="ask-teacher">
+      <strong>Anything unclear? Ask your teacher.</strong>
+      Common issues: (1) <code>route.params is undefined</code> — you opened the screen directly without navigating, so no params were passed; always use the <code>?? {}</code> fallback. (2) The unread badge doesn't clear — check that <code>markedReadChatId</code> is exactly the same string as the chat's <code>id</code>; a type mismatch (string vs number) will cause the <code>find</code> to miss. (3) <code>useNavigation</code> or <code>useRoute</code> throwing — make sure the component is rendered inside a NavigationContainer.
+    </div>
+
+    <hr>
+
+    <!-- Lesson nav -->
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="./0008-navigation.html">← Lesson 8: React Navigation</a>
+      <a href="./0010-forms-login-register.html">Lesson 10: Forms — Login &amp; Register →</a>
+    </nav>
+
+  </div><!-- .page-wrap -->
+
+  <script src="../../assets/quiz.js"></script>
+  <script>
+    createQuiz("rn-lesson-0009-quiz", [
+      {
+        question: "You're on the Chat List screen and want to open Priya's message thread. Which call correctly passes her chatId and chatName?",
+        options: [
+          "navigation.navigate('MessageThread', chatId, chatName) — pass params as separate arguments",
+          "navigation.navigate('MessageThread', { chatId: item.id, chatName: item.name }) — pass a params object as the second argument",
+          "navigation.push({ screen: 'MessageThread', chatId: item.id })",
+          "navigation.open('MessageThread').withParams({ chatId, chatName })"
+        ],
+        correct: 1,
+        explanation: "The second argument to navigation.navigate is a plain params object. You can put any serialisable values in it — strings, numbers, booleans, plain objects. The receiving screen reads them from route.params."
+      },
+      {
+        question: "Inside MessageThreadScreen, route.params might be undefined (e.g. during deep link testing). How do you safely destructure chatName with a fallback?",
+        options: [
+          "const chatName = route.params.chatName || 'Unknown' — use || for the fallback",
+          "const { chatName = 'Unknown' } = route.params ?? {} — destructure with a default and guard against undefined params",
+          "if (route.params) { const { chatName } = route.params } — check first with an if statement",
+          "const chatName = route?.params?.chatName — optional chaining is enough"
+        ],
+        correct: 1,
+        explanation: "const { chatName = 'Unknown' } = route.params ?? {} is the cleanest pattern. The ?? {} guard prevents a TypeError if route.params is undefined. The = 'Unknown' default inside destructuring handles the case where chatName exists in params but wasn't passed. Optional chaining alone gives you undefined — it doesn't provide the fallback string."
+      },
+      {
+        question: "You want the navigation header to show the contact's name (e.g. 'Priya Sharma') loaded from route.params. Which approach is correct?",
+        options: [
+          "Set the title as a static string in the Stack.Screen definition — it can't be dynamic",
+          "Call navigation.setOptions({ title: chatName }) inside a useEffect in the screen component",
+          "Render a <Text> component inside the screen — the navigation header auto-reads its first Text child",
+          "Pass the title as a prop to the screen component from the navigator"
+        ],
+        correct: 1,
+        explanation: "navigation.setOptions lets you update header options from inside the component, including after data loads. Wrap it in useEffect so it runs after the component mounts. You can also use options={({ route }) => ({ title: route.params.chatName })} on the Stack.Screen definition for a purely declarative approach."
+      },
+      {
+        question: "The message thread screen needs to tell the chat list that messages were read so it can clear the unread badge. Functions can't be passed as route params. What is the correct approach?",
+        options: [
+          "Store the chatId in AsyncStorage before navigating back — the chat list reads it on focus",
+          "Use a global variable to share state between screens",
+          "Call navigation.navigate('ChatList', { markedReadChatId: chatId }) — pass data back via params when navigating",
+          "Emit a custom event using an EventEmitter and listen for it in the chat list"
+        ],
+        correct: 2,
+        explanation: "navigation.navigate back to the parent screen with a params object is the clean React Navigation pattern for passing data backwards. The parent watches for the param in a useEffect with [route.params?.markedReadChatId] as the dependency. In Module 3, Firebase real-time listeners will make this unnecessary — unread counts will update automatically."
+      },
+      {
+        question: "You need to navigate from the Settings tab directly into a specific chat (the MessageThread screen inside the Chats tab stack). How?",
+        options: [
+          "navigation.navigate('MessageThread', { chatId: '1' }) — navigate always finds the screen regardless of which tab it's in",
+          "navigation.navigate('Chats', { screen: 'MessageThread', params: { chatId: '1', chatName: 'Priya' } }) — navigate to the tab, then specify the nested screen",
+          "navigation.jumpTo('Chats') then navigation.navigate('MessageThread') — use two separate calls",
+          "You cannot navigate across tabs into nested screens — the user must tap the tab manually"
+        ],
+        correct: 1,
+        explanation: "For nested navigators, pass screen and params inside the outer navigate call. navigation.navigate('Chats', { screen: 'MessageThread', params: { chatId, chatName } }) tells React Navigation: go to the Chats tab, and within it navigate to MessageThread with these params. This is how push notifications deep-link the user into a specific conversation."
+      }
+    ]);
+  </script>
+
+</body>
+</html>

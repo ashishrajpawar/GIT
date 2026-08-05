@@ -1,0 +1,930 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WhatsApp Features Lesson 6: Push Notifications — JS Learn</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">Module 4: WhatsApp Features</a>
+      <span class="sep">›</span>
+      <span class="current">Lesson 6: Push Notifications</span>
+    </nav>
+
+    <!-- Header -->
+    <span class="badge">WhatsApp Features · Lesson 6</span>
+    <h1 style="margin-top:0.5rem;">Push Notifications</h1>
+    <div class="lesson-meta">
+      <span>expo-notifications · FCM (Android) · APNs (iOS) · Token storage · Navigate on tap</span>
+      <span>~55 min</span>
+      <span>Hands-on</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for your WhatsApp clone</div>
+      <p>When someone sends you a WhatsApp message and your phone is locked, you still see "Priya: Hey, are you free tonight?" on your lock screen. That's a push notification — delivered by Google (FCM) on Android and Apple (APNs) on iOS even when the app is closed. Without push notifications, your users would never know they received a message until they manually open the app. This lesson sets up <code>expo-notifications</code>, stores device tokens in Firestore, sends notifications when new messages arrive, and navigates to the correct chat when the user taps the notification.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 1 -->
+    <h2>1. How push notifications work</h2>
+
+    <p>The flow involves three parties: your app, a push service (FCM or APNs), and the recipient's device:</p>
+
+    <pre><code>┌─────────────┐     ┌─────────────────────┐     ┌──────────────┐
+│  Sender's   │     │  Push Service        │     │  Recipient's │
+│  device     │────▶│  (FCM for Android,   │────▶│  device      │
+│             │     │   APNs for iOS)      │     │              │
+└─────────────┘     └─────────────────────┘     └──────────────┘
+      │                                                │
+      │  1. Send message to Firestore                  │
+      │  2. Trigger notification (Cloud Function       │
+      │     or REST API call)                          │
+      │  3. Push service delivers to device            │
+      │  4. Device shows lock-screen notification      │
+      └────────────────────────────────────────────────┘</code></pre>
+
+    <p><strong>Key concepts:</strong></p>
+    <ul>
+      <li><strong>Push token</strong> — a unique string identifying a specific device. Each device gets its own token. You store it in Firestore so you know where to send notifications.</li>
+      <li><strong>FCM (Firebase Cloud Messaging)</strong> — Google's free push service. Handles Android natively and can also relay to APNs for iOS.</li>
+      <li><strong>APNs (Apple Push Notification service)</strong> — Apple's push service. On iOS, FCM talks to APNs behind the scenes.</li>
+      <li><strong>Expo Push Service</strong> — a free proxy from Expo that lets you send to both FCM and APNs with one API call using Expo push tokens.</li>
+    </ul>
+
+    <hr>
+
+    <!-- Section 2 -->
+    <h2>2. Installing and configuring expo-notifications</h2>
+
+    <pre><code>npx expo install expo-notifications expo-device expo-constants</code></pre>
+
+    <p>Add notification configuration to your <code>app.json</code>:</p>
+
+    <pre><code>// app.json (inside "expo" key)
+{
+  "expo": {
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#075E54"
+        }
+      ]
+    ],
+    "android": {
+      "useNextNotificationsApi": true
+    },
+    "ios": {
+      "bundleIdentifier": "com.yourname.whatsappclone"
+    }
+  }
+}</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">Platform requirements</div>
+      <p><strong>Android:</strong> Push notifications work on physical devices and emulators with Google Play Services. No extra setup needed for FCM — Expo handles it.<br>
+      <strong>iOS:</strong> Push notifications do NOT work in the iOS Simulator. You must test on a physical iPhone. You also need an Apple Developer account ($99/year) and must configure APNs credentials in your Expo dashboard.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 3 -->
+    <h2>3. Requesting permission and getting the push token</h2>
+
+    <p>Before you can receive notifications, you must ask the user for permission and get their device's push token:</p>
+
+    <pre><code>import * as Notifications from 'expo-notifications';
+import * as Device from 'expo-device';
+import Constants from 'expo-constants';
+import { Platform } from 'react-native';
+
+async function registerForPushNotifications() {
+  // Push notifications only work on physical devices
+  if (!Device.isDevice) {
+    Alert.alert('Error', 'Push notifications require a physical device');
+    return null;
+  }
+
+  // Check existing permission
+  const { status: existingStatus } = await Notifications.getPermissionsAsync();
+  let finalStatus = existingStatus;
+
+  // If not granted, ask for permission
+  if (existingStatus !== 'granted') {
+    const { status } = await Notifications.requestPermissionsAsync();
+    finalStatus = status;
+  }
+
+  if (finalStatus !== 'granted') {
+    Alert.alert('Permission denied', 'Enable notifications in Settings to receive messages');
+    return null;
+  }
+
+  // Get the Expo push token
+  const tokenData = await Notifications.getExpoPushTokenAsync({
+    projectId: Constants.expoConfig?.extra?.eas?.projectId,
+  });
+
+  // Android: set up notification channel
+  if (Platform.OS === 'android') {
+    await Notifications.setNotificationChannelAsync('messages', {
+      name: 'Messages',
+      importance: Notifications.AndroidImportance.HIGH,
+      vibrationPattern: [0, 250, 250, 250],
+      lightColor: '#25D366',
+      sound: 'default',
+    });
+  }
+
+  return tokenData.data; // e.g. "ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]"
+}</code></pre>
+
+    <p><strong>What is an Expo push token?</strong> It's a wrapper around the native FCM/APNs token. Expo's push service accepts this token and routes the notification to the correct platform. You don't need to handle FCM and APNs separately.</p>
+
+    <hr>
+
+    <!-- Section 4 -->
+    <h2>4. Storing the push token in Firestore</h2>
+
+    <p>Once you have the token, store it in the user's profile document so you can look it up when sending notifications to them:</p>
+
+    <pre><code>import { doc, updateDoc, arrayUnion } from 'firebase/firestore';
+
+async function savePushToken(uid, token) {
+  // Store as an array — a user might have multiple devices
+  await updateDoc(doc(db, 'users', uid), {
+    pushTokens: arrayUnion(token),
+  });
+}
+
+// Call after login/register:
+async function setupNotifications(uid) {
+  const token = await registerForPushNotifications();
+  if (token) {
+    await savePushToken(uid, token);
+  }
+}</code></pre>
+
+    <p><strong>Why an array?</strong> A user might be logged in on both their phone and tablet. Each device has a different push token. When a message arrives, you send notifications to ALL their devices.</p>
+
+    <hr>
+
+    <!-- Section 5 -->
+    <h2>5. Sending a push notification</h2>
+
+    <p>When a message is sent, you trigger a notification to the recipient. The simplest approach uses the <strong>Expo Push API</strong> directly from the sender's device:</p>
+
+    <pre><code>async function sendPushNotification(recipientTokens, senderName, messageText, chatId) {
+  // Build the notification payload for each device token
+  const messages = recipientTokens.map((token) => ({
+    to: token,
+    sound: 'default',
+    title: senderName,
+    body: messageText,
+    data: { chatId: chatId, type: 'new_message' },
+  }));
+
+  // Send to Expo's push service
+  await fetch('https://exp.host/--/api/v2/push/send', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(messages),
+  });
+}</code></pre>
+
+    <p><strong>The <code>data</code> field</strong> is crucial — it carries metadata that your app reads when the user taps the notification. Here we include <code>chatId</code> so we know which chat to open.</p>
+
+    <div class="callout">
+      <div class="callout-title">Client-side vs Cloud Function</div>
+      <p>Sending from the client works for learning but has issues: (1) the sender needs the recipient's push tokens, (2) if the sender's app closes before the fetch completes, the notification won't send. In production, you'd use a <strong>Firebase Cloud Function</strong> triggered by a Firestore write — when a new message document is created, the function sends the push. We'll cover Cloud Functions in Module 6.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 6 -->
+    <h2>6. Integrating with your message-send flow</h2>
+
+    <p>Here's how to trigger a notification after sending a message:</p>
+
+    <pre><code>async function sendMessageWithNotification(chatId, text, senderName, recipientUids) {
+  // 1. Save message to Firestore (existing code from Module 3)
+  await addDoc(collection(db, 'chats', chatId, 'messages'), {
+    text: text,
+    senderId: auth.currentUser.uid,
+    senderName: senderName,
+    timestamp: serverTimestamp(),
+    type: 'text',
+    readBy: [auth.currentUser.uid],
+    reactions: {},
+    deletedFor: [],
+    deletedForEveryone: false,
+  });
+
+  // 2. Update lastMessage
+  await updateDoc(doc(db, 'chats', chatId), {
+    lastMessage: { text: `${senderName}: ${text}`, timestamp: serverTimestamp() },
+  });
+
+  // 3. Get recipient push tokens and send notifications
+  const currentUid = auth.currentUser.uid;
+  const recipients = recipientUids.filter((uid) => uid !== currentUid);
+
+  for (const uid of recipients) {
+    const userSnap = await getDoc(doc(db, 'users', uid));
+    if (userSnap.exists()) {
+      const tokens = userSnap.data().pushTokens || [];
+      if (tokens.length > 0) {
+        await sendPushNotification(tokens, senderName, text, chatId);
+      }
+    }
+  }
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 7 -->
+    <h2>7. Handling notifications when the app is open</h2>
+
+    <p>When a notification arrives and the app is in the foreground, you probably don't want to show a banner (since the user is already looking at the chat). Configure this behaviour:</p>
+
+    <pre><code>import * as Notifications from 'expo-notifications';
+
+// Set how notifications behave when app is in foreground
+Notifications.setNotificationHandler({
+  handleNotification: async (notification) => {
+    // You can check if user is already viewing this chat
+    const chatId = notification.request.content.data?.chatId;
+
+    // For now: show the notification if user is NOT in that chat
+    return {
+      shouldShowAlert: true,    // show banner
+      shouldPlaySound: true,    // play sound
+      shouldSetBadge: true,     // update app badge count (iOS)
+    };
+  },
+});</code></pre>
+
+    <p>In a polished app, you'd suppress the notification if the user is currently viewing the exact chat that the message was sent to. You can track which chat screen is open using a global ref or context.</p>
+
+    <hr>
+
+    <!-- Section 8 -->
+    <h2>8. Navigating to the chat when user taps a notification</h2>
+
+    <p>This is the critical part — when the user taps a notification on their lock screen, your app should open directly to the relevant chat:</p>
+
+    <pre><code>import * as Notifications from 'expo-notifications';
+import { useRef, useEffect } from 'react';
+import { useNavigation } from '@react-navigation/native';
+
+function useNotificationNavigation() {
+  const navigationRef = useRef(null);
+
+  useEffect(() => {
+    // Handle notification tap when app was in background/closed
+    const subscription = Notifications.addNotificationResponseReceivedListener(
+      (response) => {
+        const data = response.notification.request.content.data;
+
+        if (data?.chatId && data?.type === 'new_message') {
+          // Navigate to the message thread
+          navigationRef.current?.navigate('MessageThread', { chatId: data.chatId });
+        }
+      }
+    );
+
+    return () => subscription.remove();
+  }, []);
+
+  return navigationRef;
+}
+
+// In your App component, pass the ref to NavigationContainer:
+function App() {
+  const navigationRef = useNotificationNavigation();
+
+  return (
+    &lt;NavigationContainer ref={navigationRef}&gt;
+      {/* ... your navigator stack */}
+    &lt;/NavigationContainer&gt;
+  );
+}</code></pre>
+
+    <p><strong>Two listener types:</strong></p>
+    <ul>
+      <li><code>addNotificationReceivedListener</code> — fires when a notification arrives (even if user doesn't tap it). Use for updating badge counts or in-app indicators.</li>
+      <li><code>addNotificationResponseReceivedListener</code> — fires when the user <strong>taps</strong> the notification. This is where you navigate.</li>
+    </ul>
+
+    <hr>
+
+    <!-- Section 9 -->
+    <h2>9. Handling the "app was closed" case</h2>
+
+    <p>If the app was completely closed when the notification arrives, the response listener won't fire immediately. You need to check for a "last notification response" on startup:</p>
+
+    <pre><code>useEffect(() => {
+  // Check if app was opened from a notification tap
+  Notifications.getLastNotificationResponseAsync().then((response) => {
+    if (response) {
+      const data = response.notification.request.content.data;
+      if (data?.chatId) {
+        // Delay navigation slightly to let the navigator mount
+        setTimeout(() => {
+          navigationRef.current?.navigate('MessageThread', { chatId: data.chatId });
+        }, 500);
+      }
+    }
+  });
+}, []);</code></pre>
+
+    <hr>
+
+    <!-- Section 10 -->
+    <h2>10. Removing tokens on logout</h2>
+
+    <p>When a user logs out, remove their push token so they stop receiving notifications on that device:</p>
+
+    <pre><code>import { doc, updateDoc, arrayRemove } from 'firebase/firestore';
+import * as Notifications from 'expo-notifications';
+
+async function logout() {
+  const uid = auth.currentUser.uid;
+
+  // Get the current device's token
+  const tokenData = await Notifications.getExpoPushTokenAsync({
+    projectId: Constants.expoConfig?.extra?.eas?.projectId,
+  });
+
+  // Remove this device's token from Firestore
+  await updateDoc(doc(db, 'users', uid), {
+    pushTokens: arrayRemove(tokenData.data),
+  });
+
+  // Sign out
+  await auth.signOut();
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 11 -->
+    <h2>11. Badge count management (iOS)</h2>
+
+    <p>On iOS, the red badge number on the app icon shows unread messages. Manage it with:</p>
+
+    <pre><code>import * as Notifications from 'expo-notifications';
+
+// Set badge count (e.g. when new messages arrive)
+await Notifications.setBadgeCountAsync(5);
+
+// Clear badge when user opens the app
+await Notifications.setBadgeCountAsync(0);
+
+// Typically clear in your App component:
+useEffect(() => {
+  // Clear badge every time app comes to foreground
+  const subscription = AppState.addEventListener('change', (state) => {
+    if (state === 'active') {
+      Notifications.setBadgeCountAsync(0);
+    }
+  });
+  return () => subscription.remove();
+}, []);</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">Android badges</div>
+      <p>Android doesn't have a universal badge API — it depends on the launcher. Some launchers (Samsung, Huawei) support badges via notification channels. The <code>shouldSetBadge: true</code> in the notification handler is the best you can do on Android.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 12: Full runnable App.js -->
+    <h2>12. Full runnable App.js — Push notifications end to end</h2>
+
+    <p>Copy this entire file and replace your <code>App.js</code>. It registers for push notifications on login, stores the token, shows a chat list, and navigates to the correct chat when a notification is tapped. Test by sending a message from another device or using the Expo Push Tool (https://expo.dev/notifications).</p>
+
+    <pre><code>// App.js — Full runnable example: Push Notifications
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  View, Text, TextInput, FlatList, Pressable,
+  StyleSheet, Alert, Platform, AppState
+} from 'react-native';
+import * as Notifications from 'expo-notifications';
+import * as Device from 'expo-device';
+import Constants from 'expo-constants';
+
+// Firebase imports
+import { initializeApp } from 'firebase/app';
+import { getAuth, onAuthStateChanged, signOut } from 'firebase/auth';
+import {
+  getFirestore, doc, getDoc, addDoc, updateDoc, getDocs,
+  collection, query, where, orderBy, onSnapshot,
+  serverTimestamp, arrayUnion, arrayRemove
+} from 'firebase/firestore';
+
+// Navigation
+import { NavigationContainer } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+
+// ─── Firebase config ────────────────────────────────────────────────
+const firebaseConfig = {
+  apiKey: 'YOUR_API_KEY',
+  authDomain: 'YOUR_PROJECT.firebaseapp.com',
+  projectId: 'YOUR_PROJECT_ID',
+  storageBucket: 'YOUR_PROJECT.appspot.com',
+  messagingSenderId: '123456789',
+  appId: '1:123456789:web:abcdef',
+};
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+// ─── Notification handler (foreground) ──────────────────────────────
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: true,
+  }),
+});
+
+// ─── Register for push notifications ────────────────────────────────
+async function registerForPushNotifications() {
+  if (!Device.isDevice) {
+    console.log('Push notifications require a physical device');
+    return null;
+  }
+
+  const { status: existing } = await Notifications.getPermissionsAsync();
+  let finalStatus = existing;
+  if (existing !== 'granted') {
+    const { status } = await Notifications.requestPermissionsAsync();
+    finalStatus = status;
+  }
+  if (finalStatus !== 'granted') return null;
+
+  const tokenData = await Notifications.getExpoPushTokenAsync({
+    projectId: Constants.expoConfig?.extra?.eas?.projectId,
+  });
+
+  if (Platform.OS === 'android') {
+    await Notifications.setNotificationChannelAsync('messages', {
+      name: 'Messages',
+      importance: Notifications.AndroidImportance.HIGH,
+      vibrationPattern: [0, 250, 250, 250],
+      lightColor: '#25D366',
+      sound: 'default',
+    });
+  }
+
+  return tokenData.data;
+}
+
+// ─── Send push notification ─────────────────────────────────────────
+async function sendPushNotification(tokens, title, body, data) {
+  const messages = tokens.map((token) => ({
+    to: token,
+    sound: 'default',
+    title,
+    body,
+    data,
+    channelId: 'messages',
+  }));
+
+  try {
+    await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(messages),
+    });
+  } catch (err) {
+    console.log('Failed to send push:', err);
+  }
+}
+
+// ─── Chat List Screen ───────────────────────────────────────────────
+function ChatListScreen({ navigation }) {
+  const [chats, setChats] = useState([]);
+  const currentUid = auth.currentUser.uid;
+
+  useEffect(() => {
+    const q = query(
+      collection(db, 'chats'),
+      where('members', 'array-contains', currentUid),
+      orderBy('lastMessage.timestamp', 'desc')
+    );
+    const unsub = onSnapshot(q, (snapshot) => {
+      const list = [];
+      snapshot.forEach((docSnap) => list.push(docSnap.data()));
+      setChats(list);
+    });
+    return unsub;
+  }, []);
+
+  async function handleLogout() {
+    try {
+      const tokenData = await Notifications.getExpoPushTokenAsync({
+        projectId: Constants.expoConfig?.extra?.eas?.projectId,
+      });
+      await updateDoc(doc(db, 'users', currentUid), {
+        pushTokens: arrayRemove(tokenData.data),
+        online: false,
+        lastSeen: serverTimestamp(),
+      });
+    } catch (e) {}
+    await signOut(auth);
+  }
+
+  return (
+    &lt;View style={styles.container}&gt;
+      &lt;View style={styles.header}&gt;
+        &lt;Text style={styles.headerTitle}&gt;Chats&lt;/Text&gt;
+        &lt;Pressable onPress={handleLogout}&gt;
+          &lt;Text style={styles.logoutBtn}&gt;Logout&lt;/Text&gt;
+        &lt;/Pressable&gt;
+      &lt;/View&gt;
+
+      &lt;FlatList
+        data={chats}
+        keyExtractor={(item) =&gt; item.id}
+        renderItem={({ item }) =&gt; (
+          &lt;Pressable
+            style={styles.chatRow}
+            onPress={() =&gt; navigation.navigate('MessageThread', { chatId: item.id, chat: item })}
+          &gt;
+            &lt;View style={styles.avatarCircle}&gt;
+              &lt;Text style={styles.avatarLetter}&gt;
+                {(item.name || 'C').charAt(0).toUpperCase()}
+              &lt;/Text&gt;
+            &lt;/View&gt;
+            &lt;View style={styles.chatInfo}&gt;
+              &lt;Text style={styles.chatName}&gt;{item.name || 'Chat'}&lt;/Text&gt;
+              &lt;Text style={styles.chatPreview} numberOfLines={1}&gt;
+                {item.lastMessage?.text || 'No messages'}
+              &lt;/Text&gt;
+            &lt;/View&gt;
+          &lt;/Pressable&gt;
+        )}
+        ListEmptyComponent={
+          &lt;Text style={styles.emptyText}&gt;No chats yet&lt;/Text&gt;
+        }
+      /&gt;
+    &lt;/View&gt;
+  );
+}
+
+// ─── Message Thread Screen ──────────────────────────────────────────
+function MessageThreadScreen({ route }) {
+  const { chatId, chat } = route.params;
+  const [messages, setMessages] = useState([]);
+  const [text, setText] = useState('');
+  const [myName, setMyName] = useState('');
+  const currentUid = auth.currentUser.uid;
+  const flatListRef = useRef(null);
+
+  useEffect(() => {
+    async function loadName() {
+      const snap = await getDoc(doc(db, 'users', currentUid));
+      if (snap.exists()) setMyName(snap.data().displayName);
+      else setMyName('User');
+    }
+    loadName();
+
+    const q = query(
+      collection(db, 'chats', chatId, 'messages'),
+      orderBy('timestamp', 'asc')
+    );
+    const unsub = onSnapshot(q, (snapshot) => {
+      const msgs = [];
+      snapshot.forEach((docSnap) => msgs.push({ id: docSnap.id, ...docSnap.data() }));
+      setMessages(msgs);
+    });
+    return unsub;
+  }, []);
+
+  async function sendMessage() {
+    if (text.trim() === '') return;
+    const msgText = text.trim();
+    setText('');
+
+    await addDoc(collection(db, 'chats', chatId, 'messages'), {
+      text: msgText,
+      senderId: currentUid,
+      senderName: myName,
+      timestamp: serverTimestamp(),
+      type: 'text',
+      readBy: [currentUid],
+      reactions: {},
+      deletedFor: [],
+      deletedForEveryone: false,
+    });
+
+    await updateDoc(doc(db, 'chats', chatId), {
+      lastMessage: { text: `${myName}: ${msgText}`, timestamp: serverTimestamp() },
+    });
+
+    // Send push to other members
+    const members = chat?.members || [];
+    const recipients = members.filter((uid) => uid !== currentUid);
+    for (const uid of recipients) {
+      const userSnap = await getDoc(doc(db, 'users', uid));
+      if (userSnap.exists()) {
+        const tokens = userSnap.data().pushTokens || [];
+        if (tokens.length > 0) {
+          await sendPushNotification(
+            tokens,
+            myName,
+            msgText,
+            { chatId: chatId, type: 'new_message' }
+          );
+        }
+      }
+    }
+  }
+
+  return (
+    &lt;View style={styles.container}&gt;
+      &lt;View style={styles.header}&gt;
+        &lt;Text style={styles.headerTitle}&gt;{chat?.name || 'Chat'}&lt;/Text&gt;
+      &lt;/View&gt;
+
+      &lt;FlatList
+        ref={flatListRef}
+        data={messages}
+        keyExtractor={(item) =&gt; item.id}
+        style={styles.messageList}
+        onContentSizeChange={() =&gt; flatListRef.current?.scrollToEnd()}
+        renderItem={({ item }) =&gt; {
+          const isMe = item.senderId === currentUid;
+          return (
+            &lt;View style={[styles.bubble, isMe ? styles.sent : styles.received]}&gt;
+              {!isMe &amp;&amp; &lt;Text style={styles.senderLabel}&gt;{item.senderName}&lt;/Text&gt;}
+              &lt;Text style={styles.msgText}&gt;{item.text}&lt;/Text&gt;
+              &lt;Text style={styles.timeText}&gt;
+                {item.timestamp?.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              &lt;/Text&gt;
+            &lt;/View&gt;
+          );
+        }}
+        ListEmptyComponent={
+          &lt;Text style={styles.emptyText}&gt;Send the first message!&lt;/Text&gt;
+        }
+      /&gt;
+
+      &lt;View style={styles.inputBar}&gt;
+        &lt;TextInput
+          style={styles.input}
+          value={text}
+          onChangeText={setText}
+          placeholder="Type a message"
+          multiline
+        /&gt;
+        &lt;Pressable style={styles.sendBtn} onPress={sendMessage}&gt;
+          &lt;Text style={styles.sendText}&gt;Send&lt;/Text&gt;
+        &lt;/Pressable&gt;
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}
+
+// ─── App Entry ──────────────────────────────────────────────────────
+const Stack = createNativeStackNavigator();
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const navigationRef = useRef(null);
+
+  // Auth listener
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => setUser(u));
+    return unsub;
+  }, []);
+
+  // Register push token after login
+  useEffect(() => {
+    if (!user) return;
+
+    async function setup() {
+      const token = await registerForPushNotifications();
+      if (token) {
+        await updateDoc(doc(db, 'users', user.uid), {
+          pushTokens: arrayUnion(token),
+        });
+      }
+    }
+    setup();
+  }, [user]);
+
+  // Clear badge when app becomes active
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        Notifications.setBadgeCountAsync(0);
+      }
+    });
+    return () => sub.remove();
+  }, []);
+
+  // Handle notification tap → navigate to chat
+  useEffect(() => {
+    const subscription = Notifications.addNotificationResponseReceivedListener(
+      (response) => {
+        const data = response.notification.request.content.data;
+        if (data?.chatId && data?.type === 'new_message') {
+          setTimeout(() => {
+            navigationRef.current?.navigate('MessageThread', {
+              chatId: data.chatId,
+              chat: { id: data.chatId, name: 'Chat', members: [] },
+            });
+          }, 300);
+        }
+      }
+    );
+    return () => subscription.remove();
+  }, []);
+
+  // Check if app was opened from notification (cold start)
+  useEffect(() => {
+    Notifications.getLastNotificationResponseAsync().then((response) => {
+      if (response) {
+        const data = response.notification.request.content.data;
+        if (data?.chatId) {
+          setTimeout(() => {
+            navigationRef.current?.navigate('MessageThread', {
+              chatId: data.chatId,
+              chat: { id: data.chatId, name: 'Chat', members: [] },
+            });
+          }, 1000);
+        }
+      }
+    });
+  }, []);
+
+  if (!user) {
+    return (
+      &lt;View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}&gt;
+        &lt;Text style={{ fontSize: 18, color: '#667781' }}&gt;
+          Please log in (Module 3 Lesson 2)
+        &lt;/Text&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  return (
+    &lt;NavigationContainer ref={navigationRef}&gt;
+      &lt;Stack.Navigator screenOptions={{ headerShown: false }}&gt;
+        &lt;Stack.Screen name="ChatList" component={ChatListScreen} /&gt;
+        &lt;Stack.Screen name="MessageThread" component={MessageThreadScreen} /&gt;
+      &lt;/Stack.Navigator&gt;
+    &lt;/NavigationContainer&gt;
+  );
+}
+
+// ─── Styles ─────────────────────────────────────────────────────────
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#FFFFFF' },
+  header: {
+    backgroundColor: '#075E54',
+    paddingTop: 48,
+    paddingBottom: 16,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  headerTitle: { color: '#FFFFFF', fontSize: 20, fontWeight: 'bold' },
+  logoutBtn: { color: '#FFFFFF', fontSize: 14 },
+  chatRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    paddingHorizontal: 16,
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#E0E0E0',
+  },
+  avatarCircle: {
+    width: 50, height: 50, borderRadius: 25,
+    backgroundColor: '#075E54', justifyContent: 'center', alignItems: 'center',
+  },
+  avatarLetter: { color: '#FFFFFF', fontSize: 22, fontWeight: 'bold' },
+  chatInfo: { flex: 1, marginLeft: 12 },
+  chatName: { fontSize: 17, fontWeight: '600', color: '#000000' },
+  chatPreview: { fontSize: 14, color: '#667781', marginTop: 2 },
+  messageList: { flex: 1, backgroundColor: '#ECE5DD', padding: 8 },
+  bubble: { maxWidth: '78%', padding: 10, borderRadius: 8, marginVertical: 3 },
+  sent: { backgroundColor: '#DCF8C6', alignSelf: 'flex-end', borderTopRightRadius: 0 },
+  received: { backgroundColor: '#FFFFFF', alignSelf: 'flex-start', borderTopLeftRadius: 0 },
+  senderLabel: { fontSize: 13, fontWeight: 'bold', color: '#075E54', marginBottom: 2 },
+  msgText: { fontSize: 16, color: '#000000' },
+  timeText: { fontSize: 11, color: '#667781', alignSelf: 'flex-end', marginTop: 4 },
+  inputBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 8,
+    backgroundColor: '#F0F0F0',
+  },
+  input: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    fontSize: 16,
+    maxHeight: 100,
+  },
+  sendBtn: {
+    backgroundColor: '#25D366',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    marginLeft: 8,
+  },
+  sendText: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },
+  emptyText: { textAlign: 'center', marginTop: 40, color: '#667781', fontSize: 16 },
+});</code></pre>
+
+    <hr>
+
+    <!-- Section 13: Quiz -->
+    <h2>13. Quiz</h2>
+    <div id="wa-lesson-0006-quiz"></div>
+
+    <hr>
+
+    <!-- Lesson nav -->
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="./0005-status-stories.html">← Lesson 5: Status (Stories)</a>
+      <a href="../05-audio-video-calls/README.html">Module 5: Audio &amp; Video Calls →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script>
+    createQuiz('wa-lesson-0006-quiz', [
+      {
+        question: 'Why do we store push tokens as an array in the user document instead of a single string?',
+        options: [
+          'Firestore requires arrays for string fields',
+          'A user might be logged in on multiple devices, each with a different token',
+          'The Expo push API only accepts arrays',
+          'It makes the document easier to query'
+        ],
+        answer: 1
+      },
+      {
+        question: 'What is the purpose of the "data" field in a push notification payload?',
+        options: [
+          'It sets the notification sound',
+          'It carries metadata (like chatId) so the app knows where to navigate when the notification is tapped',
+          'It is displayed as the notification body text',
+          'It controls the badge count'
+        ],
+        answer: 1
+      },
+      {
+        question: 'Why must you remove the push token from Firestore when a user logs out?',
+        options: [
+          'The token expires after logout',
+          'Firebase requires it for security compliance',
+          'So the device stops receiving notifications for that account (another user might log in on the same device)',
+          'The app will crash if old tokens are stored'
+        ],
+        answer: 2
+      },
+      {
+        question: 'What is the difference between addNotificationReceivedListener and addNotificationResponseReceivedListener?',
+        options: [
+          'They are the same — both fire when a notification arrives',
+          'Received fires when the notification arrives (even untapped); ResponseReceived fires only when the user TAPS it',
+          'Received is for iOS only; ResponseReceived is for Android only',
+          'Received handles local notifications; ResponseReceived handles remote ones'
+        ],
+        answer: 1
+      },
+      {
+        question: 'Why do push notifications NOT work in the iOS Simulator?',
+        options: [
+          'The Simulator doesn\'t have internet access',
+          'Expo doesn\'t support iOS at all',
+          'APNs requires a real device token which the Simulator cannot generate',
+          'You need a paid Apple Developer account to use the Simulator'
+        ],
+        answer: 2
+      }
+    ]);
+  </script>
+</body>
+</html>

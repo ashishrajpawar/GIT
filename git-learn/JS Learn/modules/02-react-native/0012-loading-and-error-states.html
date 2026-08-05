@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RN Lesson 12: Loading &amp; Error States — JS Learn</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">Module 2: React Native</a>
+      <span class="sep">›</span>
+      <span class="current">Lesson 12: Loading &amp; Error States</span>
+    </nav>
+
+    <!-- Header -->
+    <span class="badge">React Native · Lesson 12</span>
+    <h1 style="margin-top:0.5rem;">Loading &amp; Error States</h1>
+    <div class="lesson-meta">
+      <span>ActivityIndicator · Skeleton loaders · Empty states · Error banners · try/load/catch/finally</span>
+      <span>~35 min</span>
+      <span>Hands-on</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for your WhatsApp clone</div>
+      <p>Every screen in your app loads data — the chat list fetches conversations from Firebase, the message thread loads messages, the profile screen loads user info. That data doesn't appear instantly. If you show nothing while it loads, the user thinks the app is broken. If you crash silently when Firebase is unreachable, the user gets a white screen with no explanation. This lesson teaches the three states every data-loading screen must handle: <strong>loading</strong>, <strong>error</strong>, and <strong>empty</strong> — and the single pattern you'll use for all of them.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 1 -->
+    <h2>1. The three states of every data screen</h2>
+
+    <p>Any screen that loads data from a network or database is always in one of these states:</p>
+
+    <table>
+      <thead>
+        <tr><th>State</th><th>What happened</th><th>What to show</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>loading</strong></td><td>Request in flight, no data yet</td><td>Spinner or skeleton</td></tr>
+        <tr><td><strong>error</strong></td><td>Request failed</td><td>Error message + retry button</td></tr>
+        <tr><td><strong>empty</strong></td><td>Request succeeded, zero results</td><td>Empty state illustration</td></tr>
+        <tr><td><strong>data</strong></td><td>Request succeeded, data present</td><td>The actual content</td></tr>
+      </tbody>
+    </table>
+
+    <p>Model these as three pieces of state:</p>
+
+    <pre><code>const [chats,   setChats]   = useState([]);       // the data
+const [loading, setLoading] = useState(true);     // true while fetching
+const [error,   setError]   = useState(null);     // null = no error, string = error message</code></pre>
+
+    <hr>
+
+    <!-- Section 2 -->
+    <h2>2. The standard load pattern — try / finally</h2>
+
+    <p>Always set <code>loading = true</code> before the fetch and <code>loading = false</code> in a <code>finally</code> block — not in <code>try</code>. <code>finally</code> runs whether the request succeeded or failed, so loading is always cleared.</p>
+
+    <pre><code>useEffect(() =&gt; {
+  async function loadChats() {
+    setLoading(true);
+    setError(null);         // clear any previous error on retry
+    try {
+      // In Module 3 this becomes a Firebase call:
+      // const snapshot = await getDocs(collection(db, 'chats'));
+      // Simulated network delay for now:
+      await new Promise(r =&gt; setTimeout(r, 1500));
+      setChats([
+        { id: '1', name: 'Priya Sharma',  preview: 'See you tomorrow!', unread: 2 },
+        { id: '2', name: 'Rahul Mehta',   preview: 'Got it, thanks.',   unread: 0 },
+      ]);
+    } catch (err) {
+      setError('Could not load chats. Check your connection.');
+    } finally {
+      setLoading(false);    // always runs — clears the spinner
+    }
+  }
+
+  loadChats();
+}, []);</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">Never put setLoading(false) in the try block</div>
+      <p>If you write <code>setLoading(false)</code> inside <code>try</code>, a thrown error will skip it and the spinner will spin forever. Always use <code>finally</code>.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 3 -->
+    <h2>3. ActivityIndicator — the built-in spinner</h2>
+
+    <p>React Native's <code>ActivityIndicator</code> is the standard loading spinner. Use it for full-screen loading and for button loading states.</p>
+
+    <pre><code>import { ActivityIndicator, View, StyleSheet } from 'react-native';
+
+// Full-screen centred spinner
+function LoadingScreen() {
+  return (
+    &lt;View style={styles.centre}&gt;
+      &lt;ActivityIndicator size="large" color="#075E54" /&gt;
+    &lt;/View&gt;
+  );
+}
+
+// Inline — replacing a button label while a request is in flight
+&lt;Pressable style={styles.button} disabled={loading}&gt;
+  {loading
+    ? &lt;ActivityIndicator size="small" color="#fff" /&gt;
+    : &lt;Text style={styles.buttonText}&gt;Send&lt;/Text&gt;
+  }
+&lt;/Pressable&gt;
+
+const styles = StyleSheet.create({
+  centre: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+});</code></pre>
+
+    <hr>
+
+    <!-- Section 4 -->
+    <h2>4. Skeleton loaders — better than a blank spinner</h2>
+
+    <p>A skeleton loader shows the shape of the content while it loads — grey placeholder blocks where the real data will appear. WhatsApp uses this for the chat list. You don't need a library; build it with <code>View</code> and a subtle animated opacity.</p>
+
+    <pre><code>import { useEffect, useRef } from 'react';
+import { View, Animated, StyleSheet } from 'react-native';
+
+// A single pulsing grey block
+function SkeletonBlock({ width, height, style }) {
+  const opacity = useRef(new Animated.Value(0.4)).current;
+
+  useEffect(() =&gt; {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(opacity, { toValue: 1,   duration: 700, useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 0.4, duration: 700, useNativeDriver: true }),
+      ])
+    ).start();
+  }, []);
+
+  return (
+    &lt;Animated.View
+      style={[
+        styles.skeleton,
+        { width, height, borderRadius: height / 2 },
+        { opacity },
+        style,
+      ]}
+    /&gt;
+  );
+}
+
+// A skeleton row that mimics a chat list item
+function ChatRowSkeleton() {
+  return (
+    &lt;View style={styles.skeletonRow}&gt;
+      &lt;SkeletonBlock width={52} height={52} style={{ borderRadius: 26 }} /&gt;
+      &lt;View style={styles.skeletonLines}&gt;
+        &lt;SkeletonBlock width="60%" height={14} /&gt;
+        &lt;SkeletonBlock width="85%" height={12} style={{ marginTop: 8 }} /&gt;
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  skeleton:     { backgroundColor: '#e0e0e0' },
+  skeletonRow:  { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12 },
+  skeletonLines:{ flex: 1, marginLeft: 12 },
+});</code></pre>
+
+    <p>Render 5–6 skeleton rows while loading — the layout looks populated immediately and the transition to real data feels smooth.</p>
+
+    <hr>
+
+    <!-- Section 5 -->
+    <h2>5. Empty state — when the request succeeds but returns nothing</h2>
+
+    <p>Don't confuse loading and empty. If the request succeeds and the array is empty, show an encouraging empty state — not a spinner and not an error.</p>
+
+    <pre><code>// Inside your render logic:
+if (loading) return &lt;LoadingScreen /&gt;;
+if (error)   return &lt;ErrorScreen message={error} onRetry={loadChats} /&gt;;
+
+// Data loaded — but is there anything in it?
+return (
+  &lt;FlatList
+    data={chats}
+    keyExtractor={item =&gt; item.id}
+    renderItem={({ item }) =&gt; &lt;ChatRow chat={item} /&gt;}
+    ListEmptyComponent={
+      &lt;View style={styles.emptyState}&gt;
+        &lt;Text style={styles.emptyIcon}&gt;💬&lt;/Text&gt;
+        &lt;Text style={styles.emptyTitle}&gt;No chats yet&lt;/Text&gt;
+        &lt;Text style={styles.emptySub}&gt;
+          Start a conversation by tapping the pencil icon above.
+        &lt;/Text&gt;
+      &lt;/View&gt;
+    }
+  /&gt;
+);</code></pre>
+
+    <p>FlatList's <code>ListEmptyComponent</code> renders automatically when <code>data</code> is an empty array — you don't need an <code>if</code> check.</p>
+
+    <hr>
+
+    <!-- Section 6 -->
+    <h2>6. Error states — three patterns</h2>
+
+    <p>Choose the right error UI for the context:</p>
+
+    <h3>Full-screen error (data failed to load entirely)</h3>
+
+    <pre><code>function ErrorScreen({ message, onRetry }) {
+  return (
+    &lt;View style={styles.centre}&gt;
+      &lt;Text style={styles.errorIcon}&gt;⚠️&lt;/Text&gt;
+      &lt;Text style={styles.errorTitle}&gt;Something went wrong&lt;/Text&gt;
+      &lt;Text style={styles.errorMessage}&gt;{message}&lt;/Text&gt;
+      &lt;Pressable style={styles.retryButton} onPress={onRetry}&gt;
+        &lt;Text style={styles.retryText}&gt;Try again&lt;/Text&gt;
+      &lt;/Pressable&gt;
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <h3>Inline error (form field validation — covered in Lesson 10)</h3>
+
+    <pre><code>{formErrors.email ? (
+  &lt;Text style={styles.fieldError}&gt;{formErrors.email}&lt;/Text&gt;
+) : null}</code></pre>
+
+    <h3>Toast / banner (background action failed — e.g. message send failed)</h3>
+
+    <pre><code>// A temporary banner that auto-hides after 3 seconds
+function Toast({ message, visible }) {
+  if (!visible) return null;
+  return (
+    &lt;View style={styles.toast}&gt;
+      &lt;Text style={styles.toastText}&gt;{message}&lt;/Text&gt;
+    &lt;/View&gt;
+  );
+}
+
+// Usage — show on send failure, auto-hide with setTimeout
+const [toastMessage, setToastMessage] = useState('');
+const [toastVisible, setToastVisible] = useState(false);
+
+function showToast(msg) {
+  setToastMessage(msg);
+  setToastVisible(true);
+  setTimeout(() =&gt; setToastVisible(false), 3000);
+}
+
+// Triggered in a catch block:
+// showToast('Message failed to send. Tap to retry.');</code></pre>
+
+    <div class="callout">
+      <div class="callout-title">Which error UI to use when</div>
+      <p><strong>Full-screen error</strong>: the main data the screen exists to show failed — there is nothing useful to display without it (chat list, message thread).<br>
+      <strong>Inline field error</strong>: a form input is invalid — always under the specific field.<br>
+      <strong>Toast / banner</strong>: a background action failed but the user can keep using the screen (message failed to send, image upload failed).</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 7 -->
+    <h2>7. Pull-to-refresh</h2>
+
+    <p>Users expect to pull down on a list to refresh it. Wire it up with FlatList's <code>refreshing</code> and <code>onRefresh</code> props.</p>
+
+    <pre><code>const [refreshing, setRefreshing] = useState(false);
+
+async function onRefresh() {
+  setRefreshing(true);
+  try {
+    // await fetchChatsFromFirebase();
+    await new Promise(r =&gt; setTimeout(r, 1000));
+    setChats([ /* updated data */ ]);
+  } catch {
+    showToast('Refresh failed. Check your connection.');
+  } finally {
+    setRefreshing(false);
+  }
+}
+
+&lt;FlatList
+  data={chats}
+  refreshing={refreshing}     // shows the pull-to-refresh spinner
+  onRefresh={onRefresh}       // called when user pulls down
+  ...
+/&gt;</code></pre>
+
+    <hr>
+
+    <!-- Section 8: Full working example -->
+    <h2>8. Full working example — chat list with all four states</h2>
+
+    <p>This puts everything together: skeleton while loading, error screen with retry, empty state, and real data — plus pull-to-refresh and a toast for background failures. Replace your entire <code>App.js</code> with this.</p>
+
+    <pre><code>import { useState, useEffect, useRef } from 'react';
+import {
+  View, Text, FlatList, Pressable,
+  StyleSheet, Animated, ActivityIndicator,
+} from 'react-native';
+
+// ── Skeleton components ───────────────────────────────────────────────────────
+function SkeletonBlock({ width, height, style }) {
+  const opacity = useRef(new Animated.Value(0.4)).current;
+  useEffect(() =&gt; {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(opacity, { toValue: 1,   duration: 700, useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 0.4, duration: 700, useNativeDriver: true }),
+      ])
+    ).start();
+  }, []);
+  return (
+    &lt;Animated.View
+      style={[{ backgroundColor: '#e0e0e0', borderRadius: height / 2 }, { width, height }, { opacity }, style]}
+    /&gt;
+  );
+}
+
+function ChatRowSkeleton() {
+  return (
+    &lt;View style={styles.row}&gt;
+      &lt;SkeletonBlock width={52} height={52} style={{ borderRadius: 26 }} /&gt;
+      &lt;View style={{ flex: 1, marginLeft: 12 }}&gt;
+        &lt;SkeletonBlock width="55%" height={14} /&gt;
+        &lt;SkeletonBlock width="80%" height={12} style={{ marginTop: 8 }} /&gt;
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function Toast({ message, visible }) {
+  if (!visible) return null;
+  return (
+    &lt;View style={styles.toast}&gt;
+      &lt;Text style={styles.toastText}&gt;{message}&lt;/Text&gt;
+    &lt;/View&gt;
+  );
+}
+
+// ── Fake Firebase — swap these for real calls in Module 3 ─────────────────────
+let callCount = 0;
+async function fetchChats() {
+  await new Promise(r =&gt; setTimeout(r, 1500));
+  callCount++;
+  // Simulate a failure on the second load so you can see the error state
+  if (callCount === 2) throw new Error('Network error');
+  // Return empty array on the third load so you can see the empty state
+  if (callCount === 3) return [];
+  return [
+    { id: '1', name: 'Priya Sharma',  preview: 'See you tomorrow!',     time: '10:32',    unread: 2 },
+    { id: '2', name: 'Rahul Mehta',   preview: 'Got it, thanks.',       time: '09:15',    unread: 0 },
+    { id: '3', name: 'Family Group',  preview: 'Mom: Dinner at 7!',     time: 'Yesterday',unread: 5 },
+  ];
+}
+
+// ── Main screen ───────────────────────────────────────────────────────────────
+export default function App() {
+  const [chats,      setChats]      = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [error,      setError]      = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [toast,      setToast]      = useState({ visible: false, message: '' });
+
+  function showToast(message) {
+    setToast({ visible: true, message });
+    setTimeout(() =&gt; setToast({ visible: false, message: '' }), 3000);
+  }
+
+  async function loadChats() {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await fetchChats();
+      setChats(data);
+    } catch {
+      setError('Could not load chats. Check your connection.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function onRefresh() {
+    setRefreshing(true);
+    try {
+      const data = await fetchChats();
+      setChats(data);
+    } catch {
+      showToast('Refresh failed. Pull down to try again.');
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  useEffect(() =&gt; { loadChats(); }, []);
+
+  // ── State: loading ──────────────────────────────────────────────────────────
+  if (loading) {
+    return (
+      &lt;View style={styles.screen}&gt;
+        &lt;View style={styles.header}&gt;
+          &lt;Text style={styles.headerTitle}&gt;WhatsApp&lt;/Text&gt;
+        &lt;/View&gt;
+        {[1,2,3,4,5].map(i =&gt; &lt;ChatRowSkeleton key={i} /&gt;)}
+      &lt;/View&gt;
+    );
+  }
+
+  // ── State: error ────────────────────────────────────────────────────────────
+  if (error) {
+    return (
+      &lt;View style={styles.screen}&gt;
+        &lt;View style={styles.header}&gt;
+          &lt;Text style={styles.headerTitle}&gt;WhatsApp&lt;/Text&gt;
+        &lt;/View&gt;
+        &lt;View style={styles.centre}&gt;
+          &lt;Text style={styles.errorIcon}&gt;⚠️&lt;/Text&gt;
+          &lt;Text style={styles.errorTitle}&gt;Something went wrong&lt;/Text&gt;
+          &lt;Text style={styles.errorMessage}&gt;{error}&lt;/Text&gt;
+          &lt;Pressable style={styles.retryButton} onPress={loadChats}&gt;
+            &lt;Text style={styles.retryText}&gt;Try again&lt;/Text&gt;
+          &lt;/Pressable&gt;
+          &lt;Text style={styles.hintText}&gt;(Tap retry twice to see the empty state)&lt;/Text&gt;
+        &lt;/View&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  // ── State: data (may be empty) ──────────────────────────────────────────────
+  return (
+    &lt;View style={styles.screen}&gt;
+      &lt;View style={styles.header}&gt;
+        &lt;Text style={styles.headerTitle}&gt;WhatsApp&lt;/Text&gt;
+        &lt;Text style={styles.headerSub}&gt;{chats.length} chats&lt;/Text&gt;
+      &lt;/View&gt;
+
+      &lt;FlatList
+        data={chats}
+        keyExtractor={item =&gt; item.id}
+        refreshing={refreshing}
+        onRefresh={onRefresh}
+        ItemSeparatorComponent={() =&gt; &lt;View style={styles.sep} /&gt;}
+        ListEmptyComponent={
+          &lt;View style={styles.emptyState}&gt;
+            &lt;Text style={styles.emptyIcon}&gt;💬&lt;/Text&gt;
+            &lt;Text style={styles.emptyTitle}&gt;No chats yet&lt;/Text&gt;
+            &lt;Text style={styles.emptySub}&gt;
+              Start a conversation by tapping the pencil icon.
+            &lt;/Text&gt;
+            &lt;Pressable style={styles.retryButton} onPress={loadChats}&gt;
+              &lt;Text style={styles.retryText}&gt;Reload&lt;/Text&gt;
+            &lt;/Pressable&gt;
+          &lt;/View&gt;
+        }
+        renderItem={({ item }) =&gt; (
+          &lt;Pressable
+            style={({ pressed }) =&gt; [styles.row, pressed &amp;&amp; styles.rowPressed]}
+          &gt;
+            &lt;View style={styles.avatarCircle}&gt;
+              &lt;Text style={styles.avatarLetter}&gt;{item.name[0]}&lt;/Text&gt;
+            &lt;/View&gt;
+            &lt;View style={styles.middle}&gt;
+              &lt;Text style={styles.name}&gt;{item.name}&lt;/Text&gt;
+              &lt;Text style={styles.preview} numberOfLines={1}&gt;{item.preview}&lt;/Text&gt;
+            &lt;/View&gt;
+            &lt;View style={styles.right}&gt;
+              &lt;Text style={[styles.time, item.unread &gt; 0 &amp;&amp; styles.timeGreen]}&gt;
+                {item.time}
+              &lt;/Text&gt;
+              {item.unread &gt; 0 &amp;&amp; (
+                &lt;View style={styles.badge}&gt;
+                  &lt;Text style={styles.badgeText}&gt;{item.unread}&lt;/Text&gt;
+                &lt;/View&gt;
+              )}
+            &lt;/View&gt;
+          &lt;/Pressable&gt;
+        )}
+      /&gt;
+
+      {/* Toast sits above everything else */}
+      &lt;Toast message={toast.message} visible={toast.visible} /&gt;
+    &lt;/View&gt;
+  );
+}
+
+// ── Styles ────────────────────────────────────────────────────────────────────
+const styles = StyleSheet.create({
+  screen:        { flex: 1, backgroundColor: '#fff' },
+  centre:        { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
+  header:        { backgroundColor: '#075E54', paddingTop: 48, paddingBottom: 12, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'baseline', gap: 10 },
+  headerTitle:   { color: '#fff', fontSize: 20, fontWeight: '700' },
+  headerSub:     { color: '#b2dfdb', fontSize: 13 },
+
+  row:           { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12 },
+  rowPressed:    { backgroundColor: '#f5f5f5' },
+  avatarCircle:  { width: 52, height: 52, borderRadius: 26, backgroundColor: '#128C7E', alignItems: 'center', justifyContent: 'center' },
+  avatarLetter:  { color: '#fff', fontSize: 22, fontWeight: '700' },
+  middle:        { flex: 1, marginLeft: 12, marginRight: 8 },
+  name:          { fontSize: 16, fontWeight: '600', color: '#111' },
+  preview:       { fontSize: 14, color: '#667781', marginTop: 2 },
+  right:         { alignItems: 'flex-end' },
+  time:          { fontSize: 12, color: '#667781' },
+  timeGreen:     { color: '#25D366', fontWeight: '600' },
+  badge:         { backgroundColor: '#25D366', borderRadius: 10, minWidth: 20, height: 20, alignItems: 'center', justifyContent: 'center', marginTop: 4, paddingHorizontal: 5 },
+  badgeText:     { color: '#fff', fontSize: 11, fontWeight: '700' },
+  sep:           { height: 1, backgroundColor: '#f0f2f5', marginLeft: 80 },
+
+  errorIcon:     { fontSize: 48, marginBottom: 12 },
+  errorTitle:    { fontSize: 18, fontWeight: '700', color: '#111', marginBottom: 8 },
+  errorMessage:  { fontSize: 14, color: '#667781', textAlign: 'center', marginBottom: 24, lineHeight: 20 },
+  retryButton:   { backgroundColor: '#075E54', paddingHorizontal: 28, paddingVertical: 12, borderRadius: 8 },
+  retryText:     { color: '#fff', fontWeight: '700', fontSize: 15 },
+  hintText:      { marginTop: 16, fontSize: 12, color: '#aaa' },
+
+  emptyState:    { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 80, paddingHorizontal: 32 },
+  emptyIcon:     { fontSize: 56, marginBottom: 16 },
+  emptyTitle:    { fontSize: 20, fontWeight: '700', color: '#111', marginBottom: 8 },
+  emptySub:      { fontSize: 14, color: '#667781', textAlign: 'center', lineHeight: 20, marginBottom: 24 },
+
+  toast:         { position: 'absolute', bottom: 24, left: 20, right: 20, backgroundColor: '#333', borderRadius: 10, padding: 14, alignItems: 'center' },
+  toastText:     { color: '#fff', fontSize: 14 },
+});</code></pre>
+
+    <p>Run this. The first load shows skeleton rows for 1.5 seconds, then real data appears. Pull down to refresh — on the second request it throws an error, showing the error screen with a retry button. Tap retry — the third request returns an empty array, showing the empty state. Tap Reload — the fourth request succeeds and data reappears. The cycle repeats, so you can see all four states as many times as you want.</p>
+
+    <div class="callout success">
+      <div class="callout-title">This is the complete pattern for every data screen</div>
+      <p>The three state variables (<code>loading</code>, <code>error</code>, <code>chats</code>) and the <code>try / catch / finally</code> structure in <code>loadChats</code> are the same in every screen of your app. In Module 3 you replace the fake <code>fetchChats()</code> function with real Firebase calls — the state management and UI stay identical.</p>
+    </div>
+
+    <hr>
+
+    <!-- Quiz -->
+    <h2>Quick check — test yourself</h2>
+    <p>Five questions on what you just read.</p>
+
+    <div id="rn-lesson-0012-quiz"></div>
+
+    <hr>
+
+    <!-- Resources -->
+    <h2>Primary resources for this lesson</h2>
+    <ul>
+      <li><a href="https://reactnative.dev/docs/activityindicator" target="_blank" rel="noopener">ActivityIndicator — React Native docs</a></li>
+      <li><a href="https://reactnative.dev/docs/animated" target="_blank" rel="noopener">Animated API — React Native docs</a></li>
+      <li><a href="https://reactnative.dev/docs/flatlist#onrefresh" target="_blank" rel="noopener">FlatList onRefresh — React Native docs</a></li>
+    </ul>
+
+    <div class="ask-teacher">
+      <strong>Anything unclear? Ask your teacher.</strong>
+      Common issues: (1) Spinner spins forever — you put <code>setLoading(false)</code> inside the <code>try</code> block instead of <code>finally</code>; an error throws before it runs. (2) Skeleton doesn't animate — make sure you imported <code>Animated</code> from <code>react-native</code> and used <code>useNativeDriver: true</code>. (3) Pull-to-refresh spinner shows but data doesn't update — check that you called <code>setChats(data)</code> inside <code>onRefresh</code>, not just inside <code>loadChats</code>. (4) Toast shows but never disappears — confirm your <code>setTimeout</code> is calling <code>setToast({ visible: false, ... })</code> with the right shape.
+    </div>
+
+    <hr>
+
+    <!-- Lesson nav -->
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="./0011-images-imagepicker.html">← Lesson 11: Images &amp; ImagePicker</a>
+      <a href="./0013-chat-list-screen.html">Lesson 13: Build the Chat List Screen →</a>
+    </nav>
+
+  </div><!-- .page-wrap -->
+
+  <script src="../../assets/quiz.js"></script>
+  <script>
+    createQuiz("rn-lesson-0012-quiz", [
+      {
+        question: "Your loadChats function sets loading=true, then makes a Firebase call. Where must you put setLoading(false) to guarantee it always runs — even if Firebase throws an error?",
+        options: [
+          "At the end of the try block, after setChats(data)",
+          "At the start of the catch block, before setting the error",
+          "In a finally block — finally always runs whether try succeeded or catch fired",
+          "After the entire try/catch — outside both blocks"
+        ],
+        correct: 2,
+        explanation: "finally always executes after try/catch regardless of whether the operation succeeded or threw. If you put setLoading(false) in the try block, a thrown error jumps past it straight to catch, leaving loading stuck at true forever. If you put it after the try/catch (not in finally), async control flow can skip it. The finally block is the only safe place."
+      },
+      {
+        question: "A Firebase request returns successfully but the array of chats is empty. Which UI should you show?",
+        options: [
+          "The loading spinner — empty data is the same as data still loading",
+          "The error screen — an empty result means something went wrong",
+          "The empty state — a friendly message explaining there are no chats yet",
+          "Nothing — render null and let the user figure it out"
+        ],
+        correct: 2,
+        explanation: "An empty array is a successful response — it means the user genuinely has no chats yet. Show a friendly empty state (icon + message + optional action button). Never show an error for an empty result; that would confuse the user into thinking the app is broken. FlatList's ListEmptyComponent renders automatically when data.length is 0."
+      },
+      {
+        question: "You want the FlatList to show a pull-to-refresh spinner when the user pulls down. Which two props does FlatList need?",
+        options: [
+          "pullRefresh={true} and onPull={onRefresh}",
+          "refreshing={refreshing} and onRefresh={onRefresh} — refreshing is a boolean that controls the spinner, onRefresh is called when the user pulls down",
+          "loading={refreshing} and refresh={onRefresh}",
+          "canRefresh={true} and refreshCallback={onRefresh}"
+        ],
+        correct: 1,
+        explanation: "FlatList's built-in pull-to-refresh needs exactly two props: refreshing (a boolean — true shows the spinner) and onRefresh (a function called when the user pulls down). In your handler, set refreshing=true at the start and refreshing=false in finally. Do NOT reuse your main loading state for this — keep them separate so pulling doesn't hide the existing list."
+      },
+      {
+        question: "A message fails to send in the background while the user is reading the chat. Which error UI pattern is most appropriate?",
+        options: [
+          "Full-screen error — replace the entire message thread with an error screen",
+          "Inline field error — show a red border under the message input",
+          "Toast / banner — a temporary overlay at the bottom of the screen that auto-hides after a few seconds",
+          "Alert.alert — block the user with a modal dialog"
+        ],
+        correct: 2,
+        explanation: "A toast is correct for background action failures where the user can stay on the screen. The chat thread is still usable — the user can scroll, read messages, and retry sending. Replacing the whole screen with an error would be disruptive and wrong. Alert.alert is too aggressive for a recoverable failure. Reserve full-screen errors for when the primary data the screen exists to show has failed to load."
+      },
+      {
+        question: "You build a skeleton loader using Animated.Value and Animated.loop. Why do you pass useNativeDriver: true to the Animated.timing config?",
+        options: [
+          "It makes the animation work on Android — without it, animations only work on iOS",
+          "It runs the animation on the native UI thread instead of the JavaScript thread, making it smoother and preventing it from being blocked by heavy JS work",
+          "It is required to use Animated.loop — without it, the loop throws an error",
+          "It tells React Native to use hardware acceleration for the View's background colour"
+        ],
+        correct: 1,
+        explanation: "useNativeDriver: true moves the animation entirely to the native UI thread. The JS thread handles logic (state updates, fetching), and if it's busy, JS-driven animations stutter. With useNativeDriver, the skeleton pulse keeps running at 60fps even when your component tree is re-rendering. Use it whenever the animated property is supported (opacity, transform) — it's supported for opacity, which is exactly what the skeleton uses."
+      }
+    ]);
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,1143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Store Compliance Lesson 1: Block &amp; Report Users — JS Learn</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">Module 7: Store Compliance &amp; Safety</a>
+      <span class="sep">›</span>
+      <span class="current">Lesson 1: Block &amp; Report Users</span>
+    </nav>
+
+    <!-- Header -->
+    <span class="badge">Store Compliance · Lesson 1</span>
+    <h1 style="margin-top:0.5rem;">Block &amp; Report Users</h1>
+    <div class="lesson-meta">
+      <span>Block list · Report flow · Firestore schema · Settings UI · Security rules</span>
+      <span>~60 min</span>
+      <span>Hands-on</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for your WhatsApp clone</div>
+      <p>This is the <strong>#1 reason messaging apps get rejected</strong> from both stores. Apple Guideline 1.2 states: "Apps with user-generated content must include a method for filtering objectionable material, a mechanism to report offensive content, and the ability to block abusive users." Google Play's User Generated Content policy has the same requirement. Without block and report, your app <em>will not pass review</em> — no exceptions. WhatsApp has both features in every chat's menu. You'll build the same thing in this lesson.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 1 -->
+    <h2>1. How blocking works — the concept</h2>
+
+    <p>When Priya blocks Rahul:</p>
+    <ul>
+      <li>Rahul's messages <strong>no longer appear</strong> in Priya's chat list or message thread</li>
+      <li>Rahul <strong>cannot start a new chat</strong> with Priya</li>
+      <li>Priya's online status and "last seen" are <strong>hidden</strong> from Rahul</li>
+      <li>Rahul <strong>doesn't know he's blocked</strong> — his messages still appear sent on his side (same as WhatsApp)</li>
+      <li>Priya can <strong>unblock</strong> Rahul at any time from Settings</li>
+    </ul>
+
+    <p>Key design decision: blocking is <strong>client-side filtering + server-side enforcement</strong>. The client hides blocked users' content, and Firestore security rules prevent blocked users from writing to the blocker's data.</p>
+
+    <hr>
+
+    <!-- Section 2 -->
+    <h2>2. Firestore data model for blocking</h2>
+
+    <p>You need a place to store who each user has blocked. Add a <code>blockedUsers</code> array to the user's profile document:</p>
+
+    <pre><code>// Firestore document: /users/{uid}
+{
+  uid: 'priya123',
+  displayName: 'Priya Sharma',
+  email: 'priya@example.com',
+  // ... other profile fields ...
+  blockedUsers: ['rahul456', 'spam789']  // array of blocked UIDs
+}</code></pre>
+
+    <p>Why an array on the user document?</p>
+    <ul>
+      <li><strong>Fast lookup</strong> — when loading chats, one read gives you the entire block list</li>
+      <li><strong>Simple filtering</strong> — <code>blockedUsers.includes(senderId)</code> on the client</li>
+      <li><strong>Security rules can check it</strong> — Firestore rules can read this array to enforce blocks server-side</li>
+      <li><strong>Limit</strong> — Firestore documents have a 1 MB limit; even 10,000 UIDs (each ~28 chars) is only ~280 KB, well within limits</li>
+    </ul>
+
+    <hr>
+
+    <!-- Section 3 -->
+    <h2>3. Blocking a user — the code</h2>
+
+    <p>When Priya taps "Block" on Rahul's profile or in a chat menu:</p>
+
+    <pre><code>import { doc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
+import { auth, db } from './firebaseConfig';
+
+// Block a user
+async function blockUser(targetUid) {
+  const myUid = auth.currentUser.uid;
+  const myDocRef = doc(db, 'users', myUid);
+
+  await updateDoc(myDocRef, {
+    blockedUsers: arrayUnion(targetUid)
+  });
+}
+
+// Unblock a user
+async function unblockUser(targetUid) {
+  const myUid = auth.currentUser.uid;
+  const myDocRef = doc(db, 'users', myUid);
+
+  await updateDoc(myDocRef, {
+    blockedUsers: arrayRemove(targetUid)
+  });
+}</code></pre>
+
+    <p><code>arrayUnion</code> adds the UID only if it's not already there (no duplicates). <code>arrayRemove</code> removes it. Both are atomic — safe even if two devices act at the same time.</p>
+
+    <hr>
+
+    <!-- Section 4 -->
+    <h2>4. Filtering blocked users on the client</h2>
+
+    <p>When you load the chat list or messages, filter out anything from blocked users:</p>
+
+    <pre><code>import { useState, useEffect } from 'react';
+import { collection, query, where, orderBy, onSnapshot, doc } from 'firebase/firestore';
+import { auth, db } from './firebaseConfig';
+
+function useChatList() {
+  const [chats, setChats] = useState([]);
+  const [blockedUsers, setBlockedUsers] = useState([]);
+
+  useEffect(() => {
+    const myUid = auth.currentUser.uid;
+
+    // Listen to my profile for block list changes
+    const unsubProfile = onSnapshot(doc(db, 'users', myUid), (snap) => {
+      const data = snap.data();
+      setBlockedUsers(data?.blockedUsers || []);
+    });
+
+    // Listen to my chats
+    const chatsQuery = query(
+      collection(db, 'chats'),
+      where('members', 'array-contains', myUid),
+      orderBy('lastMessageAt', 'desc')
+    );
+
+    const unsubChats = onSnapshot(chatsQuery, (snapshot) => {
+      const allChats = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      setChats(allChats);
+    });
+
+    return () => { unsubProfile(); unsubChats(); };
+  }, []);
+
+  // Filter out chats where the other person is blocked (1:1 chats only)
+  const visibleChats = chats.filter(chat => {
+    if (chat.isGroup) return true; // don't hide group chats
+    const otherUid = chat.members.find(uid => uid !== auth.currentUser.uid);
+    return !blockedUsers.includes(otherUid);
+  });
+
+  return visibleChats;
+}</code></pre>
+
+    <p>For message threads, filter individual messages from blocked users in group chats:</p>
+
+    <pre><code>// Inside a group chat message list
+const visibleMessages = messages.filter(msg => {
+  return !blockedUsers.includes(msg.senderId);
+});</code></pre>
+
+    <hr>
+
+    <!-- Section 5 -->
+    <h2>5. Security rules — enforcing blocks server-side</h2>
+
+    <p>Client-side filtering is not enough — a malicious user could bypass your app and write directly to Firestore. Add rules that check the block list:</p>
+
+    <pre><code>// firestore.rules
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Users collection
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth.uid == userId;
+    }
+
+    // Chats collection
+    match /chats/{chatId} {
+      allow read: if request.auth.uid in resource.data.members;
+
+      // Can only create a chat if you're not blocked by the other person
+      allow create: if request.auth.uid in request.resource.data.members
+        && !isBlockedByAnyMember(request.resource.data.members);
+
+      allow update: if request.auth.uid in resource.data.members;
+
+      // Messages sub-collection
+      match /messages/{messageId} {
+        allow read: if request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.members;
+
+        // Can only send if not blocked by a member
+        allow create: if request.auth.uid == request.resource.data.senderId
+          && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.members
+          && !senderIsBlocked(chatId);
+      }
+    }
+
+    // Helper: check if the sender is in any member's blockedUsers
+    function senderIsBlocked(chatId) {
+      let chat = get(/databases/$(database)/documents/chats/$(chatId)).data;
+      let otherMembers = chat.members.removeAll([request.auth.uid]);
+      // For 1:1 chats, check if the other user blocked us
+      return otherMembers.size() == 1
+        && request.auth.uid in get(/databases/$(database)/documents/users/$(otherMembers[0])).data.blockedUsers;
+    }
+
+    function isBlockedByAnyMember(members) {
+      // Simplified: for 1:1, check the other member's block list
+      let otherMembers = members.removeAll([request.auth.uid]);
+      return otherMembers.size() == 1
+        && request.auth.uid in get(/databases/$(database)/documents/users/$(otherMembers[0])).data.blockedUsers;
+    }
+  }
+}</code></pre>
+
+    <p><strong>Important:</strong> Each <code>get()</code> in security rules counts as one document read and adds latency. For 1:1 chats this is fine (one extra read). For large group chats, checking every member's block list is too expensive — rely on client-side filtering for groups instead.</p>
+
+    <hr>
+
+    <!-- Section 6 -->
+    <h2>6. The "Block" action in the chat UI</h2>
+
+    <p>WhatsApp puts "Block" in the three-dot menu of a chat and on the user's profile. Here's a long-press action sheet pattern:</p>
+
+    <pre><code>import { Alert } from 'react-native';
+
+function showBlockOptions(targetUid, targetName) {
+  Alert.alert(
+    `Block ${targetName}?`,
+    'Blocked contacts can no longer send you messages or see your online status. You can unblock them later from Settings.',
+    [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Block',
+        style: 'destructive',
+        onPress: () => blockUser(targetUid),
+      },
+    ]
+  );
+}</code></pre>
+
+    <p>Call this from your chat header menu or contact profile screen. Always show a confirmation dialog — blocking is a significant action.</p>
+
+    <hr>
+
+    <!-- Section 7 -->
+    <h2>7. Reporting a user or message</h2>
+
+    <p>Reporting is separate from blocking. When someone reports content, you store it in a <code>/reports</code> collection for review. The user doesn't need to block in order to report (but you can offer both together).</p>
+
+    <h3>Reports collection schema</h3>
+
+    <pre><code>// Firestore document: /reports/{autoId}
+{
+  reportedBy: 'priya123',           // who filed the report
+  reportedUser: 'spam789',          // who is being reported
+  chatId: 'chat_abc',              // which chat (optional)
+  messageId: 'msg_xyz',           // specific message (optional)
+  messageText: 'Buy cheap...',    // snapshot of the message content
+  reason: 'spam',                  // category: spam | harassment | hate | other
+  details: 'Keeps sending ads',   // optional free text
+  status: 'pending',              // pending | reviewed | actioned | dismissed
+  createdAt: Timestamp
+}</code></pre>
+
+    <h3>Submitting a report</h3>
+
+    <pre><code>import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { auth, db } from './firebaseConfig';
+
+async function reportUser({ reportedUser, chatId, messageId, messageText, reason, details }) {
+  await addDoc(collection(db, 'reports'), {
+    reportedBy: auth.currentUser.uid,
+    reportedUser,
+    chatId: chatId || null,
+    messageId: messageId || null,
+    messageText: messageText || null,
+    reason,
+    details: details || '',
+    status: 'pending',
+    createdAt: serverTimestamp(),
+  });
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 8 -->
+    <h2>8. Report UI — reason picker</h2>
+
+    <p>When the user taps "Report", show a reason picker before submitting:</p>
+
+    <pre><code>import { useState } from 'react';
+import { View, Text, Pressable, TextInput, Alert, StyleSheet } from 'react-native';
+
+const REPORT_REASONS = [
+  { key: 'spam', label: 'Spam or advertising' },
+  { key: 'harassment', label: 'Harassment or bullying' },
+  { key: 'hate', label: 'Hate speech' },
+  { key: 'inappropriate', label: 'Inappropriate content' },
+  { key: 'other', label: 'Other' },
+];
+
+function ReportScreen({ route, navigation }) {
+  const { reportedUser, chatId, messageId, messageText } = route.params;
+  const [selectedReason, setSelectedReason] = useState(null);
+  const [details, setDetails] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  async function handleSubmit() {
+    if (!selectedReason) {
+      Alert.alert('Select a reason', 'Please choose why you are reporting this user.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      await reportUser({
+        reportedUser,
+        chatId,
+        messageId,
+        messageText,
+        reason: selectedReason,
+        details,
+      });
+
+      Alert.alert(
+        'Report Submitted',
+        'Thank you. We will review this report and take action if needed.',
+        [{ text: 'OK', onPress: () => navigation.goBack() }]
+      );
+    } catch (error) {
+      Alert.alert('Error', 'Could not submit report. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    &lt;View style={styles.container}&gt;
+      &lt;Text style={styles.title}&gt;Why are you reporting this user?&lt;/Text&gt;
+
+      {REPORT_REASONS.map((reason) =&gt; (
+        &lt;Pressable
+          key={reason.key}
+          style={[
+            styles.reasonButton,
+            selectedReason === reason.key && styles.reasonSelected,
+          ]}
+          onPress={() =&gt; setSelectedReason(reason.key)}
+        &gt;
+          &lt;Text style={[
+            styles.reasonText,
+            selectedReason === reason.key && styles.reasonTextSelected,
+          ]}&gt;
+            {reason.label}
+          &lt;/Text&gt;
+        &lt;/Pressable&gt;
+      ))}
+
+      &lt;TextInput
+        style={styles.detailsInput}
+        placeholder="Add details (optional)"
+        value={details}
+        onChangeText={setDetails}
+        multiline
+        maxLength={500}
+      /&gt;
+
+      &lt;Pressable
+        style={[styles.submitButton, submitting && styles.submitDisabled]}
+        onPress={handleSubmit}
+        disabled={submitting}
+      &gt;
+        &lt;Text style={styles.submitText}&gt;
+          {submitting ? 'Submitting...' : 'Submit Report'}
+        &lt;/Text&gt;
+      &lt;/Pressable&gt;
+    &lt;/View&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, padding: 20, backgroundColor: '#fff' },
+  title: { fontSize: 18, fontWeight: '700', marginBottom: 20, color: '#075E54' },
+  reasonButton: {
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    marginBottom: 10,
+  },
+  reasonSelected: { borderColor: '#075E54', backgroundColor: '#f0faf8' },
+  reasonText: { fontSize: 15, color: '#333' },
+  reasonTextSelected: { color: '#075E54', fontWeight: '600' },
+  detailsInput: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 10,
+    marginBottom: 20,
+    minHeight: 80,
+    textAlignVertical: 'top',
+    fontSize: 15,
+  },
+  submitButton: {
+    backgroundColor: '#075E54',
+    paddingVertical: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  submitDisabled: { opacity: 0.6 },
+  submitText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+});</code></pre>
+
+    <hr>
+
+    <!-- Section 9 -->
+    <h2>9. Block list screen in Settings</h2>
+
+    <p>Users need a way to see who they've blocked and unblock them. Add this to your Settings tab:</p>
+
+    <pre><code>import { useState, useEffect } from 'react';
+import { View, Text, FlatList, Pressable, Alert, StyleSheet } from 'react-native';
+import { doc, onSnapshot, getDoc } from 'firebase/firestore';
+import { auth, db } from './firebaseConfig';
+
+function BlockedUsersScreen() {
+  const [blockedProfiles, setBlockedProfiles] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const myUid = auth.currentUser.uid;
+
+    const unsub = onSnapshot(doc(db, 'users', myUid), async (snap) => {
+      const blockedUids = snap.data()?.blockedUsers || [];
+
+      // Fetch each blocked user's profile
+      const profiles = await Promise.all(
+        blockedUids.map(async (uid) => {
+          const profileSnap = await getDoc(doc(db, 'users', uid));
+          return profileSnap.exists()
+            ? { uid, ...profileSnap.data() }
+            : { uid, displayName: 'Deleted User' };
+        })
+      );
+
+      setBlockedProfiles(profiles);
+      setLoading(false);
+    });
+
+    return unsub;
+  }, []);
+
+  function confirmUnblock(targetUid, targetName) {
+    Alert.alert(
+      `Unblock ${targetName}?`,
+      'They will be able to send you messages and see your online status again.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Unblock', onPress: () => unblockUser(targetUid) },
+      ]
+    );
+  }
+
+  function renderItem({ item }) {
+    return (
+      &lt;View style={styles.row}&gt;
+        &lt;View style={styles.avatar}&gt;
+          &lt;Text style={styles.avatarText}&gt;
+            {item.displayName?.charAt(0)?.toUpperCase() || '?'}
+          &lt;/Text&gt;
+        &lt;/View&gt;
+        &lt;Text style={styles.name}&gt;{item.displayName}&lt;/Text&gt;
+        &lt;Pressable
+          style={styles.unblockButton}
+          onPress={() =&gt; confirmUnblock(item.uid, item.displayName)}
+        &gt;
+          &lt;Text style={styles.unblockText}&gt;Unblock&lt;/Text&gt;
+        &lt;/Pressable&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  if (loading) return &lt;Text style={styles.loading}&gt;Loading...&lt;/Text&gt;;
+
+  return (
+    &lt;View style={styles.container}&gt;
+      &lt;FlatList
+        data={blockedProfiles}
+        keyExtractor={(item) =&gt; item.uid}
+        renderItem={renderItem}
+        ListEmptyComponent={
+          &lt;Text style={styles.empty}&gt;You haven't blocked anyone.&lt;/Text&gt;
+        }
+      /&gt;
+    &lt;/View&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#fff' },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  avatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#075E54',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  avatarText: { color: '#fff', fontSize: 18, fontWeight: '600' },
+  name: { flex: 1, fontSize: 16, color: '#333' },
+  unblockButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#dc3545',
+  },
+  unblockText: { color: '#dc3545', fontSize: 14, fontWeight: '600' },
+  loading: { padding: 20, textAlign: 'center', color: '#999' },
+  empty: { padding: 40, textAlign: 'center', color: '#999', fontSize: 15 },
+});</code></pre>
+
+    <hr>
+
+    <!-- Section 10 -->
+    <h2>10. Combining block + report in one flow</h2>
+
+    <p>Like WhatsApp, offer to block after reporting — but don't force it:</p>
+
+    <pre><code>// After report is submitted successfully:
+Alert.alert(
+  'Report Submitted',
+  'Would you also like to block this user? They won\'t be able to message you.',
+  [
+    { text: 'No, just report', style: 'cancel', onPress: () => navigation.goBack() },
+    {
+      text: 'Block & Report',
+      style: 'destructive',
+      onPress: async () => {
+        await blockUser(reportedUser);
+        navigation.goBack();
+      },
+    },
+  ]
+);</code></pre>
+
+    <hr>
+
+    <!-- Section 11 -->
+    <h2>11. Where to add the "Block" and "Report" buttons</h2>
+
+    <p>Add these actions in three places (same as WhatsApp):</p>
+
+    <table style="width:100%;border-collapse:collapse;">
+      <thead>
+        <tr style="border-bottom:2px solid #e0e0e0;">
+          <th style="text-align:left;padding:8px;">Location</th>
+          <th style="text-align:left;padding:8px;">Action</th>
+          <th style="text-align:left;padding:8px;">How to access</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid #f0f0f0;">
+          <td style="padding:8px;">Chat header menu (⋮)</td>
+          <td style="padding:8px;">Block + Report</td>
+          <td style="padding:8px;">Three-dot menu in the message thread</td>
+        </tr>
+        <tr style="border-bottom:1px solid #f0f0f0;">
+          <td style="padding:8px;">Contact profile screen</td>
+          <td style="padding:8px;">Block + Report</td>
+          <td style="padding:8px;">Scroll to bottom of profile, red buttons</td>
+        </tr>
+        <tr style="border-bottom:1px solid #f0f0f0;">
+          <td style="padding:8px;">Long-press a message</td>
+          <td style="padding:8px;">Report this message</td>
+          <td style="padding:8px;">Context menu on the specific message</td>
+        </tr>
+        <tr>
+          <td style="padding:8px;">Settings → Blocked contacts</td>
+          <td style="padding:8px;">View list, unblock</td>
+          <td style="padding:8px;">Settings tab</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <hr>
+
+    <!-- Section 12 -->
+    <h2>12. Security rules for the reports collection</h2>
+
+    <p>Users can create reports but should never read or modify other people's reports:</p>
+
+    <pre><code>// firestore.rules (add to existing rules)
+match /reports/{reportId} {
+  // Anyone logged in can create a report
+  allow create: if request.auth != null
+    && request.resource.data.reportedBy == request.auth.uid
+    && request.resource.data.status == 'pending'
+    && request.resource.data.reason in ['spam', 'harassment', 'hate', 'inappropriate', 'other'];
+
+  // Only admins can read or update reports (you'll set up admin in the next lesson)
+  allow read, update: if false; // locked down for now
+  allow delete: if false;       // reports are never deleted
+}</code></pre>
+
+    <p>Key points:</p>
+    <ul>
+      <li><code>reportedBy</code> must match the current user — can't file reports pretending to be someone else</li>
+      <li><code>status</code> must be <code>'pending'</code> on creation — users can't mark their own reports as "actioned"</li>
+      <li><code>reason</code> must be one of the allowed values — prevents garbage data</li>
+      <li>Reports are <strong>write-only</strong> for regular users — they can't see other people's reports or delete their own</li>
+    </ul>
+
+    <hr>
+
+    <!-- Section 13 - Full App.js -->
+    <h2>13. Full runnable example — Block &amp; Report integrated into a chat screen</h2>
+
+    <p>Copy this into your <code>App.js</code> to see blocking and reporting in action. This shows the message thread with a header menu containing Block and Report:</p>
+
+    <pre><code>import { useState, useEffect, useCallback } from 'react';
+import {
+  View, Text, FlatList, TextInput, Pressable, Alert,
+  KeyboardAvoidingView, Platform, Modal, StyleSheet
+} from 'react-native';
+import { initializeApp } from 'firebase/app';
+import {
+  getFirestore, collection, doc, query, orderBy, onSnapshot,
+  addDoc, updateDoc, arrayUnion, arrayRemove, serverTimestamp
+} from 'firebase/firestore';
+import { getAuth } from 'firebase/auth';
+
+// Replace with your Firebase config
+const app = initializeApp({ /* your config */ });
+const db = getFirestore(app);
+const auth = getAuth(app);
+
+// ─── Block & Report Functions ───────────────────────────────
+async function blockUser(targetUid) {
+  const myUid = auth.currentUser.uid;
+  await updateDoc(doc(db, 'users', myUid), {
+    blockedUsers: arrayUnion(targetUid),
+  });
+}
+
+async function unblockUser(targetUid) {
+  const myUid = auth.currentUser.uid;
+  await updateDoc(doc(db, 'users', myUid), {
+    blockedUsers: arrayRemove(targetUid),
+  });
+}
+
+async function reportUser({ reportedUser, chatId, messageId, messageText, reason, details }) {
+  await addDoc(collection(db, 'reports'), {
+    reportedBy: auth.currentUser.uid,
+    reportedUser,
+    chatId: chatId || null,
+    messageId: messageId || null,
+    messageText: messageText || null,
+    reason,
+    details: details || '',
+    status: 'pending',
+    createdAt: serverTimestamp(),
+  });
+}
+
+// ─── Report Reasons ─────────────────────────────────────────
+const REPORT_REASONS = [
+  { key: 'spam', label: 'Spam or advertising' },
+  { key: 'harassment', label: 'Harassment or bullying' },
+  { key: 'hate', label: 'Hate speech' },
+  { key: 'inappropriate', label: 'Inappropriate content' },
+  { key: 'other', label: 'Other' },
+];
+
+// ─── Main Chat Screen ───────────────────────────────────────
+export default function App() {
+  // In a real app, these come from navigation route params
+  const chatId = 'chat_demo123';
+  const otherUserId = 'rahul456';
+  const otherUserName = 'Rahul Kumar';
+
+  const [messages, setMessages] = useState([]);
+  const [text, setText] = useState('');
+  const [blockedUsers, setBlockedUsers] = useState([]);
+  const [menuVisible, setMenuVisible] = useState(false);
+  const [reportModalVisible, setReportModalVisible] = useState(false);
+  const [selectedReason, setSelectedReason] = useState(null);
+  const [reportDetails, setReportDetails] = useState('');
+
+  const myUid = auth.currentUser?.uid || 'priya123';
+  const isBlocked = blockedUsers.includes(otherUserId);
+
+  // Listen to block list
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, 'users', myUid), (snap) => {
+      setBlockedUsers(snap.data()?.blockedUsers || []);
+    });
+    return unsub;
+  }, [myUid]);
+
+  // Listen to messages
+  useEffect(() => {
+    const messagesQuery = query(
+      collection(db, 'chats', chatId, 'messages'),
+      orderBy('createdAt', 'asc')
+    );
+    const unsub = onSnapshot(messagesQuery, (snapshot) => {
+      const msgs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      setMessages(msgs);
+    });
+    return unsub;
+  }, [chatId]);
+
+  // Filter messages from blocked users
+  const visibleMessages = messages.filter(msg => !blockedUsers.includes(msg.senderId));
+
+  // Send message
+  async function handleSend() {
+    if (!text.trim()) return;
+    const messageText = text.trim();
+    setText('');
+    await addDoc(collection(db, 'chats', chatId, 'messages'), {
+      text: messageText,
+      senderId: myUid,
+      createdAt: serverTimestamp(),
+    });
+  }
+
+  // Block confirmation
+  function handleBlock() {
+    setMenuVisible(false);
+    Alert.alert(
+      `Block ${otherUserName}?`,
+      'Blocked contacts can no longer send you messages or see your online status.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Block', style: 'destructive', onPress: () => blockUser(otherUserId) },
+      ]
+    );
+  }
+
+  // Unblock confirmation
+  function handleUnblock() {
+    Alert.alert(
+      `Unblock ${otherUserName}?`,
+      'They will be able to send you messages again.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Unblock', onPress: () => unblockUser(otherUserId) },
+      ]
+    );
+  }
+
+  // Report submission
+  async function handleReportSubmit() {
+    if (!selectedReason) {
+      Alert.alert('Select a reason', 'Please choose why you are reporting.');
+      return;
+    }
+    try {
+      await reportUser({
+        reportedUser: otherUserId,
+        chatId,
+        reason: selectedReason,
+        details: reportDetails,
+      });
+      setReportModalVisible(false);
+      setSelectedReason(null);
+      setReportDetails('');
+
+      Alert.alert('Report Submitted', 'Would you also like to block this user?', [
+        { text: 'No thanks', style: 'cancel' },
+        { text: 'Block', style: 'destructive', onPress: () => blockUser(otherUserId) },
+      ]);
+    } catch (err) {
+      Alert.alert('Error', 'Could not submit report. Try again.');
+    }
+  }
+
+  // Render a message bubble
+  const renderMessage = useCallback(({ item }) => {
+    const isMine = item.senderId === myUid;
+    return (
+      &lt;View style={[styles.bubble, isMine ? styles.myBubble : styles.theirBubble]}&gt;
+        &lt;Text style={styles.messageText}&gt;{item.text}&lt;/Text&gt;
+      &lt;/View&gt;
+    );
+  }, [myUid]);
+
+  return (
+    &lt;KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    &gt;
+      {/* Header with menu */}
+      &lt;View style={styles.header}&gt;
+        &lt;Text style={styles.headerName}&gt;{otherUserName}&lt;/Text&gt;
+        &lt;Pressable onPress={() =&gt; setMenuVisible(true)} style={styles.menuButton}&gt;
+          &lt;Text style={styles.menuDots}&gt;⋮&lt;/Text&gt;
+        &lt;/Pressable&gt;
+      &lt;/View&gt;
+
+      {/* Blocked banner */}
+      {isBlocked && (
+        &lt;View style={styles.blockedBanner}&gt;
+          &lt;Text style={styles.blockedText}&gt;
+            You blocked this contact.{' '}
+          &lt;/Text&gt;
+          &lt;Pressable onPress={handleUnblock}&gt;
+            &lt;Text style={styles.unblockLink}&gt;Unblock&lt;/Text&gt;
+          &lt;/Pressable&gt;
+        &lt;/View&gt;
+      )}
+
+      {/* Messages */}
+      &lt;FlatList
+        data={visibleMessages}
+        keyExtractor={(item) =&gt; item.id}
+        renderItem={renderMessage}
+        contentContainerStyle={styles.messagesList}
+        inverted={false}
+      /&gt;
+
+      {/* Input bar (hidden if blocked) */}
+      {!isBlocked && (
+        &lt;View style={styles.inputBar}&gt;
+          &lt;TextInput
+            style={styles.input}
+            value={text}
+            onChangeText={setText}
+            placeholder="Type a message"
+          /&gt;
+          &lt;Pressable style={styles.sendButton} onPress={handleSend}&gt;
+            &lt;Text style={styles.sendText}&gt;Send&lt;/Text&gt;
+          &lt;/Pressable&gt;
+        &lt;/View&gt;
+      )}
+
+      {/* Menu dropdown */}
+      &lt;Modal visible={menuVisible} transparent animationType="fade"&gt;
+        &lt;Pressable style={styles.menuOverlay} onPress={() =&gt; setMenuVisible(false)}&gt;
+          &lt;View style={styles.menuDropdown}&gt;
+            &lt;Pressable style={styles.menuItem} onPress={handleBlock}&gt;
+              &lt;Text style={styles.menuItemText}&gt;Block {otherUserName}&lt;/Text&gt;
+            &lt;/Pressable&gt;
+            &lt;Pressable style={styles.menuItem} onPress={() =&gt; {
+              setMenuVisible(false);
+              setReportModalVisible(true);
+            }}&gt;
+              &lt;Text style={[styles.menuItemText, { color: '#dc3545' }]}&gt;Report&lt;/Text&gt;
+            &lt;/Pressable&gt;
+          &lt;/View&gt;
+        &lt;/Pressable&gt;
+      &lt;/Modal&gt;
+
+      {/* Report modal */}
+      &lt;Modal visible={reportModalVisible} animationType="slide"&gt;
+        &lt;View style={styles.reportContainer}&gt;
+          &lt;Text style={styles.reportTitle}&gt;Report {otherUserName}&lt;/Text&gt;
+          {REPORT_REASONS.map((reason) =&gt; (
+            &lt;Pressable
+              key={reason.key}
+              style={[
+                styles.reasonButton,
+                selectedReason === reason.key && styles.reasonSelected,
+              ]}
+              onPress={() =&gt; setSelectedReason(reason.key)}
+            &gt;
+              &lt;Text style={[
+                styles.reasonText,
+                selectedReason === reason.key && styles.reasonTextSelected,
+              ]}&gt;
+                {reason.label}
+              &lt;/Text&gt;
+            &lt;/Pressable&gt;
+          ))}
+          &lt;TextInput
+            style={styles.detailsInput}
+            placeholder="Add details (optional)"
+            value={reportDetails}
+            onChangeText={setReportDetails}
+            multiline
+            maxLength={500}
+          /&gt;
+          &lt;View style={styles.reportButtons}&gt;
+            &lt;Pressable
+              style={styles.cancelButton}
+              onPress={() =&gt; { setReportModalVisible(false); setSelectedReason(null); }}
+            &gt;
+              &lt;Text style={styles.cancelText}&gt;Cancel&lt;/Text&gt;
+            &lt;/Pressable&gt;
+            &lt;Pressable style={styles.submitButton} onPress={handleReportSubmit}&gt;
+              &lt;Text style={styles.submitText}&gt;Submit Report&lt;/Text&gt;
+            &lt;/Pressable&gt;
+          &lt;/View&gt;
+        &lt;/View&gt;
+      &lt;/Modal&gt;
+    &lt;/KeyboardAvoidingView&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#ECE5DD' },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#075E54',
+    paddingTop: Platform.OS === 'ios' ? 50 : 30,
+    paddingBottom: 12,
+    paddingHorizontal: 16,
+  },
+  headerName: { flex: 1, color: '#fff', fontSize: 18, fontWeight: '600' },
+  menuButton: { padding: 8 },
+  menuDots: { color: '#fff', fontSize: 22, fontWeight: 'bold' },
+  blockedBanner: {
+    flexDirection: 'row',
+    backgroundColor: '#fff3cd',
+    padding: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  blockedText: { color: '#856404', fontSize: 14 },
+  unblockLink: { color: '#075E54', fontWeight: '700', fontSize: 14 },
+  messagesList: { padding: 10 },
+  bubble: {
+    maxWidth: '75%',
+    padding: 10,
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  myBubble: { backgroundColor: '#DCF8C6', alignSelf: 'flex-end' },
+  theirBubble: { backgroundColor: '#fff', alignSelf: 'flex-start' },
+  messageText: { fontSize: 15, color: '#333' },
+  inputBar: {
+    flexDirection: 'row',
+    padding: 8,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+  },
+  input: {
+    flex: 1,
+    backgroundColor: '#f5f5f5',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    fontSize: 15,
+  },
+  sendButton: {
+    marginLeft: 8,
+    backgroundColor: '#25D366',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+  },
+  sendText: { color: '#fff', fontWeight: '600' },
+  menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' },
+  menuDropdown: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 90 : 70,
+    right: 16,
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    overflow: 'hidden',
+  },
+  menuItem: { paddingVertical: 14, paddingHorizontal: 20 },
+  menuItemText: { fontSize: 15, color: '#333' },
+  reportContainer: { flex: 1, padding: 24, paddingTop: 60, backgroundColor: '#fff' },
+  reportTitle: { fontSize: 20, fontWeight: '700', color: '#075E54', marginBottom: 24 },
+  reasonButton: {
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    marginBottom: 10,
+  },
+  reasonSelected: { borderColor: '#075E54', backgroundColor: '#f0faf8' },
+  reasonText: { fontSize: 15, color: '#333' },
+  reasonTextSelected: { color: '#075E54', fontWeight: '600' },
+  detailsInput: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 10,
+    marginBottom: 20,
+    minHeight: 80,
+    textAlignVertical: 'top',
+    fontSize: 15,
+  },
+  reportButtons: { flexDirection: 'row', justifyContent: 'space-between' },
+  cancelButton: {
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ddd',
+  },
+  cancelText: { fontSize: 15, color: '#666' },
+  submitButton: {
+    backgroundColor: '#dc3545',
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+  },
+  submitText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+});</code></pre>
+
+    <hr>
+
+    <!-- Section 14 -->
+    <h2>14. What the stores check</h2>
+
+    <p>When Apple or Google reviews your messaging app, they verify:</p>
+
+    <table style="width:100%;border-collapse:collapse;">
+      <thead>
+        <tr style="border-bottom:2px solid #e0e0e0;">
+          <th style="text-align:left;padding:8px;">Requirement</th>
+          <th style="text-align:left;padding:8px;">Apple (Guideline 1.2)</th>
+          <th style="text-align:left;padding:8px;">Google (UGC Policy)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid #f0f0f0;">
+          <td style="padding:8px;">Block users</td>
+          <td style="padding:8px;">Required ✅</td>
+          <td style="padding:8px;">Required ✅</td>
+        </tr>
+        <tr style="border-bottom:1px solid #f0f0f0;">
+          <td style="padding:8px;">Report users/content</td>
+          <td style="padding:8px;">Required ✅</td>
+          <td style="padding:8px;">Required ✅</td>
+        </tr>
+        <tr style="border-bottom:1px solid #f0f0f0;">
+          <td style="padding:8px;">Filter objectionable content</td>
+          <td style="padding:8px;">Required ✅</td>
+          <td style="padding:8px;">Required ✅</td>
+        </tr>
+        <tr>
+          <td style="padding:8px;">Review mechanism for reports</td>
+          <td style="padding:8px;">Must describe process</td>
+          <td style="padding:8px;">Must describe process</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p><strong>Apple will ask:</strong> "How does your app handle reports?" Your answer: "Reports are stored in our database with a category and reviewed by the team. Users with multiple confirmed reports are banned." (Lesson 2 builds this system.)</p>
+
+    <hr>
+
+    <!-- Quiz -->
+    <h2>Quiz</h2>
+    <div id="compliance-lesson-0001-quiz"></div>
+
+    <hr>
+
+    <!-- Nav -->
+    <div class="nav-links">
+      <a href="./README.html">&larr; Module 7 Home</a>
+      <a href="./0002-content-moderation.html">Lesson 2: Content Moderation &rarr;</a>
+    </div>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script>
+    createQuiz('compliance-lesson-0001-quiz', [
+      {
+        question: 'Why is block/report the #1 rejection reason for messaging apps?',
+        options: [
+          'Apple and Google require it for all apps with user-generated content',
+          'It makes the app faster',
+          'It reduces Firebase costs',
+          'It is needed for push notifications to work'
+        ],
+        answer: 0
+      },
+      {
+        question: 'Where should you store a user\'s block list in Firestore?',
+        options: [
+          'In a separate /blocks collection with one document per block',
+          'As a blockedUsers array on the user\'s own /users/{uid} document',
+          'In localStorage on the device',
+          'In Firebase Auth custom claims'
+        ],
+        answer: 1
+      },
+      {
+        question: 'Why do you need BOTH client-side filtering AND security rules for blocking?',
+        options: [
+          'Client-side makes the UI responsive; security rules prevent bypassing the app with direct Firestore writes',
+          'Client-side is for Android and security rules are for iOS',
+          'You don\'t — client-side filtering alone is enough',
+          'Security rules are faster than client-side code'
+        ],
+        answer: 0
+      },
+      {
+        question: 'What should happen when a user submits a report?',
+        options: [
+          'The reported user is immediately banned',
+          'A document is created in a /reports collection with status "pending" for admin review',
+          'The message is deleted from the chat',
+          'A push notification is sent to the reported user'
+        ],
+        answer: 1
+      },
+      {
+        question: 'After submitting a report, what should you offer the user?',
+        options: [
+          'Ask if they want to delete their account',
+          'Ask if they also want to block the reported user',
+          'Force them to block the reported user',
+          'Show them other users\' reports'
+        ],
+        answer: 1
+      }
+    ]);
+  </script>
+</body>
+</html>

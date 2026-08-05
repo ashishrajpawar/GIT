@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RN Lesson 6: useEffect — JS Learn</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">Module 2: React Native</a>
+      <span class="sep">›</span>
+      <span class="current">Lesson 6: useEffect</span>
+    </nav>
+
+    <!-- Header -->
+    <span class="badge">React Native · Lesson 6</span>
+    <h1 style="margin-top:0.5rem;">useEffect</h1>
+    <div class="lesson-meta">
+      <span>Side effects · Lifecycle · Cleanup</span>
+      <span>~30 min</span>
+      <span>Hands-on</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for your WhatsApp clone</div>
+      <p>When a user opens a chat screen your app needs to immediately fetch messages from Firebase. When they leave the screen, you need to stop listening for new messages so you're not wasting battery and data. When the chat list is open, you need a live listener that updates the list the instant a new message arrives. All of this — loading data when a screen opens, subscribing to live updates, cleaning up when leaving — is what <code>useEffect</code> handles.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 1 -->
+    <h2>1. What is a side effect?</h2>
+
+    <p>A React Native component's job is to take some data and return UI. That's it. But real apps need to do things <em>beyond</em> just rendering — fetch data from a server, set up a timer, subscribe to Firebase updates, update the navigation title. These are called <strong>side effects</strong> because they reach outside the component into the outside world.</p>
+
+    <p>You cannot do these things directly inside the component function body — that code runs on every render, which would mean fetching data on every keystroke, creating new Firebase subscriptions repeatedly, and leaking memory. <code>useEffect</code> gives you a controlled place to run side effects.</p>
+
+    <pre><code>// WRONG — fetching data directly in the component body
+export default function ChatScreen() {
+  // This runs on EVERY render — including every keystroke in the input!
+  const messages = fetchMessagesFromFirebase();  // runs constantly
+
+  return &lt;View&gt;...&lt;/View&gt;;
+}
+
+// CORRECT — useEffect runs only when you tell it to
+export default function ChatScreen() {
+  const [messages, setMessages] = useState([]);
+
+  useEffect(() => {
+    // This only runs once when the screen opens
+    fetchMessagesFromFirebase().then(msgs => setMessages(msgs));
+  }, []);  // empty array = run once on mount
+
+  return &lt;View&gt;...&lt;/View&gt;;
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 2 -->
+    <h2>2. useEffect syntax — the three forms</h2>
+
+    <p><code>useEffect</code> takes two arguments: a function (the effect), and a dependency array that controls <em>when</em> it runs.</p>
+
+    <pre><code>import { useEffect } from 'react';
+
+// ── Form 1: No dependency array — runs after EVERY render ─────────────────
+useEffect(() => {
+  console.log('I run after every single render');
+});
+// Avoid this — usually not what you want
+
+// ── Form 2: Empty array [] — runs ONCE when component mounts ──────────────
+useEffect(() => {
+  console.log('I run once when the screen opens');
+}, []);
+// Use for: initial data fetch, setting up subscriptions
+
+// ── Form 3: Array with values — runs when those values change ─────────────
+useEffect(() => {
+  console.log('chatId changed — fetch new messages');
+}, [chatId]);
+// Runs once on mount AND again whenever chatId changes</code></pre>
+
+    <div class="callout">
+      <div class="callout-title">The dependency array — the most important thing to get right</div>
+      <p>The dependency array tells React Native <em>when</em> to re-run the effect. Empty array <code>[]</code> means "only on mount". An array with values like <code>[chatId, userId]</code> means "on mount, and any time chatId or userId changes". No array at all means "every render" — almost never what you want.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 3 -->
+    <h2>3. Loading data when a screen opens</h2>
+
+    <p>The most common use of <code>useEffect</code> — fetch data from Firebase (or any API) when the screen first appears.</p>
+
+    <pre><code>import { useState, useEffect } from 'react';
+import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
+
+// Simulated Firebase fetch
+function fetchMessages(chatId) {
+  return new Promise(resolve => {
+    setTimeout(() => {
+      resolve([
+        { id: 'm1', sender: 'Priya',  text: 'Hey!',         time: '10:01' },
+        { id: 'm2', sender: 'Ashish', text: 'Hi! All good?', time: '10:02' },
+      ]);
+    }, 1000);  // simulate 1 second network delay
+  });
+}
+
+export default function ChatScreen({ chatId = 'chat-001' }) {
+  const [messages, setMessages]   = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError]         = useState(null);
+
+  useEffect(() => {
+    async function loadMessages() {
+      try {
+        setIsLoading(true);
+        setError(null);
+        const msgs = await fetchMessages(chatId);
+        setMessages(msgs);
+      } catch (err) {
+        setError('Could not load messages. Check your connection.');
+        console.error('loadMessages error:', err);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+
+    loadMessages();
+  }, [chatId]);  // re-fetch if the user switches to a different chat
+
+  // ── Render loading state ──────────────────────────────────────────────────
+  if (isLoading) {
+    return (
+      &lt;View style={styles.centre}&gt;
+        &lt;ActivityIndicator size="large" color="#075E54" /&gt;
+        &lt;Text style={styles.loadingText}&gt;Loading messages...&lt;/Text&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  // ── Render error state ────────────────────────────────────────────────────
+  if (error) {
+    return (
+      &lt;View style={styles.centre}&gt;
+        &lt;Text style={styles.errorText}&gt;{error}&lt;/Text&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  // ── Render messages ───────────────────────────────────────────────────────
+  return (
+    &lt;View style={styles.container}&gt;
+      {messages.map(msg =&gt; (
+        &lt;Text key={msg.id} style={styles.message}&gt;
+          {msg.sender}: {msg.text}
+        &lt;/Text&gt;
+      ))}
+    &lt;/View&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  container:   { flex: 1, padding: 16, backgroundColor: '#ECE5DD' },
+  centre:      { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  loadingText: { marginTop: 12, color: '#667781', fontSize: 14 },
+  errorText:   { color: '#e53e3e', fontSize: 15, textAlign: 'center', paddingHorizontal: 24 },
+  message:     { fontSize: 15, marginBottom: 8 },
+});</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">useEffect cannot be async directly — use an inner function</div>
+      <p>You cannot write <code>useEffect(async () => { ... })</code> — React Native expects the effect function to return either nothing or a cleanup function, not a Promise. The pattern is to define an <code>async function</code> <em>inside</em> the effect and call it immediately, as shown above. You'll write this pattern on every screen that loads data.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 4 -->
+    <h2>4. Cleanup — stopping effects when a screen closes</h2>
+
+    <p>Some effects set things up that need to be torn down — timers, Firebase listeners, event subscriptions. If you don't clean up, those effects keep running after the screen is gone, wasting resources and causing bugs (updating state on unmounted components).</p>
+
+    <p>Return a function from your effect — React Native calls it when the component unmounts or before re-running the effect.</p>
+
+    <pre><code>useEffect(() => {
+  // Set up the effect
+  const timer = setInterval(() => {
+    console.log('checking for new messages...');
+  }, 5000);
+
+  // Return a cleanup function
+  return () => {
+    clearInterval(timer);  // runs when component unmounts
+    console.log('timer cleared');
+  };
+}, []);  // set up once, clean up once</code></pre>
+
+    <h3>Firebase real-time listener with cleanup</h3>
+
+    <p>This is the exact pattern you'll use in Module 3 when connecting to Firestore:</p>
+
+    <pre><code>useEffect(() => {
+  // onSnapshot returns an unsubscribe function
+  const unsubscribe = firebase
+    .firestore()
+    .collection('chats')
+    .doc(chatId)
+    .collection('messages')
+    .orderBy('timestamp')
+    .onSnapshot(snapshot => {
+      const msgs = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
+      setMessages(msgs);
+    });
+
+  // Clean up — stop listening when the screen closes
+  return () => unsubscribe();
+}, [chatId]);</code></pre>
+
+    <div class="callout success">
+      <div class="callout-title">This is how WhatsApp's live updates work</div>
+      <p>When you open a chat, a Firestore listener is set up — any new message written to that chat document instantly triggers your callback and updates the screen. When you close the chat, the cleanup function calls <code>unsubscribe()</code> and the listener stops. Your battery and data thank you.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 5 -->
+    <h2>5. Running effects when values change</h2>
+
+    <p>Put a value in the dependency array and the effect re-runs every time that value changes. This is how you re-fetch data when the user navigates to a different chat.</p>
+
+    <pre><code>// Fetch messages for whichever chat is currently open
+useEffect(() => {
+  if (!chatId) return;   // guard against undefined on first render
+
+  async function load() {
+    setIsLoading(true);
+    const msgs = await fetchMessages(chatId);
+    setMessages(msgs);
+    setIsLoading(false);
+  }
+
+  load();
+}, [chatId]);  // re-runs every time chatId changes
+
+// User opens chat-001 → effect runs, loads chat-001 messages
+// User navigates to chat-002 → chatId changes → effect re-runs, loads chat-002 messages</code></pre>
+
+    <h3>Multiple dependencies</h3>
+
+    <pre><code>// Re-run if either userId or filter changes
+useEffect(() => {
+  loadFilteredMessages(userId, filter);
+}, [userId, filter]);</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">Include everything the effect uses in the dependency array</div>
+      <p>If your effect reads a variable (like <code>chatId</code>), put it in the dependency array. If you don't, the effect uses the stale value from the first render — a subtle bug where your chat screen shows old messages when the user switches chats. React's ESLint plugin (<code>eslint-plugin-react-hooks</code>) will warn you if you miss a dependency.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 6 -->
+    <h2>6. Common useEffect patterns for your WhatsApp screens</h2>
+
+    <pre><code>// ── Pattern 1: Load data once on mount ───────────────────────────────────
+useEffect(() => {
+  async function loadChats() {
+    setIsLoading(true);
+    const data = await fetchUserChats(userId);
+    setChats(data);
+    setIsLoading(false);
+  }
+  loadChats();
+}, []);
+
+
+// ── Pattern 2: Live Firebase listener with cleanup ────────────────────────
+useEffect(() => {
+  const unsub = db.collection('messages')
+    .where('chatId', '==', chatId)
+    .onSnapshot(snap => {
+      setMessages(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  return () => unsub();
+}, [chatId]);
+
+
+// ── Pattern 3: Update screen title when data loads ────────────────────────
+useEffect(() => {
+  if (chatPartner) {
+    navigation.setOptions({ title: chatPartner.name });
+  }
+}, [chatPartner]);
+
+
+// ── Pattern 4: Auto-scroll to bottom when messages change ─────────────────
+useEffect(() => {
+  if (messages.length > 0) {
+    scrollRef.current?.scrollToEnd({ animated: true });
+  }
+}, [messages]);
+
+
+// ── Pattern 5: Search filter — re-run when query changes ─────────────────
+useEffect(() => {
+  if (!searchQuery.trim()) {
+    setFilteredContacts(contacts);
+    return;
+  }
+  const results = contacts.filter(c =>
+    c.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+  setFilteredContacts(results);
+}, [searchQuery, contacts]);</code></pre>
+
+    <hr>
+
+    <!-- Section 7: Full example -->
+    <h2>7. Full example — chat list with live loading and search</h2>
+
+    <p>This simulates the real WhatsApp chat list screen — it loads chats on mount with a spinner, then lets you search through them live as you type. Replace your <code>App.js</code> and run it.</p>
+
+    <pre><code>import { useState, useEffect } from 'react';
+import {
+  View, Text, TextInput, FlatList,
+  ActivityIndicator, Pressable, StyleSheet
+} from 'react-native';
+
+// ── Simulated Firebase fetch ───────────────────────────────────────────────
+function fetchChats() {
+  return new Promise(resolve => {
+    setTimeout(() => {
+      resolve([
+        { id: '1', name: 'Priya Sharma',  preview: 'Perfect, see you then!',       time: '10:32', unread: 2 },
+        { id: '2', name: 'Rahul Mehta',   preview: 'Check out this article',        time: '09:15', unread: 0 },
+        { id: '3', name: 'Family Group',  preview: 'Mom: Dinner at 7, don\'t be late', time: 'Yesterday', unread: 5 },
+        { id: '4', name: 'Work Team',     preview: 'Meeting moved to 3pm',          time: 'Yesterday', unread: 0 },
+        { id: '5', name: 'Anil Kumar',    preview: 'Sounds good 👍',               time: 'Monday',    unread: 0 },
+        { id: '6', name: 'Sara Singh',    preview: 'Haha yes exactly!',             time: 'Monday',    unread: 1 },
+      ]);
+    }, 1200);
+  });
+}
+
+// ── Chat row component ─────────────────────────────────────────────────────
+function ChatRow({ chat, onPress }) {
+  return (
+    &lt;Pressable
+      style={({ pressed }) => [styles.row, pressed &amp;&amp; styles.rowPressed]}
+      onPress={() => onPress(chat)}
+    &gt;
+      &lt;View style={styles.avatar}&gt;
+        &lt;Text style={styles.avatarLetter}&gt;
+          {chat.name.charAt(0).toUpperCase()}
+        &lt;/Text&gt;
+      &lt;/View&gt;
+      &lt;View style={styles.middle}&gt;
+        &lt;Text style={styles.name} numberOfLines={1}&gt;{chat.name}&lt;/Text&gt;
+        &lt;Text style={styles.preview} numberOfLines={1}&gt;{chat.preview}&lt;/Text&gt;
+      &lt;/View&gt;
+      &lt;View style={styles.right}&gt;
+        &lt;Text style={styles.time}&gt;{chat.time}&lt;/Text&gt;
+        {chat.unread > 0 &amp;&amp; (
+          &lt;View style={styles.badge}&gt;
+            &lt;Text style={styles.badgeText}&gt;{chat.unread}&lt;/Text&gt;
+          &lt;/View&gt;
+        )}
+      &lt;/View&gt;
+    &lt;/Pressable&gt;
+  );
+}
+
+// ── Main screen ────────────────────────────────────────────────────────────
+export default function App() {
+  const [chats, setChats]           = useState([]);
+  const [isLoading, setIsLoading]   = useState(true);
+  const [error, setError]           = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // ── Effect 1: Load chats on mount ────────────────────────────────────────
+  useEffect(() => {
+    async function loadChats() {
+      try {
+        setIsLoading(true);
+        setError(null);
+        const data = await fetchChats();
+        setChats(data);
+      } catch (err) {
+        setError('Could not load chats. Pull down to retry.');
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    loadChats();
+  }, []);  // empty array — run once on mount
+
+  // ── Derived: filter chats based on search query ───────────────────────────
+  const filteredChats = chats.filter(c =>
+    c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    c.preview.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
+  function handleChatPress(chat) {
+    // In Lesson 8 (Navigation) this will navigate to the message screen
+    console.log('Opening:', chat.name);
+  }
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+  return (
+    &lt;View style={styles.screen}&gt;
+
+      {/* Header */}
+      &lt;View style={styles.header}&gt;
+        &lt;Text style={styles.headerTitle}&gt;WhatsApp&lt;/Text&gt;
+      &lt;/View&gt;
+
+      {/* Search bar */}
+      &lt;View style={styles.searchBar}&gt;
+        &lt;TextInput
+          style={styles.searchInput}
+          placeholder="Search or start new chat"
+          placeholderTextColor="#667781"
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+        /&gt;
+      &lt;/View&gt;
+
+      {/* Loading state */}
+      {isLoading &amp;&amp; (
+        &lt;View style={styles.centre}&gt;
+          &lt;ActivityIndicator size="large" color="#075E54" /&gt;
+          &lt;Text style={styles.loadingText}&gt;Loading chats...&lt;/Text&gt;
+        &lt;/View&gt;
+      )}
+
+      {/* Error state */}
+      {error &amp;&amp; !isLoading &amp;&amp; (
+        &lt;View style={styles.centre}&gt;
+          &lt;Text style={styles.errorText}&gt;{error}&lt;/Text&gt;
+        &lt;/View&gt;
+      )}
+
+      {/* Empty search result */}
+      {!isLoading &amp;&amp; !error &amp;&amp; filteredChats.length === 0 &amp;&amp; (
+        &lt;View style={styles.centre}&gt;
+          &lt;Text style={styles.emptyText}&gt;No chats match "{searchQuery}"&lt;/Text&gt;
+        &lt;/View&gt;
+      )}
+
+      {/* Chat list */}
+      {!isLoading &amp;&amp; !error &amp;&amp; (
+        &lt;FlatList
+          data={filteredChats}
+          keyExtractor={item =&gt; item.id}
+          renderItem={({ item }) =&gt; (
+            &lt;ChatRow chat={item} onPress={handleChatPress} /&gt;
+          )}
+        /&gt;
+      )}
+
+    &lt;/View&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  screen:      { flex: 1, backgroundColor: '#fff' },
+
+  header:      { backgroundColor: '#075E54', paddingTop: 48, paddingBottom: 12, paddingHorizontal: 16 },
+  headerTitle: { color: '#fff', fontSize: 20, fontWeight: '700' },
+
+  searchBar:   { backgroundColor: '#f0f2f5', paddingHorizontal: 12, paddingVertical: 8 },
+  searchInput: { backgroundColor: '#fff', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 8, fontSize: 15, color: '#111' },
+
+  centre:      { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  loadingText: { marginTop: 12, color: '#667781', fontSize: 14 },
+  errorText:   { color: '#e53e3e', fontSize: 15, textAlign: 'center', paddingHorizontal: 24 },
+  emptyText:   { color: '#667781', fontSize: 15 },
+
+  row:         { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f0f2f5' },
+  rowPressed:  { backgroundColor: '#f5f5f5' },
+
+  avatar:       { width: 52, height: 52, borderRadius: 26, backgroundColor: '#075E54', alignItems: 'center', justifyContent: 'center' },
+  avatarLetter: { color: '#fff', fontSize: 22, fontWeight: '700' },
+
+  middle:      { flex: 1, marginLeft: 12, marginRight: 8 },
+  name:        { fontSize: 16, fontWeight: '600', color: '#111' },
+  preview:     { fontSize: 14, color: '#667781', marginTop: 2 },
+
+  right:       { alignItems: 'flex-end' },
+  time:        { fontSize: 12, color: '#667781' },
+  badge:       { backgroundColor: '#25D366', borderRadius: 10, minWidth: 20, height: 20, alignItems: 'center', justifyContent: 'center', marginTop: 4, paddingHorizontal: 5 },
+  badgeText:   { color: '#fff', fontSize: 11, fontWeight: '700' },
+});</code></pre>
+
+    <p>Run this. You'll see a 1.2 second loading spinner, then the full chat list appears. Type in the search bar — the list filters live as you type. This is exactly how the WhatsApp chat list screen works.</p>
+
+    <div class="callout success">
+      <div class="callout-title">Notice what this screen does with just two effects</div>
+      <ul>
+        <li><strong>Effect 1</strong> (empty array) — loads chats once when the screen opens, handles loading and error states</li>
+        <li><strong>Derived value</strong> — the filtered list recomputes instantly from state on every render, no effect needed</li>
+      </ul>
+      <p style="margin-bottom:0;">You also used <code>FlatList</code> here for the first time — you'll learn it fully in Lesson 7. It's the performant list component for long lists.</p>
+    </div>
+
+    <hr>
+
+    <!-- Quiz -->
+    <h2>Quick check — test yourself</h2>
+    <p>Five questions on what you just read.</p>
+
+    <div id="rn-lesson-0006-quiz"></div>
+
+    <hr>
+
+    <!-- Resources -->
+    <h2>Primary resources for this lesson</h2>
+    <ul>
+      <li><a href="https://react.dev/reference/react/useEffect" target="_blank" rel="noopener">useEffect — React docs</a></li>
+      <li><a href="https://react.dev/learn/synchronizing-with-effects" target="_blank" rel="noopener">Synchronising with effects — React docs</a></li>
+      <li><a href="https://react.dev/learn/you-might-not-need-an-effect" target="_blank" rel="noopener">You might not need an effect — React docs</a></li>
+    </ul>
+
+    <div class="ask-teacher">
+      <strong>Anything unclear? Ask your teacher.</strong>
+      The two things that trip people up most: forgetting the inner async function pattern (you can't make the effect itself async), and missing a dependency from the array. If either felt unclear, ask before moving on — every Firebase screen in Module 3 uses exactly these patterns.
+    </div>
+
+    <hr>
+
+    <!-- Lesson nav -->
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="./0005-usestate.html">← Lesson 5: useState</a>
+      <a href="./0007-flatlist.html">Lesson 7: FlatList →</a>
+    </nav>
+
+  </div><!-- .page-wrap -->
+
+  <script src="../../assets/quiz.js"></script>
+  <script>
+    createQuiz("rn-lesson-0006-quiz", [
+      {
+        question: "You want to fetch messages from Firebase exactly once when the chat screen opens. Which useEffect form is correct?",
+        options: [
+          "useEffect(() => { fetchMessages(); }); — no dependency array",
+          "useEffect(() => { fetchMessages(); }, [messages]); — depend on messages",
+          "useEffect(() => { fetchMessages(); }, []); — empty dependency array",
+          "useEffect(async () => { await fetchMessages(); }, []); — async effect"
+        ],
+        correct: 2,
+        explanation: "An empty dependency array [] tells React Native to run the effect only once — when the component mounts. No array runs on every render (too often). Depending on [messages] would create an infinite loop — fetch sets messages, which triggers the effect again, which fetches again. Option D is also wrong — useEffect cannot be async directly; use an inner async function instead."
+      },
+      {
+        question: "Your Firebase listener (onSnapshot) keeps running even after the user navigates away from the screen. What are you missing?",
+        options: [
+          "You need to call useEffect twice — once to start, once to stop",
+          "You need to return a cleanup function from useEffect that calls the unsubscribe function",
+          "Firebase listeners stop automatically when the component unmounts",
+          "You need to set the listener to null in a useState call"
+        ],
+        correct: 1,
+        explanation: "Return a cleanup function from useEffect: `return () => unsubscribe()`. React Native calls this function when the component unmounts (user leaves the screen) or before re-running the effect. Without it, the listener keeps firing, updates state on an unmounted component, and wastes battery and data."
+      },
+      {
+        question: "Why can't you write `useEffect(async () => { await fetchData(); }, [])`?",
+        options: [
+          "async/await is not supported inside hooks",
+          "useEffect expects its function to return either nothing or a cleanup function — an async function always returns a Promise, which React Native can't use as a cleanup function",
+          "You cannot use await without try/catch inside useEffect",
+          "Async effects only work without a dependency array"
+        ],
+        correct: 1,
+        explanation: "Making the effect function async means it returns a Promise. React Native expects either nothing or a cleanup function returned from useEffect — a Promise is neither. The fix is to define an inner async function and call it immediately: `useEffect(() => { async function load() { await fetchData(); } load(); }, [])`."
+      },
+      {
+        question: "You have `useEffect(() => { loadMessages(chatId); }, [chatId])`. What happens when the user switches from chat-001 to chat-002?",
+        options: [
+          "Nothing — the effect already ran and won't run again",
+          "The effect runs again because chatId is in the dependency array and its value changed",
+          "The component unmounts and remounts completely",
+          "An error is thrown because chatId changed"
+        ],
+        correct: 1,
+        explanation: "When a value in the dependency array changes, React Native re-runs the effect. chatId changed from 'chat-001' to 'chat-002', so the effect fires again and loadMessages runs with the new chatId. This is how you refresh data when the user navigates between chats without duplicating code."
+      },
+      {
+        question: "You want to filter a contacts list as the user types in a search bar. Should you use useEffect for this filtering, or a derived value?",
+        options: [
+          "useEffect with [searchQuery] in the dependency array — store the result in a separate filteredContacts state",
+          "A derived value — compute filteredContacts directly from contacts and searchQuery on every render, no effect or extra state needed",
+          "useEffect with no dependency array so it filters on every render",
+          "Both — useEffect to filter and useState to store the result for performance"
+        ],
+        correct: 1,
+        explanation: "Filtering is a pure computation from existing state — it needs no side effect and no network call. Compute it directly: `const filteredContacts = contacts.filter(...)`. Putting it in useEffect adds unnecessary complexity and a render delay. The rule: if you can compute it from state in one expression, derive it — don't store it in state or put it in an effect."
+      }
+    ]);
+  </script>
+
+</body>
+</html>

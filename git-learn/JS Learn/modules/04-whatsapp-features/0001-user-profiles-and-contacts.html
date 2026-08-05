@@ -1,0 +1,1121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WhatsApp Features Lesson 1: User Profiles &amp; Contacts — JS Learn</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">Module 4: WhatsApp Features</a>
+      <span class="sep">›</span>
+      <span class="current">Lesson 1: User Profiles &amp; Contacts</span>
+    </nav>
+
+    <!-- Header -->
+    <span class="badge">WhatsApp Features · Lesson 1</span>
+    <h1 style="margin-top:0.5rem;">User Profiles &amp; Contacts</h1>
+    <div class="lesson-meta">
+      <span>Firestore /users collection · Search by name · Online/last-seen · Contact list screen</span>
+      <span>~55 min</span>
+      <span>Hands-on</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for your WhatsApp clone</div>
+      <p>Open WhatsApp and tap the new-chat icon — you see a list of contacts with names, profile photos, and "about" text. Tap any contact to start a conversation. That entire flow depends on a <strong>user profiles system</strong>: every registered user stores their display name, photo URL, about text, and online status in Firestore. Without this, your app can only show raw email addresses — no photos, no names, no way to find someone new to chat with. This lesson builds the <code>/users/{uid}</code> collection, writes a profile on sign-up, adds a search screen to find people, and shows online/last-seen status — the foundation every other feature in this module depends on.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 1 -->
+    <h2>1. The /users collection — data model</h2>
+
+    <p>Every time a user registers, you create a document in Firestore at <code>/users/{uid}</code>. The document ID is the Firebase Auth UID — this makes lookups instant because you always know the current user's UID.</p>
+
+    <pre><code>// Firestore document: /users/abc123xyz
+{
+  uid: 'abc123xyz',
+  displayName: 'Priya Sharma',
+  email: 'priya@example.com',
+  photoURL: 'https://firebasestorage.googleapis.com/.../avatar.jpg',
+  about: 'Hey there! I am using WhatsApp',
+  online: true,
+  lastSeen: Timestamp,       // Firestore server timestamp
+  createdAt: Timestamp,
+  searchName: 'priya sharma' // lowercase copy for case-insensitive search
+}</code></pre>
+
+    <p>Key design decisions:</p>
+    <ul>
+      <li><strong>uid as document ID</strong> — Firebase Auth already gives you the UID; no need for a separate lookup</li>
+      <li><strong>searchName</strong> — Firestore queries are case-sensitive, so we store a lowercase copy of the display name for searching</li>
+      <li><strong>online + lastSeen</strong> — two fields work together: <code>online: true</code> means they're in the app right now; <code>lastSeen</code> stores when they last closed the app</li>
+      <li><strong>about</strong> — defaults to "Hey there! I am using WhatsApp" just like the real app</li>
+    </ul>
+
+    <hr>
+
+    <!-- Section 2 -->
+    <h2>2. Creating a user profile on sign-up</h2>
+
+    <p>In Module 3 Lesson 2, you used <code>createUserWithEmailAndPassword</code> to register users. Now you add one extra step — immediately write a profile document to Firestore:</p>
+
+    <pre><code>import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { auth, db } from './firebaseConfig';
+
+async function registerUser(email, password, displayName) {
+  // 1. Create the Firebase Auth account
+  const { user } = await createUserWithEmailAndPassword(auth, email, password);
+
+  // 2. Write the profile document to /users/{uid}
+  await setDoc(doc(db, 'users', user.uid), {
+    uid: user.uid,
+    displayName: displayName,
+    email: email,
+    photoURL: null,
+    about: 'Hey there! I am using WhatsApp',
+    online: true,
+    lastSeen: serverTimestamp(),
+    createdAt: serverTimestamp(),
+    searchName: displayName.toLowerCase(),
+  });
+
+  return user;
+}</code></pre>
+
+    <p><strong>Why <code>setDoc</code> instead of <code>addDoc</code>?</strong> Because you want the document ID to be the user's UID (not a random auto-generated ID). <code>setDoc</code> lets you choose the document ID; <code>addDoc</code> always generates a random one.</p>
+
+    <hr>
+
+    <!-- Section 3 -->
+    <h2>3. Reading and updating the current user's profile</h2>
+
+    <p>Once logged in, you need to fetch and display the profile, and let the user edit it:</p>
+
+    <pre><code>import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+
+// Fetch current user's profile
+async function getMyProfile(uid) {
+  const snap = await getDoc(doc(db, 'users', uid));
+  if (snap.exists()) {
+    return snap.data();
+  }
+  return null;
+}
+
+// Update display name
+async function updateDisplayName(uid, newName) {
+  await updateDoc(doc(db, 'users', uid), {
+    displayName: newName,
+    searchName: newName.toLowerCase(),
+  });
+}
+
+// Update "about" text
+async function updateAbout(uid, newAbout) {
+  await updateDoc(doc(db, 'users', uid), {
+    about: newAbout,
+  });
+}
+
+// Update profile photo URL (after uploading to Storage)
+async function updateProfilePhoto(uid, photoURL) {
+  await updateDoc(doc(db, 'users', uid), {
+    photoURL: photoURL,
+  });
+}</code></pre>
+
+    <p>Notice each update function only changes the fields it needs — <code>updateDoc</code> merges, it doesn't overwrite the entire document.</p>
+
+    <hr>
+
+    <!-- Section 4 -->
+    <h2>4. Searching for users by name</h2>
+
+    <p>WhatsApp lets you search for contacts. Firestore doesn't have full-text search built in, but for a contacts list a <strong>prefix query</strong> works well — as the user types "pri", you find all names starting with "pri":</p>
+
+    <pre><code>import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
+
+async function searchUsers(searchText, currentUid) {
+  const lower = searchText.toLowerCase();
+  // Firestore range trick: 'pri' matches everything from 'pri' up to 'pri'
+  const q = query(
+    collection(db, 'users'),
+    where('searchName', '>=', lower),
+    where('searchName', '<=', lower + ''),
+    orderBy('searchName'),
+    limit(20)
+  );
+
+  const snapshot = await getDocs(q);
+  const results = [];
+  snapshot.forEach((docSnap) => {
+    const data = docSnap.data();
+    // Don't show the current user in search results
+    if (data.uid !== currentUid) {
+      results.push(data);
+    }
+  });
+  return results;
+}</code></pre>
+
+    <p><strong>How the range trick works:</strong></p>
+    <ul>
+      <li><code>&gt;=</code> "pri" — matches "priya", "prince", "priti" (anything starting with "pri")</li>
+      <li><code>&lt;=</code> "pri" — the character <code></code> is the highest Unicode character, so this catches everything starting with "pri" and nothing else</li>
+      <li>This is the standard Firestore pattern for prefix search — it's fast and uses no external services</li>
+    </ul>
+
+    <div class="callout warning">
+      <div class="callout-title">Firestore index needed</div>
+      <p>This query uses <code>where</code> + <code>orderBy</code> on the same field (<code>searchName</code>), so Firestore handles it automatically — no composite index required. If you ever filter on one field and sort by another, Firebase will show an error with a link to create the index.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 5 -->
+    <h2>5. Online / last-seen status</h2>
+
+    <p>WhatsApp shows "online" or "last seen today at 2:34 PM" under a contact's name. You need two things:</p>
+    <ol>
+      <li><strong>Set online when the app opens</strong></li>
+      <li><strong>Set offline + lastSeen when the app closes</strong></li>
+    </ol>
+
+    <pre><code>import { AppState } from 'react-native';
+import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+
+function usePresence(uid) {
+  useEffect(() => {
+    if (!uid) return;
+
+    const userRef = doc(db, 'users', uid);
+
+    // Mark online immediately
+    updateDoc(userRef, { online: true });
+
+    // Listen for app going to background/foreground
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        updateDoc(userRef, { online: true });
+      } else {
+        // 'background' or 'inactive'
+        updateDoc(userRef, { online: false, lastSeen: serverTimestamp() });
+      }
+    });
+
+    return () => {
+      // Cleanup: mark offline when component unmounts (logout)
+      updateDoc(userRef, { online: false, lastSeen: serverTimestamp() });
+      subscription.remove();
+    };
+  }, [uid]);
+}</code></pre>
+
+    <p><strong>How AppState works:</strong></p>
+    <ul>
+      <li><code>'active'</code> — the app is in the foreground, user is looking at it</li>
+      <li><code>'background'</code> — user pressed home or switched apps</li>
+      <li><code>'inactive'</code> — iOS only: transitional state (e.g. pulling down notification center)</li>
+    </ul>
+
+    <p>To <strong>display</strong> another user's status, listen to their profile document in real time:</p>
+
+    <pre><code>import { doc, onSnapshot } from 'firebase/firestore';
+
+function useUserStatus(otherUid) {
+  const [status, setStatus] = useState({ online: false, lastSeen: null });
+
+  useEffect(() => {
+    if (!otherUid) return;
+
+    const unsub = onSnapshot(doc(db, 'users', otherUid), (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        setStatus({ online: data.online, lastSeen: data.lastSeen });
+      }
+    });
+
+    return unsub;
+  }, [otherUid]);
+
+  return status;
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 6 -->
+    <h2>6. Formatting "last seen" for display</h2>
+
+    <p>Firestore timestamps need to be converted to readable text like "last seen today at 2:34 PM":</p>
+
+    <pre><code>function formatLastSeen(timestamp) {
+  if (!timestamp) return '';
+
+  const date = timestamp.toDate(); // Firestore Timestamp → JS Date
+  const now = new Date();
+  const diffMs = now - date;
+  const diffMins = Math.floor(diffMs / 60000);
+
+  if (diffMins < 1) return 'last seen just now';
+  if (diffMins < 60) return `last seen ${diffMins} min ago`;
+
+  // Check if same day
+  const isToday = date.toDateString() === now.toDateString();
+  const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  if (isToday) return `last seen today at ${timeStr}`;
+
+  // Check if yesterday
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (date.toDateString() === yesterday.toDateString()) {
+    return `last seen yesterday at ${timeStr}`;
+  }
+
+  // Older: show date
+  const dateStr = date.toLocaleDateString([], { day: 'numeric', month: 'short' });
+  return `last seen ${dateStr} at ${timeStr}`;
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 7 -->
+    <h2>7. The Contact List screen</h2>
+
+    <p>This is the screen users see when they tap the "new chat" floating button. It shows a search bar and a list of all registered users they can start a conversation with:</p>
+
+    <pre><code>import React, { useState, useEffect } from 'react';
+import {
+  View, Text, TextInput, FlatList, Image, Pressable, StyleSheet, ActivityIndicator
+} from 'react-native';
+import { collection, query, orderBy, limit, getDocs, where } from 'firebase/firestore';
+import { db, auth } from './firebaseConfig';
+
+function ContactListScreen({ navigation }) {
+  const [searchText, setSearchText] = useState('');
+  const [contacts, setContacts] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  // Load all users initially (up to 50)
+  useEffect(() => {
+    loadAllUsers();
+  }, []);
+
+  async function loadAllUsers() {
+    setLoading(true);
+    const q = query(
+      collection(db, 'users'),
+      orderBy('searchName'),
+      limit(50)
+    );
+    const snapshot = await getDocs(q);
+    const users = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      if (data.uid !== auth.currentUser.uid) {
+        users.push(data);
+      }
+    });
+    setContacts(users);
+    setLoading(false);
+  }
+
+  // Search as user types (with debounce in the full app)
+  async function handleSearch(text) {
+    setSearchText(text);
+    if (text.trim() === '') {
+      loadAllUsers();
+      return;
+    }
+    setLoading(true);
+    const lower = text.toLowerCase();
+    const q = query(
+      collection(db, 'users'),
+      where('searchName', '>=', lower),
+      where('searchName', '<=', lower + ''),
+      orderBy('searchName'),
+      limit(20)
+    );
+    const snapshot = await getDocs(q);
+    const results = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      if (data.uid !== auth.currentUser.uid) {
+        results.push(data);
+      }
+    });
+    setContacts(results);
+    setLoading(false);
+  }
+
+  function startChat(contact) {
+    // Navigate to MessageThread with the selected contact's info
+    navigation.navigate('MessageThread', {
+      chatId: null,  // will be created or looked up
+      otherUser: contact,
+    });
+  }
+
+  return (
+    &lt;View style={styles.container}&gt;
+      {/* Custom green header */}
+      &lt;View style={styles.header}&gt;
+        &lt;Pressable onPress={() =&gt; navigation.goBack()}&gt;
+          &lt;Text style={styles.backBtn}&gt;← Back&lt;/Text&gt;
+        &lt;/Pressable&gt;
+        &lt;Text style={styles.headerTitle}&gt;Select contact&lt;/Text&gt;
+      &lt;/View&gt;
+
+      {/* Search bar */}
+      &lt;View style={styles.searchBox}&gt;
+        &lt;TextInput
+          style={styles.searchInput}
+          placeholder="Search by name..."
+          value={searchText}
+          onChangeText={handleSearch}
+          autoCapitalize="none"
+        /&gt;
+      &lt;/View&gt;
+
+      {/* Contact list */}
+      {loading ? (
+        &lt;ActivityIndicator size="large" color="#25D366" style={{ marginTop: 40 }} /&gt;
+      ) : (
+        &lt;FlatList
+          data={contacts}
+          keyExtractor={(item) =&gt; item.uid}
+          renderItem={({ item }) =&gt; (
+            &lt;Pressable style={styles.contactRow} onPress={() =&gt; startChat(item)}&gt;
+              &lt;Image
+                source={
+                  item.photoURL
+                    ? { uri: item.photoURL }
+                    : require('./assets/default-avatar.png')
+                }
+                style={styles.avatar}
+              /&gt;
+              &lt;View style={styles.contactInfo}&gt;
+                &lt;Text style={styles.contactName}&gt;{item.displayName}&lt;/Text&gt;
+                &lt;Text style={styles.contactAbout} numberOfLines={1}&gt;
+                  {item.about}
+                &lt;/Text&gt;
+              &lt;/View&gt;
+              {item.online &amp;&amp; &lt;View style={styles.onlineDot} /&gt;}
+            &lt;/Pressable&gt;
+          )}
+          ListEmptyComponent={
+            &lt;Text style={styles.emptyText}&gt;No contacts found&lt;/Text&gt;
+          }
+        /&gt;
+      )}
+    &lt;/View&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#FFFFFF' },
+  header: {
+    backgroundColor: '#075E54',
+    paddingTop: 48,
+    paddingBottom: 16,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  backBtn: { color: '#FFFFFF', fontSize: 16, marginRight: 16 },
+  headerTitle: { color: '#FFFFFF', fontSize: 20, fontWeight: 'bold' },
+  searchBox: {
+    padding: 10,
+    backgroundColor: '#F6F6F6',
+  },
+  searchInput: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    fontSize: 16,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  contactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    paddingHorizontal: 16,
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#E0E0E0',
+  },
+  avatar: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#E0E0E0',
+  },
+  contactInfo: { flex: 1, marginLeft: 12 },
+  contactName: { fontSize: 17, fontWeight: '600', color: '#000000' },
+  contactAbout: { fontSize: 14, color: '#667781', marginTop: 2 },
+  onlineDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#25D366',
+  },
+  emptyText: {
+    textAlign: 'center',
+    marginTop: 40,
+    color: '#667781',
+    fontSize: 16,
+  },
+});
+
+export default ContactListScreen;</code></pre>
+
+    <hr>
+
+    <!-- Section 8 -->
+    <h2>8. Profile settings screen</h2>
+
+    <p>WhatsApp's Settings tab shows your photo, name, and about text — all editable. Here's the screen pattern:</p>
+
+    <pre><code>import React, { useState, useEffect } from 'react';
+import {
+  View, Text, TextInput, Image, Pressable, StyleSheet, Alert
+} from 'react-native';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { db, auth } from './firebaseConfig';
+
+function ProfileScreen() {
+  const [profile, setProfile] = useState(null);
+  const [editingName, setEditingName] = useState(false);
+  const [newName, setNewName] = useState('');
+
+  useEffect(() => {
+    loadProfile();
+  }, []);
+
+  async function loadProfile() {
+    const snap = await getDoc(doc(db, 'users', auth.currentUser.uid));
+    if (snap.exists()) {
+      setProfile(snap.data());
+      setNewName(snap.data().displayName);
+    }
+  }
+
+  async function saveName() {
+    if (newName.trim() === '') {
+      Alert.alert('Error', 'Name cannot be empty');
+      return;
+    }
+    await updateDoc(doc(db, 'users', auth.currentUser.uid), {
+      displayName: newName.trim(),
+      searchName: newName.trim().toLowerCase(),
+    });
+    setProfile((prev) =&gt; ({ ...prev, displayName: newName.trim() }));
+    setEditingName(false);
+  }
+
+  if (!profile) return null;
+
+  return (
+    &lt;View style={styles.container}&gt;
+      &lt;View style={styles.header}&gt;
+        &lt;Text style={styles.headerTitle}&gt;Profile&lt;/Text&gt;
+      &lt;/View&gt;
+
+      &lt;View style={styles.avatarSection}&gt;
+        &lt;Image
+          source={
+            profile.photoURL
+              ? { uri: profile.photoURL }
+              : require('./assets/default-avatar.png')
+          }
+          style={styles.bigAvatar}
+        /&gt;
+      &lt;/View&gt;
+
+      &lt;View style={styles.fieldRow}&gt;
+        &lt;Text style={styles.fieldLabel}&gt;Name&lt;/Text&gt;
+        {editingName ? (
+          &lt;View style={styles.editRow}&gt;
+            &lt;TextInput
+              style={styles.editInput}
+              value={newName}
+              onChangeText={setNewName}
+              autoFocus
+            /&gt;
+            &lt;Pressable onPress={saveName}&gt;
+              &lt;Text style={styles.saveBtn}&gt;Save&lt;/Text&gt;
+            &lt;/Pressable&gt;
+          &lt;/View&gt;
+        ) : (
+          &lt;Pressable onPress={() =&gt; setEditingName(true)}&gt;
+            &lt;Text style={styles.fieldValue}&gt;{profile.displayName} ✏️&lt;/Text&gt;
+          &lt;/Pressable&gt;
+        )}
+      &lt;/View&gt;
+
+      &lt;View style={styles.fieldRow}&gt;
+        &lt;Text style={styles.fieldLabel}&gt;About&lt;/Text&gt;
+        &lt;Text style={styles.fieldValue}&gt;{profile.about}&lt;/Text&gt;
+      &lt;/View&gt;
+
+      &lt;View style={styles.fieldRow}&gt;
+        &lt;Text style={styles.fieldLabel}&gt;Email&lt;/Text&gt;
+        &lt;Text style={styles.fieldValue}&gt;{profile.email}&lt;/Text&gt;
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#FFFFFF' },
+  header: {
+    backgroundColor: '#075E54',
+    paddingTop: 48,
+    paddingBottom: 16,
+    paddingHorizontal: 16,
+  },
+  headerTitle: { color: '#FFFFFF', fontSize: 20, fontWeight: 'bold' },
+  avatarSection: { alignItems: 'center', marginVertical: 24 },
+  bigAvatar: {
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: '#E0E0E0',
+  },
+  fieldRow: {
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#E0E0E0',
+  },
+  fieldLabel: { fontSize: 13, color: '#667781', marginBottom: 4 },
+  fieldValue: { fontSize: 17, color: '#000000' },
+  editRow: { flexDirection: 'row', alignItems: 'center' },
+  editInput: {
+    flex: 1,
+    fontSize: 17,
+    borderBottomWidth: 2,
+    borderBottomColor: '#075E54',
+    paddingVertical: 4,
+  },
+  saveBtn: { color: '#075E54', fontSize: 16, fontWeight: 'bold', marginLeft: 12 },
+});
+
+export default ProfileScreen;</code></pre>
+
+    <hr>
+
+    <!-- Section 9: Full runnable App.js -->
+    <h2>9. Full runnable App.js — Contact list with search &amp; presence</h2>
+
+    <p>Copy this entire file and replace your <code>App.js</code>. It shows the contact list with search, online dots, and the profile screen in a tab navigator. You'll see real data once you have at least two registered users in your Firebase project.</p>
+
+    <pre><code>// App.js — Full runnable example: User Profiles & Contacts
+import React, { useState, useEffect } from 'react';
+import {
+  View, Text, TextInput, FlatList, Image, Pressable,
+  StyleSheet, ActivityIndicator, Alert, AppState
+} from 'react-native';
+
+// Firebase imports
+import { initializeApp } from 'firebase/app';
+import { getAuth, onAuthStateChanged } from 'firebase/auth';
+import {
+  getFirestore, doc, getDoc, setDoc, updateDoc, getDocs,
+  collection, query, where, orderBy, limit, onSnapshot, serverTimestamp
+} from 'firebase/firestore';
+
+// Navigation imports
+import { NavigationContainer } from '@react-navigation/native';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+
+// ─── Firebase config (replace with yours) ───────────────────────────
+const firebaseConfig = {
+  apiKey: 'YOUR_API_KEY',
+  authDomain: 'YOUR_PROJECT.firebaseapp.com',
+  projectId: 'YOUR_PROJECT_ID',
+  storageBucket: 'YOUR_PROJECT.appspot.com',
+  messagingSenderId: '123456789',
+  appId: '1:123456789:web:abcdef',
+};
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+// ─── Presence hook — tracks online/offline ──────────────────────────
+function usePresence(uid) {
+  useEffect(() => {
+    if (!uid) return;
+    const userRef = doc(db, 'users', uid);
+    updateDoc(userRef, { online: true });
+
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        updateDoc(userRef, { online: true });
+      } else {
+        updateDoc(userRef, { online: false, lastSeen: serverTimestamp() });
+      }
+    });
+
+    return () => {
+      updateDoc(userRef, { online: false, lastSeen: serverTimestamp() });
+      subscription.remove();
+    };
+  }, [uid]);
+}
+
+// ─── Format last seen ───────────────────────────────────────────────
+function formatLastSeen(timestamp) {
+  if (!timestamp) return '';
+  const date = timestamp.toDate();
+  const now = new Date();
+  const diffMins = Math.floor((now - date) / 60000);
+
+  if (diffMins < 1) return 'last seen just now';
+  if (diffMins < 60) return `last seen ${diffMins} min ago`;
+
+  const isToday = date.toDateString() === now.toDateString();
+  const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (isToday) return `last seen today at ${timeStr}`;
+
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (date.toDateString() === yesterday.toDateString()) {
+    return `last seen yesterday at ${timeStr}`;
+  }
+  const dateStr = date.toLocaleDateString([], { day: 'numeric', month: 'short' });
+  return `last seen ${dateStr} at ${timeStr}`;
+}
+
+// ─── Contact List Screen ────────────────────────────────────────────
+function ContactListScreen({ navigation }) {
+  const [searchText, setSearchText] = useState('');
+  const [contacts, setContacts] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => { loadAllUsers(); }, []);
+
+  async function loadAllUsers() {
+    setLoading(true);
+    const q = query(collection(db, 'users'), orderBy('searchName'), limit(50));
+    const snapshot = await getDocs(q);
+    const users = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      if (data.uid !== auth.currentUser.uid) users.push(data);
+    });
+    setContacts(users);
+    setLoading(false);
+  }
+
+  async function handleSearch(text) {
+    setSearchText(text);
+    if (text.trim() === '') { loadAllUsers(); return; }
+    setLoading(true);
+    const lower = text.toLowerCase();
+    const q = query(
+      collection(db, 'users'),
+      where('searchName', '>=', lower),
+      where('searchName', '<=', lower + ''),
+      orderBy('searchName'),
+      limit(20)
+    );
+    const snapshot = await getDocs(q);
+    const results = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      if (data.uid !== auth.currentUser.uid) results.push(data);
+    });
+    setContacts(results);
+    setLoading(false);
+  }
+
+  return (
+    &lt;View style={styles.container}&gt;
+      &lt;View style={styles.header}&gt;
+        &lt;Pressable onPress={() =&gt; navigation.goBack()}&gt;
+          &lt;Text style={styles.backBtn}&gt;← Back&lt;/Text&gt;
+        &lt;/Pressable&gt;
+        &lt;Text style={styles.headerTitle}&gt;Select contact&lt;/Text&gt;
+      &lt;/View&gt;
+
+      &lt;View style={styles.searchBox}&gt;
+        &lt;TextInput
+          style={styles.searchInput}
+          placeholder="Search by name..."
+          value={searchText}
+          onChangeText={handleSearch}
+          autoCapitalize="none"
+        /&gt;
+      &lt;/View&gt;
+
+      {loading ? (
+        &lt;ActivityIndicator size="large" color="#25D366" style={{ marginTop: 40 }} /&gt;
+      ) : (
+        &lt;FlatList
+          data={contacts}
+          keyExtractor={(item) =&gt; item.uid}
+          renderItem={({ item }) =&gt; (
+            &lt;Pressable
+              style={styles.contactRow}
+              onPress={() =&gt; Alert.alert('Start chat', `Chat with ${item.displayName}`)}
+            &gt;
+              &lt;View style={styles.avatarPlaceholder}&gt;
+                &lt;Text style={styles.avatarLetter}&gt;
+                  {item.displayName.charAt(0).toUpperCase()}
+                &lt;/Text&gt;
+              &lt;/View&gt;
+              &lt;View style={styles.contactInfo}&gt;
+                &lt;Text style={styles.contactName}&gt;{item.displayName}&lt;/Text&gt;
+                &lt;Text style={styles.contactAbout} numberOfLines={1}&gt;
+                  {item.online ? 'online' : item.about}
+                &lt;/Text&gt;
+              &lt;/View&gt;
+              {item.online &amp;&amp; &lt;View style={styles.onlineDot} /&gt;}
+            &lt;/Pressable&gt;
+          )}
+          ListEmptyComponent={
+            &lt;Text style={styles.emptyText}&gt;No contacts found&lt;/Text&gt;
+          }
+        /&gt;
+      )}
+    &lt;/View&gt;
+  );
+}
+
+// ─── Profile Screen ─────────────────────────────────────────────────
+function ProfileScreen() {
+  const [profile, setProfile] = useState(null);
+  const [editingName, setEditingName] = useState(false);
+  const [newName, setNewName] = useState('');
+
+  useEffect(() => { loadProfile(); }, []);
+
+  async function loadProfile() {
+    const snap = await getDoc(doc(db, 'users', auth.currentUser.uid));
+    if (snap.exists()) {
+      setProfile(snap.data());
+      setNewName(snap.data().displayName);
+    }
+  }
+
+  async function saveName() {
+    if (newName.trim() === '') { Alert.alert('Error', 'Name cannot be empty'); return; }
+    await updateDoc(doc(db, 'users', auth.currentUser.uid), {
+      displayName: newName.trim(),
+      searchName: newName.trim().toLowerCase(),
+    });
+    setProfile((prev) =&gt; ({ ...prev, displayName: newName.trim() }));
+    setEditingName(false);
+  }
+
+  if (!profile) {
+    return (
+      &lt;View style={styles.container}&gt;
+        &lt;ActivityIndicator size="large" color="#25D366" style={{ marginTop: 80 }} /&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  return (
+    &lt;View style={styles.container}&gt;
+      &lt;View style={styles.header}&gt;
+        &lt;Text style={styles.headerTitle}&gt;Profile&lt;/Text&gt;
+      &lt;/View&gt;
+
+      &lt;View style={styles.avatarSection}&gt;
+        &lt;View style={styles.bigAvatarPlaceholder}&gt;
+          &lt;Text style={styles.bigAvatarLetter}&gt;
+            {profile.displayName.charAt(0).toUpperCase()}
+          &lt;/Text&gt;
+        &lt;/View&gt;
+      &lt;/View&gt;
+
+      &lt;View style={styles.fieldRow}&gt;
+        &lt;Text style={styles.fieldLabel}&gt;Name&lt;/Text&gt;
+        {editingName ? (
+          &lt;View style={styles.editRow}&gt;
+            &lt;TextInput
+              style={styles.editInput}
+              value={newName}
+              onChangeText={setNewName}
+              autoFocus
+            /&gt;
+            &lt;Pressable onPress={saveName}&gt;
+              &lt;Text style={styles.saveBtn}&gt;Save&lt;/Text&gt;
+            &lt;/Pressable&gt;
+          &lt;/View&gt;
+        ) : (
+          &lt;Pressable onPress={() =&gt; setEditingName(true)}&gt;
+            &lt;Text style={styles.fieldValue}&gt;{profile.displayName}&lt;/Text&gt;
+          &lt;/Pressable&gt;
+        )}
+      &lt;/View&gt;
+
+      &lt;View style={styles.fieldRow}&gt;
+        &lt;Text style={styles.fieldLabel}&gt;About&lt;/Text&gt;
+        &lt;Text style={styles.fieldValue}&gt;{profile.about}&lt;/Text&gt;
+      &lt;/View&gt;
+
+      &lt;View style={styles.fieldRow}&gt;
+        &lt;Text style={styles.fieldLabel}&gt;Email&lt;/Text&gt;
+        &lt;Text style={styles.fieldValue}&gt;{profile.email}&lt;/Text&gt;
+      &lt;/View&gt;
+
+      &lt;View style={styles.fieldRow}&gt;
+        &lt;Text style={styles.fieldLabel}&gt;Status&lt;/Text&gt;
+        &lt;Text style={[styles.fieldValue, { color: '#25D366' }]}&gt;online&lt;/Text&gt;
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}
+
+// ─── Placeholder Chats Screen ───────────────────────────────────────
+function ChatsScreen({ navigation }) {
+  return (
+    &lt;View style={styles.container}&gt;
+      &lt;View style={styles.header}&gt;
+        &lt;Text style={styles.headerTitle}&gt;Chats&lt;/Text&gt;
+      &lt;/View&gt;
+      &lt;View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}&gt;
+        &lt;Text style={{ color: '#667781', fontSize: 16 }}&gt;Your chats will appear here&lt;/Text&gt;
+        &lt;Pressable
+          style={styles.fab}
+          onPress={() =&gt; navigation.navigate('ContactList')}
+        &gt;
+          &lt;Text style={styles.fabText}&gt;+&lt;/Text&gt;
+        &lt;/Pressable&gt;
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}
+
+// ─── Navigation ─────────────────────────────────────────────────────
+const Tab = createBottomTabNavigator();
+const Stack = createNativeStackNavigator();
+
+function MainTabs() {
+  return (
+    &lt;Tab.Navigator screenOptions={{ headerShown: false }}&gt;
+      &lt;Tab.Screen name="Chats" component={ChatsScreen} /&gt;
+      &lt;Tab.Screen name="Profile" component={ProfileScreen} /&gt;
+    &lt;/Tab.Navigator&gt;
+  );
+}
+
+export default function App() {
+  const [user, setUser] = useState(null);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => setUser(u));
+    return unsub;
+  }, []);
+
+  // Track presence for logged-in user
+  usePresence(user?.uid);
+
+  if (!user) {
+    return (
+      &lt;View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}&gt;
+        &lt;Text style={{ fontSize: 18, color: '#667781' }}&gt;
+          Please log in (use the auth from Module 3 Lesson 2)
+        &lt;/Text&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  return (
+    &lt;NavigationContainer&gt;
+      &lt;Stack.Navigator screenOptions={{ headerShown: false }}&gt;
+        &lt;Stack.Screen name="Main" component={MainTabs} /&gt;
+        &lt;Stack.Screen name="ContactList" component={ContactListScreen} /&gt;
+      &lt;/Stack.Navigator&gt;
+    &lt;/NavigationContainer&gt;
+  );
+}
+
+// ─── Styles ─────────────────────────────────────────────────────────
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#FFFFFF' },
+  header: {
+    backgroundColor: '#075E54',
+    paddingTop: 48,
+    paddingBottom: 16,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  backBtn: { color: '#FFFFFF', fontSize: 16, marginRight: 16 },
+  headerTitle: { color: '#FFFFFF', fontSize: 20, fontWeight: 'bold' },
+  searchBox: { padding: 10, backgroundColor: '#F6F6F6' },
+  searchInput: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    fontSize: 16,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  contactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    paddingHorizontal: 16,
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#E0E0E0',
+  },
+  avatarPlaceholder: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#075E54',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarLetter: { color: '#FFFFFF', fontSize: 22, fontWeight: 'bold' },
+  contactInfo: { flex: 1, marginLeft: 12 },
+  contactName: { fontSize: 17, fontWeight: '600', color: '#000000' },
+  contactAbout: { fontSize: 14, color: '#667781', marginTop: 2 },
+  onlineDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#25D366',
+  },
+  emptyText: {
+    textAlign: 'center',
+    marginTop: 40,
+    color: '#667781',
+    fontSize: 16,
+  },
+  avatarSection: { alignItems: 'center', marginVertical: 24 },
+  bigAvatarPlaceholder: {
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: '#075E54',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  bigAvatarLetter: { color: '#FFFFFF', fontSize: 56, fontWeight: 'bold' },
+  fieldRow: {
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#E0E0E0',
+  },
+  fieldLabel: { fontSize: 13, color: '#667781', marginBottom: 4 },
+  fieldValue: { fontSize: 17, color: '#000000' },
+  editRow: { flexDirection: 'row', alignItems: 'center' },
+  editInput: {
+    flex: 1,
+    fontSize: 17,
+    borderBottomWidth: 2,
+    borderBottomColor: '#075E54',
+    paddingVertical: 4,
+  },
+  saveBtn: { color: '#075E54', fontSize: 16, fontWeight: 'bold', marginLeft: 12 },
+  fab: {
+    position: 'absolute',
+    bottom: 24,
+    right: 24,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#25D366',
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+  },
+  fabText: { color: '#FFFFFF', fontSize: 28, fontWeight: 'bold' },
+});</code></pre>
+
+    <hr>
+
+    <!-- Section 10: Quiz -->
+    <h2>10. Quiz</h2>
+    <div id="wa-lesson-0001-quiz"></div>
+
+    <hr>
+
+    <!-- Lesson nav -->
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="../03-firebase-backend/0005-firebase-storage.html">← Module 3 Lesson 5: Firebase Storage</a>
+      <a href="./0002-group-chats.html">Lesson 2: Group Chats →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script>
+    createQuiz('wa-lesson-0001-quiz', [
+      {
+        question: 'Why do we use setDoc instead of addDoc when creating a user profile?',
+        options: [
+          'setDoc is faster than addDoc',
+          'setDoc lets us choose the document ID (the user\'s UID)',
+          'addDoc doesn\'t work with the /users collection',
+          'setDoc automatically validates the data'
+        ],
+        answer: 1
+      },
+      {
+        question: 'What is the purpose of the searchName field in the user profile?',
+        options: [
+          'It makes the document smaller',
+          'Firestore requires it for all collections',
+          'It stores a lowercase copy of the name for case-insensitive search',
+          'It is displayed to other users instead of displayName'
+        ],
+        answer: 2
+      },
+      {
+        question: 'How does the Firestore prefix search trick work (using >= and <= with \\uf8ff)?',
+        options: [
+          'It uses full-text search behind the scenes',
+          'It matches all documents whose searchName starts with the typed text',
+          'It searches every document in the collection one by one',
+          'It only works if searchName is exactly 3 characters long'
+        ],
+        answer: 1
+      },
+      {
+        question: 'When does the usePresence hook set online to false?',
+        options: [
+          'Only when the user logs out',
+          'Every 30 seconds automatically',
+          'When AppState changes to background or inactive, and on cleanup (unmount)',
+          'Only when the app is force-closed'
+        ],
+        answer: 2
+      },
+      {
+        question: 'What React Native API do we use to detect if the app is in the foreground or background?',
+        options: [
+          'LifecycleManager',
+          'BackHandler',
+          'AppState',
+          'useWindowDimensions'
+        ],
+        answer: 2
+      }
+    ]);
+  </script>
+</body>
+</html>

@@ -1,0 +1,1102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Advanced Features Lesson 6: Feature Flags &amp; Staged Rollout — JS Learn</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">Module 9: Advanced Features</a>
+      <span class="sep">›</span>
+      <span class="current">Lesson 6: Feature Flags &amp; Staged Rollout</span>
+    </nav>
+
+    <!-- Header -->
+    <span class="badge">Advanced Features · Lesson 6</span>
+    <h1 style="margin-top:0.5rem;">Feature Flags &amp; Staged Rollout</h1>
+    <div class="lesson-meta">
+      <span>Firebase Remote Config · Percentage rollout · A/B testing · Kill switch · No-rebuild changes</span>
+      <span>~60 min</span>
+      <span>Hands-on</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for your WhatsApp clone</div>
+      <p>You've built a new "Disappearing Messages" feature. It works perfectly in testing. But what if it crashes for users on slow Android phones? Or what if users hate it? Without feature flags, you'd have to push a new build to remove it — a process that takes days through app store review. With <strong>feature flags</strong>, you flip a switch in Firebase Console and the feature disappears instantly for all users. Or you show it to just 5% of users first, watch for crashes, and gradually roll it out to everyone. WhatsApp does this for every major feature — they test with a small percentage in India or Brazil before going global.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 1 -->
+    <h2>1. What are feature flags?</h2>
+
+    <p>A feature flag is a <strong>remote on/off switch</strong> for a feature in your app. The flag's value lives on a server (Firebase Remote Config) — your app reads it at launch and decides whether to show or hide the feature.</p>
+
+    <pre><code>// The concept — pseudocode:
+if (remoteConfig.get('disappearing_messages_enabled') === true) {
+  showDisappearingMessagesUI();
+} else {
+  // Feature is hidden — as if it doesn't exist
+}
+
+// You control the value from Firebase Console:
+// Turn it ON → feature appears for users
+// Turn it OFF → feature vanishes instantly (no new app build!)</code></pre>
+
+    <h3>What feature flags enable</h3>
+    <table>
+      <thead>
+        <tr><th>Use case</th><th>How it works</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Kill switch</strong></td><td>Disable a broken feature instantly without a new build</td></tr>
+        <tr><td><strong>Percentage rollout</strong></td><td>Show to 5% → 20% → 50% → 100% of users gradually</td></tr>
+        <tr><td><strong>A/B testing</strong></td><td>50% see design A, 50% see design B — measure which is better</td></tr>
+        <tr><td><strong>Beta features</strong></td><td>Show to internal testers only</td></tr>
+        <tr><td><strong>Regional launch</strong></td><td>Enable for India first, then expand to other countries</td></tr>
+        <tr><td><strong>Time-based launch</strong></td><td>Enable after a specific date (holiday features)</td></tr>
+      </tbody>
+    </table>
+
+    <hr>
+
+    <!-- Section 2 -->
+    <h2>2. Setting up Firebase Remote Config</h2>
+
+    <pre><code># Install the package
+npx expo install @react-native-firebase/app @react-native-firebase/remote-config
+
+# Note: This requires EAS Build (native module)
+# OR use the REST API approach (shown later) for Expo Go compatibility</code></pre>
+
+    <h3>Option A: Using the Firebase JS SDK (works in Expo Go)</h3>
+
+    <pre><code># For Expo Go compatibility, use the modular JS SDK:
+npm install firebase
+# (You already have this from Module 3)</code></pre>
+
+    <pre><code>// config/remoteConfig.js — Setup Firebase Remote Config
+
+import { initializeApp } from 'firebase/app';
+import {
+  getRemoteConfig,
+  fetchAndActivate,
+  getValue,
+  getBoolean,
+  getNumber,
+  getString,
+} from 'firebase/remote-config';
+
+const app = initializeApp(firebaseConfig);
+const remoteConfig = getRemoteConfig(app);
+
+// Set minimum fetch interval (12 hours in production, 0 in dev)
+remoteConfig.settings.minimumFetchIntervalMillis = __DEV__
+  ? 0           // Fetch every time in development (for testing)
+  : 43200000;   // 12 hours in production (Firebase free tier limit)
+
+// Default values — used when the app can't reach Firebase
+// (offline, first launch before config is fetched, etc.)
+remoteConfig.defaultConfig = {
+  disappearing_messages_enabled: false,
+  new_chat_ui_enabled: false,
+  max_group_size: 256,
+  maintenance_mode: false,
+  maintenance_message: 'We are performing scheduled maintenance. Back soon!',
+  onboarding_variant: 'control',
+  video_call_enabled: true,
+};
+
+// Fetch and activate remote values
+export async function initRemoteConfig() {
+  try {
+    await fetchAndActivate(remoteConfig);
+    console.log('Remote Config fetched and activated');
+  } catch (error) {
+    console.log('Remote Config fetch failed, using defaults:', error);
+    // App continues with default values — never crashes
+  }
+}
+
+// Helper functions to read flag values
+export function getFlag(key) {
+  return getBoolean(remoteConfig, key);
+}
+
+export function getFlagString(key) {
+  return getString(remoteConfig, key);
+}
+
+export function getFlagNumber(key) {
+  return getNumber(remoteConfig, key);
+}
+
+export { remoteConfig };</code></pre>
+
+    <hr>
+
+    <!-- Section 3 -->
+    <h2>3. Using flags in your components</h2>
+
+    <p>Now wrap features in simple <code>if</code> checks using the flag values.</p>
+
+    <pre><code>// hooks/useFeatureFlag.js — Custom hook for feature flags
+
+import { useState, useEffect } from 'react';
+import { getRemoteConfig, getValue, onConfigUpdated } from 'firebase/remote-config';
+import { remoteConfig } from '../config/remoteConfig';
+
+// Hook: returns the current value of a boolean feature flag
+export function useFeatureFlag(flagName) {
+  const [enabled, setEnabled] = useState(() => {
+    // Read current value synchronously (from last fetch)
+    return getValue(remoteConfig, flagName).asBoolean();
+  });
+
+  useEffect(() => {
+    // Listen for real-time config updates (if supported)
+    // This lets you toggle flags without users restarting the app
+    const unsubscribe = onConfigUpdated(remoteConfig, () => {
+      const newValue = getValue(remoteConfig, flagName).asBoolean();
+      setEnabled(newValue);
+    });
+
+    return () => unsubscribe();
+  }, [flagName]);
+
+  return enabled;
+}
+
+// Hook: returns a string flag value (for A/B test variants)
+export function useFeatureVariant(flagName) {
+  const [variant, setVariant] = useState(() => {
+    return getValue(remoteConfig, flagName).asString();
+  });
+
+  useEffect(() => {
+    const unsubscribe = onConfigUpdated(remoteConfig, () => {
+      setVariant(getValue(remoteConfig, flagName).asString());
+    });
+    return () => unsubscribe();
+  }, [flagName]);
+
+  return variant;
+}</code></pre>
+
+    <pre><code>// screens/ChatSettingsScreen.js — Using a feature flag
+
+import React from 'react';
+import { View, Text, Switch, StyleSheet } from 'react-native';
+import { useFeatureFlag } from '../hooks/useFeatureFlag';
+
+export function ChatSettingsScreen() {
+  // This flag is controlled from Firebase Console
+  const disappearingEnabled = useFeatureFlag('disappearing_messages_enabled');
+  const videoCallEnabled = useFeatureFlag('video_call_enabled');
+
+  return (
+    &lt;View style={styles.container}&gt;
+      &lt;Text style={styles.header}&gt;Chat Settings&lt;/Text&gt;
+
+      {/* This entire section only appears when the flag is ON */}
+      {disappearingEnabled && (
+        &lt;View style={styles.setting}&gt;
+          &lt;Text style={styles.settingLabel}&gt;Disappearing Messages&lt;/Text&gt;
+          &lt;Text style={styles.settingHint}&gt;
+            Messages will vanish after 24 hours
+          &lt;/Text&gt;
+          &lt;Switch value={false} /&gt;
+        &lt;/View&gt;
+      )}
+
+      {videoCallEnabled && (
+        &lt;View style={styles.setting}&gt;
+          &lt;Text style={styles.settingLabel}&gt;Video Calls&lt;/Text&gt;
+          &lt;Text style={styles.settingHint}&gt;Allow video calls in this chat&lt;/Text&gt;
+          &lt;Switch value={true} /&gt;
+        &lt;/View&gt;
+      )}
+
+      {/* This always shows — no flag needed */}
+      &lt;View style={styles.setting}&gt;
+        &lt;Text style={styles.settingLabel}&gt;Notifications&lt;/Text&gt;
+        &lt;Switch value={true} /&gt;
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 4 -->
+    <h2>4. Percentage rollout — showing to some users</h2>
+
+    <p>Firebase Remote Config supports <strong>conditions</strong> — rules that decide which users see which value. The most powerful condition is percentage-based rollout.</p>
+
+    <h3>Setting it up in Firebase Console</h3>
+    <ol>
+      <li>Go to <strong>Firebase Console → Remote Config</strong></li>
+      <li>Add a parameter: <code>disappearing_messages_enabled</code></li>
+      <li>Set default value: <code>false</code></li>
+      <li>Click <strong>"Add condition"</strong></li>
+      <li>Name it "5% Rollout"</li>
+      <li>Choose condition type: <strong>"User in random percentile"</strong></li>
+      <li>Set range: <strong>0% to 5%</strong></li>
+      <li>Set value for this condition: <code>true</code></li>
+      <li>Click <strong>"Publish changes"</strong></li>
+    </ol>
+
+    <p>Now 5% of users will see the feature. To roll out further:</p>
+    <ul>
+      <li>Day 1: 5% (watch crash reports)</li>
+      <li>Day 3: 20% (check user feedback)</li>
+      <li>Day 7: 50% (monitor performance)</li>
+      <li>Day 10: 100% (full launch!)</li>
+    </ul>
+
+    <pre><code>// You don't need to change ANY app code during rollout!
+// Just edit the percentage in Firebase Console.
+// The same useFeatureFlag('disappearing_messages_enabled') hook
+// will return true for more users as you increase the percentage.
+
+// The percentage is STICKY — the same user always gets the same value
+// (based on a hash of their device ID). They won't flip between
+// "has feature" and "doesn't have feature" on every app launch.</code></pre>
+
+    <h3>Other condition types</h3>
+    <table>
+      <thead>
+        <tr><th>Condition</th><th>Use case</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>User in percentile (0-5%)</td><td>Gradual rollout</td></tr>
+        <tr><td>App version equals "2.1.0"</td><td>Only show to users on latest version</td></tr>
+        <tr><td>Device OS == "iOS"</td><td>Platform-specific features</td></tr>
+        <tr><td>Country == "IN"</td><td>Region-specific launch</td></tr>
+        <tr><td>User property "beta_tester" == "true"</td><td>Internal testers only</td></tr>
+        <tr><td>Date/time after "2026-09-01"</td><td>Scheduled launch</td></tr>
+      </tbody>
+    </table>
+
+    <hr>
+
+    <!-- Section 5 -->
+    <h2>5. A/B testing a new UI</h2>
+
+    <p>You've designed two versions of the chat list header. Which one leads to more engagement? A/B testing shows each version to 50% of users and measures the difference.</p>
+
+    <pre><code>// In Firebase Console, create a parameter:
+// Name: "chat_header_variant"
+// Condition A (50%): value = "compact"
+// Condition B (50%): value = "detailed"
+// Default: "compact"</code></pre>
+
+    <pre><code>// screens/ChatListScreen.js — A/B tested header
+
+import React from 'react';
+import { View, Text, StyleSheet } from 'react-native';
+import { useFeatureVariant } from '../hooks/useFeatureFlag';
+
+function ChatListHeader() {
+  const variant = useFeatureVariant('chat_header_variant');
+
+  if (variant === 'detailed') {
+    // Variant B: larger header with search bar visible
+    return (
+      &lt;View style={styles.headerDetailed}&gt;
+        &lt;Text style={styles.headerTitle}&gt;ChatApp&lt;/Text&gt;
+        &lt;Text style={styles.headerSubtitle}&gt;3 unread conversations&lt;/Text&gt;
+        &lt;View style={styles.searchBar}&gt;
+          &lt;Text style={styles.searchPlaceholder}&gt;Search chats...&lt;/Text&gt;
+        &lt;/View&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  // Variant A (control): compact header
+  return (
+    &lt;View style={styles.headerCompact}&gt;
+      &lt;Text style={styles.headerTitle}&gt;ChatApp&lt;/Text&gt;
+    &lt;/View&gt;
+  );
+}
+
+// Track which variant the user saw (for analytics)
+import { getAnalytics, logEvent } from 'firebase/analytics';
+
+function ChatListScreen() {
+  const variant = useFeatureVariant('chat_header_variant');
+
+  useEffect(() => {
+    // Log which variant this user is seeing
+    logEvent(getAnalytics(), 'experiment_viewed', {
+      experiment: 'chat_header',
+      variant: variant,
+    });
+  }, [variant]);
+
+  return (
+    &lt;View&gt;
+      &lt;ChatListHeader /&gt;
+      {/* ... rest of screen */}
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <h3>Measuring results</h3>
+    <pre><code>// Track the metric you care about:
+// - "messages_sent" per session
+// - "time_in_app" per day
+// - "chats_opened" per session
+
+// After 2 weeks, compare:
+// Variant A users sent avg 12 messages/day
+// Variant B users sent avg 15 messages/day → Variant B wins!
+
+// Then set the flag to "detailed" for 100% of users.</code></pre>
+
+    <hr>
+
+    <!-- Section 6 -->
+    <h2>6. Kill switch — disabling a broken feature instantly</h2>
+
+    <p>The most critical use of feature flags: emergency shutdown. A bug in your video call feature is crashing the app for 10% of users. Without a kill switch, you'd need to publish a new build (1–3 days for Apple review). With a kill switch, you disable it in 30 seconds.</p>
+
+    <pre><code>// The kill switch pattern — wrap the entire feature
+
+import { useFeatureFlag } from '../hooks/useFeatureFlag';
+
+function CallButton({ recipientId, recipientName }) {
+  // If this flag is set to false in Firebase Console,
+  // the call button disappears instantly for all users
+  const videoCallEnabled = useFeatureFlag('video_call_enabled');
+
+  if (!videoCallEnabled) {
+    return null; // Feature completely hidden
+  }
+
+  return (
+    &lt;Pressable
+      onPress={() =&gt; startVideoCall(recipientId)}
+      accessibilityLabel={`Video call ${recipientName}`}
+      accessibilityRole="button"
+      style={styles.callBtn}
+    &gt;
+      &lt;Text style={styles.callIcon}&gt;📹&lt;/Text&gt;
+    &lt;/Pressable&gt;
+  );
+}</code></pre>
+
+    <pre><code>// Maintenance mode — block the entire app temporarily
+
+function MaintenanceGate({ children }) {
+  const maintenanceMode = useFeatureFlag('maintenance_mode');
+  const maintenanceMessage = useFeatureVariant('maintenance_message');
+
+  if (maintenanceMode) {
+    return (
+      &lt;View style={styles.maintenance}&gt;
+        &lt;Text style={styles.maintenanceIcon}&gt;🔧&lt;/Text&gt;
+        &lt;Text style={styles.maintenanceTitle}&gt;Under Maintenance&lt;/Text&gt;
+        &lt;Text style={styles.maintenanceMsg}&gt;{maintenanceMessage}&lt;/Text&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  return children;
+}
+
+// In App.js:
+export default function App() {
+  return (
+    &lt;MaintenanceGate&gt;
+      &lt;NavigationContainer&gt;
+        {/* ... your app */}
+      &lt;/NavigationContainer&gt;
+    &lt;/MaintenanceGate&gt;
+  );
+}</code></pre>
+
+    <h3>Emergency response playbook</h3>
+    <ol>
+      <li>Crash reports spike → identify the feature causing it</li>
+      <li>Open Firebase Console → Remote Config</li>
+      <li>Set the feature's flag to <code>false</code></li>
+      <li>Click "Publish changes"</li>
+      <li>Within minutes, users relaunch the app and the feature is gone</li>
+      <li>Fix the bug, test thoroughly, then re-enable gradually (5% → 20% → 100%)</li>
+    </ol>
+
+    <hr>
+
+    <!-- Section 7 -->
+    <h2>7. Reading flag values without a new build</h2>
+
+    <p>The power of Remote Config: you can change any value without publishing a new app build. Here are creative uses beyond simple on/off flags.</p>
+
+    <pre><code>// Dynamic configuration values — all controlled from Firebase Console
+
+// Maximum group chat size (change without a build)
+const maxGroupSize = getFlagNumber('max_group_size'); // 256
+
+// Welcome message text (change for holidays, events)
+const welcomeMsg = getFlagString('welcome_message');
+
+// Minimum app version required (force users to update)
+const minVersion = getFlagString('min_app_version'); // "1.5.0"
+
+// Server URL (switch to backup server in emergencies)
+const apiUrl = getFlagString('api_base_url');
+
+// Rate limit (adjust if servers are overloaded)
+const msgCooldownMs = getFlagNumber('message_cooldown_ms'); // 1000
+
+// Feature tiers (unlock features for paying users)
+const premiumFeatures = getFlagString('premium_features'); // "video,groups,status"</code></pre>
+
+    <pre><code>// Example: dynamic max group size
+import { getFlagNumber } from '../config/remoteConfig';
+
+function CreateGroupScreen() {
+  const maxMembers = getFlagNumber('max_group_size');
+
+  const addMember = (userId) => {
+    if (members.length >= maxMembers) {
+      Alert.alert(
+        'Group Full',
+        `Groups can have at most ${maxMembers} members`
+      );
+      return;
+    }
+    setMembers(prev => [...prev, userId]);
+  };
+
+  // If you later decide to increase from 256 to 1024,
+  // just change the value in Firebase Console — no new build!
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 8 -->
+    <h2>8. Best practices for feature flags</h2>
+
+    <h3>Naming conventions</h3>
+    <pre><code>// Use clear, consistent naming:
+// [feature]_[what]_enabled  (for booleans)
+// [feature]_[what]_value    (for strings/numbers)
+
+// Good:
+disappearing_messages_enabled
+video_call_enabled
+max_group_size
+chat_header_variant
+maintenance_mode
+
+// Bad:
+flag1
+newFeature
+test123
+enableThing</code></pre>
+
+    <h3>Always have defaults</h3>
+    <pre><code>// The app MUST work if Remote Config is unreachable
+// (no internet, Firebase outage, first launch)
+
+remoteConfig.defaultConfig = {
+  // Safe defaults — features are OFF until explicitly enabled
+  disappearing_messages_enabled: false,
+  new_chat_ui_enabled: false,
+  // Critical features are ON by default
+  video_call_enabled: true,
+  // Sensible numbers
+  max_group_size: 256,
+  message_cooldown_ms: 1000,
+};</code></pre>
+
+    <h3>Clean up old flags</h3>
+    <pre><code>// Once a feature is 100% rolled out and stable (4+ weeks),
+// REMOVE the flag from your code and hardcode the feature as always-on.
+// Dead flags accumulate and make code confusing.
+
+// Before cleanup:
+if (useFeatureFlag('reactions_enabled')) {
+  showReactions();
+}
+
+// After cleanup (feature is permanent now):
+showReactions();
+
+// Also delete the parameter from Firebase Console.</code></pre>
+
+    <h3>Don't nest flags</h3>
+    <pre><code>// ❌ Bad: nested flags create impossible-to-debug combinations
+if (flagA && flagB && !flagC) {
+  // What combination is the user seeing? Hard to reason about.
+}
+
+// ✅ Good: one flag per feature, flat checks
+if (disappearingMessagesEnabled) {
+  showDisappearingMessages();
+}
+if (reactionsEnabled) {
+  showReactions();
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 9 -->
+    <h2>9. Combining flags with OTA and CI/CD</h2>
+
+    <p>Feature flags work beautifully with the tools from Lessons 2 and 3:</p>
+
+    <pre><code>// The safe feature launch workflow:
+//
+// 1. Develop the feature behind a flag (flag = false in production)
+//    - Code ships to users, but feature is hidden
+//    - Push via OTA update (Lesson 3) — instant, no store review
+//
+// 2. Enable for internal testers via Firebase condition
+//    - Condition: user_property "role" == "tester"
+//    - Your team tests on their real phones
+//
+// 3. Gradual rollout via percentage
+//    - 5% → watch crash reports (Module 8 Lesson 6)
+//    - 25% → check analytics
+//    - 100% → full launch
+//
+// 4. If anything goes wrong → flip flag to false (kill switch)
+//    - Feature vanishes in minutes
+//    - No new build, no store review, no waiting
+//
+// 5. Once stable for 4 weeks → remove the flag, feature is permanent</code></pre>
+
+    <pre><code>// In your CI/CD pipeline (from Lesson 2), you can even
+// automate flag creation:
+
+// .github/workflows/create-flag.yml
+// When a PR is labelled "feature-flag", auto-create the Remote Config parameter
+// (Advanced — using Firebase Admin SDK in a GitHub Action)</code></pre>
+
+    <hr>
+
+    <!-- Section 10: Full App.js -->
+    <h2>10. Full working example — feature flags in action</h2>
+
+    <p>Here's a complete <code>App.js</code> demonstrating feature flags: a kill switch, percentage rollout UI, A/B test variant, maintenance mode, and dynamic configuration — all controlled without code changes.</p>
+
+    <pre><code>// App.js — Feature Flags & Staged Rollout Demo
+// Replace your App.js with this to see feature flags in action
+
+import React, { useState, useEffect } from 'react';
+import {
+  View, Text, TextInput, FlatList, Pressable, Switch,
+  StyleSheet, Alert, ActivityIndicator, Platform,
+  KeyboardAvoidingView,
+} from 'react-native';
+import { initializeApp } from 'firebase/app';
+import {
+  getRemoteConfig, fetchAndActivate,
+  getValue, getBoolean, getNumber, getString,
+} from 'firebase/remote-config';
+import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
+import Constants from 'expo-constants';
+
+// ─── Firebase config ─────────────────────────────────
+const firebaseConfig = {
+  apiKey: Constants.expoConfig?.extra?.firebaseApiKey || 'YOUR_API_KEY',
+  authDomain: Constants.expoConfig?.extra?.firebaseAuthDomain || 'your-app.firebaseapp.com',
+  projectId: Constants.expoConfig?.extra?.firebaseProjectId || 'your-app',
+  storageBucket: Constants.expoConfig?.extra?.firebaseStorageBucket || 'your-app.appspot.com',
+  messagingSenderId: Constants.expoConfig?.extra?.firebaseMessagingSenderId || '123456789',
+  appId: Constants.expoConfig?.extra?.firebaseAppId || '1:123456789:web:abc123',
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const remoteConfig = getRemoteConfig(app);
+
+// ─── Remote Config defaults ──────────────────────────
+remoteConfig.settings.minimumFetchIntervalMillis = __DEV__ ? 0 : 43200000;
+remoteConfig.defaultConfig = {
+  disappearing_messages_enabled: false,
+  reactions_enabled: true,
+  video_call_enabled: true,
+  new_header_variant: 'compact',
+  max_group_size: 256,
+  maintenance_mode: false,
+  maintenance_message: 'We are performing maintenance. Back soon!',
+  welcome_banner_text: 'Welcome to ChatApp!',
+};
+
+// ─── WhatsApp colours ────────────────────────────────
+const COLORS = {
+  darkGreen: '#075E54',
+  lightGreen: '#25D366',
+  bubbleGreen: '#DCF8C6',
+  chatBg: '#ECE5DD',
+  white: '#FFFFFF',
+};
+
+// ─── Feature Flag Hook ───────────────────────────────
+function useFeatureFlag(key) {
+  const [value, setValue] = useState(() => getBoolean(remoteConfig, key));
+  return value;
+}
+
+function useFeatureString(key) {
+  const [value, setValue] = useState(() => getString(remoteConfig, key));
+  return value;
+}
+
+function useFeatureNumber(key) {
+  const [value, setValue] = useState(() => getNumber(remoteConfig, key));
+  return value;
+}
+
+// ─── Maintenance Gate ────────────────────────────────
+function MaintenanceGate({ children }) {
+  const isMaintenance = useFeatureFlag('maintenance_mode');
+  const message = useFeatureString('maintenance_message');
+
+  if (isMaintenance) {
+    return (
+      &lt;View style={styles.maintenance}&gt;
+        &lt;Text style={styles.maintenanceIcon}&gt;🔧&lt;/Text&gt;
+        &lt;Text style={styles.maintenanceTitle}&gt;Under Maintenance&lt;/Text&gt;
+        &lt;Text style={styles.maintenanceMsg}&gt;{message}&lt;/Text&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  return children;
+}
+
+// ─── Feature Flag Dashboard (for demo) ──────────────
+function FlagDashboard() {
+  const disappearing = useFeatureFlag('disappearing_messages_enabled');
+  const reactions = useFeatureFlag('reactions_enabled');
+  const videoCalls = useFeatureFlag('video_call_enabled');
+  const headerVariant = useFeatureString('new_header_variant');
+  const maxGroup = useFeatureNumber('max_group_size');
+  const banner = useFeatureString('welcome_banner_text');
+
+  return (
+    &lt;View style={styles.dashboard}&gt;
+      &lt;Text style={styles.dashTitle}&gt;Feature Flags (from Firebase)&lt;/Text&gt;
+
+      &lt;View style={styles.flagRow}&gt;
+        &lt;Text style={styles.flagName}&gt;disappearing_messages&lt;/Text&gt;
+        &lt;Text style={[styles.flagValue, disappearing ? styles.flagOn : styles.flagOff]}&gt;
+          {disappearing ? 'ON' : 'OFF'}
+        &lt;/Text&gt;
+      &lt;/View&gt;
+
+      &lt;View style={styles.flagRow}&gt;
+        &lt;Text style={styles.flagName}&gt;reactions&lt;/Text&gt;
+        &lt;Text style={[styles.flagValue, reactions ? styles.flagOn : styles.flagOff]}&gt;
+          {reactions ? 'ON' : 'OFF'}
+        &lt;/Text&gt;
+      &lt;/View&gt;
+
+      &lt;View style={styles.flagRow}&gt;
+        &lt;Text style={styles.flagName}&gt;video_calls&lt;/Text&gt;
+        &lt;Text style={[styles.flagValue, videoCalls ? styles.flagOn : styles.flagOff]}&gt;
+          {videoCalls ? 'ON' : 'OFF'}
+        &lt;/Text&gt;
+      &lt;/View&gt;
+
+      &lt;View style={styles.flagRow}&gt;
+        &lt;Text style={styles.flagName}&gt;header_variant&lt;/Text&gt;
+        &lt;Text style={styles.flagString}&gt;"{headerVariant}"&lt;/Text&gt;
+      &lt;/View&gt;
+
+      &lt;View style={styles.flagRow}&gt;
+        &lt;Text style={styles.flagName}&gt;max_group_size&lt;/Text&gt;
+        &lt;Text style={styles.flagString}&gt;{maxGroup}&lt;/Text&gt;
+      &lt;/View&gt;
+
+      &lt;Text style={styles.dashHint}&gt;
+        Change these values in Firebase Console → Remote Config
+        to see them update here (no new app build needed!)
+      &lt;/Text&gt;
+    &lt;/View&gt;
+  );
+}
+
+// ─── Chat Screen with Feature Flags ─────────────────
+function ChatScreen() {
+  const reactionsEnabled = useFeatureFlag('reactions_enabled');
+  const disappearingEnabled = useFeatureFlag('disappearing_messages_enabled');
+  const videoCallEnabled = useFeatureFlag('video_call_enabled');
+  const headerVariant = useFeatureString('new_header_variant');
+  const banner = useFeatureString('welcome_banner_text');
+
+  const [messages, setMessages] = useState([
+    { id: '1', senderId: 'rahul456', text: 'Hey! Have you seen the new features?', time: '10:30 AM' },
+    { id: '2', senderId: 'me', text: 'Yes! Testing feature flags right now.', time: '10:31 AM' },
+    { id: '3', senderId: 'rahul456', text: 'So cool that you can toggle them remotely!', time: '10:32 AM' },
+  ]);
+  const [input, setInput] = useState('');
+
+  const handleSend = () => {
+    if (!input.trim()) return;
+    setMessages(prev => [
+      { id: String(Date.now()), senderId: 'me', text: input.trim(), time: 'Now' },
+      ...prev,
+    ]);
+    setInput('');
+  };
+
+  // A/B tested header
+  const renderHeader = () => {
+    if (headerVariant === 'detailed') {
+      return (
+        &lt;View style={styles.headerDetailed}&gt;
+          &lt;Text style={styles.headerTitle}&gt;Rahul&lt;/Text&gt;
+          &lt;Text style={styles.headerSubtitle}&gt;online • last active 2 min ago&lt;/Text&gt;
+          {videoCallEnabled && (
+            &lt;Pressable style={styles.callBtn}&gt;
+              &lt;Text&gt;📹&lt;/Text&gt;
+            &lt;/Pressable&gt;
+          )}
+        &lt;/View&gt;
+      );
+    }
+
+    return (
+      &lt;View style={styles.header}&gt;
+        &lt;Text style={styles.headerTitle}&gt;Rahul&lt;/Text&gt;
+        &lt;View style={styles.headerRight}&gt;
+          {videoCallEnabled && &lt;Text style={styles.headerIcon}&gt;📹&lt;/Text&gt;}
+          &lt;Text style={styles.headerIcon}&gt;⋮&lt;/Text&gt;
+        &lt;/View&gt;
+      &lt;/View&gt;
+    );
+  };
+
+  return (
+    &lt;KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    &gt;
+      {renderHeader()}
+
+      {/* Welcome banner (dynamic text from Remote Config) */}
+      &lt;View style={styles.bannerBar}&gt;
+        &lt;Text style={styles.bannerText}&gt;{banner}&lt;/Text&gt;
+      &lt;/View&gt;
+
+      {/* Disappearing messages indicator (only if flag is ON) */}
+      {disappearingEnabled && (
+        &lt;View style={styles.disappearingBanner}&gt;
+          &lt;Text style={styles.disappearingText}&gt;
+            ⏱ Disappearing messages are ON — messages vanish after 24h
+          &lt;/Text&gt;
+        &lt;/View&gt;
+      )}
+
+      {/* Messages */}
+      &lt;FlatList
+        data={messages}
+        keyExtractor={(item) =&gt; item.id}
+        inverted
+        style={styles.messageList}
+        renderItem={({ item }) =&gt; {
+          const isMine = item.senderId === 'me';
+          return (
+            &lt;View style={[styles.bubble, isMine ? styles.myBubble : styles.theirBubble]}&gt;
+              &lt;Text style={styles.messageText}&gt;{item.text}&lt;/Text&gt;
+              &lt;View style={styles.bubbleFooter}&gt;
+                &lt;Text style={styles.timeText}&gt;{item.time}&lt;/Text&gt;
+                {/* Reactions — only shown if flag is ON */}
+                {reactionsEnabled && (
+                  &lt;Pressable style={styles.reactBtn}&gt;
+                    &lt;Text style={styles.reactIcon}&gt;😀&lt;/Text&gt;
+                  &lt;/Pressable&gt;
+                )}
+              &lt;/View&gt;
+            &lt;/View&gt;
+          );
+        }}
+      /&gt;
+
+      {/* Input bar */}
+      &lt;View style={styles.inputBar}&gt;
+        &lt;TextInput
+          style={styles.input}
+          value={input}
+          onChangeText={setInput}
+          placeholder="Type a message"
+          multiline
+        /&gt;
+        &lt;Pressable
+          style={[styles.sendBtn, !input.trim() && { opacity: 0.4 }]}
+          onPress={handleSend}
+          disabled={!input.trim()}
+        &gt;
+          &lt;Text style={styles.sendText}&gt;Send&lt;/Text&gt;
+        &lt;/Pressable&gt;
+      &lt;/View&gt;
+    &lt;/KeyboardAvoidingView&gt;
+  );
+}
+
+// ─── Main App ────────────────────────────────────────
+export default function App() {
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    async function init() {
+      try {
+        // Fetch remote config values from Firebase
+        await fetchAndActivate(remoteConfig);
+      } catch (e) {
+        console.log('Using default config values');
+      }
+      setReady(true);
+    }
+    init();
+  }, []);
+
+  if (!ready) {
+    return (
+      &lt;View style={styles.center}&gt;
+        &lt;ActivityIndicator size="large" color={COLORS.darkGreen} /&gt;
+        &lt;Text style={{ marginTop: 12, color: '#666' }}&gt;Loading config...&lt;/Text&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  return (
+    &lt;MaintenanceGate&gt;
+      &lt;View style={{ flex: 1 }}&gt;
+        &lt;ChatScreen /&gt;
+        &lt;FlagDashboard /&gt;
+      &lt;/View&gt;
+    &lt;/MaintenanceGate&gt;
+  );
+}
+
+// ─── Styles ──────────────────────────────────────────
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: COLORS.chatBg },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  header: {
+    backgroundColor: COLORS.darkGreen,
+    paddingTop: Platform.OS === 'ios' ? 50 : 30,
+    paddingBottom: 12,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  headerDetailed: {
+    backgroundColor: COLORS.darkGreen,
+    paddingTop: Platform.OS === 'ios' ? 50 : 30,
+    paddingBottom: 14,
+    paddingHorizontal: 16,
+  },
+  headerTitle: { color: COLORS.white, fontSize: 18, fontWeight: '700' },
+  headerSubtitle: { color: '#b2dfdb', fontSize: 12, marginTop: 2 },
+  headerRight: { flexDirection: 'row', gap: 16 },
+  headerIcon: { fontSize: 20, color: '#fff' },
+  callBtn: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 52 : 32,
+    right: 16,
+  },
+  bannerBar: {
+    backgroundColor: '#e8f5e9',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  bannerText: { fontSize: 12, color: '#2e7d32' },
+  disappearingBanner: {
+    backgroundColor: '#fff3e0',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  disappearingText: { fontSize: 11, color: '#e65100' },
+  messageList: { flex: 1, paddingHorizontal: 10 },
+  bubble: {
+    maxWidth: '75%',
+    padding: 10,
+    borderRadius: 8,
+    marginVertical: 3,
+  },
+  myBubble: {
+    backgroundColor: COLORS.bubbleGreen,
+    alignSelf: 'flex-end',
+    borderTopRightRadius: 0,
+  },
+  theirBubble: {
+    backgroundColor: COLORS.white,
+    alignSelf: 'flex-start',
+    borderTopLeftRadius: 0,
+  },
+  messageText: { fontSize: 15, color: '#303030' },
+  bubbleFooter: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
+  timeText: { fontSize: 11, color: '#666', flex: 1 },
+  reactBtn: { padding: 2 },
+  reactIcon: { fontSize: 14 },
+  inputBar: {
+    flexDirection: 'row',
+    padding: 8,
+    backgroundColor: COLORS.white,
+    alignItems: 'flex-end',
+  },
+  input: {
+    flex: 1,
+    backgroundColor: '#f0f0f0',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
+    fontSize: 15,
+    maxHeight: 100,
+  },
+  sendBtn: {
+    backgroundColor: COLORS.lightGreen,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    marginStart: 8,
+  },
+  sendText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  // Maintenance screen
+  maintenance: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 32,
+    backgroundColor: '#fff',
+  },
+  maintenanceIcon: { fontSize: 48, marginBottom: 16 },
+  maintenanceTitle: { fontSize: 22, fontWeight: '700', color: '#333', marginBottom: 8 },
+  maintenanceMsg: { fontSize: 15, color: '#666', textAlign: 'center', lineHeight: 22 },
+  // Flag dashboard
+  dashboard: {
+    backgroundColor: '#f9f9f9',
+    padding: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+  },
+  dashTitle: { fontSize: 13, fontWeight: '700', color: '#333', marginBottom: 8 },
+  flagRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  flagName: { fontSize: 12, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', color: '#555' },
+  flagValue: { fontSize: 12, fontWeight: '700', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 },
+  flagOn: { backgroundColor: '#c8e6c9', color: '#2e7d32' },
+  flagOff: { backgroundColor: '#ffcdd2', color: '#c62828' },
+  flagString: { fontSize: 12, color: '#1565c0' },
+  dashHint: { fontSize: 11, color: '#888', marginTop: 8, fontStyle: 'italic' },
+});</code></pre>
+
+    <hr>
+
+    <!-- Section 11: Key Takeaways -->
+    <h2>11. Key takeaways</h2>
+
+    <ul>
+      <li><strong>Feature flags = remote on/off switches</strong> — control features without new builds</li>
+      <li><strong>Firebase Remote Config</strong> — free, built into your existing Firebase stack</li>
+      <li><strong>Always set defaults</strong> — app must work even if Remote Config is unreachable</li>
+      <li><strong>Kill switch</strong> — disable broken features in 30 seconds, not 3 days</li>
+      <li><strong>Percentage rollout</strong> — 5% → 20% → 50% → 100% (same user stays in their group)</li>
+      <li><strong>A/B testing</strong> — show different UIs to different users, measure which performs better</li>
+      <li><strong>Dynamic config values</strong> — change max group size, API URLs, rate limits without a build</li>
+      <li><strong>Clean up old flags</strong> — remove flags 4+ weeks after 100% rollout to avoid dead code</li>
+      <li><strong>Don't nest flags</strong> — one flag per feature, flat checks</li>
+      <li><strong>Combine with OTA + CI/CD</strong> — ship code behind a flag, enable remotely when ready</li>
+    </ul>
+
+    <div class="callout" style="background:#e8f5e9; border-left-color:#25D366;">
+      <div class="callout-title">Congratulations! 🎉</div>
+      <p>You've completed the entire JS Learn course — 9 modules, 63 lessons — from "What is JavaScript?" all the way to feature flags and staged rollouts. You now have the knowledge to build, publish, and professionally operate a real WhatsApp clone on both Android and iOS. The app you've built uses the same technologies as real WhatsApp: React Native, Firebase, WebRTC, end-to-end encryption, and feature flags. Go build something amazing!</p>
+    </div>
+
+    <hr>
+
+    <!-- Quiz -->
+    <h2>Test your knowledge</h2>
+    <div id="adv-lesson-0006-quiz"></div>
+
+    <hr>
+
+    <!-- Nav -->
+    <div class="nav-links">
+      <a href="./0005-accessibility.html">&larr; Previous: Accessibility</a>
+      <a href="../../index.html">Back to Course Home &rarr;</a>
+    </div>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script>
+    createQuiz('adv-lesson-0006-quiz', [
+      {
+        question: 'What is the primary advantage of feature flags over regular code deployment?',
+        options: [
+          'They make the app run faster',
+          'They let you enable or disable features instantly without publishing a new app build',
+          'They reduce the app download size',
+          'They automatically fix bugs in your code',
+        ],
+        answer: 1,
+      },
+      {
+        question: 'In a percentage rollout, why is the assignment "sticky" (same user always gets the same value)?',
+        options: [
+          'Because it uses a hash of the user\'s device ID, not random selection on each launch',
+          'Because the flag value is stored in AsyncStorage',
+          'Because Firebase only checks the flag once ever',
+          'Because the user must manually opt in to the feature',
+        ],
+        answer: 0,
+      },
+      {
+        question: 'What should you do with a feature flag after the feature has been at 100% rollout for 4+ weeks?',
+        options: [
+          'Keep it forever in case you need to roll back someday',
+          'Change it to a different flag name',
+          'Remove the flag from your code and Firebase Console to avoid dead code accumulation',
+          'Move it to a separate "archive" Remote Config project',
+        ],
+        answer: 2,
+      },
+      {
+        question: 'What happens if the app cannot reach Firebase Remote Config (e.g., no internet)?',
+        options: [
+          'The app crashes with a network error',
+          'All features are automatically disabled',
+          'The app uses the default values defined in `remoteConfig.defaultConfig`',
+          'The app shows a "no internet" screen and refuses to launch',
+        ],
+        answer: 2,
+      },
+      {
+        question: 'How can you use feature flags as a "kill switch" for a broken feature?',
+        options: [
+          'Delete the feature\'s code from the repository',
+          'Set the flag to false in Firebase Console — the feature disappears for all users within minutes',
+          'Send a push notification telling users to uninstall the app',
+          'Revoke the app\'s Firebase API key',
+        ],
+        answer: 1,
+      },
+    ]);
+  </script>
+</body>
+</html>

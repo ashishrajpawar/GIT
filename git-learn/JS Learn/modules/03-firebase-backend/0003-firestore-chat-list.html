@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Firebase Lesson 3: Firestore — Real-Time Chat List — JS Learn</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">Module 3: Firebase Backend</a>
+      <span class="sep">›</span>
+      <span class="current">Lesson 3: Firestore — Real-Time Chat List</span>
+    </nav>
+
+    <!-- Header -->
+    <span class="badge">Firebase · Lesson 3</span>
+    <h1 style="margin-top:0.5rem;">Firestore — Real-Time Chat List</h1>
+    <div class="lesson-meta">
+      <span>Data model · addDoc · onSnapshot · orderBy · Security Rules</span>
+      <span>~50 min</span>
+      <span>Hands-on</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for your WhatsApp clone</div>
+      <p>The chat list you built in Lesson 13 uses hardcoded data — it never changes and is the same for every user. Firestore replaces that with a real database: chats are stored in the cloud, every user sees only their own conversations, and the list updates instantly when a new message arrives — without the user needing to pull to refresh. This lesson sets up the Firestore data model, reads it with a real-time listener, and locks it down with Security Rules so users can only see their own data.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 1 -->
+    <h2>1. Firestore concepts — documents and collections</h2>
+
+    <p>Firestore stores data as <strong>documents</strong> inside <strong>collections</strong>. Think of a collection as a folder and a document as a JSON file inside it.</p>
+
+    <pre><code>// A Firestore path looks like: collection/documentId
+// You can nest further: collection/documentId/subCollection/subDocumentId
+
+chats/                        ← collection
+  abc123/                     ← document (one chat conversation)
+    members: ['uid1', 'uid2']
+    lastMessage: 'See you then!'
+    lastMessageAt: Timestamp
+    unreadCounts: { uid1: 0, uid2: 2 }
+
+    messages/                 ← sub-collection (inside the chat document)
+      msg001/                 ← one message document
+        text: 'Hey!'
+        senderId: 'uid1'
+        createdAt: Timestamp
+        read: false</code></pre>
+
+    <p>Your WhatsApp clone uses two levels:</p>
+    <ul>
+      <li><strong><code>/chats/{chatId}</code></strong> — one document per conversation, stores metadata (last message, members, unread counts)</li>
+      <li><strong><code>/chats/{chatId}/messages/{messageId}</code></strong> — sub-collection of all messages in that chat (covered in Lesson 4)</li>
+    </ul>
+
+    <hr>
+
+    <!-- Section 2 -->
+    <h2>2. The chat document shape</h2>
+
+    <p>Every document in the <code>chats</code> collection looks like this:</p>
+
+    <pre><code>{
+  // Who is in this chat
+  members:       ['uid_ashish', 'uid_priya'],   // array of user UIDs
+  memberNames:   { uid_ashish: 'Ashish', uid_priya: 'Priya Sharma' },
+  memberColors:  { uid_ashish: '#075E54', uid_priya: '#128C7E' },
+
+  // Last message preview (shown in the chat list)
+  lastMessage:   'Perfect, see you then!',
+  lastMessageAt: Timestamp,   // Firebase server timestamp — used for ordering
+  lastSenderId:  'uid_priya',
+
+  // Unread counts per user
+  unreadCounts:  { uid_ashish: 2, uid_priya: 0 },
+
+  // Group chat support
+  isGroup:       false,
+  groupName:     null,        // only set for group chats
+}</code></pre>
+
+    <p>The <code>members</code> array is the key to querying — you ask Firestore for "all chats where members contains my uid".</p>
+
+    <hr>
+
+    <!-- Section 3 -->
+    <h2>3. Creating a chat document — addDoc</h2>
+
+    <p>To start a new chat between two users, add a document to the <code>chats</code> collection. Firestore generates a unique ID automatically.</p>
+
+    <pre><code>import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { db, auth } from './firebase';
+
+async function startChat(otherUserId, otherUserName) {
+  const myUid  = auth.currentUser.uid;
+  const myName = auth.currentUser.displayName;
+
+  const newChat = {
+    members:       [myUid, otherUserId],
+    memberNames:   { [myUid]: myName,  [otherUserId]: otherUserName },
+    memberColors:  { [myUid]: '#075E54', [otherUserId]: '#128C7E' },
+    lastMessage:   '',
+    lastMessageAt: serverTimestamp(),   // Firebase server time — never use new Date()
+    lastSenderId:  null,
+    unreadCounts:  { [myUid]: 0, [otherUserId]: 0 },
+    isGroup:       false,
+    groupName:     null,
+  };
+
+  const docRef = await addDoc(collection(db, 'chats'), newChat);
+  console.log('New chat ID:', docRef.id);
+  return docRef.id;
+}</code></pre>
+
+    <div class="callout success">
+      <div class="callout-title">Always use serverTimestamp() for time fields</div>
+      <p><code>serverTimestamp()</code> uses Firebase's server clock, not the device clock. This matters because different phones have different times — a phone that is 5 minutes ahead would make its messages appear at the top of the list. Server timestamps are consistent regardless of where the message was sent from.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 4 -->
+    <h2>4. Reading chats once — getDocs</h2>
+
+    <p>Use <code>getDocs</code> to fetch the chat list once — good for initial load or manual refresh. This is the "snapshot at a point in time" approach.</p>
+
+    <pre><code>import { collection, query, where, orderBy, getDocs } from 'firebase/firestore';
+import { db, auth } from './firebase';
+
+async function loadChats() {
+  const myUid = auth.currentUser.uid;
+
+  // Query: chats where I am a member, sorted newest first
+  const q = query(
+    collection(db, 'chats'),
+    where('members', 'array-contains', myUid),   // only MY chats
+    orderBy('lastMessageAt', 'desc')             // newest at top
+  );
+
+  const snapshot = await getDocs(q);
+
+  const chats = snapshot.docs.map(doc =&gt; ({
+    id:           doc.id,                        // Firestore document ID
+    ...doc.data(),                               // all the fields
+    // Build display fields from the raw data:
+    name:         doc.data().isGroup
+                    ? doc.data().groupName
+                    : doc.data().memberNames[otherMember(doc.data().members, myUid)],
+    unread:       doc.data().unreadCounts?.[myUid] ?? 0,
+    time:         formatTimestamp(doc.data().lastMessageAt),
+  }));
+
+  return chats;
+}
+
+// Get the other person's uid from the members array
+function otherMember(members, myUid) {
+  return members.find(uid =&gt; uid !== myUid);
+}
+
+// Convert a Firestore Timestamp to a display string
+function formatTimestamp(ts) {
+  if (!ts) return '';
+  const date = ts.toDate();                      // Timestamp → JS Date
+  const now  = new Date();
+  const diff = now - date;
+  const oneDay = 86400000;
+  if (diff &lt; oneDay)   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (diff &lt; oneDay*2) return 'Yesterday';
+  return date.toLocaleDateString([], { weekday: 'short' });
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 5 -->
+    <h2>5. Real-time updates — onSnapshot</h2>
+
+    <p><code>onSnapshot</code> is the key difference between Firestore and a regular REST API. It sets up a live listener — whenever any chat document that matches your query changes (new message, unread count update), Firestore pushes the update to your app instantly. No polling, no pull-to-refresh needed.</p>
+
+    <pre><code>import { collection, query, where, orderBy, onSnapshot } from 'firebase/firestore';
+import { db, auth } from './firebase';
+
+useEffect(() =&gt; {
+  const myUid = auth.currentUser?.uid;
+  if (!myUid) return;
+
+  setLoading(true);
+
+  const q = query(
+    collection(db, 'chats'),
+    where('members', 'array-contains', myUid),
+    orderBy('lastMessageAt', 'desc')
+  );
+
+  // Subscribe — fires immediately with current data, then on every change
+  const unsubscribe = onSnapshot(q,
+    (snapshot) =&gt; {
+      const chats = snapshot.docs.map(doc =&gt; ({
+        id:     doc.id,
+        ...doc.data(),
+        name:   doc.data().isGroup
+                  ? doc.data().groupName
+                  : doc.data().memberNames?.[otherMember(doc.data().members, myUid)] ?? 'Unknown',
+        unread: doc.data().unreadCounts?.[myUid] ?? 0,
+        time:   formatTimestamp(doc.data().lastMessageAt),
+      }));
+      setAllChats(chats);
+      setLoading(false);
+      setError(null);
+    },
+    (err) =&gt; {
+      console.error('Firestore error:', err);
+      setError('Could not load chats. Check your connection.');
+      setLoading(false);
+    }
+  );
+
+  return unsubscribe;   // crucial — unsubscribes when the component unmounts
+}, []);</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">Always return the unsubscribe function from useEffect</div>
+      <p>If you forget <code>return unsubscribe</code>, the Firestore listener keeps running even after the component unmounts — listening forever, updating state on an unmounted component, causing memory leaks and console warnings. The <code>return</code> is the cleanup function that React calls when the component unmounts.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 6 -->
+    <h2>6. Firestore Security Rules — locking down your data</h2>
+
+    <p>Right now your Firestore is in test mode — anyone can read and write anything. Before you ship, replace those rules with ones that require authentication and ownership checks.</p>
+
+    <p>In the Firebase console: <strong>Firestore Database → Rules</strong>. Replace the existing rules with:</p>
+
+    <pre><code>rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Chats collection
+    match /chats/{chatId} {
+      // Only authenticated users who are members of this chat can read it
+      allow read: if request.auth != null
+                  &amp;&amp; request.auth.uid in resource.data.members;
+
+      // Only authenticated members can update (e.g. mark as read, update lastMessage)
+      allow update: if request.auth != null
+                    &amp;&amp; request.auth.uid in resource.data.members;
+
+      // Only authenticated users can create a new chat
+      // and they must include themselves in the members array
+      allow create: if request.auth != null
+                    &amp;&amp; request.auth.uid in request.resource.data.members;
+
+      // Messages sub-collection
+      match /messages/{messageId} {
+        // Any member of the parent chat can read messages
+        allow read: if request.auth != null
+                    &amp;&amp; request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.members;
+
+        // Only members can write messages
+        allow create: if request.auth != null
+                      &amp;&amp; request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.members
+                      &amp;&amp; request.resource.data.senderId == request.auth.uid;
+      }
+    }
+  }
+}</code></pre>
+
+    <p>Click <strong>Publish</strong>. These rules mean:</p>
+    <ul>
+      <li>You must be logged in to do anything</li>
+      <li>You can only read chats you are a member of</li>
+      <li>You can only send messages in chats you belong to</li>
+      <li>You can only send messages as yourself (<code>senderId == request.auth.uid</code>)</li>
+    </ul>
+
+    <div class="callout">
+      <div class="callout-title">Composite index required for the chat list query</div>
+      <p>The query <code>where('members', 'array-contains', uid) + orderBy('lastMessageAt', 'desc')</code> uses two fields — Firestore requires a composite index for this. The first time you run the query, Firestore throws an error with a link in the console. Click that link — it takes you directly to the Firebase console to create the index with one click. The index takes about a minute to build.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 7 -->
+    <h2>7. Seeding test data from the app</h2>
+
+    <p>Before you build a contact-picker screen, seed some test chats directly from the app so the chat list shows real data. Add a temporary button to your Settings screen:</p>
+
+    <pre><code>import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { db, auth } from './firebase';
+
+async function seedTestChats() {
+  const myUid  = auth.currentUser.uid;
+  const myName = auth.currentUser.displayName ?? 'Me';
+
+  const testChats = [
+    { otherUid: 'fake_uid_priya',  otherName: 'Priya Sharma',  lastMsg: 'Perfect, see you then!' },
+    { otherUid: 'fake_uid_rahul',  otherName: 'Rahul Mehta',   lastMsg: 'I\'ll send the file now.' },
+    { otherUid: 'fake_uid_family', otherName: 'Family Group',  lastMsg: 'Mom: Dinner at 7!', isGroup: true },
+  ];
+
+  for (const chat of testChats) {
+    await addDoc(collection(db, 'chats'), {
+      members:       [myUid, chat.otherUid],
+      memberNames:   { [myUid]: myName, [chat.otherUid]: chat.otherName },
+      memberColors:  { [myUid]: '#075E54', [chat.otherUid]: '#128C7E' },
+      lastMessage:   chat.lastMsg,
+      lastMessageAt: serverTimestamp(),
+      lastSenderId:  chat.otherUid,
+      unreadCounts:  { [myUid]: Math.floor(Math.random() * 4), [chat.otherUid]: 0 },
+      isGroup:       chat.isGroup ?? false,
+      groupName:     chat.isGroup ? chat.otherName : null,
+    });
+  }
+  Alert.alert('Done', '3 test chats created!');
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 8: Full working example -->
+    <h2>8. Full working example — ChatListScreen with live Firestore data</h2>
+
+    <p>This replaces the <code>SAMPLE_CHATS</code> array in your <code>ChatListScreen</code> from Lesson 13 with a live Firestore listener. Everything else — the UI, search, skeletons, error states — stays identical. Only the data source changes.</p>
+
+    <pre><code>// ChatListScreen.js — drop this in as your ChatListScreen component
+// (the rest of App.js — navigators, other screens — stays the same as Lesson 13)
+
+import { useState, useEffect, useRef } from 'react';
+import {
+  View, Text, FlatList, TextInput, Pressable,
+  StyleSheet, Animated, Keyboard, Alert,
+} from 'react-native';
+import {
+  collection, query, where, orderBy,
+  onSnapshot, addDoc, serverTimestamp,
+} from 'firebase/firestore';
+import { db, auth } from './firebase';
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function otherMember(members, myUid) {
+  return members.find(uid =&gt; uid !== myUid) ?? '';
+}
+
+function formatTimestamp(ts) {
+  if (!ts) return '';
+  const date = ts.toDate();
+  const now  = new Date();
+  const diff = now - date;
+  const day  = 86400000;
+  if (diff &lt; day)   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (diff &lt; day*2) return 'Yesterday';
+  return date.toLocaleDateString([], { weekday: 'short' });
+}
+
+// ── Skeleton (same as Lesson 13) ──────────────────────────────────────────────
+function SkeletonBlock({ width, height, borderRadius, style }) {
+  const opacity = useRef(new Animated.Value(0.4)).current;
+  useEffect(() =&gt; {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(opacity, { toValue: 1,   duration: 700, useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 0.4, duration: 700, useNativeDriver: true }),
+      ])
+    ).start();
+  }, []);
+  return (
+    &lt;Animated.View style={[{ backgroundColor: '#e0e0e0' }, { width, height, borderRadius }, { opacity }, style]} /&gt;
+  );
+}
+
+function ChatRowSkeleton() {
+  return (
+    &lt;View style={styles.row}&gt;
+      &lt;SkeletonBlock width={52} height={52} borderRadius={26} /&gt;
+      &lt;View style={{ flex: 1, marginLeft: 12 }}&gt;
+        &lt;SkeletonBlock width="55%" height={14} borderRadius={7} /&gt;
+        &lt;SkeletonBlock width="80%" height={12} borderRadius={6} style={{ marginTop: 8 }} /&gt;
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}
+
+// ── Chat row ──────────────────────────────────────────────────────────────────
+function ChatRow({ chat, onPress }) {
+  const initial = (chat.name ?? '?')[0].toUpperCase();
+  return (
+    &lt;Pressable
+      style={({ pressed }) =&gt; [styles.row, pressed &amp;&amp; styles.rowPressed]}
+      onPress={onPress}
+    &gt;
+      &lt;View style={styles.avatarWrap}&gt;
+        &lt;View style={[styles.avatarCircle, { backgroundColor: chat.memberColors?.[auth.currentUser?.uid] ?? '#075E54' }]}&gt;
+          &lt;Text style={styles.avatarLetter}&gt;{initial}&lt;/Text&gt;
+        &lt;/View&gt;
+      &lt;/View&gt;
+      &lt;View style={styles.middle}&gt;
+        &lt;View style={styles.topRow}&gt;
+          &lt;Text style={styles.chatName} numberOfLines={1}&gt;{chat.name ?? 'Unknown'}&lt;/Text&gt;
+          {chat.isGroup &amp;&amp; &lt;Text style={styles.groupTag}&gt;Group&lt;/Text&gt;}
+        &lt;/View&gt;
+        &lt;Text style={styles.preview} numberOfLines={1}&gt;{chat.lastMessage ?? ''}&lt;/Text&gt;
+      &lt;/View&gt;
+      &lt;View style={styles.right}&gt;
+        &lt;Text style={[styles.time, chat.unread &gt; 0 &amp;&amp; styles.timeGreen]}&gt;{chat.time}&lt;/Text&gt;
+        {chat.unread &gt; 0 &amp;&amp; (
+          &lt;View style={styles.badge}&gt;
+            &lt;Text style={styles.badgeText}&gt;{chat.unread}&lt;/Text&gt;
+          &lt;/View&gt;
+        )}
+      &lt;/View&gt;
+    &lt;/Pressable&gt;
+  );
+}
+
+// ── ChatListScreen ────────────────────────────────────────────────────────────
+export function ChatListScreen({ navigation }) {
+  const [allChats,   setAllChats]   = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [error,      setError]      = useState(null);
+  const [query_str,  setQueryStr]   = useState('');
+  const [showSearch, setShowSearch] = useState(false);
+
+  const myUid = auth.currentUser?.uid;
+
+  // Derived — filtered list
+  const filteredChats = query_str.trim()
+    ? allChats.filter(c =&gt;
+        (c.name ?? '').toLowerCase().includes(query_str.toLowerCase()) ||
+        (c.lastMessage ?? '').toLowerCase().includes(query_str.toLowerCase())
+      )
+    : allChats;
+
+  // Tab badge — total unread
+  useEffect(() =&gt; {
+    const total = allChats.reduce((sum, c) =&gt; sum + (c.unread ?? 0), 0);
+    navigation.setOptions({ tabBarBadge: total &gt; 0 ? total : undefined });
+  }, [allChats, navigation]);
+
+  // Live Firestore listener
+  useEffect(() =&gt; {
+    if (!myUid) return;
+    setLoading(true);
+
+    const q = query(
+      collection(db, 'chats'),
+      where('members', 'array-contains', myUid),
+      orderBy('lastMessageAt', 'desc')
+    );
+
+    const unsubscribe = onSnapshot(q,
+      (snapshot) =&gt; {
+        const chats = snapshot.docs.map(doc =&gt; {
+          const data = doc.data();
+          const otherId = otherMember(data.members, myUid);
+          return {
+            id:          doc.id,
+            ...data,
+            name:        data.isGroup ? data.groupName : (data.memberNames?.[otherId] ?? 'Unknown'),
+            unread:      data.unreadCounts?.[myUid] ?? 0,
+            time:        formatTimestamp(data.lastMessageAt),
+            avatarColor: data.memberColors?.[otherId] ?? '#667781',
+          };
+        });
+        setAllChats(chats);
+        setLoading(false);
+        setError(null);
+      },
+      (err) =&gt; {
+        console.error(err);
+        setError('Could not load chats. Check your connection.');
+        setLoading(false);
+      }
+    );
+
+    return unsubscribe;   // unsubscribe on unmount
+  }, [myUid]);
+
+  // Seed test data button (remove before shipping)
+  async function seedTestData() {
+    const myName = auth.currentUser?.displayName ?? 'Me';
+    const testChats = [
+      { otherUid: 'fake_priya',  otherName: 'Priya Sharma',  lastMsg: 'Perfect, see you then!',  isGroup: false },
+      { otherUid: 'fake_rahul',  otherName: 'Rahul Mehta',   lastMsg: 'I\'ll send the file now.', isGroup: false },
+      { otherUid: 'fake_family', otherName: 'Family Group',  lastMsg: 'Mom: Dinner at 7!',        isGroup: true  },
+    ];
+    for (const c of testChats) {
+      await addDoc(collection(db, 'chats'), {
+        members:       [myUid, c.otherUid],
+        memberNames:   { [myUid]: myName, [c.otherUid]: c.otherName },
+        memberColors:  { [myUid]: '#075E54', [c.otherUid]: '#128C7E' },
+        lastMessage:   c.lastMsg,
+        lastMessageAt: serverTimestamp(),
+        lastSenderId:  c.otherUid,
+        unreadCounts:  { [myUid]: Math.floor(Math.random() * 4), [c.otherUid]: 0 },
+        isGroup:       c.isGroup,
+        groupName:     c.isGroup ? c.otherName : null,
+      });
+    }
+    Alert.alert('Seeded', '3 test chats added to Firestore!');
+  }
+
+  // ── Loading state ───────────────────────────────────────────────────────────
+  if (loading) {
+    return (
+      &lt;View style={styles.screen}&gt;
+        &lt;View style={styles.header}&gt;&lt;Text style={styles.headerTitle}&gt;WhatsApp&lt;/Text&gt;&lt;/View&gt;
+        {[1,2,3,4,5].map(i =&gt; &lt;ChatRowSkeleton key={i} /&gt;)}
+      &lt;/View&gt;
+    );
+  }
+
+  // ── Error state ─────────────────────────────────────────────────────────────
+  if (error) {
+    return (
+      &lt;View style={styles.screen}&gt;
+        &lt;View style={styles.header}&gt;&lt;Text style={styles.headerTitle}&gt;WhatsApp&lt;/Text&gt;&lt;/View&gt;
+        &lt;View style={styles.centre}&gt;
+          &lt;Text style={{ fontSize: 48, marginBottom: 12 }}&gt;⚠️&lt;/Text&gt;
+          &lt;Text style={styles.errorTitle}&gt;Something went wrong&lt;/Text&gt;
+          &lt;Text style={styles.errorMsg}&gt;{error}&lt;/Text&gt;
+        &lt;/View&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  // ── Data state ──────────────────────────────────────────────────────────────
+  return (
+    &lt;View style={styles.screen}&gt;
+      &lt;View style={styles.header}&gt;
+        {showSearch ? (
+          &lt;TextInput
+            style={styles.searchInput}
+            value={query_str}
+            onChangeText={setQueryStr}
+            placeholder="Search chats..."
+            placeholderTextColor="#b2dfdb"
+            autoFocus
+            returnKeyType="search"
+          /&gt;
+        ) : (
+          &lt;Text style={styles.headerTitle}&gt;WhatsApp&lt;/Text&gt;
+        )}
+        &lt;Pressable
+          style={styles.searchIconBtn}
+          onPress={() =&gt; { setShowSearch(s =&gt; !s); if (showSearch) setQueryStr(''); }}
+        &gt;
+          &lt;Text style={styles.searchIconText}&gt;{showSearch ? '✕' : '🔍'}&lt;/Text&gt;
+        &lt;/Pressable&gt;
+      &lt;/View&gt;
+
+      &lt;FlatList
+        data={filteredChats}
+        keyExtractor={item =&gt; item.id}
+        keyboardShouldPersistTaps="handled"
+        ItemSeparatorComponent={() =&gt; &lt;View style={styles.sep} /&gt;}
+        ListEmptyComponent={
+          &lt;View style={styles.emptyState}&gt;
+            {query_str.trim() ? (
+              &lt;&gt;
+                &lt;Text style={styles.emptyIcon}&gt;🔍&lt;/Text&gt;
+                &lt;Text style={styles.emptyTitle}&gt;No results for "{query_str}"&lt;/Text&gt;
+              &lt;/&gt;
+            ) : (
+              &lt;&gt;
+                &lt;Text style={styles.emptyIcon}&gt;💬&lt;/Text&gt;
+                &lt;Text style={styles.emptyTitle}&gt;No chats yet&lt;/Text&gt;
+                &lt;Text style={styles.emptySub}&gt;Tap the button below to add test data.&lt;/Text&gt;
+                &lt;Pressable style={styles.seedBtn} onPress={seedTestData}&gt;
+                  &lt;Text style={styles.seedBtnText}&gt;Add test chats&lt;/Text&gt;
+                &lt;/Pressable&gt;
+              &lt;/&gt;
+            )}
+          &lt;/View&gt;
+        }
+        renderItem={({ item }) =&gt; (
+          &lt;ChatRow
+            chat={item}
+            onPress={() =&gt; {
+              Keyboard.dismiss();
+              navigation.navigate('MessageThread', {
+                chatId:   item.id,
+                chatName: item.name,
+                isGroup:  item.isGroup,
+              });
+            }}
+          /&gt;
+        )}
+      /&gt;
+    &lt;/View&gt;
+  );
+}
+
+// ── Styles ────────────────────────────────────────────────────────────────────
+const styles = StyleSheet.create({
+  screen:        { flex: 1, backgroundColor: '#fff' },
+  centre:        { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
+  header:        { backgroundColor: '#075E54', paddingTop: 48, paddingBottom: 12, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center' },
+  headerTitle:   { flex: 1, color: '#fff', fontSize: 20, fontWeight: '700' },
+  searchInput:   { flex: 1, color: '#fff', fontSize: 16, paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: '#b2dfdb' },
+  searchIconBtn: { paddingLeft: 12, paddingVertical: 4 },
+  searchIconText:{ fontSize: 18 },
+  row:           { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12 },
+  rowPressed:    { backgroundColor: '#f5f5f5' },
+  avatarWrap:    { position: 'relative' },
+  avatarCircle:  { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center' },
+  avatarLetter:  { color: '#fff', fontSize: 22, fontWeight: '700' },
+  middle:        { flex: 1, marginLeft: 12, marginRight: 8 },
+  topRow:        { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  chatName:      { flex: 1, fontSize: 16, fontWeight: '600', color: '#111' },
+  groupTag:      { fontSize: 11, color: '#667781', backgroundColor: '#f0f2f5', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4 },
+  preview:       { fontSize: 14, color: '#667781', marginTop: 2 },
+  right:         { alignItems: 'flex-end' },
+  time:          { fontSize: 12, color: '#667781' },
+  timeGreen:     { color: '#25D366', fontWeight: '600' },
+  badge:         { backgroundColor: '#25D366', borderRadius: 10, minWidth: 20, height: 20, alignItems: 'center', justifyContent: 'center', marginTop: 4, paddingHorizontal: 5 },
+  badgeText:     { color: '#fff', fontSize: 11, fontWeight: '700' },
+  sep:           { height: 1, backgroundColor: '#f0f2f5', marginLeft: 80 },
+  errorTitle:    { fontSize: 18, fontWeight: '700', color: '#111', marginBottom: 8 },
+  errorMsg:      { fontSize: 14, color: '#667781', textAlign: 'center', lineHeight: 20 },
+  emptyState:    { alignItems: 'center', paddingTop: 80, paddingHorizontal: 32 },
+  emptyIcon:     { fontSize: 56, marginBottom: 16 },
+  emptyTitle:    { fontSize: 20, fontWeight: '700', color: '#111', marginBottom: 8 },
+  emptySub:      { fontSize: 14, color: '#667781', textAlign: 'center', lineHeight: 20, marginBottom: 20 },
+  seedBtn:       { backgroundColor: '#075E54', paddingHorizontal: 24, paddingVertical: 11, borderRadius: 8 },
+  seedBtnText:   { color: '#fff', fontWeight: '700' },
+});</code></pre>
+
+    <p>Run this with your logged-in account. The first time, the list is empty — tap "Add test chats" to write three documents to Firestore. They appear in the list instantly, with no refresh needed. Open the Firebase console → Firestore Database → <code>chats</code> collection — you can see the raw documents. Edit a <code>lastMessage</code> value directly in the console and watch the list update on your phone in real time. That is <code>onSnapshot</code> working.</p>
+
+    <div class="callout success">
+      <div class="callout-title">What just changed from Lesson 13</div>
+      <p>The entire ChatListScreen UI is identical to Lesson 13. The only change is the data source: <code>SAMPLE_CHATS</code> is gone, replaced by the <code>onSnapshot</code> listener. The loading skeleton, error state, search bar, unread badges, and navigation all work exactly as before — now powered by real cloud data.</p>
+    </div>
+
+    <hr>
+
+    <!-- Quiz -->
+    <h2>Quick check — test yourself</h2>
+    <p>Five questions on what you just read.</p>
+
+    <div id="firebase-lesson-0003-quiz"></div>
+
+    <hr>
+
+    <!-- Resources -->
+    <h2>Primary resources for this lesson</h2>
+    <ul>
+      <li><a href="https://firebase.google.com/docs/firestore/query-data/listen" target="_blank" rel="noopener">Firestore — real-time updates with onSnapshot</a></li>
+      <li><a href="https://firebase.google.com/docs/firestore/query-data/queries" target="_blank" rel="noopener">Firestore — simple and compound queries</a></li>
+      <li><a href="https://firebase.google.com/docs/firestore/security/get-started" target="_blank" rel="noopener">Firestore Security Rules — get started</a></li>
+      <li><a href="https://firebase.google.com/docs/reference/js/firestore_#servertimestamp" target="_blank" rel="noopener">serverTimestamp — Firestore docs</a></li>
+    </ul>
+
+    <div class="ask-teacher">
+      <strong>Anything unclear? Ask your teacher.</strong>
+      Common issues: (1) <code>The query requires an index</code> error in the console — click the link in the error message to auto-create the composite index in the Firebase console; wait ~1 min for it to build. (2) Chat list is empty after seeding — check that the <code>where('members', 'array-contains', myUid)</code> query matches the <code>members</code> array you wrote; the UIDs must match exactly. (3) <code>Missing or insufficient permissions</code> — your Security Rules are blocking the query; temporarily switch back to test-mode rules while developing, then re-apply the real rules before shipping. (4) Timestamps show as <code>null</code> — <code>serverTimestamp()</code> is pending (not yet written by the server); use <code>if (!ts) return ''</code> as a guard in <code>formatTimestamp</code>.
+    </div>
+
+    <hr>
+
+    <!-- Lesson nav -->
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="./0002-authentication.html">← Lesson 2: Authentication</a>
+      <a href="./0004-firestore-messages.html">Lesson 4: Firestore — Real-Time Messages →</a>
+    </nav>
+
+  </div><!-- .page-wrap -->
+
+  <script src="../../assets/quiz.js"></script>
+  <script>
+    createQuiz("firebase-lesson-0003-quiz", [
+      {
+        question: "You call onSnapshot(query, callback) in a useEffect. What must the useEffect return, and why?",
+        options: [
+          "Return null — onSnapshot cleans itself up when the query goes out of scope",
+          "Return the unsubscribe function that onSnapshot gives back — React calls it when the component unmounts, stopping the listener and preventing memory leaks",
+          "Return a Promise that resolves when the first snapshot arrives",
+          "Nothing — the listener stops automatically when the component re-renders"
+        ],
+        correct: 1,
+        explanation: "onSnapshot returns an unsubscribe function. The useEffect cleanup function (the function you return) is called by React when the component unmounts. If you don't return unsubscribe, the Firestore listener keeps running forever — listening for changes, calling setState on an unmounted component, causing memory leaks and React warnings."
+      },
+      {
+        question: "The query uses where('members', 'array-contains', myUid) AND orderBy('lastMessageAt', 'desc'). Firestore throws an error about a missing index. What do you do?",
+        options: [
+          "Remove the orderBy — Firestore doesn't support sorting and filtering together",
+          "Click the link in the error message — it takes you directly to the Firebase console to create the required composite index with one click",
+          "Replace onSnapshot with getDocs — composite indexes are only required for real-time queries",
+          "Add an index manually by writing a JSON config file in your project"
+        ],
+        correct: 1,
+        explanation: "Firestore requires a composite index when a query filters on one field and sorts by a different field. The error message includes a URL that auto-fills the index creation form in the Firebase console — click it, click Create, wait about a minute for the index to build. You never write index config manually; the console handles it."
+      },
+      {
+        question: "Why should you use serverTimestamp() instead of new Date() when writing a lastMessageAt field to Firestore?",
+        options: [
+          "new Date() is not available in React Native — it is a browser-only API",
+          "serverTimestamp() uses Firebase's server clock, ensuring consistent ordering regardless of device clock differences — a phone that is 5 minutes ahead would otherwise make its messages appear first",
+          "Firestore only accepts Timestamp objects, not JavaScript Date objects",
+          "serverTimestamp() compresses the timestamp to use less storage"
+        ],
+        correct: 1,
+        explanation: "serverTimestamp() tells Firestore to fill in the timestamp using the server's clock at the moment the write completes. Device clocks drift and can be wrong by minutes. If you used new Date() from the device, a phone with a fast clock would get a future timestamp and its messages would appear at the top of every list. Server timestamps eliminate this problem entirely."
+      },
+      {
+        question: "The Firestore Security Rule says: allow read: if request.auth != null && request.auth.uid in resource.data.members. What does resource.data.members refer to?",
+        options: [
+          "The members field of the document being requested — the chat that is about to be read",
+          "The members collection at the root of your Firestore database",
+          "The authenticated user's member profile document",
+          "All documents in the chats collection"
+        ],
+        correct: 0,
+        explanation: "In a Firestore Security Rule, resource.data refers to the fields of the specific document being accessed by the current request. resource.data.members is the members array stored inside that chat document. The rule checks whether the requesting user's uid is in that array — if so, allow the read; if not, deny it."
+      },
+      {
+        question: "getDocs fetches data once. onSnapshot sets up a live listener. For the chat list, which should you use and why?",
+        options: [
+          "getDocs — it is simpler and you can call it again on pull-to-refresh",
+          "onSnapshot — the chat list must update automatically when a new message arrives without the user pulling to refresh, which only a real-time listener can do",
+          "Both — use getDocs for the initial load and onSnapshot for subsequent updates",
+          "Neither — use a polling interval with setInterval calling getDocs every 5 seconds"
+        ],
+        correct: 1,
+        explanation: "onSnapshot is the right choice for the chat list. When Priya sends Ashish a message, Firestore pushes the update to every connected client that has a matching listener — the chat list updates in under a second without any user action. getDocs is a one-time fetch; you'd have to rely on pull-to-refresh for updates, which is a poor user experience for a messaging app."
+      }
+    ]);
+  </script>
+
+</body>
+</html>

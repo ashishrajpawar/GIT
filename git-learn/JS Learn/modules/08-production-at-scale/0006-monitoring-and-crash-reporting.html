@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Production at Scale Lesson 6: Monitoring &amp; Crash Reporting — JS Learn</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">Module 8: Production at Scale</a>
+      <span class="sep">›</span>
+      <span class="current">Lesson 6: Monitoring &amp; Crash Reporting</span>
+    </nav>
+
+    <!-- Header -->
+    <span class="badge">Production at Scale · Lesson 6</span>
+    <h1 style="margin-top:0.5rem;">Monitoring &amp; Crash Reporting</h1>
+    <div class="lesson-meta">
+      <span>Crashlytics · Sentry · Logging strategy · Performance monitoring · Alerts</span>
+      <span>~55 min</span>
+      <span>Hands-on</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for your WhatsApp clone</div>
+      <p>Right now, if your app crashes on a user's phone, you have <strong>no idea</strong>. The user just silently stops using it. With crash reporting, you get an alert within minutes: "5 users crashed on the MessageThread screen on Android 12 when they tap a voice message." You know exactly what broke, on which device, and can fix it before 500 more users hit it. Every serious app — WhatsApp, Instagram, Spotify — uses crash reporting and performance monitoring. It's how they ship fixes within hours of a problem appearing.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 1 -->
+    <h2>1. Two options: Firebase Crashlytics vs. Sentry</h2>
+
+    <p>Both are excellent crash reporting tools. Here's how they compare for a React Native + Expo app:</p>
+
+    <table>
+      <thead>
+        <tr><th></th><th>Firebase Crashlytics</th><th>Sentry</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Price</strong></td><td>Free (unlimited)</td><td>Free tier: 5K events/month; paid plans after</td></tr>
+        <tr><td><strong>Expo support</strong></td><td>Requires EAS Build + config plugin</td><td>First-class Expo support (sentry-expo)</td></tr>
+        <tr><td><strong>JavaScript errors</strong></td><td>Limited — better for native crashes</td><td>Excellent — full JS stack traces with source maps</td></tr>
+        <tr><td><strong>Native crashes</strong></td><td>Excellent (ObjC/Java/C++)</td><td>Good</td></tr>
+        <tr><td><strong>Performance monitoring</strong></td><td>Yes (Firebase Performance)</td><td>Yes (built-in)</td></tr>
+        <tr><td><strong>Already in your stack</strong></td><td>Yes (you use Firebase)</td><td>Extra service to set up</td></tr>
+        <tr><td><strong>Best for</strong></td><td>Native crashes + Firebase-heavy apps</td><td>JS errors + detailed debugging</td></tr>
+      </tbody>
+    </table>
+
+    <p><strong>Recommendation for your app:</strong> Use <strong>Sentry</strong> for JavaScript crash reporting (easier setup with Expo, better JS stack traces) and <strong>Firebase Performance</strong> for performance monitoring (already in your stack). This gives you the best of both.</p>
+
+    <hr>
+
+    <!-- Section 2 -->
+    <h2>2. Setting up Sentry with Expo</h2>
+
+    <h3>Step 1: Install</h3>
+
+    <pre><code>npx expo install @sentry/react-native</code></pre>
+
+    <h3>Step 2: Create a Sentry project</h3>
+    <ol>
+      <li>Sign up at sentry.io (free tier is enough to start)</li>
+      <li>Create a new project → choose "React Native"</li>
+      <li>Copy your DSN (a URL that identifies your project)</li>
+    </ol>
+
+    <h3>Step 3: Initialize in your app</h3>
+
+    <pre><code>// App.js — at the very top, before all other imports
+import * as Sentry from '@sentry/react-native';
+
+Sentry.init({
+  dsn: 'https://abc123@o123456.ingest.sentry.io/789',
+  // Only send errors in production (not during development)
+  enabled: !__DEV__,
+  // Capture 20% of transactions for performance monitoring
+  tracesSampleRate: 0.2,
+  // Attach user info to crash reports
+  beforeSend(event) {
+    // Strip any sensitive data before sending
+    if (event.user) {
+      delete event.user.email; // don't send emails to Sentry
+    }
+    return event;
+  },
+});
+
+// Wrap your root component with Sentry's error boundary
+export default Sentry.wrap(function App() {
+  // your app code...
+});</code></pre>
+
+    <h3>Step 4: Add the Expo config plugin</h3>
+
+    <pre><code>// app.json (or app.config.js)
+{
+  "expo": {
+    "plugins": [
+      [
+        "@sentry/react-native/expo",
+        {
+          "organization": "your-org",
+          "project": "your-whatsapp-clone"
+        }
+      ]
+    ]
+  }
+}</code></pre>
+
+    <h3>Step 5: Upload source maps (for readable stack traces)</h3>
+
+    <pre><code>// In eas.json, add the Sentry upload step
+{
+  "build": {
+    "production": {
+      "env": {
+        "SENTRY_AUTH_TOKEN": "your-sentry-auth-token"
+      }
+    }
+  }
+}
+
+// Source maps upload automatically during EAS Build with the plugin configured</code></pre>
+
+    <hr>
+
+    <!-- Section 3 -->
+    <h2>3. What to log (and what NOT to log)</h2>
+
+    <p>Logging everything fills your crash dashboard with noise. Log strategically:</p>
+
+    <h3>DO log (as breadcrumbs)</h3>
+
+    <pre><code>import * as Sentry from '@sentry/react-native';
+
+// Navigation events — "user was on this screen when it crashed"
+Sentry.addBreadcrumb({
+  category: 'navigation',
+  message: 'Opened MessageThread for chat: group-family',
+  level: 'info',
+});
+
+// Key user actions — "what did they do before the crash?"
+Sentry.addBreadcrumb({
+  category: 'user-action',
+  message: 'Tapped send button',
+  level: 'info',
+});
+
+// Network status changes — "were they offline?"
+Sentry.addBreadcrumb({
+  category: 'network',
+  message: 'Network changed: wifi → none',
+  level: 'warning',
+});
+
+// Firebase errors that you handle (but want to track frequency)
+Sentry.addBreadcrumb({
+  category: 'firebase',
+  message: 'Firestore write failed: unavailable (will retry)',
+  level: 'warning',
+});</code></pre>
+
+    <h3>DO NOT log</h3>
+    <ul>
+      <li><strong>Message content</strong> — private; never send to a third party</li>
+      <li><strong>Passwords or tokens</strong> — obvious security risk</li>
+      <li><strong>Every state update</strong> — too noisy, fills up your event quota</li>
+      <li><strong>Successful operations</strong> — you only need to know when things go <em>wrong</em></li>
+      <li><strong>Phone numbers or emails</strong> — PII that you don't need for debugging</li>
+    </ul>
+
+    <h3>Setting user context (without PII)</h3>
+
+    <pre><code>// After login, attach the user ID (NOT email/phone)
+import * as Sentry from '@sentry/react-native';
+
+function onLoginSuccess(user) {
+  Sentry.setUser({
+    id: user.uid,  // enough to look up the user if needed
+    // Do NOT include: email, phone, name
+  });
+}
+
+function onLogout() {
+  Sentry.setUser(null); // clear user context
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 4 -->
+    <h2>4. Capturing errors at different levels</h2>
+
+    <pre><code>import * as Sentry from '@sentry/react-native';
+
+// Level 1: Automatic crash capture (unhandled exceptions)
+// → Sentry.wrap() handles this automatically. No extra code needed.
+
+// Level 2: Caught errors you want to track
+async function sendMessage(chatId, text) {
+  try {
+    await addDoc(collection(db, 'chats', chatId, 'messages'), { ... });
+  } catch (error) {
+    if (!isRetryableError(error)) {
+      // Permanent error — report to Sentry
+      Sentry.captureException(error, {
+        tags: { screen: 'MessageThread', action: 'send_message' },
+        extra: { chatId, textLength: text.length },
+      });
+    }
+    throw error; // re-throw so the UI handles it
+  }
+}
+
+// Level 3: Warnings (things that shouldn't happen but aren't crashes)
+function loadUserProfile(userId) {
+  const doc = await getDoc(userRef);
+  if (!doc.exists()) {
+    // User exists in Auth but not in Firestore — data inconsistency
+    Sentry.captureMessage('User profile missing in Firestore', {
+      level: 'warning',
+      extra: { userId },
+    });
+    return defaultProfile;
+  }
+  return doc.data();
+}
+
+// Level 4: Custom events for business metrics
+function trackCallDropped(callId, duration, reason) {
+  Sentry.captureMessage('Call dropped', {
+    level: 'info',
+    tags: { reason }, // 'network', 'timeout', 'user_hangup'
+    extra: { callId, durationSeconds: duration },
+  });
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 5 -->
+    <h2>5. Firebase Performance Monitoring</h2>
+
+    <p>Performance monitoring tells you how long things take in production — not on your fast WiFi, but on your users' real devices and connections.</p>
+
+    <h3>Setup</h3>
+
+    <pre><code>npx expo install @react-native-firebase/perf
+
+// app.json
+{
+  "expo": {
+    "plugins": [
+      "@react-native-firebase/perf"
+    ]
+  }
+}</code></pre>
+
+    <h3>Automatic monitoring (free with setup)</h3>
+    <ul>
+      <li><strong>App start time</strong> — how long from tap to first screen</li>
+      <li><strong>HTTP request latency</strong> — all fetch/XHR requests automatically tracked</li>
+      <li><strong>Screen rendering</strong> — slow/frozen frames detected automatically</li>
+    </ul>
+
+    <h3>Custom traces (measure what you care about)</h3>
+
+    <pre><code>import perf from '@react-native-firebase/perf';
+
+// Measure how long it takes to load a chat
+async function loadChatWithTrace(chatId) {
+  const trace = await perf().startTrace('load_chat_messages');
+  trace.putAttribute('chatId', chatId);
+
+  const messages = await getDocs(
+    query(collection(db, 'chats', chatId, 'messages'),
+      orderBy('createdAt', 'desc'),
+      limit(30))
+  );
+
+  trace.putMetric('message_count', messages.size);
+  await trace.stop(); // records duration automatically
+
+  return messages;
+}
+
+// Measure image upload time
+async function uploadImageWithTrace(uri, path) {
+  const trace = await perf().startTrace('upload_image');
+
+  const response = await fetch(uri);
+  const blob = await response.blob();
+  trace.putMetric('file_size_bytes', blob.size);
+
+  await uploadBytes(ref(storage, path), blob);
+  await trace.stop();
+}
+
+// Measure time-to-interactive for the chat list screen
+function ChatListScreen() {
+  const traceRef = useRef(null);
+
+  useEffect(() => {
+    async function startTrace() {
+      traceRef.current = await perf().startTrace('chat_list_tti');
+    }
+    startTrace();
+  }, []);
+
+  // Call when the first data appears
+  function onDataLoaded(chatCount) {
+    if (traceRef.current) {
+      traceRef.current.putMetric('chat_count', chatCount);
+      traceRef.current.stop();
+      traceRef.current = null;
+    }
+  }
+
+  // ...
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 6 -->
+    <h2>6. Basic analytics: DAU and messages/day</h2>
+
+    <p>You don't need a full analytics suite to start. Track two numbers that tell you if your app is healthy:</p>
+
+    <pre><code>import { getAnalytics, logEvent } from 'firebase/analytics';
+
+const analytics = getAnalytics(app);
+
+// Track daily active users (DAU)
+// Firebase Analytics tracks this automatically via session events.
+// But you can add custom events for deeper insight:
+
+// When the app opens
+function onAppOpen() {
+  logEvent(analytics, 'app_open', {
+    platform: Platform.OS,
+  });
+}
+
+// When a message is sent (tells you engagement)
+function onMessageSent(chatId, messageType) {
+  logEvent(analytics, 'message_sent', {
+    message_type: messageType, // 'text', 'image', 'voice'
+    is_group: chatId.startsWith('group_'),
+  });
+}
+
+// When a call is made
+function onCallStarted(callType) {
+  logEvent(analytics, 'call_started', {
+    call_type: callType, // 'voice', 'video'
+  });
+}
+
+// When a user signs up (funnel tracking)
+function onSignupComplete() {
+  logEvent(analytics, 'sign_up_complete');
+}</code></pre>
+
+    <h3>What to track (and what not to)</h3>
+    <table>
+      <thead>
+        <tr><th>Track ✅</th><th>Don't track ❌</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>App opens per day</td><td>Message content</td></tr>
+        <tr><td>Messages sent (count + type)</td><td>Who is messaging whom</td></tr>
+        <tr><td>Calls started/duration</td><td>Call audio/video content</td></tr>
+        <tr><td>Signup/login events</td><td>Passwords or tokens</td></tr>
+        <tr><td>Feature usage (status views, group creates)</td><td>Exact user location</td></tr>
+        <tr><td>Error frequency by type</td><td>Personal identifiers (email, phone)</td></tr>
+      </tbody>
+    </table>
+
+    <hr>
+
+    <!-- Section 7 -->
+    <h2>7. Setting up alerts for error spikes</h2>
+
+    <h3>In Sentry</h3>
+    <ol>
+      <li>Go to <strong>Alerts → Create Alert</strong></li>
+      <li>Choose "When number of errors exceeds a threshold"</li>
+      <li>Set: "If more than <strong>10 events</strong> in <strong>1 hour</strong> → send email"</li>
+      <li>Add a second alert: "If a new issue is seen for the first time → send immediately"</li>
+    </ol>
+
+    <h3>In Firebase Console</h3>
+    <ol>
+      <li><strong>Crashlytics → Alerts</strong>: auto-alerts when crash-free rate drops below 99%</li>
+      <li><strong>Performance → Alerts</strong>: alert when app start time exceeds 5 seconds</li>
+    </ol>
+
+    <h3>Recommended alert thresholds for your app</h3>
+    <table>
+      <thead>
+        <tr><th>Metric</th><th>Alert if...</th><th>Severity</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Crash-free rate</td><td>Below 99%</td><td>🔴 Critical</td></tr>
+        <tr><td>New crash type</td><td>First occurrence</td><td>🟡 Warning</td></tr>
+        <tr><td>Error spike</td><td>10+ errors in 1 hour</td><td>🟡 Warning</td></tr>
+        <tr><td>App start time</td><td>Above 5 seconds (p95)</td><td>🟡 Warning</td></tr>
+        <tr><td>Message send failure rate</td><td>Above 5%</td><td>🔴 Critical</td></tr>
+      </tbody>
+    </table>
+
+    <hr>
+
+    <!-- Section 8 -->
+    <h2>8. Reading crash reports — what to look for</h2>
+
+    <p>When a crash comes in, here's how to read the report:</p>
+
+    <pre><code>// Example Sentry crash report:
+
+// 1. TITLE — what threw
+// "TypeError: Cannot read property 'toDate' of null"
+
+// 2. WHERE — stack trace (most important line is the top of YOUR code)
+// at MessageBubble (MessageThread.js:142)
+// at FlatList (node_modules/react-native/...)
+
+// 3. BREADCRUMBS — what happened before the crash
+// [info] navigation: Opened MessageThread for chat: group-family
+// [info] user-action: Scrolled to older messages
+// [warning] firebase: onSnapshot received doc with null createdAt
+// [error] CRASH: TypeError: Cannot read property 'toDate' of null
+
+// 4. DEVICE INFO
+// Device: Samsung Galaxy A12, Android 12
+// App version: 1.2.3
+// Free RAM: 180MB
+
+// 5. DIAGNOSIS
+// The crash happens because a message document has createdAt: null
+// (probably written while offline and not yet synced).
+// Fix: add a null check before calling .toDate()
+// Before: message.createdAt.toDate()
+// After:  message.createdAt?.toDate?.() || new Date()</code></pre>
+
+    <h3>Triage checklist</h3>
+    <ol>
+      <li><strong>How many users affected?</strong> — 1 user = low priority; 500 = fix now</li>
+      <li><strong>Is it reproducible?</strong> — check if the same device/OS version keeps crashing</li>
+      <li><strong>Is it in critical path?</strong> — login screen crash > settings screen crash</li>
+      <li><strong>Can you reproduce locally?</strong> — use the breadcrumbs to replay the steps</li>
+      <li><strong>Is there a quick workaround?</strong> — null check, try/catch, or feature flag</li>
+    </ol>
+
+    <hr>
+
+    <!-- Section 9: Full App.js -->
+    <h2>9. Full working example — app with monitoring</h2>
+
+    <pre><code>// App.js — Monitoring & Crash Reporting Demo
+// Shows: Sentry initialization, breadcrumbs, error capture,
+// performance traces, and user context
+
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  View, Text, TextInput, FlatList, Pressable,
+  StyleSheet, Alert, ActivityIndicator, Platform,
+  KeyboardAvoidingView,
+} from 'react-native';
+import * as Sentry from '@sentry/react-native';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
+import {
+  getFirestore, collection, doc, query, orderBy,
+  limit, onSnapshot, addDoc, serverTimestamp, writeBatch,
+} from 'firebase/firestore';
+
+// ─── Initialize Sentry FIRST ──────────────────
+Sentry.init({
+  dsn: 'https://your-dsn@sentry.io/your-project-id',
+  enabled: !__DEV__,
+  tracesSampleRate: 0.2,
+  beforeSend(event) {
+    if (event.user) delete event.user.email;
+    return event;
+  },
+});
+
+// ─── Firebase config ───────────────────────────
+const firebaseConfig = {
+  apiKey: 'YOUR_API_KEY',
+  authDomain: 'your-app.firebaseapp.com',
+  projectId: 'your-app',
+  storageBucket: 'your-app.appspot.com',
+  messagingSenderId: '123456789',
+  appId: '1:123456789:web:abc123',
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+const COLORS = {
+  darkGreen: '#075E54',
+  lightGreen: '#25D366',
+  bubbleGreen: '#DCF8C6',
+  chatBg: '#ECE5DD',
+  white: '#FFFFFF',
+};
+
+// ─── Logging helpers ───────────────────────────
+function logNavigation(screen, params = {}) {
+  Sentry.addBreadcrumb({
+    category: 'navigation',
+    message: `Opened ${screen}`,
+    data: params,
+    level: 'info',
+  });
+}
+
+function logUserAction(action, details = {}) {
+  Sentry.addBreadcrumb({
+    category: 'user-action',
+    message: action,
+    data: details,
+    level: 'info',
+  });
+}
+
+function logFirebaseError(operation, error) {
+  Sentry.addBreadcrumb({
+    category: 'firebase',
+    message: `${operation} failed: ${error.code || error.message}`,
+    level: 'warning',
+  });
+}
+
+// ─── Chat Screen with monitoring ───────────────
+function ChatScreen({ chatId }) {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+  const [sending, setSending] = useState(false);
+  const loadStartTime = useRef(Date.now());
+
+  const userId = auth.currentUser?.uid;
+
+  useEffect(() => {
+    logNavigation('ChatScreen', { chatId });
+    loadStartTime.current = Date.now();
+
+    const q = query(
+      collection(db, 'chats', chatId, 'messages'),
+      orderBy('createdAt', 'desc'),
+      limit(50)
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const msgs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      setMessages(msgs);
+
+      // Track time-to-first-data
+      if (loadStartTime.current) {
+        const loadTime = Date.now() - loadStartTime.current;
+        Sentry.addBreadcrumb({
+          category: 'performance',
+          message: `Chat loaded in ${loadTime}ms (${msgs.length} messages)`,
+          level: 'info',
+        });
+        loadStartTime.current = null; // only track once
+      }
+    }, (error) => {
+      // Listener error — log and report
+      logFirebaseError('messages_listener', error);
+      Sentry.captureException(error, {
+        tags: { screen: 'ChatScreen', operation: 'onSnapshot' },
+        extra: { chatId },
+      });
+    });
+
+    return unsubscribe;
+  }, [chatId]);
+
+  const handleSend = async () => {
+    const trimmed = input.trim();
+    if (!trimmed) return;
+
+    logUserAction('send_message', { chatId, textLength: trimmed.length });
+    setSending(true);
+    setInput('');
+
+    try {
+      const batch = writeBatch(db);
+      const msgRef = doc(collection(db, 'chats', chatId, 'messages'));
+      batch.set(msgRef, {
+        senderId: userId,
+        text: trimmed,
+        createdAt: serverTimestamp(),
+      });
+      const chatRef = doc(db, 'chats', chatId);
+      batch.update(chatRef, {
+        lastMessage: trimmed.substring(0, 100),
+        lastMessageAt: serverTimestamp(),
+      });
+      await batch.commit();
+    } catch (error) {
+      logFirebaseError('send_message', error);
+
+      // Report non-retryable errors to Sentry
+      if (error.code !== 'unavailable') {
+        Sentry.captureException(error, {
+          tags: { screen: 'ChatScreen', action: 'send_message' },
+          extra: { chatId, textLength: trimmed.length },
+        });
+      }
+
+      Alert.alert('Send failed', error.message);
+      setInput(trimmed); // restore the text so they don't lose it
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const renderMessage = ({ item }) => {
+    const isMine = item.senderId === userId;
+    const isPending = !item.createdAt;
+
+    return (
+      &lt;View style={[styles.bubble, isMine ? styles.myBubble : styles.theirBubble]}&gt;
+        &lt;Text style={styles.messageText}&gt;{item.text}&lt;/Text&gt;
+        &lt;View style={styles.metaRow}&gt;
+          &lt;Text style={styles.timeText}&gt;
+            {isPending
+              ? 'Sending...'
+              : item.createdAt?.toDate?.()
+                ? item.createdAt.toDate().toLocaleTimeString([], {
+                    hour: '2-digit', minute: '2-digit',
+                  })
+                : ''}
+          &lt;/Text&gt;
+          {isMine &amp;&amp; (
+            &lt;Text style={styles.tick}&gt;{isPending ? '🕐' : '✓✓'}&lt;/Text&gt;
+          )}
+        &lt;/View&gt;
+      &lt;/View&gt;
+    );
+  };
+
+  return (
+    &lt;KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    &gt;
+      &lt;View style={styles.header}&gt;
+        &lt;Text style={styles.headerTitle}&gt;Priya&lt;/Text&gt;
+        &lt;Text style={styles.headerSubtitle}&gt;online&lt;/Text&gt;
+      &lt;/View&gt;
+
+      &lt;FlatList
+        data={messages}
+        renderItem={renderMessage}
+        keyExtractor={(item) =&gt; item.id}
+        inverted
+        style={styles.messageList}
+        contentContainerStyle={{ paddingVertical: 10 }}
+      /&gt;
+
+      &lt;View style={styles.inputBar}&gt;
+        &lt;TextInput
+          style={styles.input}
+          value={input}
+          onChangeText={setInput}
+          placeholder="Type a message"
+          maxLength={4096}
+          multiline
+        /&gt;
+        &lt;Pressable
+          style={[styles.sendBtn, sending &amp;&amp; { opacity: 0.5 }]}
+          onPress={handleSend}
+          disabled={sending}
+        &gt;
+          {sending
+            ? &lt;ActivityIndicator color={COLORS.white} size="small" /&gt;
+            : &lt;Text style={styles.sendText}&gt;Send&lt;/Text&gt;
+          }
+        &lt;/Pressable&gt;
+      &lt;/View&gt;
+    &lt;/KeyboardAvoidingView&gt;
+  );
+}
+
+// ─── Main App (wrapped with Sentry) ───────────
+function MainApp() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    signInWithEmailAndPassword(auth, 'reviewer@yourapp.com', 'ReviewTest2026!')
+      .then((cred) => {
+        setUser(cred.user);
+        // Set user context for crash reports (ID only, no PII)
+        Sentry.setUser({ id: cred.user.uid });
+      })
+      .catch((err) => {
+        Sentry.captureException(err, { tags: { screen: 'Login' } });
+        Alert.alert('Login failed', err.message);
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return (
+      &lt;View style={styles.center}&gt;
+        &lt;ActivityIndicator size="large" color={COLORS.darkGreen} /&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  if (!user) {
+    return (
+      &lt;View style={styles.center}&gt;
+        &lt;Text&gt;Not logged in&lt;/Text&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  return &lt;ChatScreen chatId="chat1" /&gt;;
+}
+
+// Export wrapped with Sentry error boundary
+export default Sentry.wrap(MainApp);
+
+// ─── Styles ───────────────────────────────────
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: COLORS.chatBg },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  header: {
+    backgroundColor: COLORS.darkGreen,
+    paddingTop: Platform.OS === 'ios' ? 50 : 30,
+    paddingBottom: 12,
+    paddingHorizontal: 16,
+  },
+  headerTitle: { color: COLORS.white, fontSize: 18, fontWeight: '700' },
+  headerSubtitle: { color: '#b2dfdb', fontSize: 13 },
+  messageList: { flex: 1, paddingHorizontal: 10 },
+  bubble: {
+    maxWidth: '75%',
+    padding: 10,
+    borderRadius: 8,
+    marginVertical: 3,
+  },
+  myBubble: {
+    backgroundColor: COLORS.bubbleGreen,
+    alignSelf: 'flex-end',
+    borderTopRightRadius: 0,
+  },
+  theirBubble: {
+    backgroundColor: COLORS.white,
+    alignSelf: 'flex-start',
+    borderTopLeftRadius: 0,
+  },
+  messageText: { fontSize: 15, color: '#303030' },
+  metaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 4 },
+  timeText: { fontSize: 11, color: '#999' },
+  tick: { fontSize: 12 },
+  inputBar: {
+    flexDirection: 'row',
+    padding: 8,
+    backgroundColor: COLORS.white,
+    alignItems: 'flex-end',
+  },
+  input: {
+    flex: 1,
+    backgroundColor: '#f0f0f0',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
+    fontSize: 15,
+    maxHeight: 100,
+  },
+  sendBtn: {
+    backgroundColor: COLORS.lightGreen,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    marginLeft: 8,
+  },
+  sendText: { color: COLORS.white, fontWeight: '700', fontSize: 15 },
+});</code></pre>
+
+    <hr>
+
+    <!-- Section 10: Key Takeaways -->
+    <h2>10. Key takeaways</h2>
+
+    <ul>
+      <li><strong>Use Sentry for JS errors</strong> — first-class Expo support, readable stack traces with source maps</li>
+      <li><strong>Use Firebase Performance</strong> — automatic app start, HTTP, and frame tracking</li>
+      <li><strong>Log breadcrumbs, not content</strong> — navigation, actions, and errors; never message text or PII</li>
+      <li><strong><code>Sentry.captureException()</code></strong> — for caught errors you want to track</li>
+      <li><strong>Custom performance traces</strong> — measure load_chat, upload_image, time-to-interactive</li>
+      <li><strong>Set user ID (not email)</strong> — enough to investigate but respects privacy</li>
+      <li><strong>Set up alerts</strong> — crash-free rate &lt; 99%, error spikes, new issue types</li>
+      <li><strong>Read crash reports</strong> — stack trace + breadcrumbs + device info = fast diagnosis</li>
+    </ul>
+
+    <hr>
+
+    <!-- Quiz -->
+    <h2>Test your knowledge</h2>
+    <div id="prod-lesson-0006-quiz"></div>
+
+    <hr>
+
+    <!-- Nav -->
+    <div class="nav-links">
+      <a href="./0005-error-recovery-and-retry.html">&larr; Previous: Error Recovery &amp; Retry Logic</a>
+      <a href="./0007-testing.html">Next: Testing Your App &rarr;</a>
+    </div>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script>
+    createQuiz('prod-lesson-0006-quiz', [
+      {
+        question: 'Why is Sentry recommended over Firebase Crashlytics for JavaScript errors in an Expo app?',
+        options: [
+          'Sentry is free and Crashlytics is paid',
+          'Sentry has first-class Expo support and provides better JS stack traces with source maps',
+          'Crashlytics doesn\'t work on iOS',
+          'Sentry automatically fixes bugs for you',
+        ],
+        answer: 1,
+      },
+      {
+        question: 'What are "breadcrumbs" in Sentry?',
+        options: [
+          'The trail of screens the user navigated through',
+          'A log of events (navigation, actions, errors) that happened before a crash — providing context for debugging',
+          'Links between related crash reports',
+          'The file path where the crash occurred',
+        ],
+        answer: 1,
+      },
+      {
+        question: 'Which of these should you NEVER include in crash reports?',
+        options: [
+          'The screen name where the crash happened',
+          'The device model and OS version',
+          'The user\'s message content and phone number',
+          'The Firestore error code',
+        ],
+        answer: 2,
+      },
+      {
+        question: 'What does `enabled: !__DEV__` do in the Sentry configuration?',
+        options: [
+          'Disables Sentry on developer devices permanently',
+          'Only sends crash reports in production builds (not during local development)',
+          'Enables extra debug logging in development',
+          'Prevents crashes from happening in development mode',
+        ],
+        answer: 1,
+      },
+      {
+        question: 'What alert threshold should trigger immediate investigation?',
+        options: [
+          'One user reported a typo in the UI',
+          'App start time increased by 100ms',
+          'Crash-free rate dropped below 99% (more than 1 in 100 sessions crash)',
+          'A single non-fatal error was logged once',
+        ],
+        answer: 2,
+      },
+    ]);
+  </script>
+</body>
+</html>

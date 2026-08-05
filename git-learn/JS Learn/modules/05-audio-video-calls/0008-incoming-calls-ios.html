@@ -1,0 +1,1297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Calls Lesson 8: Incoming Calls on iOS — JS Learn</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">Module 5: Audio &amp; Video Calls</a>
+      <span class="sep">›</span>
+      <span class="current">Lesson 8: Incoming Calls on iOS</span>
+    </nav>
+
+    <!-- Header -->
+    <span class="badge">Audio &amp; Video Calls · Lesson 8</span>
+    <h1 style="margin-top:0.5rem;">Incoming Calls on iOS</h1>
+    <div class="lesson-meta">
+      <span>CallKit · VoIP push · APNs · react-native-callkeep · Native call screen</span>
+      <span>~60 min</span>
+      <span>Hands-on</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for your WhatsApp clone</div>
+      <p>Apple <strong>requires</strong> all VoIP apps to use <strong>CallKit</strong>. If you don't, Apple will reject your app from the App Store. CallKit gives you the <em>native</em> iOS call screen — the same green/red slide-to-answer UI that regular phone calls use. Combined with <strong>VoIP push notifications</strong> (a special type of APNs push), your app can wake from a completely closed state and show the incoming call screen instantly — even faster than regular push notifications. This is how WhatsApp, Signal, and Telegram handle calls on iPhone.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 1 -->
+    <h2>1. How iOS incoming calls differ from Android</h2>
+
+    <table style="width:100%;border-collapse:collapse;margin:1rem 0;">
+      <thead>
+        <tr style="border-bottom:2px solid var(--gray-200);">
+          <th style="text-align:left;padding:0.5rem;font-size:0.85rem;"></th>
+          <th style="text-align:left;padding:0.5rem;font-size:0.85rem;">Android (Lesson 7)</th>
+          <th style="text-align:left;padding:0.5rem;font-size:0.85rem;">iOS (This Lesson)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid var(--gray-200);">
+          <td style="padding:0.5rem;font-weight:600;">Push type</td>
+          <td style="padding:0.5rem;">FCM data message</td>
+          <td style="padding:0.5rem;">VoIP push (APNs)</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--gray-200);">
+          <td style="padding:0.5rem;font-weight:600;">Call UI</td>
+          <td style="padding:0.5rem;">Custom notification (you build it)</td>
+          <td style="padding:0.5rem;">System CallKit UI (Apple builds it)</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--gray-200);">
+          <td style="padding:0.5rem;font-weight:600;">Wake from killed</td>
+          <td style="padding:0.5rem;">FCM + foreground service</td>
+          <td style="padding:0.5rem;">VoIP push wakes app instantly</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--gray-200);">
+          <td style="padding:0.5rem;font-weight:600;">Mandatory?</td>
+          <td style="padding:0.5rem;">No (but strongly recommended)</td>
+          <td style="padding:0.5rem;"><strong>Yes</strong> — Apple rejects apps without CallKit</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--gray-200);">
+          <td style="padding:0.5rem;font-weight:600;">Lock screen</td>
+          <td style="padding:0.5rem;">Full-screen intent</td>
+          <td style="padding:0.5rem;">Native call screen (slide to answer)</td>
+        </tr>
+        <tr>
+          <td style="padding:0.5rem;font-weight:600;">Integrations</td>
+          <td style="padding:0.5rem;">None built-in</td>
+          <td style="padding:0.5rem;">Recents app, Contacts, Siri ("Call Rahul on WhatsApp")</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout warning">
+      <div class="callout-title">VoIP push is special</div>
+      <p>Regular APNs push notifications may be delayed or batched by iOS to save battery. <strong>VoIP push</strong> is a separate, high-priority channel — it wakes your app <em>immediately</em>, even if the app was force-quit. Apple only allows VoIP push for actual call notifications (not chat messages). If you misuse it, Apple will revoke your VoIP push certificate.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 2 -->
+    <h2>2. What is CallKit?</h2>
+
+    <p>CallKit is Apple's framework that integrates your VoIP app with the native phone experience:</p>
+
+    <ul>
+      <li><strong>Native incoming call screen</strong> — the same green slide-to-answer UI as regular calls</li>
+      <li><strong>Recents integration</strong> — your calls appear in the Phone app's Recents tab</li>
+      <li><strong>Do Not Disturb</strong> — respects the user's DND settings and favourites</li>
+      <li><strong>Car Bluetooth</strong> — incoming calls work through CarPlay and car audio</li>
+      <li><strong>Siri</strong> — "Hey Siri, call Rahul on WhatsApp"</li>
+      <li><strong>Audio session management</strong> — iOS automatically pauses music, handles interruptions</li>
+    </ul>
+
+    <p>You don't build a custom incoming call screen on iOS — Apple gives you the system one. Your app only controls what happens <em>after</em> the user answers.</p>
+
+    <hr>
+
+    <!-- Section 3 -->
+    <h2>3. Installing react-native-callkeep</h2>
+
+    <p><code>react-native-callkeep</code> is the React Native bridge to CallKit (iOS) and ConnectionService (Android). For iOS incoming calls, it's the standard library:</p>
+
+    <pre><code># Install
+npx expo install react-native-callkeep
+
+# Rebuild with EAS (native code)
+eas build --platform ios --profile development</code></pre>
+
+    <p>Add the VoIP background mode to <code>app.json</code>:</p>
+
+    <pre><code>{
+  "expo": {
+    "ios": {
+      "infoPlist": {
+        "UIBackgroundModes": ["voip", "audio", "fetch"],
+        "NSCameraUsageDescription": "Video calls require camera access",
+        "NSMicrophoneUsageDescription": "Calls require microphone access"
+      }
+    },
+    "plugins": [
+      [
+        "react-native-callkeep",
+        {
+          "ios": {
+            "supportsVideo": true
+          }
+        }
+      ]
+    ]
+  }
+}</code></pre>
+
+    <p><strong>Key: <code>UIBackgroundModes: ["voip"]</code></strong> — this tells iOS that your app handles VoIP calls and should be woken by VoIP push notifications.</p>
+
+    <hr>
+
+    <!-- Section 4 -->
+    <h2>4. Setting up CallKit in your app</h2>
+
+    <p>Initialize CallKit when your app starts:</p>
+
+    <pre><code>import RNCallKeep from 'react-native-callkeep';
+
+// Call this once at app startup
+async function setupCallKit() {
+  const options = {
+    ios: {
+      appName: 'WhatsApp Clone',
+      supportsVideo: true,
+      maximumCallGroups: 1,
+      maximumCallsPerCallGroup: 1,
+      ringtoneSound: 'ringtone.caf',   // Custom sound in iOS bundle
+    },
+    android: {
+      alertTitle: 'Permissions required',
+      alertDescription: 'This app needs phone account access',
+    },
+  };
+
+  try {
+    await RNCallKeep.setup(options);
+    RNCallKeep.setAvailable(true);   // Tell iOS your app is ready for calls
+  } catch (error) {
+    console.error('CallKit setup failed:', error);
+  }
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 5 -->
+    <h2>5. VoIP push certificate — Apple Developer setup</h2>
+
+    <p>VoIP push uses a separate certificate from regular push notifications. Here's how to get it:</p>
+
+    <ol>
+      <li>Log in to <a href="https://developer.apple.com/account" style="color:#075E54;">developer.apple.com/account</a></li>
+      <li>Go to <strong>Certificates, Identifiers &amp; Profiles</strong></li>
+      <li>Click <strong>+</strong> to create a new certificate</li>
+      <li>Select <strong>VoIP Services Certificate</strong></li>
+      <li>Choose your app's App ID (the Bundle Identifier from your <code>app.json</code>)</li>
+      <li>Generate and download the <code>.cer</code> file</li>
+      <li>Double-click to install it in Keychain Access</li>
+      <li>Export as <code>.p12</code> from Keychain Access (you'll need this for your server)</li>
+    </ol>
+
+    <div class="callout warning">
+      <div class="callout-title">Apple Developer account required</div>
+      <p>You need an Apple Developer account ($99/year) to create VoIP push certificates and publish to the App Store. This is the same account you need for publishing (Module 6). There is no free alternative for VoIP push.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 6 -->
+    <h2>6. Getting the VoIP push token</h2>
+
+    <p>Just like FCM tokens on Android, each iOS device has a VoIP push token. Save it to Firestore:</p>
+
+    <pre><code>import RNCallKeep from 'react-native-callkeep';
+import { Platform } from 'react-native';
+import VoipPushNotification from 'react-native-voip-push-notification';
+
+async function registerVoIPPush(uid) {
+  if (Platform.OS !== 'ios') return;
+
+  // Register for VoIP push
+  VoipPushNotification.requestPermissions();
+
+  VoipPushNotification.addEventListener('register', async (token) => {
+    console.log('VoIP push token:', token);
+    // Save to Firestore
+    await updateDoc(doc(db, 'users', uid), {
+      voipToken: token,
+      platform: 'ios',
+    });
+  });
+
+  // This fires when a VoIP push arrives
+  VoipPushNotification.addEventListener('notification', (notification) => {
+    const callId = notification.callId;
+    const callerName = notification.callerName;
+    const callType = notification.callType;
+    const uuid = notification.uuid;   // Unique call identifier
+
+    // Display the native CallKit incoming call screen
+    RNCallKeep.displayIncomingCall(
+      uuid,
+      callerName,           // Handle (shown on call screen)
+      callerName,           // Display name
+      'generic',            // Handle type
+      callType === 'video'  // Has video
+    );
+  });
+}</code></pre>
+
+    <p>You also need <code>react-native-voip-push-notification</code>:</p>
+
+    <pre><code>npx expo install react-native-voip-push-notification
+eas build --platform ios --profile development</code></pre>
+
+    <hr>
+
+    <!-- Section 7 -->
+    <h2>7. The Cloud Function — sending VoIP push to iOS</h2>
+
+    <p>Your Cloud Function (from Lesson 7) needs to detect iOS users and send a VoIP push instead of FCM. Apple's VoIP push uses HTTP/2 to <code>api.push.apple.com</code>:</p>
+
+    <pre><code>// functions/index.js — updated to handle both Android and iOS
+const functions = require('firebase-functions');
+const admin = require('firebase-admin');
+const apn = require('apn');   // npm install apn
+admin.initializeApp();
+
+// Configure APNs provider (VoIP push)
+const apnProvider = new apn.Provider({
+  cert: './certs/voip_cert.pem',     // Your VoIP certificate
+  key: './certs/voip_key.pem',       // Your VoIP private key
+  production: false,                  // true for App Store builds
+});
+
+exports.onCallCreated = functions.firestore
+  .document('calls/{callId}')
+  .onCreate(async (snap, context) => {
+    const callData = snap.data();
+    const callId = context.params.callId;
+    if (callData.status !== 'ringing') return null;
+
+    // Get callee's info
+    const calleeDoc = await admin.firestore()
+      .collection('users')
+      .doc(callData.calleeId)
+      .get();
+
+    if (!calleeDoc.exists) return null;
+    const calleeData = calleeDoc.data();
+
+    if (calleeData.platform === 'ios' && calleeData.voipToken) {
+      // ── iOS: Send VoIP push via APNs ──
+      const notification = new apn.Notification();
+      notification.topic = 'com.yourapp.bundleid.voip';  // Bundle ID + ".voip"
+      notification.expiry = Math.floor(Date.now() / 1000) + 30;
+      notification.pushType = 'voip';
+      notification.priority = 10;   // Immediate delivery
+      notification.payload = {
+        callId: callId,
+        callerName: callData.callerName || 'Unknown',
+        callerId: callData.callerId,
+        callType: callData.type,
+        uuid: generateUUID(),   // Unique ID for CallKit
+      };
+
+      await apnProvider.send(notification, calleeData.voipToken);
+      console.log('VoIP push sent to iOS device');
+
+    } else if (calleeData.fcmToken) {
+      // ── Android: Send FCM data message (same as Lesson 7) ──
+      await admin.messaging().send({
+        token: calleeData.fcmToken,
+        data: {
+          type: 'incoming_call',
+          callId: callId,
+          callerName: callData.callerName || 'Unknown',
+          callerId: callData.callerId,
+          callType: callData.type,
+        },
+        android: { priority: 'high', ttl: 30000 },
+      });
+      console.log('FCM push sent to Android device');
+    }
+
+    return null;
+  });
+
+function generateUUID() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 8 -->
+    <h2>8. Handling CallKit events</h2>
+
+    <p>When the user interacts with the native call screen (answer, end, mute), CallKit fires events. Handle them to connect your WebRTC call:</p>
+
+    <pre><code>import RNCallKeep from 'react-native-callkeep';
+
+function setupCallKitListeners(navigation) {
+
+  // User tapped ANSWER on the native call screen
+  RNCallKeep.addEventListener('answerCall', ({ callUUID }) => {
+    console.log('Call answered:', callUUID);
+    // Navigate to your call screen and start WebRTC
+    // The callId is stored when displayIncomingCall was called
+    connectWebRTCCall(callUUID);
+  });
+
+  // User tapped END (decline or hang up)
+  RNCallKeep.addEventListener('endCall', ({ callUUID }) => {
+    console.log('Call ended:', callUUID);
+    // Decline or end the call in Firestore
+    declineOrEndCall(callUUID);
+  });
+
+  // User toggled mute from the native call screen
+  RNCallKeep.addEventListener('didPerformSetMutedCallAction', ({ muted, callUUID }) => {
+    // Mute/unmute the audio track
+    const track = streamRef.current?.getAudioTracks()[0];
+    if (track) track.enabled = !muted;
+  });
+
+  // User toggled hold
+  RNCallKeep.addEventListener('didToggleHoldCallAction', ({ hold, callUUID }) => {
+    // Pause/resume the stream
+    streamRef.current?.getTracks().forEach((t) => { t.enabled = !hold; });
+  });
+
+  // Audio route changed (speaker/earpiece/bluetooth)
+  RNCallKeep.addEventListener('didChangeAudioRoute', ({ output }) => {
+    console.log('Audio route:', output);  // 'Speaker', 'Receiver', 'Bluetooth'
+  });
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 9 -->
+    <h2>9. Reporting call state to CallKit</h2>
+
+    <p>You must tell CallKit when the call connects, ends, or fails — otherwise the native UI won't update correctly:</p>
+
+    <pre><code>// When WebRTC connects (ICE state = connected):
+RNCallKeep.reportConnectedOutgoingCallWithUUID(callUUID);
+// or for incoming:
+RNCallKeep.reportConnectingOutgoingCallWithUUID(callUUID);
+
+// When the call ends (from either side):
+RNCallKeep.endCall(callUUID);
+
+// When starting an outgoing call (shows "Calling..." in native UI):
+RNCallKeep.startCall(callUUID, contactName, contactName, 'generic', hasVideo);
+
+// When the remote side answers your outgoing call:
+RNCallKeep.reportConnectedOutgoingCallWithUUID(callUUID);</code></pre>
+
+    <p><strong>Important:</strong> If you don't call <code>RNCallKeep.endCall()</code>, the native call screen will stay visible even after your app's call ends. Always call it in your <code>handleEndCall</code> function.</p>
+
+    <hr>
+
+    <!-- Section 10 -->
+    <h2>10. The complete iOS flow — step by step</h2>
+
+    <table style="width:100%;border-collapse:collapse;margin:1rem 0;">
+      <thead>
+        <tr style="border-bottom:2px solid var(--gray-200);">
+          <th style="text-align:left;padding:0.5rem;font-size:0.85rem;">#</th>
+          <th style="text-align:left;padding:0.5rem;font-size:0.85rem;">What happens</th>
+          <th style="text-align:left;padding:0.5rem;font-size:0.85rem;">Where</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid var(--gray-200);">
+          <td style="padding:0.5rem;">1</td>
+          <td style="padding:0.5rem;">Priya taps Call → writes call doc to Firestore</td>
+          <td style="padding:0.5rem;">Priya's phone</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--gray-200);">
+          <td style="padding:0.5rem;">2</td>
+          <td style="padding:0.5rem;">Cloud Function triggers → detects iOS → sends VoIP push via APNs</td>
+          <td style="padding:0.5rem;">Firebase server</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--gray-200);">
+          <td style="padding:0.5rem;">3</td>
+          <td style="padding:0.5rem;">iOS receives VoIP push → wakes app instantly</td>
+          <td style="padding:0.5rem;">Rahul's iPhone (background)</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--gray-200);">
+          <td style="padding:0.5rem;">4</td>
+          <td style="padding:0.5rem;">App calls <code>RNCallKeep.displayIncomingCall()</code></td>
+          <td style="padding:0.5rem;">Rahul's iPhone</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--gray-200);">
+          <td style="padding:0.5rem;">5</td>
+          <td style="padding:0.5rem;">iOS shows <strong>native call screen</strong> (green/red buttons, caller name)</td>
+          <td style="padding:0.5rem;">Rahul's iPhone (lock screen or banner)</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--gray-200);">
+          <td style="padding:0.5rem;">6</td>
+          <td style="padding:0.5rem;">Rahul slides to answer → CallKit fires <code>answerCall</code> event</td>
+          <td style="padding:0.5rem;">Rahul's iPhone</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--gray-200);">
+          <td style="padding:0.5rem;">7</td>
+          <td style="padding:0.5rem;">Your app connects WebRTC → reports connected to CallKit</td>
+          <td style="padding:0.5rem;">Rahul's iPhone (foreground)</td>
+        </tr>
+        <tr>
+          <td style="padding:0.5rem;">8</td>
+          <td style="padding:0.5rem;">Both phones are in the active call</td>
+          <td style="padding:0.5rem;">Both phones</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <hr>
+
+    <!-- Section 11 -->
+    <h2>11. Mapping callUUID to callId</h2>
+
+    <p>CallKit uses UUIDs to identify calls. Your Firestore uses callId document IDs. You need a mapping between them so you know which Firestore call to answer when CallKit fires <code>answerCall</code>:</p>
+
+    <pre><code>// Simple in-memory map — works because the app is alive during the call
+const callMap = {};   // { uuid: callId }
+
+// When VoIP push arrives and you display the call:
+VoipPushNotification.addEventListener('notification', (notification) => {
+  const uuid = notification.uuid || generateUUID();
+  const callId = notification.callId;
+
+  // Store the mapping
+  callMap[uuid] = callId;
+
+  RNCallKeep.displayIncomingCall(uuid, notification.callerName, notification.callerName, 'generic', notification.callType === 'video');
+});
+
+// When user answers:
+RNCallKeep.addEventListener('answerCall', async ({ callUUID }) => {
+  const callId = callMap[callUUID];
+  if (callId) {
+    // Fetch call doc and connect WebRTC (same as Lesson 6 handleAnswerCall)
+    const callSnap = await getDoc(doc(db, 'calls', callId));
+    if (callSnap.exists()) {
+      await answerWebRTCCall(callId, callSnap.data());
+    }
+  }
+});
+
+// When call ends — clean up
+RNCallKeep.addEventListener('endCall', async ({ callUUID }) => {
+  const callId = callMap[callUUID];
+  if (callId) {
+    await updateDoc(doc(db, 'calls', callId), { status: 'declined' });
+    delete callMap[callUUID];
+  }
+});</code></pre>
+
+    <hr>
+
+    <!-- Section 12 -->
+    <h2>12. Platform-aware code — handling both Android and iOS</h2>
+
+    <p>Your final app needs to handle both platforms. Here's the pattern:</p>
+
+    <pre><code>import { Platform } from 'react-native';
+
+async function registerForPush(uid) {
+  if (Platform.OS === 'android') {
+    // Android: save FCM token (Lesson 7)
+    await saveFCMToken(uid);
+  } else {
+    // iOS: register VoIP push + save token
+    await registerVoIPPush(uid);
+  }
+}
+
+// In your App startup:
+useEffect(() => {
+  if (user) {
+    registerForPush(user.uid);
+    if (Platform.OS === 'ios') {
+      setupCallKit();
+      setupCallKitListeners();
+    }
+  }
+}, [user]);</code></pre>
+
+    <p>For outgoing calls on iOS, also integrate with CallKit:</p>
+
+    <pre><code>async function handleStartCall() {
+  // ... existing code to create offer and write to Firestore ...
+
+  if (Platform.OS === 'ios') {
+    // Tell CallKit about the outgoing call
+    const uuid = generateUUID();
+    callMap[uuid] = callRef.id;
+    RNCallKeep.startCall(uuid, contactName, contactName, 'generic', true);
+
+    // When WebRTC connects:
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === 'connected') {
+        RNCallKeep.reportConnectedOutgoingCallWithUUID(uuid);
+        setCallState('active');
+      }
+    };
+  }
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 13: Full runnable App.js -->
+    <h2>13. Full runnable App.js — iOS incoming calls with CallKit</h2>
+
+    <p>This example focuses on the iOS-specific CallKit integration. It builds on Lesson 7's code, adding VoIP push handling and CallKit. Copy both files.</p>
+
+    <h3>index.js — Entry point (handles both platforms)</h3>
+
+    <pre><code>// index.js — App entry point with platform-specific call handling
+import { AppRegistry, Platform } from 'react-native';
+import App from './App';
+
+if (Platform.OS === 'android') {
+  // Android: FCM background handler (same as Lesson 7)
+  const messaging = require('@react-native-firebase/messaging').default;
+  const notifee = require('@notifee/react-native').default;
+  const { AndroidImportance, AndroidCategory, EventType } = require('@notifee/react-native');
+
+  messaging().setBackgroundMessageHandler(async (remoteMessage) => {
+    const data = remoteMessage.data;
+    if (data?.type === 'incoming_call') {
+      const channelId = await notifee.createChannel({
+        id: 'incoming_calls', name: 'Incoming Calls',
+        importance: AndroidImportance.HIGH, vibration: true,
+      });
+      await notifee.displayNotification({
+        title: data.callerName || 'Incoming Call',
+        body: data.callType === 'video' ? 'Incoming video call' : 'Incoming voice call',
+        android: {
+          channelId, category: AndroidCategory.CALL,
+          asForegroundService: true, ongoing: true,
+          fullScreenAction: { id: 'default', launchActivity: 'default' },
+          actions: [
+            { title: 'Decline', pressAction: { id: 'decline' } },
+            { title: 'Accept', pressAction: { id: 'accept', launchActivity: 'default' } },
+          ],
+        },
+        data: { callId: data.callId, callerName: data.callerName, callType: data.callType },
+      });
+    }
+  });
+
+  notifee.onBackgroundEvent(async ({ type, detail }) => {
+    if (type === EventType.ACTION_PRESS && detail.pressAction.id === 'decline') {
+      const callId = detail.notification?.data?.callId;
+      if (callId) {
+        const { getFirestore, doc, updateDoc } = require('firebase/firestore');
+        const db = getFirestore();
+        await updateDoc(doc(db, 'calls', callId), { status: 'declined' });
+      }
+      await notifee.cancelAllNotifications();
+    }
+  });
+
+  notifee.registerForegroundService(() => new Promise((resolve) => setTimeout(resolve, 30000)));
+}
+
+if (Platform.OS === 'ios') {
+  // iOS: VoIP push handler
+  const VoipPushNotification = require('react-native-voip-push-notification').default;
+  const RNCallKeep = require('react-native-callkeep').default;
+
+  // Must register early (before app renders)
+  VoipPushNotification.requestPermissions();
+
+  VoipPushNotification.addEventListener('notification', (notification) => {
+    const uuid = notification.uuid || generateUUID();
+    const callerName = notification.callerName || 'Unknown';
+    const hasVideo = notification.callType === 'video';
+
+    // Show native iOS call screen
+    RNCallKeep.displayIncomingCall(uuid, callerName, callerName, 'generic', hasVideo);
+
+    // Store mapping for later (app-level storage)
+    global.__incomingCallMap = global.__incomingCallMap || {};
+    global.__incomingCallMap[uuid] = {
+      callId: notification.callId,
+      callerName: callerName,
+      callType: notification.callType,
+    };
+  });
+
+  function generateUUID() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = Math.random() * 16 | 0;
+      return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+    });
+  }
+}
+
+AppRegistry.registerComponent('main', () => App);</code></pre>
+
+    <h3>App.js — Main component with CallKit integration</h3>
+
+    <pre><code>// App.js — Video call with CallKit support (iOS) + Notifee (Android)
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  View, Text, TextInput, Pressable, StyleSheet, Alert, Platform
+} from 'react-native';
+import {
+  RTCPeerConnection, RTCSessionDescription, RTCIceCandidate,
+  mediaDevices, RTCView
+} from 'react-native-webrtc';
+import InCallManager from 'react-native-incall-manager';
+import RNCallKeep from 'react-native-callkeep';
+
+import { initializeApp } from 'firebase/app';
+import { getAuth, onAuthStateChanged } from 'firebase/auth';
+import {
+  getFirestore, doc, setDoc, getDoc, updateDoc, addDoc,
+  collection, query, where, onSnapshot, serverTimestamp
+} from 'firebase/firestore';
+
+// ─── Firebase config ────────────────────────────────────────────────
+const firebaseConfig = {
+  apiKey: 'YOUR_API_KEY',
+  authDomain: 'YOUR_PROJECT.firebaseapp.com',
+  projectId: 'YOUR_PROJECT_ID',
+  storageBucket: 'YOUR_PROJECT.appspot.com',
+  messagingSenderId: '123456789',
+  appId: '1:123456789:web:abcdef',
+};
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+const ICE_SERVERS = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+  ],
+};
+
+// ─── CallKit Setup (iOS only) ──────────────────────────────────────
+async function initCallKit() {
+  if (Platform.OS !== 'ios') return;
+  await RNCallKeep.setup({
+    ios: {
+      appName: 'WhatsApp Clone',
+      supportsVideo: true,
+      maximumCallGroups: 1,
+      maximumCallsPerCallGroup: 1,
+    },
+  });
+  RNCallKeep.setAvailable(true);
+}
+
+// ─── Call Timer ─────────────────────────────────────────────────────
+function useCallTimer(isActive) {
+  const [seconds, setSeconds] = useState(0);
+  useEffect(() => {
+    if (!isActive) { setSeconds(0); return; }
+    const i = setInterval(() => setSeconds((s) => s + 1), 1000);
+    return () => clearInterval(i);
+  }, [isActive]);
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
+
+// ─── Main App ───────────────────────────────────────────────────────
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [screen, setScreen] = useState('home');
+  const [calleeUid, setCalleeUid] = useState('');
+  const [contactName, setContactName] = useState('');
+  const [callState, setCallState] = useState('idle');
+  const [isMuted, setIsMuted] = useState(false);
+  const [localStreamURL, setLocalStreamURL] = useState(null);
+  const [remoteStreamURL, setRemoteStreamURL] = useState(null);
+  const [incomingCall, setIncomingCall] = useState(null);
+
+  const pcRef = useRef(null);
+  const streamRef = useRef(null);
+  const callIdRef = useRef(null);
+  const callUUIDRef = useRef(null);
+  const unsubsRef = useRef([]);
+
+  const timer = useCallTimer(callState === 'active');
+
+  // Auth + CallKit init
+  useEffect(() => {
+    initCallKit();
+    const unsub = onAuthStateChanged(auth, (u) => setUser(u));
+    return unsub;
+  }, []);
+
+  // ★ iOS CallKit event listeners
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+
+    // User answered from native call screen
+    const answerListener = RNCallKeep.addEventListener('answerCall', async ({ callUUID }) => {
+      const callMap = global.__incomingCallMap || {};
+      const callInfo = callMap[callUUID];
+      if (callInfo) {
+        callUUIDRef.current = callUUID;
+        setContactName(callInfo.callerName);
+        // Fetch call data and answer
+        const callSnap = await getDoc(doc(db, 'calls', callInfo.callId));
+        if (callSnap.exists()) {
+          setIncomingCall({ callId: callInfo.callId, ...callSnap.data() });
+          setScreen('call');
+          // handleAnswerCall will be triggered by the state change
+        }
+        delete callMap[callUUID];
+      }
+    });
+
+    // User declined from native call screen
+    const endListener = RNCallKeep.addEventListener('endCall', async ({ callUUID }) => {
+      const callMap = global.__incomingCallMap || {};
+      const callInfo = callMap[callUUID];
+      if (callInfo) {
+        await updateDoc(doc(db, 'calls', callInfo.callId), { status: 'declined' });
+        delete callMap[callUUID];
+      }
+      // Also end any active call
+      handleEndCall();
+    });
+
+    // User toggled mute from native UI
+    const muteListener = RNCallKeep.addEventListener('didPerformSetMutedCallAction', ({ muted }) => {
+      const track = streamRef.current?.getAudioTracks()[0];
+      if (track) { track.enabled = !muted; setIsMuted(muted); }
+    });
+
+    return () => {
+      answerListener?.remove?.();
+      endListener?.remove?.();
+      muteListener?.remove?.();
+    };
+  }, []);
+
+  // Firestore listener for incoming calls (foreground fallback)
+  useEffect(() => {
+    if (!user) return;
+    const q = query(
+      collection(db, 'calls'),
+      where('calleeId', '==', user.uid),
+      where('status', '==', 'ringing')
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      snap.docChanges().forEach((change) => {
+        if (change.type === 'added') {
+          const data = change.doc.data();
+          setIncomingCall({ callId: change.doc.id, ...data });
+          setContactName(data.callerName || 'Unknown');
+
+          if (Platform.OS === 'ios') {
+            // Show native call screen (if not already shown by VoIP push)
+            const uuid = generateUUID();
+            callUUIDRef.current = uuid;
+            global.__incomingCallMap = global.__incomingCallMap || {};
+            global.__incomingCallMap[uuid] = { callId: change.doc.id, callerName: data.callerName, callType: data.type };
+            RNCallKeep.displayIncomingCall(uuid, data.callerName, data.callerName, 'generic', data.type === 'video');
+          } else {
+            setScreen('incoming');
+          }
+        }
+      });
+    });
+    return unsub;
+  }, [user]);
+
+  // ── START CALL ──
+  async function handleStartCall() {
+    if (!calleeUid.trim()) { Alert.alert('Error', 'Enter UID'); return; }
+
+    setScreen('call');
+    setCallState('calling');
+
+    const pc = new RTCPeerConnection(ICE_SERVERS);
+    pcRef.current = pc;
+
+    const stream = await mediaDevices.getUserMedia({ audio: true, video: { facingMode: 'user' } });
+    streamRef.current = stream;
+    setLocalStreamURL(stream.toURL());
+    stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+    // iOS: report outgoing call to CallKit
+    if (Platform.OS === 'ios') {
+      const uuid = generateUUID();
+      callUUIDRef.current = uuid;
+      RNCallKeep.startCall(uuid, contactName || calleeUid, contactName || calleeUid, 'generic', true);
+    }
+
+    pc.ontrack = (event) => {
+      if (event.streams?.[0]) {
+        setRemoteStreamURL(event.streams[0].toURL());
+        InCallManager.start({ media: 'video' });
+        setCallState('active');
+        // Tell CallKit the call connected
+        if (Platform.OS === 'ios' && callUUIDRef.current) {
+          RNCallKeep.reportConnectedOutgoingCallWithUUID(callUUIDRef.current);
+        }
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === 'failed') handleEndCall();
+    };
+
+    const callRef = doc(collection(db, 'calls'));
+    callIdRef.current = callRef.id;
+
+    pc.onicecandidate = (e) => {
+      if (e.candidate) addDoc(collection(db, 'calls', callRef.id, 'callerCandidates'), e.candidate.toJSON());
+    };
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    const myName = user.displayName || user.email || 'Caller';
+    const calleeSnap = await getDoc(doc(db, 'users', calleeUid.trim()));
+    setContactName(calleeSnap.exists() ? calleeSnap.data().displayName || calleeUid : calleeUid);
+
+    await setDoc(callRef, {
+      callerId: user.uid,
+      calleeId: calleeUid.trim(),
+      callerName: myName,
+      type: 'video',
+      status: 'ringing',
+      offer: { type: offer.type, sdp: offer.sdp },
+      answer: null,
+      createdAt: serverTimestamp(),
+    });
+
+    const unsubCall = onSnapshot(doc(db, 'calls', callRef.id), (snap) => {
+      const data = snap.data();
+      if (!data) return;
+      if (data.answer && !pc.remoteDescription) pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+      if (data.status === 'ended' || data.status === 'declined') handleEndCall();
+    });
+
+    const unsubCands = onSnapshot(collection(db, 'calls', callRef.id, 'calleeCandidates'), (snap) => {
+      snap.docChanges().forEach((change) => {
+        if (change.type === 'added') pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+      });
+    });
+
+    unsubsRef.current = [unsubCall, unsubCands];
+
+    setTimeout(async () => {
+      const snap = await getDoc(doc(db, 'calls', callRef.id));
+      if (snap.exists() && snap.data().status === 'ringing') {
+        await updateDoc(doc(db, 'calls', callRef.id), { status: 'missed' });
+        handleEndCall();
+      }
+    }, 30000);
+  }
+
+  // ── ANSWER CALL ──
+  async function handleAnswerCall() {
+    if (!incomingCall) return;
+    setScreen('call');
+    setCallState('connecting');
+
+    const { callId, offer } = incomingCall;
+    callIdRef.current = callId;
+
+    const pc = new RTCPeerConnection(ICE_SERVERS);
+    pcRef.current = pc;
+
+    const stream = await mediaDevices.getUserMedia({ audio: true, video: { facingMode: 'user' } });
+    streamRef.current = stream;
+    setLocalStreamURL(stream.toURL());
+    stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+    pc.ontrack = (event) => {
+      if (event.streams?.[0]) {
+        setRemoteStreamURL(event.streams[0].toURL());
+        InCallManager.start({ media: 'video' });
+        setCallState('active');
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === 'failed') handleEndCall();
+    };
+
+    pc.onicecandidate = (e) => {
+      if (e.candidate) addDoc(collection(db, 'calls', callId, 'calleeCandidates'), e.candidate.toJSON());
+    };
+
+    await pc.setRemoteDescription(new RTCSessionDescription(offer));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+
+    await updateDoc(doc(db, 'calls', callId), {
+      answer: { type: answer.type, sdp: answer.sdp },
+      status: 'active',
+    });
+
+    const unsubCands = onSnapshot(collection(db, 'calls', callId, 'callerCandidates'), (snap) => {
+      snap.docChanges().forEach((change) => {
+        if (change.type === 'added') pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+      });
+    });
+
+    const unsubCall = onSnapshot(doc(db, 'calls', callId), (snap) => {
+      const data = snap.data();
+      if (data && data.status === 'ended') handleEndCall();
+    });
+
+    unsubsRef.current = [unsubCands, unsubCall];
+    setIncomingCall(null);
+  }
+
+  // ── END CALL ──
+  async function handleEndCall() {
+    InCallManager.stop();
+    pcRef.current?.close();
+    pcRef.current = null;
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    unsubsRef.current.forEach((u) => u());
+    unsubsRef.current = [];
+
+    if (callIdRef.current) {
+      try { await updateDoc(doc(db, 'calls', callIdRef.current), { status: 'ended' }); } catch (e) {}
+    }
+
+    // ★ Tell CallKit the call ended
+    if (Platform.OS === 'ios' && callUUIDRef.current) {
+      RNCallKeep.endCall(callUUIDRef.current);
+      callUUIDRef.current = null;
+    }
+
+    callIdRef.current = null;
+    setCallState('idle');
+    setIsMuted(false);
+    setLocalStreamURL(null);
+    setRemoteStreamURL(null);
+    setScreen('home');
+    setIncomingCall(null);
+  }
+
+  // ── DECLINE (Android in-app UI) ──
+  async function handleDecline() {
+    if (incomingCall) {
+      await updateDoc(doc(db, 'calls', incomingCall.callId), { status: 'declined' });
+    }
+    if (Platform.OS === 'ios' && callUUIDRef.current) {
+      RNCallKeep.endCall(callUUIDRef.current);
+      callUUIDRef.current = null;
+    }
+    setIncomingCall(null);
+    setScreen('home');
+    setCallState('idle');
+  }
+
+  // ── MUTE ──
+  function handleToggleMute() {
+    const track = streamRef.current?.getAudioTracks()[0];
+    if (track) { track.enabled = isMuted; setIsMuted(!isMuted); }
+    // CallKit reflects mute state automatically via didPerformSetMutedCallAction
+  }
+
+  // ── RENDER ──
+  if (!user) {
+    return (
+      &lt;View style={[styles.container, styles.center]}&gt;
+        &lt;Text style={styles.infoText}&gt;Please log in (Module 3 Lesson 2)&lt;/Text&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  if (screen === 'home') {
+    return (
+      &lt;View style={styles.container}&gt;
+        &lt;View style={styles.header}&gt;
+          &lt;Text style={styles.headerTitle}&gt;Video Call&lt;/Text&gt;
+          &lt;Text style={styles.headerSub}&gt;UID: {user.uid.substring(0, 16)}...&lt;/Text&gt;
+        &lt;/View&gt;
+        &lt;View style={styles.homeContent}&gt;
+          &lt;Text style={styles.label}&gt;Enter the other user's UID:&lt;/Text&gt;
+          &lt;TextInput
+            style={styles.input}
+            value={calleeUid}
+            onChangeText={setCalleeUid}
+            placeholder="Paste UID here"
+            autoCapitalize="none"
+          /&gt;
+          &lt;Pressable style={styles.callButton} onPress={handleStartCall}&gt;
+            &lt;Text style={styles.callButtonText}&gt;🎥 Video Call&lt;/Text&gt;
+          &lt;/Pressable&gt;
+        &lt;/View&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  // Incoming screen (Android only — iOS uses native CallKit UI)
+  if (screen === 'incoming') {
+    return (
+      &lt;View style={styles.callScreen}&gt;
+        &lt;View style={styles.callInfo}&gt;
+          &lt;View style={styles.bigAvatar}&gt;
+            &lt;Text style={styles.bigAvatarText}&gt;{contactName.charAt(0).toUpperCase()}&lt;/Text&gt;
+          &lt;/View&gt;
+          &lt;Text style={styles.callName}&gt;{contactName}&lt;/Text&gt;
+          &lt;Text style={styles.callStatus}&gt;Incoming video call...&lt;/Text&gt;
+        &lt;/View&gt;
+        &lt;View style={styles.incomingBtns}&gt;
+          &lt;Pressable style={styles.declineBtn} onPress={handleDecline}&gt;
+            &lt;Text style={styles.btnIcon}&gt;✕&lt;/Text&gt;
+            &lt;Text style={styles.btnLabel}&gt;Decline&lt;/Text&gt;
+          &lt;/Pressable&gt;
+          &lt;Pressable style={styles.acceptBtn} onPress={handleAnswerCall}&gt;
+            &lt;Text style={styles.btnIcon}&gt;🎥&lt;/Text&gt;
+            &lt;Text style={styles.btnLabel}&gt;Accept&lt;/Text&gt;
+          &lt;/Pressable&gt;
+        &lt;/View&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  // ACTIVE VIDEO CALL
+  return (
+    &lt;View style={{ flex: 1 }}&gt;
+      {remoteStreamURL ? (
+        &lt;RTCView streamURL={remoteStreamURL} style={StyleSheet.absoluteFill} objectFit="cover" zOrder={0} /&gt;
+      ) : (
+        &lt;View style={[StyleSheet.absoluteFill, styles.callScreen]}&gt;
+          &lt;View style={styles.callInfo}&gt;
+            &lt;View style={styles.bigAvatar}&gt;
+              &lt;Text style={styles.bigAvatarText}&gt;{contactName.charAt(0).toUpperCase()}&lt;/Text&gt;
+            &lt;/View&gt;
+            &lt;Text style={styles.callName}&gt;{contactName}&lt;/Text&gt;
+            &lt;Text style={styles.callStatus}&gt;
+              {callState === 'calling' &amp;&amp; 'Calling...'}
+              {callState === 'connecting' &amp;&amp; 'Connecting...'}
+            &lt;/Text&gt;
+          &lt;/View&gt;
+        &lt;/View&gt;
+      )}
+      {localStreamURL &amp;&amp; (
+        &lt;View style={styles.pip}&gt;
+          &lt;RTCView streamURL={localStreamURL} style={{ flex: 1 }} objectFit="cover" mirror={true} zOrder={1} /&gt;
+        &lt;/View&gt;
+      )}
+      {callState === 'active' &amp;&amp; (
+        &lt;View style={styles.timerOverlay}&gt;
+          &lt;Text style={styles.timerText}&gt;{contactName}&lt;/Text&gt;
+          &lt;Text style={styles.timerSub}&gt;{timer}&lt;/Text&gt;
+        &lt;/View&gt;
+      )}
+      &lt;View style={styles.controlBar}&gt;
+        &lt;Pressable style={[styles.ctrlBtn, isMuted &amp;&amp; styles.ctrlActive]} onPress={handleToggleMute}&gt;
+          &lt;Text style={styles.ctrlIcon}&gt;{isMuted ? '🔇' : '🎤'}&lt;/Text&gt;
+        &lt;/Pressable&gt;
+        &lt;Pressable style={styles.endCallBtn} onPress={handleEndCall}&gt;
+          &lt;Text style={styles.ctrlIcon}&gt;📵&lt;/Text&gt;
+        &lt;/Pressable&gt;
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}
+
+function generateUUID() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+
+// ─── Styles ─────────────────────────────────────────────────────────
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#FFF' },
+  center: { justifyContent: 'center', alignItems: 'center' },
+  header: { backgroundColor: '#075E54', paddingTop: 48, paddingBottom: 16, paddingHorizontal: 16 },
+  headerTitle: { color: '#FFF', fontSize: 20, fontWeight: 'bold' },
+  headerSub: { color: '#FFFFFFAA', fontSize: 12, marginTop: 4 },
+  homeContent: { flex: 1, padding: 24, justifyContent: 'center' },
+  label: { fontSize: 16, color: '#333', marginBottom: 8 },
+  input: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, padding: 12, fontSize: 14, marginBottom: 20 },
+  callButton: { backgroundColor: '#25D366', paddingVertical: 16, borderRadius: 12, alignItems: 'center' },
+  callButtonText: { color: '#FFF', fontSize: 20, fontWeight: 'bold' },
+  infoText: { color: '#667781', fontSize: 16 },
+  callScreen: { flex: 1, backgroundColor: '#1a1a2e', justifyContent: 'space-between', alignItems: 'center', paddingTop: 80, paddingBottom: 60 },
+  callInfo: { alignItems: 'center' },
+  bigAvatar: { width: 120, height: 120, borderRadius: 60, backgroundColor: '#075E54', justifyContent: 'center', alignItems: 'center', marginBottom: 20 },
+  bigAvatarText: { color: '#FFF', fontSize: 48, fontWeight: 'bold' },
+  callName: { color: '#FFF', fontSize: 26, fontWeight: 'bold' },
+  callStatus: { color: '#FFFFFFAA', fontSize: 16, marginTop: 8 },
+  pip: { position: 'absolute', top: 60, right: 16, width: 120, height: 160, borderRadius: 12, overflow: 'hidden', borderWidth: 2, borderColor: '#FFF', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 6 },
+  timerOverlay: { position: 'absolute', top: 60, left: 16, backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
+  timerText: { color: '#FFF', fontSize: 14, fontWeight: 'bold' },
+  timerSub: { color: '#FFFFFFCC', fontSize: 12, marginTop: 2 },
+  controlBar: { position: 'absolute', bottom: 40, left: 0, right: 0, flexDirection: 'row', justifyContent: 'center', gap: 24 },
+  ctrlBtn: { alignItems: 'center', padding: 14, borderRadius: 30, width: 60, height: 60, justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.2)' },
+  ctrlActive: { backgroundColor: 'rgba(255,255,255,0.4)' },
+  ctrlIcon: { fontSize: 22 },
+  endCallBtn: { alignItems: 'center', padding: 14, borderRadius: 30, width: 60, height: 60, justifyContent: 'center', backgroundColor: '#FF3B30' },
+  incomingBtns: { flexDirection: 'row', justifyContent: 'center', gap: 48 },
+  declineBtn: { alignItems: 'center', justifyContent: 'center', width: 72, height: 72, borderRadius: 36, backgroundColor: '#FF3B30' },
+  acceptBtn: { alignItems: 'center', justifyContent: 'center', width: 72, height: 72, borderRadius: 36, backgroundColor: '#25D366' },
+  btnIcon: { fontSize: 24 },
+  btnLabel: { color: '#FFF', fontSize: 11, marginTop: 4 },
+});</code></pre>
+
+    <hr>
+
+    <!-- Section 14 -->
+    <h2>14. Testing incoming calls on iOS</h2>
+
+    <ol>
+      <li><strong>Prerequisites:</strong> Apple Developer account, VoIP push certificate created (Section 5)</li>
+      <li>Deploy the updated Cloud Function: <code>firebase deploy --only functions</code></li>
+      <li>Build for iOS: <code>eas build --platform ios --profile development</code></li>
+      <li>Install the dev build on <strong>two iPhones</strong> (or iPhone + Android)</li>
+      <li>Log in on both — check that <code>voipToken</code> appears in the iOS user's Firestore doc</li>
+      <li>On the iPhone: <strong>close the app completely</strong> (swipe up from app switcher)</li>
+      <li>From the other phone: call the iPhone</li>
+      <li>The iPhone shows the <strong>native iOS call screen</strong> — green Accept, red Decline</li>
+      <li>Slide to answer → your app opens and video connects</li>
+      <li>Check the Phone app's Recents — your call appears there</li>
+    </ol>
+
+    <div class="callout warning">
+      <div class="callout-title">Testing gotchas</div>
+      <ul>
+        <li><strong>Simulator won't work</strong> — VoIP push and CallKit require a physical iPhone</li>
+        <li><strong>Development vs Production</strong> — Use the sandbox APNs endpoint (<code>api.sandbox.push.apple.com</code>) for dev builds, production endpoint for App Store builds</li>
+        <li><strong>Token changes</strong> — The VoIP token can change between builds. Always re-save on app start.</li>
+        <li><strong>Must report call within 10 seconds</strong> — If your VoIP push handler doesn't call <code>displayIncomingCall</code> within ~10 seconds, iOS will terminate your app and may throttle future pushes</li>
+      </ul>
+    </div>
+
+    <hr>
+
+    <!-- Section 15 -->
+    <h2>15. Summary: Android vs iOS — what you built</h2>
+
+    <table style="width:100%;border-collapse:collapse;margin:1rem 0;">
+      <thead>
+        <tr style="border-bottom:2px solid var(--gray-200);">
+          <th style="text-align:left;padding:0.5rem;font-size:0.85rem;">Feature</th>
+          <th style="text-align:left;padding:0.5rem;font-size:0.85rem;">Android</th>
+          <th style="text-align:left;padding:0.5rem;font-size:0.85rem;">iOS</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid var(--gray-200);">
+          <td style="padding:0.5rem;">Push delivery</td>
+          <td style="padding:0.5rem;">FCM data message</td>
+          <td style="padding:0.5rem;">APNs VoIP push</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--gray-200);">
+          <td style="padding:0.5rem;">Libraries</td>
+          <td style="padding:0.5rem;">@react-native-firebase/messaging + @notifee/react-native</td>
+          <td style="padding:0.5rem;">react-native-voip-push-notification + react-native-callkeep</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--gray-200);">
+          <td style="padding:0.5rem;">UI when ringing</td>
+          <td style="padding:0.5rem;">Custom full-screen notification</td>
+          <td style="padding:0.5rem;">Native iOS call screen (CallKit)</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--gray-200);">
+          <td style="padding:0.5rem;">Keep alive</td>
+          <td style="padding:0.5rem;">Foreground service</td>
+          <td style="padding:0.5rem;">VoIP background mode (automatic)</td>
+        </tr>
+        <tr>
+          <td style="padding:0.5rem;">Server certificate</td>
+          <td style="padding:0.5rem;">Firebase service account (automatic)</td>
+          <td style="padding:0.5rem;">VoIP push certificate (.p12)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout">
+      <div class="callout-title">Module 5 complete!</div>
+      <p>You've built the entire audio/video calling system for your WhatsApp clone — from understanding WebRTC theory, through voice and video calls, to incoming call handling on both Android and iOS. Your app can now make and receive calls exactly like WhatsApp does. Next up: <strong>Module 6 — Polish &amp; Publish</strong>, where you'll prepare the app for the Play Store and App Store.</p>
+    </div>
+
+    <hr>
+
+    <!-- Quiz -->
+    <h2>16. Quiz</h2>
+    <div id="calls-lesson-0008-quiz"></div>
+
+    <hr>
+
+    <!-- Lesson nav -->
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="./0007-incoming-calls-android.html">&larr; Lesson 7: Incoming Calls on Android</a>
+      <a href="../06-polish-and-publish/README.html">Module 6: Polish &amp; Publish &rarr;</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script>
+    createQuiz('calls-lesson-0008-quiz', [
+      {
+        question: 'Why does Apple REQUIRE apps to use CallKit for VoIP calls?',
+        options: [
+          'CallKit makes calls faster',
+          'It integrates with the native phone experience (Recents, DND, CarPlay, Siri) and Apple rejects apps without it',
+          'CallKit is the only way to access the microphone on iOS',
+          'It reduces battery usage by 50%'
+        ],
+        answer: 1
+      },
+      {
+        question: 'What is the difference between regular APNs push and VoIP push?',
+        options: [
+          'VoIP push costs money while regular push is free',
+          'Regular push may be delayed or batched; VoIP push wakes the app IMMEDIATELY, even if force-quit',
+          'VoIP push only works on Wi-Fi',
+          'Regular push can show buttons but VoIP push cannot'
+        ],
+        answer: 1
+      },
+      {
+        question: 'What must your VoIP push handler do within ~10 seconds of receiving the push?',
+        options: [
+          'Connect the WebRTC peer connection',
+          'Download the caller\'s profile picture',
+          'Call RNCallKeep.displayIncomingCall() to show the native call screen',
+          'Save the call to Firestore'
+        ],
+        answer: 2
+      },
+      {
+        question: 'When the user answers a call via the native CallKit UI, which event fires in your app?',
+        options: [
+          'onMessage from FCM',
+          'The "answerCall" event from RNCallKeep with the callUUID',
+          'A Firestore onSnapshot update',
+          'The "notification" event from VoipPushNotification'
+        ],
+        answer: 1
+      },
+      {
+        question: 'Why must you call RNCallKeep.endCall(uuid) when a call ends?',
+        options: [
+          'It frees up memory used by WebRTC',
+          'Without it, the native iOS call screen stays visible even after your app\'s call UI closes',
+          'It sends a push notification to the other user',
+          'It saves the call to the Recents tab'
+        ],
+        answer: 1
+      }
+    ]);
+  </script>
+</body>
+</html>

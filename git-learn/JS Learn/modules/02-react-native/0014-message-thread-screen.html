@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RN Lesson 14: Build the Message Thread Screen — JS Learn</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">Module 2: React Native</a>
+      <span class="sep">›</span>
+      <span class="current">Lesson 14: Build the Message Thread Screen</span>
+    </nav>
+
+    <!-- Header -->
+    <span class="badge">React Native · Lesson 14</span>
+    <h1 style="margin-top:0.5rem;">Build the Message Thread Screen</h1>
+    <div class="lesson-meta">
+      <span>Capstone · Combines lessons 2–13</span>
+      <span>~55 min</span>
+      <span>Hands-on</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for your WhatsApp clone</div>
+      <p>The message thread is the most complex screen in WhatsApp — and the one users spend almost all their time in. Messages bubble up from the bottom. The keyboard slides up and pushes the input bar with it. New messages appear at the bottom and the list auto-scrolls. Read ticks show whether the message was delivered and read. This final Module 2 capstone wires together everything: inverted FlatList, KeyboardAvoidingView, useRef for scrolling, useState for message state, and the navigation shell from Lesson 8. The result is a fully interactive chat screen ready to swap in real Firebase data in Module 3.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 1 -->
+    <h2>1. Why FlatList must be inverted</h2>
+
+    <p>In a chat thread, the newest message is at the <em>bottom</em> and the list starts scrolled to the bottom. The easiest way to achieve this is the <code>inverted</code> prop on FlatList — it flips the list visually so item [0] appears at the bottom. You simply keep your messages array sorted newest-last (which is natural) and FlatList handles the rest.</p>
+
+    <pre><code>// Messages array — oldest first, newest last (natural append order)
+const messages = [
+  { id: 'm1', text: 'Hey!',           sender: 'them', time: '10:30' },
+  { id: 'm2', text: 'Hi! How are you?', sender: 'me', time: '10:31' },
+  { id: 'm3', text: 'Great, you?',    sender: 'them', time: '10:31' },
+];
+
+// FlatList with inverted — newest message (m3) appears at the bottom
+&lt;FlatList
+  data={messages}
+  inverted                    // flips list so [0] is at bottom
+  keyExtractor={item =&gt; item.id}
+  renderItem={({ item }) =&gt; &lt;MessageBubble message={item} /&gt;}
+/&gt;</code></pre>
+
+    <div class="callout success">
+      <div class="callout-title">inverted vs manual scroll</div>
+      <p>The alternative is calling <code>flatListRef.current.scrollToEnd()</code> after every new message. That works but can cause a visible flash. <code>inverted</code> is how WhatsApp, iMessage, and Signal all do it — the list naturally starts at the bottom and new items append there without any scroll management code.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 2 -->
+    <h2>2. Keyboard + input bar — the full layout</h2>
+
+    <p>The input bar must sit directly above the keyboard at all times. The layout is:</p>
+
+    <pre><code>KeyboardAvoidingView (flex: 1)
+  └── View (flex: 1)           ← fills remaining space
+        ├── custom header      ← green header with back button
+        ├── FlatList inverted  ← messages, fills available space
+        └── input bar          ← TextInput + Send button, sticks to bottom</code></pre>
+
+    <pre><code>import { KeyboardAvoidingView, Platform } from 'react-native';
+
+&lt;KeyboardAvoidingView
+  style={{ flex: 1 }}
+  behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+  keyboardVerticalOffset={0}
+  //  ↑ increase this if the input bar sits too high when keyboard opens
+  //    (common when you have a custom header above KeyboardAvoidingView)
+&gt;
+  {/* header */}
+  {/* FlatList */}
+  {/* input bar */}
+&lt;/KeyboardAvoidingView&gt;</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">keyboardVerticalOffset on iOS with custom headers</div>
+      <p>When <code>headerShown: false</code> is set (which you use so your custom green header shows), iOS doesn't automatically account for the status bar height. If the input bar jumps too high when the keyboard opens, set <code>keyboardVerticalOffset</code> to the height of your custom header + status bar (typically 90–100 on modern iPhones). Test on a real device — the simulator doesn't show this correctly.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 3 -->
+    <h2>3. Message bubble component</h2>
+
+    <p>Sent messages appear on the right with a green bubble. Received messages appear on the left with a white bubble. A single component handles both — the <code>sender</code> field determines the style.</p>
+
+    <pre><code>function MessageBubble({ message }) {
+  const isMe = message.sender === 'me';
+
+  return (
+    &lt;View style={[styles.bubbleRow, isMe ? styles.rowRight : styles.rowLeft]}&gt;
+      &lt;View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleThem]}&gt;
+        &lt;Text style={styles.bubbleText}&gt;{message.text}&lt;/Text&gt;
+        &lt;View style={styles.bubbleMeta}&gt;
+          &lt;Text style={styles.bubbleTime}&gt;{message.time}&lt;/Text&gt;
+          {isMe &amp;&amp; &lt;Text style={styles.ticks}&gt;{message.read ? '✓✓' : '✓'}&lt;/Text&gt;}
+          {/*        single tick = sent, double tick = delivered/read        */}
+        &lt;/View&gt;
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  bubbleRow:   { paddingHorizontal: 12, marginBottom: 4 },
+  rowRight:    { alignItems: 'flex-end' },
+  rowLeft:     { alignItems: 'flex-start' },
+  bubble:      { maxWidth: '78%', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 },
+  bubbleMe:    { backgroundColor: '#DCF8C6', borderBottomRightRadius: 2 },
+  bubbleThem:  { backgroundColor: '#fff',    borderBottomLeftRadius: 2 },
+  bubbleText:  { fontSize: 15, color: '#111', lineHeight: 20 },
+  bubbleMeta:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', marginTop: 3, gap: 4 },
+  bubbleTime:  { fontSize: 11, color: '#667781' },
+  ticks:       { fontSize: 12, color: '#667781' },
+});</code></pre>
+
+    <hr>
+
+    <!-- Section 4 -->
+    <h2>4. The input bar — multiline TextInput + Send button</h2>
+
+    <p>The input bar grows as the user types multiple lines (up to a maximum height), then becomes scrollable. Use a <code>multiline</code> TextInput with a capped height.</p>
+
+    <pre><code>const [inputText, setInputText] = useState('');
+
+function sendMessage() {
+  const text = inputText.trim();
+  if (!text) return;          // don't send empty messages
+
+  const newMessage = {
+    id:     Date.now().toString(),
+    text,
+    sender: 'me',
+    time:   new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    read:   false,
+  };
+
+  setMessages(prev =&gt; [...prev, newMessage]);
+  setInputText('');            // clear after sending
+  // In Module 3: await addDoc(collection(db, 'chats', chatId, 'messages'), newMessage);
+}
+
+// Input bar JSX
+&lt;View style={styles.inputBar}&gt;
+  &lt;TextInput
+    style={styles.textInput}
+    value={inputText}
+    onChangeText={setInputText}
+    placeholder="Message"
+    placeholderTextColor="#aaa"
+    multiline
+    maxHeight={120}            // caps at ~5 lines before scrolling internally
+    returnKeyType="default"    // Enter adds a newline (not send) — send via button
+    // iOS multiline needs explicit paddingTop to centre text vertically:
+    paddingTop={Platform.OS === 'ios' ? 10 : undefined}
+  /&gt;
+  &lt;Pressable
+    style={[styles.sendButton, !inputText.trim() &amp;&amp; styles.sendButtonDisabled]}
+    onPress={sendMessage}
+    disabled={!inputText.trim()}
+  &gt;
+    &lt;Text style={styles.sendIcon}&gt;➤&lt;/Text&gt;
+  &lt;/Pressable&gt;
+&lt;/View&gt;</code></pre>
+
+    <div class="callout">
+      <div class="callout-title">iOS multiline paddingTop</div>
+      <p>On iOS, a multiline TextInput doesn't vertically centre its text by default. Adding <code>paddingTop</code> (usually 8–12) fixes this. Android handles it correctly without the workaround. Always use <code>Platform.OS === 'ios' ? 10 : undefined</code> so Android is unaffected.</p>
+    </div>
+
+    <hr>
+
+    <!-- Section 5 -->
+    <h2>5. Simulating read ticks and a reply</h2>
+
+    <p>WhatsApp's read ticks work like this: one grey tick = sent to server. Two grey ticks = delivered to recipient's device. Two blue ticks = recipient opened the chat. For now, simulate a reply and a tick update with <code>setTimeout</code> — Firebase will replace this in Module 3.</p>
+
+    <pre><code>// After user sends a message, simulate a reply after 2 seconds
+function sendMessage() {
+  const text = inputText.trim();
+  if (!text) return;
+
+  const myMsg = {
+    id: Date.now().toString(), text, sender: 'me',
+    time: formatTime(), read: false,
+  };
+  setMessages(prev =&gt; [...prev, myMsg]);
+  setInputText('');
+
+  // Simulate: message marked as read after 1s
+  setTimeout(() =&gt; {
+    setMessages(prev =&gt; prev.map(m =&gt;
+      m.id === myMsg.id ? { ...m, read: true } : m
+    ));
+  }, 1000);
+
+  // Simulate: reply arrives after 2s
+  setTimeout(() =&gt; {
+    setMessages(prev =&gt; [...prev, {
+      id:     (Date.now() + 1).toString(),
+      text:   getAutoReply(text),
+      sender: 'them',
+      time:   formatTime(),
+      read:   false,
+    }]);
+  }, 2000);
+}
+
+function getAutoReply(text) {
+  const replies = [
+    'Got it! 👍',
+    'Sounds good!',
+    'Sure, let me check.',
+    'Can we talk later?',
+    '😄',
+  ];
+  return replies[Math.floor(Math.random() * replies.length)];
+}
+
+function formatTime() {
+  return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 6 -->
+    <h2>6. Date separators between messages</h2>
+
+    <p>WhatsApp shows "Today", "Yesterday", or a date between messages from different days. Insert separator items into the messages array before passing it to FlatList.</p>
+
+    <pre><code>// Add a date separator before the first message of each day
+function insertDateSeparators(messages) {
+  const result = [];
+  let lastDate = null;
+
+  for (const msg of messages) {
+    const day = msg.date ?? 'Today';    // 'Today', 'Yesterday', or 'Mon 14 Jul'
+    if (day !== lastDate) {
+      result.push({ id: `sep-${day}`, type: 'separator', label: day });
+      lastDate = day;
+    }
+    result.push(msg);
+  }
+  return result;
+}
+
+// In renderItem — handle both types
+renderItem={({ item }) =&gt;
+  item.type === 'separator'
+    ? &lt;DateSeparator label={item.label} /&gt;
+    : &lt;MessageBubble message={item} /&gt;
+}
+
+function DateSeparator({ label }) {
+  return (
+    &lt;View style={styles.dateSepRow}&gt;
+      &lt;View style={styles.dateSepPill}&gt;
+        &lt;Text style={styles.dateSepText}&gt;{label}&lt;/Text&gt;
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <hr>
+
+    <!-- Section 7: Full working example -->
+    <h2>7. Full working example — production message thread screen</h2>
+
+    <p>This is the complete, production-quality message thread for your WhatsApp clone. Every feature is here: inverted FlatList, KeyboardAvoidingView, message bubbles, read ticks, multiline input, send button, simulated reply, and date separators. This slots directly into the navigation shell from Lesson 8. Replace your entire <code>App.js</code> with this.</p>
+
+    <pre><code>import { useState, useEffect, useRef } from 'react';
+import { NavigationContainer } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { createBottomTabNavigator }   from '@react-navigation/bottom-tabs';
+import {
+  View, Text, FlatList, TextInput, Pressable,
+  StyleSheet, KeyboardAvoidingView, Platform, Keyboard,
+} from 'react-native';
+
+const Stack = createNativeStackNavigator();
+const Tab   = createBottomTabNavigator();
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function formatTime() {
+  return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function getAutoReply(text) {
+  const replies = [
+    'Got it! 👍', 'Sounds good!', 'Sure, let me check.',
+    'Can we talk later?', '😄', 'On my way!', 'OK!',
+  ];
+  return replies[Math.abs(text.length) % replies.length];
+}
+
+// ── Date separator ────────────────────────────────────────────────────────────
+function DateSeparator({ label }) {
+  return (
+    &lt;View style={styles.dateSepRow}&gt;
+      &lt;View style={styles.dateSepPill}&gt;
+        &lt;Text style={styles.dateSepText}&gt;{label}&lt;/Text&gt;
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}
+
+// ── Message bubble ────────────────────────────────────────────────────────────
+function MessageBubble({ message }) {
+  const isMe = message.sender === 'me';
+  return (
+    &lt;View style={[styles.bubbleRow, isMe ? styles.rowRight : styles.rowLeft]}&gt;
+      &lt;View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleThem]}&gt;
+        &lt;Text style={styles.bubbleText}&gt;{message.text}&lt;/Text&gt;
+        &lt;View style={styles.bubbleMeta}&gt;
+          &lt;Text style={styles.bubbleTime}&gt;{message.time}&lt;/Text&gt;
+          {isMe &amp;&amp; (
+            &lt;Text style={[styles.ticks, message.read &amp;&amp; styles.ticksRead]}&gt;
+              {message.read ? '✓✓' : '✓'}
+            &lt;/Text&gt;
+          )}
+        &lt;/View&gt;
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}
+
+// ── Message Thread Screen ─────────────────────────────────────────────────────
+const INITIAL_MESSAGES = [
+  { id: '1', text: 'Hey! Are you free this weekend?', sender: 'them', time: '10:28', read: false, date: 'Today' },
+  { id: '2', text: 'Yes! What did you have in mind?', sender: 'me',   time: '10:29', read: true,  date: 'Today' },
+  { id: '3', text: 'Thought we could go hiking 🏔️',   sender: 'them', time: '10:30', read: false, date: 'Today' },
+  { id: '4', text: 'That sounds amazing!',            sender: 'me',   time: '10:31', read: true,  date: 'Today' },
+  { id: '5', text: 'Perfect, see you Saturday then!', sender: 'them', time: '10:32', read: false, date: 'Today' },
+];
+
+function insertDateSeparators(messages) {
+  const result = [];
+  let lastDate = null;
+  for (const msg of messages) {
+    const day = msg.date ?? 'Today';
+    if (day !== lastDate) {
+      result.push({ id: `sep-${day}-${msg.id}`, type: 'separator', label: day });
+      lastDate = day;
+    }
+    result.push({ ...msg, type: 'message' });
+  }
+  return result;
+}
+
+function MessageThreadScreen({ route, navigation }) {
+  const {
+    chatId   = '1',
+    chatName = 'Priya Sharma',
+    isGroup  = false,
+  } = route.params ?? {};
+
+  const [messages,  setMessages]  = useState(INITIAL_MESSAGES);
+  const [inputText, setInputText] = useState('');
+  const [isTyping,  setIsTyping]  = useState(false);
+
+  // Hide React Navigation's default header — we have a custom one
+  useEffect(() =&gt; {
+    navigation.setOptions({ headerShown: false });
+  }, []);
+
+  const displayItems = insertDateSeparators(messages);
+
+  function sendMessage() {
+    const text = inputText.trim();
+    if (!text) return;
+
+    const myMsg = {
+      id:     Date.now().toString(),
+      text,
+      sender: 'me',
+      time:   formatTime(),
+      read:   false,
+      date:   'Today',
+    };
+
+    setMessages(prev =&gt; [...prev, myMsg]);
+    setInputText('');
+    Keyboard.dismiss();
+
+    // Simulate: message marked as read after 1s
+    setTimeout(() =&gt; {
+      setMessages(prev =&gt; prev.map(m =&gt;
+        m.id === myMsg.id ? { ...m, read: true } : m
+      ));
+    }, 1000);
+
+    // Show typing indicator, then reply after 2s
+    setTimeout(() =&gt; setIsTyping(true),  1200);
+    setTimeout(() =&gt; {
+      setIsTyping(false);
+      setMessages(prev =&gt; [...prev, {
+        id:     (Date.now() + 1).toString(),
+        text:   getAutoReply(text),
+        sender: 'them',
+        time:   formatTime(),
+        read:   false,
+        date:   'Today',
+      }]);
+    }, 2500);
+  }
+
+  return (
+    &lt;KeyboardAvoidingView
+      style={styles.screen}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
+    &gt;
+
+      {/* Custom green header */}
+      &lt;View style={styles.header}&gt;
+        &lt;Pressable onPress={() =&gt; navigation.goBack()} style={styles.backBtn}&gt;
+          &lt;Text style={styles.backArrow}&gt;←&lt;/Text&gt;
+        &lt;/Pressable&gt;
+        &lt;View style={styles.avatarCircleSmall}&gt;
+          &lt;Text style={styles.avatarLetterSmall}&gt;{chatName[0].toUpperCase()}&lt;/Text&gt;
+        &lt;/View&gt;
+        &lt;View style={styles.headerInfo}&gt;
+          &lt;Text style={styles.headerName}&gt;{chatName}&lt;/Text&gt;
+          &lt;Text style={styles.headerStatus}&gt;
+            {isTyping ? 'typing...' : (isGroup ? 'Group' : 'online')}
+          &lt;/Text&gt;
+        &lt;/View&gt;
+        &lt;View style={styles.headerActions}&gt;
+          &lt;Pressable style={styles.headerIcon}&gt;
+            &lt;Text style={styles.headerIconText}&gt;📹&lt;/Text&gt;
+          &lt;/Pressable&gt;
+          &lt;Pressable style={styles.headerIcon}&gt;
+            &lt;Text style={styles.headerIconText}&gt;📞&lt;/Text&gt;
+          &lt;/Pressable&gt;
+        &lt;/View&gt;
+      &lt;/View&gt;
+
+      {/* Message list — inverted so newest is at bottom */}
+      &lt;FlatList
+        data={displayItems}
+        keyExtractor={item =&gt; item.id}
+        inverted
+        style={styles.messageList}
+        contentContainerStyle={styles.messageListContent}
+        keyboardShouldPersistTaps="handled"
+        renderItem={({ item }) =&gt;
+          item.type === 'separator'
+            ? &lt;DateSeparator label={item.label} /&gt;
+            : &lt;MessageBubble message={item} /&gt;
+        }
+      /&gt;
+
+      {/* Input bar */}
+      &lt;View style={styles.inputBar}&gt;
+        &lt;Pressable style={styles.attachBtn}&gt;
+          &lt;Text style={styles.attachIcon}&gt;📎&lt;/Text&gt;
+        &lt;/Pressable&gt;
+        &lt;TextInput
+          style={styles.textInput}
+          value={inputText}
+          onChangeText={setInputText}
+          placeholder="Message"
+          placeholderTextColor="#aaa"
+          multiline
+          maxHeight={120}
+          returnKeyType="default"
+          paddingTop={Platform.OS === 'ios' ? 10 : undefined}
+        /&gt;
+        &lt;Pressable
+          style={[styles.sendButton, !inputText.trim() &amp;&amp; styles.sendButtonDisabled]}
+          onPress={sendMessage}
+          disabled={!inputText.trim()}
+        &gt;
+          &lt;Text style={styles.sendIcon}&gt;➤&lt;/Text&gt;
+        &lt;/Pressable&gt;
+      &lt;/View&gt;
+
+    &lt;/KeyboardAvoidingView&gt;
+  );
+}
+
+// ── Chat List Screen (from Lesson 13) ─────────────────────────────────────────
+const SAMPLE_CHATS = [
+  { id: '1', name: 'Priya Sharma',  preview: 'Perfect, see you Saturday!', time: '10:32', unread: 2, avatarColor: '#075E54', isGroup: false },
+  { id: '2', name: 'Rahul Mehta',   preview: 'I\'ll send the file now.',    time: '09:15', unread: 0, avatarColor: '#128C7E', isGroup: false },
+  { id: '3', name: 'Family Group',  preview: 'Mom: Dinner at 7!',           time: 'Yesterday', unread: 5, avatarColor: '#25D366', isGroup: true  },
+  { id: '4', name: 'Work Team',     preview: 'Meeting moved to 3pm.',       time: 'Yesterday', unread: 0, avatarColor: '#667781', isGroup: true  },
+];
+
+function ChatRow({ chat, onPress }) {
+  return (
+    &lt;Pressable
+      style={({ pressed }) =&gt; [styles.row, pressed &amp;&amp; styles.rowPressed]}
+      onPress={onPress}
+    &gt;
+      &lt;View style={[styles.avatarCircle, { backgroundColor: chat.avatarColor }]}&gt;
+        &lt;Text style={styles.avatarLetter}&gt;{chat.name[0].toUpperCase()}&lt;/Text&gt;
+      &lt;/View&gt;
+      &lt;View style={styles.middle}&gt;
+        &lt;Text style={styles.chatName}&gt;{chat.name}&lt;/Text&gt;
+        &lt;Text style={styles.preview} numberOfLines={1}&gt;{chat.preview}&lt;/Text&gt;
+      &lt;/View&gt;
+      &lt;View style={styles.right}&gt;
+        &lt;Text style={[styles.time, chat.unread &gt; 0 &amp;&amp; styles.timeGreen]}&gt;{chat.time}&lt;/Text&gt;
+        {chat.unread &gt; 0 &amp;&amp; (
+          &lt;View style={styles.badge}&gt;
+            &lt;Text style={styles.badgeText}&gt;{chat.unread}&lt;/Text&gt;
+          &lt;/View&gt;
+        )}
+      &lt;/View&gt;
+    &lt;/Pressable&gt;
+  );
+}
+
+function ChatListScreen({ navigation }) {
+  return (
+    &lt;View style={styles.screen}&gt;
+      &lt;View style={styles.header}&gt;
+        &lt;Text style={[styles.headerName, { flex: 1 }]}&gt;WhatsApp&lt;/Text&gt;
+      &lt;/View&gt;
+      &lt;FlatList
+        data={SAMPLE_CHATS}
+        keyExtractor={item =&gt; item.id}
+        ItemSeparatorComponent={() =&gt; &lt;View style={styles.sep} /&gt;}
+        renderItem={({ item }) =&gt; (
+          &lt;ChatRow
+            chat={item}
+            onPress={() =&gt; navigation.navigate('MessageThread', {
+              chatId: item.id, chatName: item.name, isGroup: item.isGroup,
+            })}
+          /&gt;
+        )}
+      /&gt;
+    &lt;/View&gt;
+  );
+}
+
+// ── Placeholder tabs ──────────────────────────────────────────────────────────
+function CallsScreen()    { return &lt;View style={[styles.screen, { alignItems:'center', justifyContent:'center' }]}&gt;&lt;Text style={{ fontSize: 28 }}&gt;📞 Calls&lt;/Text&gt;&lt;/View&gt;; }
+function StatusScreen()   { return &lt;View style={[styles.screen, { alignItems:'center', justifyContent:'center' }]}&gt;&lt;Text style={{ fontSize: 28 }}&gt;⊙ Status&lt;/Text&gt;&lt;/View&gt;; }
+function SettingsScreen() { return &lt;View style={[styles.screen, { alignItems:'center', justifyContent:'center' }]}&gt;&lt;Text style={{ fontSize: 28 }}&gt;⚙ Settings&lt;/Text&gt;&lt;/View&gt;; }
+
+// ── Navigators ────────────────────────────────────────────────────────────────
+function ChatsStack() {
+  return (
+    &lt;Stack.Navigator screenOptions={{ headerShown: false }}&gt;
+      &lt;Stack.Screen name="ChatList"      component={ChatListScreen} /&gt;
+      &lt;Stack.Screen name="MessageThread" component={MessageThreadScreen} /&gt;
+    &lt;/Stack.Navigator&gt;
+  );
+}
+
+export default function App() {
+  return (
+    &lt;NavigationContainer&gt;
+      &lt;Tab.Navigator
+        screenOptions={{
+          headerShown:             false,
+          tabBarActiveTintColor:   '#075E54',
+          tabBarInactiveTintColor: '#667781',
+          tabBarStyle:             { backgroundColor: '#fff', borderTopColor: '#e9edef' },
+        }}
+      &gt;
+        &lt;Tab.Screen name="Chats"    component={ChatsStack}    options={{ tabBarIcon: ({ color }) =&gt; &lt;Text style={{ color, fontSize: 22 }}&gt;💬&lt;/Text&gt; }} /&gt;
+        &lt;Tab.Screen name="Calls"    component={CallsScreen}   options={{ tabBarIcon: ({ color }) =&gt; &lt;Text style={{ color, fontSize: 22 }}&gt;📞&lt;/Text&gt; }} /&gt;
+        &lt;Tab.Screen name="Status"   component={StatusScreen}  options={{ tabBarIcon: ({ color }) =&gt; &lt;Text style={{ color, fontSize: 22 }}&gt;⊙&lt;/Text&gt;  }} /&gt;
+        &lt;Tab.Screen name="Settings" component={SettingsScreen}options={{ tabBarIcon: ({ color }) =&gt; &lt;Text style={{ color, fontSize: 22 }}&gt;⚙&lt;/Text&gt;  }} /&gt;
+      &lt;/Tab.Navigator&gt;
+    &lt;/NavigationContainer&gt;
+  );
+}
+
+// ── Styles ────────────────────────────────────────────────────────────────────
+const styles = StyleSheet.create({
+  screen:             { flex: 1, backgroundColor: '#fff' },
+
+  // Header
+  header:             { backgroundColor: '#075E54', paddingTop: 48, paddingBottom: 10, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center' },
+  backBtn:            { padding: 6, marginRight: 2 },
+  backArrow:          { color: '#fff', fontSize: 22 },
+  avatarCircleSmall:  { width: 38, height: 38, borderRadius: 19, backgroundColor: '#128C7E', alignItems: 'center', justifyContent: 'center', marginRight: 10 },
+  avatarLetterSmall:  { color: '#fff', fontSize: 16, fontWeight: '700' },
+  headerInfo:         { flex: 1 },
+  headerName:         { color: '#fff', fontSize: 17, fontWeight: '700' },
+  headerStatus:       { color: '#b2dfdb', fontSize: 12, marginTop: 1 },
+  headerActions:      { flexDirection: 'row', gap: 4 },
+  headerIcon:         { padding: 6 },
+  headerIconText:     { fontSize: 20 },
+
+  // Message list
+  messageList:        { flex: 1, backgroundColor: '#ECE5DD' },
+  messageListContent: { paddingVertical: 8 },
+
+  // Bubbles
+  bubbleRow:          { paddingHorizontal: 10, marginBottom: 3 },
+  rowRight:           { alignItems: 'flex-end' },
+  rowLeft:            { alignItems: 'flex-start' },
+  bubble:             { maxWidth: '78%', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7, elevation: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 1 },
+  bubbleMe:           { backgroundColor: '#DCF8C6', borderBottomRightRadius: 2 },
+  bubbleThem:         { backgroundColor: '#fff',    borderBottomLeftRadius: 2 },
+  bubbleText:         { fontSize: 15, color: '#111', lineHeight: 20 },
+  bubbleMeta:         { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', marginTop: 3, gap: 3 },
+  bubbleTime:         { fontSize: 11, color: '#667781' },
+  ticks:              { fontSize: 13, color: '#aaa' },
+  ticksRead:          { color: '#4FC3F7' },
+
+  // Date separator
+  dateSepRow:         { alignItems: 'center', marginVertical: 10 },
+  dateSepPill:        { backgroundColor: '#D9FDD3', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4, elevation: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 1 },
+  dateSepText:        { fontSize: 12, color: '#111' },
+
+  // Input bar
+  inputBar:           { flexDirection: 'row', alignItems: 'flex-end', paddingHorizontal: 8, paddingVertical: 8, backgroundColor: '#f0f2f5', borderTopWidth: 1, borderTopColor: '#e9edef', gap: 8 },
+  attachBtn:          { padding: 6, justifyContent: 'center' },
+  attachIcon:         { fontSize: 22 },
+  textInput:          { flex: 1, backgroundColor: '#fff', borderRadius: 22, paddingHorizontal: 16, paddingBottom: 10, fontSize: 15, color: '#111', minHeight: 44, maxHeight: 120 },
+  sendButton:         { width: 44, height: 44, borderRadius: 22, backgroundColor: '#25D366', alignItems: 'center', justifyContent: 'center' },
+  sendButtonDisabled: { backgroundColor: '#aaa' },
+  sendIcon:           { color: '#fff', fontSize: 18 },
+
+  // Chat list
+  row:                { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12 },
+  rowPressed:         { backgroundColor: '#f5f5f5' },
+  avatarCircle:       { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center' },
+  avatarLetter:       { color: '#fff', fontSize: 22, fontWeight: '700' },
+  middle:             { flex: 1, marginLeft: 12, marginRight: 8 },
+  chatName:           { fontSize: 16, fontWeight: '600', color: '#111' },
+  preview:            { fontSize: 14, color: '#667781', marginTop: 2 },
+  right:              { alignItems: 'flex-end' },
+  time:               { fontSize: 12, color: '#667781' },
+  timeGreen:          { color: '#25D366', fontWeight: '600' },
+  badge:              { backgroundColor: '#25D366', borderRadius: 10, minWidth: 20, height: 20, alignItems: 'center', justifyContent: 'center', marginTop: 4, paddingHorizontal: 5 },
+  badgeText:          { color: '#fff', fontSize: 11, fontWeight: '700' },
+  sep:                { height: 1, backgroundColor: '#f0f2f5', marginLeft: 80 },
+});</code></pre>
+
+    <p>Run this on your phone. Open any chat from the list. You see an inverted message thread on the sandy background. Type a message and tap the green send button — your bubble appears on the right with a single grey tick. One second later the tick turns to double blue ✓✓. Two seconds later "typing..." appears in the header and a reply arrives from the contact. The keyboard slides the input bar up and the list stays scrolled to the bottom throughout.</p>
+
+    <div class="callout success">
+      <div class="callout-title">Module 2 complete — you built a real WhatsApp shell</div>
+      <p>You've built every screen of the WhatsApp UI with real navigation, real keyboard handling, real loading states, and real interactivity — all with hardcoded data. In <strong>Module 3</strong> you replace the fake data with Firebase: real sign-in on the Login screen, real chat list from Firestore, and real messages that sync across devices in real time. The UI you built here doesn't change — only the data source does.</p>
+    </div>
+
+    <hr>
+
+    <!-- Quiz -->
+    <h2>Quick check — test yourself</h2>
+    <p>Five questions on what you just read.</p>
+
+    <div id="rn-lesson-0014-quiz"></div>
+
+    <hr>
+
+    <!-- Module complete callout -->
+    <div class="callout" style="margin-top:2rem;">
+      <div class="callout-title">🎉 Module 2 complete!</div>
+      <p>You've finished all 14 React Native lessons. Here's what you built:<br><br>
+      ✅ A navigable app shell with bottom tabs and a stack navigator<br>
+      ✅ Login and Register screens with validation and keyboard handling<br>
+      ✅ A profile photo picker using the device camera and gallery<br>
+      ✅ A chat list with search, skeletons, pull-to-refresh, and unread badges<br>
+      ✅ A message thread with inverted FlatList, read ticks, and simulated replies<br><br>
+      <strong>Next: Module 3 — Firebase Backend.</strong> Wire up real auth, real messages, and real-time sync.</p>
+    </div>
+
+    <hr>
+
+    <!-- Resources -->
+    <h2>Primary resources for this lesson</h2>
+    <ul>
+      <li><a href="https://reactnative.dev/docs/flatlist#inverted" target="_blank" rel="noopener">FlatList inverted prop — React Native docs</a></li>
+      <li><a href="https://reactnative.dev/docs/keyboardavoidingview" target="_blank" rel="noopener">KeyboardAvoidingView — React Native docs</a></li>
+      <li><a href="https://reactnative.dev/docs/textinput#multiline" target="_blank" rel="noopener">TextInput multiline — React Native docs</a></li>
+    </ul>
+
+    <div class="ask-teacher">
+      <strong>Anything unclear? Ask your teacher.</strong>
+      Common issues: (1) Messages append at the top, not the bottom — confirm <code>inverted</code> is on the FlatList. (2) Input bar is hidden behind keyboard on iOS — set <code>behavior="padding"</code> and check <code>keyboardVerticalOffset</code> matches your header height. (3) Keyboard hides the input bar on Android — use <code>behavior="height"</code>. (4) The send button is always grey — check that <code>inputText.trim()</code> is the condition, and that <code>inputText</code> is the state variable wired to the TextInput's <code>value</code> prop. (5) "typing..." never disappears — make sure the second <code>setTimeout</code> calls <code>setIsTyping(false)</code> before adding the reply message.
+    </div>
+
+    <hr>
+
+    <!-- Lesson nav -->
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="./0013-chat-list-screen.html">← Lesson 13: Build the Chat List Screen</a>
+      <a href="../03-firebase-backend/README.html">Module 3: Firebase Backend →</a>
+    </nav>
+
+  </div><!-- .page-wrap -->
+
+  <script src="../../assets/quiz.js"></script>
+  <script>
+    createQuiz("rn-lesson-0014-quiz", [
+      {
+        question: "Your messages array is sorted oldest-first (newest at the end). You want the newest message to appear at the bottom of the screen and the list to start scrolled to the bottom. What is the correct approach?",
+        options: [
+          "Sort the array newest-first before passing it to FlatList, then call scrollToEnd() after every render",
+          "Add the inverted prop to FlatList — it flips the display so the last item in the array appears at the bottom, and the list starts scrolled there automatically",
+          "Use a ScrollView instead of FlatList and call scrollToEnd() in a useEffect",
+          "Set initialScrollIndex to messages.length - 1 on the FlatList"
+        ],
+        correct: 1,
+        explanation: "The inverted prop tells FlatList to render items in reverse visual order — item [0] appears at the bottom and the list starts scrolled to the bottom. Your array stays in natural append order (oldest first). This is how WhatsApp, iMessage, and Signal implement their threads. scrollToEnd() works but can flash; inverted avoids that entirely."
+      },
+      {
+        question: "On iOS the input bar is hidden behind the keyboard when it opens. You already have KeyboardAvoidingView with behavior='padding'. The problem is your custom header is 90px tall. What prop controls the offset?",
+        options: [
+          "headerOffset — pass the header height as a number",
+          "keyboardVerticalOffset — increase it to match your header height so the view shifts up the right amount",
+          "paddingOffset — add it to the KeyboardAvoidingView style",
+          "safeAreaOffset — controls keyboard inset on iOS only"
+        ],
+        correct: 1,
+        explanation: "keyboardVerticalOffset tells KeyboardAvoidingView how much extra space to account for above the view — typically the height of any fixed header that sits outside the KeyboardAvoidingView. If your header is 90px, set keyboardVerticalOffset={90}. Without it, iOS shifts the content up by exactly the keyboard height but doesn't account for the header, leaving the input bar too high or still obscured."
+      },
+      {
+        question: "A user's sent message starts with a single grey tick ✓ and changes to double blue ✓✓ after one second. How is this modelled in state?",
+        options: [
+          "Each message has a read boolean — false on creation (single grey tick), set to true after a timeout (double blue tick)",
+          "The tick is derived from the message's timestamp — single tick if under 1 second old, double after",
+          "A global readReceipts Map stores which message IDs have been read",
+          "The tick count is stored as a number (1 or 2) in each message object"
+        ],
+        correct: 0,
+        explanation: "Each message object has a read boolean. On creation it's false — rendered as ✓ in grey. After the simulated (or real Firebase) read receipt arrives, setMessages updates that message's read to true — rendered as ✓✓ in blue. The functional updater form (prev => prev.map(...)) is used so the update is applied to the latest state, not the stale closure."
+      },
+      {
+        question: "You call insertDateSeparators(messages) to add 'Today' dividers into the list. The FlatList's renderItem must handle both message items and separator items. What is the cleanest way to distinguish them?",
+        options: [
+          "Check if item.text is undefined — separators have no text",
+          "Check a type field on each item — separator items have type: 'separator', message items have type: 'message'",
+          "Keep two separate arrays and use two FlatLists",
+          "Check item.id.startsWith('sep-') — separator IDs are prefixed"
+        ],
+        correct: 1,
+        explanation: "Adding a type field to each item is the standard pattern for heterogeneous FlatList data. In renderItem, a single conditional — item.type === 'separator' ? <DateSeparator> : <MessageBubble> — handles both cleanly. The id prefix approach works but is fragile (depends on string formatting). Checking for missing fields is brittle. Two FlatLists would break the inverted scroll behaviour."
+      },
+      {
+        question: "The multiline TextInput input bar should grow as the user types more lines, up to a maximum of about 5 lines, then scroll internally. Which two props achieve this?",
+        options: [
+          "multiline={true} and numberOfLines={5}",
+          "multiline={true} and maxHeight={120} — the input grows freely up to 120px then becomes internally scrollable",
+          "multiline={true} and flex={1}",
+          "autoGrow={true} and maxLines={5}"
+        ],
+        correct: 1,
+        explanation: "multiline allows the TextInput to expand across multiple lines. maxHeight caps the overall height — once the content exceeds it the TextInput becomes internally scrollable. numberOfLines pre-sets an initial height but doesn't cap growth. flex={1} would let it expand to fill the whole screen. The multiline + maxHeight combination is the standard WhatsApp-style growing input bar pattern."
+      }
+    ]);
+  </script>
+
+</body>
+</html>
