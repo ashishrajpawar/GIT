@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Browser WebRTC &amp; WebSocket — A8.3</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A8 — Redemption Web Page</a>
+      <span class="sep">›</span>
+      <span class="current">Browser WebRTC &amp; WebSocket</span>
+    </nav>
+
+    <h1>Browser WebRTC &amp; WebSocket</h1>
+    <div class="lesson-meta">
+      <span>A8 — Lesson 3 of 4</span>
+      <span>~60 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>The browser has <strong>native</strong> WebSocket and WebRTC APIs — no npm packages needed. The same signalling protocol you built for the mobile app works here, but the API surface is different (no <code>react-native-webrtc</code>). The holder in their browser can text-chat via WebSocket and make voice/video calls via native <code>RTCPeerConnection</code> — all without installing anything.</p>
+    </div>
+
+    <h2>Browser WebSocket — native API</h2>
+
+    <p>In the mobile app, you might use a library for WebSocket. In the browser, it's built in:</p>
+
+    <pre><code>// web/src/lib/ws.ts
+const WS_URL = import.meta.env.VITE_WS_URL;
+
+export function createWebSocketClient(holderJwt: string) {
+  // Connect with auth token as query param
+  const ws = new WebSocket(\`\${WS_URL}/ws?token=\${holderJwt}\`);
+
+  ws.onopen = () => {
+    console.log('WebSocket connected');
+  };
+
+  ws.onmessage = (event) => {
+    const message = JSON.parse(event.data);
+    console.log('Received:', message);
+  };
+
+  ws.onerror = (error) => {
+    console.error('WebSocket error:', error);
+  };
+
+  ws.onclose = (event) => {
+    console.log('WebSocket closed:', event.code, event.reason);
+  };
+
+  return ws;
+}</code></pre>
+
+    <h2>Same protocol, different API</h2>
+
+    <p>The signalling protocol (message format) is identical between mobile and web. The difference is only the API surface:</p>
+
+    <pre><code>// Mobile (react-native) — same protocol, library wrapper
+import { io } from 'socket.io-client';
+const socket = io(WS_URL, { auth: { token: jwt } });
+socket.on('message', handler);
+socket.emit('message', payload);
+
+// Browser (native) — same protocol, native API
+const ws = new WebSocket(\`\${WS_URL}/ws?token=\${jwt}\`);
+ws.onmessage = (event) => handler(JSON.parse(event.data));
+ws.send(JSON.stringify(payload));</code></pre>
+
+    <div class="callout">
+      <div class="callout-title">Key insight</div>
+      <p>If your server uses a raw WebSocket library (like the <code>ws</code> package), both clients speak the same wire protocol natively. If your server uses Socket.IO, the browser client also needs the Socket.IO client library. For Token, we recommend raw WebSocket on the server — then the browser needs zero dependencies.</p>
+    </div>
+
+    <h2>Complete WebSocket module for the web app</h2>
+
+    <pre><code>// web/src/lib/ws.ts
+type MessageHandler = (message: any) => void;
+type ConnectionHandler = () => void;
+
+interface WSClient {
+  send: (type: string, payload: any) => void;
+  onMessage: (handler: MessageHandler) => void;
+  onConnect: (handler: ConnectionHandler) => void;
+  onDisconnect: (handler: ConnectionHandler) => void;
+  disconnect: () => void;
+  reconnect: () => void;
+}
+
+export function createWSClient(url: string, token: string): WSClient {
+  let ws: WebSocket | null = null;
+  let messageHandlers: MessageHandler[] = [];
+  let connectHandlers: ConnectionHandler[] = [];
+  let disconnectHandlers: ConnectionHandler[] = [];
+  let reconnectTimer: number | null = null;
+  let attempt = 0;
+
+  function connect() {
+    ws = new WebSocket(\`\${url}/ws?token=\${token}\`);
+
+    ws.onopen = () => {
+      attempt = 0;
+      connectHandlers.forEach(h => h());
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        messageHandlers.forEach(h => h(msg));
+      } catch (e) {
+        console.error('Failed to parse WS message:', e);
+      }
+    };
+
+    ws.onclose = () => {
+      disconnectHandlers.forEach(h => h());
+      scheduleReconnect();
+    };
+
+    ws.onerror = () => {
+      ws?.close();
+    };
+  }
+
+  function scheduleReconnect() {
+    if (reconnectTimer) return;
+    attempt++;
+    const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, delay);
+  }
+
+  connect();
+
+  return {
+    send(type, payload) {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type, ...payload }));
+      }
+    },
+    onMessage(handler) { messageHandlers.push(handler); },
+    onConnect(handler) { connectHandlers.push(handler); },
+    onDisconnect(handler) { disconnectHandlers.push(handler); },
+    disconnect() {
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      ws?.close();
+    },
+    reconnect() {
+      ws?.close();
+      connect();
+    },
+  };
+}</code></pre>
+
+    <h2>Browser WebRTC — native RTCPeerConnection</h2>
+
+    <p>The browser has WebRTC built in. No library needed — just the standard APIs:</p>
+
+    <pre><code>// The three key browser APIs for WebRTC:
+// 1. RTCPeerConnection — manages the peer connection
+// 2. navigator.mediaDevices.getUserMedia() — camera/mic access
+// 3. MediaStream / MediaStreamTrack — audio/video tracks</code></pre>
+
+    <h2>Getting media permissions</h2>
+
+    <pre><code>// Request microphone + camera
+async function getLocalMedia(video: boolean = true) {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: video ? { facingMode: 'user', width: 640, height: 480 } : false,
+    });
+    return stream;
+  } catch (err: any) {
+    if (err.name === 'NotAllowedError') {
+      throw new Error('Camera/mic permission denied. Check browser settings.');
+    }
+    if (err.name === 'NotFoundError') {
+      throw new Error('No camera or microphone found on this device.');
+    }
+    throw err;
+  }
+}</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">Browser-specific: HTTPS required</div>
+      <p><code>navigator.mediaDevices.getUserMedia()</code> only works on HTTPS origins (or localhost for development). If you try to access it on plain HTTP, the API simply won't exist. This is a browser security requirement — not an issue in React Native.</p>
+    </div>
+
+    <h2>Complete WebRTC module for the browser</h2>
+
+    <pre><code>// web/src/lib/webrtc.ts
+import { createWSClient } from './ws';
+
+interface CallOptions {
+  wsClient: ReturnType&lt;typeof createWSClient&gt;;
+  conversationId: string;
+  localVideoEl: HTMLVideoElement | null;
+  remoteVideoEl: HTMLVideoElement | null;
+  onCallEnd: () => void;
+}
+
+export async function startCall(options: CallOptions, withVideo: boolean) {
+  const { wsClient, conversationId, localVideoEl, remoteVideoEl, onCallEnd } = options;
+
+  // 1. Get local media
+  const localStream = await navigator.mediaDevices.getUserMedia({
+    audio: true,
+    video: withVideo ? { facingMode: 'user' } : false,
+  });
+
+  // Show local preview
+  if (localVideoEl && withVideo) {
+    localVideoEl.srcObject = localStream;
+    localVideoEl.muted = true; // prevent echo
+    await localVideoEl.play();
+  }
+
+  // 2. Create peer connection
+  const pc = new RTCPeerConnection({
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      // Add your TURN server for NAT traversal
+      // { urls: 'turn:turn.tokn.app:3478', username: '...', credential: '...' }
+    ],
+  });
+
+  // 3. Add local tracks to the connection
+  localStream.getTracks().forEach(track => {
+    pc.addTrack(track, localStream);
+  });
+
+  // 4. Handle remote tracks
+  pc.ontrack = (event) => {
+    if (remoteVideoEl) {
+      remoteVideoEl.srcObject = event.streams[0];
+      remoteVideoEl.play().catch(() => {
+        // Autoplay blocked — need user interaction
+        console.warn('Autoplay blocked, user must tap to hear audio');
+      });
+    }
+  };
+
+  // 5. ICE candidate exchange via signalling
+  pc.onicecandidate = (event) => {
+    if (event.candidate) {
+      wsClient.send('ice-candidate', {
+        conversationId,
+        candidate: event.candidate.toJSON(),
+      });
+    }
+  };
+
+  // 6. Create and send offer
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  wsClient.send('call-offer', {
+    conversationId,
+    sdp: offer.sdp,
+    type: offer.type,
+    withVideo,
+  });
+
+  // 7. Listen for answer and ICE candidates
+  wsClient.onMessage((msg) => {
+    if (msg.type === 'call-answer') {
+      pc.setRemoteDescription(new RTCSessionDescription({
+        type: 'answer',
+        sdp: msg.sdp,
+      }));
+    }
+    if (msg.type === 'ice-candidate') {
+      pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+    }
+    if (msg.type === 'call-end') {
+      endCall();
+    }
+  });
+
+  // Cleanup function
+  function endCall() {
+    localStream.getTracks().forEach(t => t.stop());
+    pc.close();
+    onCallEnd();
+  }
+
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+      endCall();
+    }
+  };
+
+  return { pc, localStream, endCall };
+}</code></pre>
+
+    <h2>Differences from React Native WebRTC</h2>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Aspect</th>
+          <th>React Native (mobile)</th>
+          <th>Browser (web)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Library</td>
+          <td><code>react-native-webrtc</code></td>
+          <td>Native — no library</td>
+        </tr>
+        <tr>
+          <td>Media access</td>
+          <td><code>mediaDevices.getUserMedia()</code> (from lib)</td>
+          <td><code>navigator.mediaDevices.getUserMedia()</code></td>
+        </tr>
+        <tr>
+          <td>Video display</td>
+          <td><code>&lt;RTCView&gt;</code> component</td>
+          <td><code>&lt;video&gt;</code> HTML element with <code>srcObject</code></td>
+        </tr>
+        <tr>
+          <td>Permission prompt</td>
+          <td>OS-level dialog</td>
+          <td>Browser-level dialog (site settings)</td>
+        </tr>
+        <tr>
+          <td>HTTPS requirement</td>
+          <td>Not required (native)</td>
+          <td>Required (except localhost)</td>
+        </tr>
+        <tr>
+          <td>Autoplay policy</td>
+          <td>No restrictions</td>
+          <td>May need user gesture to play audio/video</td>
+        </tr>
+        <tr>
+          <td>Background behavior</td>
+          <td>Foreground service keeps call alive</td>
+          <td>Tab must stay active (or use Web Workers)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Handling autoplay policies</h2>
+
+    <p>Browsers block autoplay of media with audio. When a remote stream arrives, <code>.play()</code> might fail:</p>
+
+    <pre><code>// The safe pattern for playing remote media
+async function playRemoteStream(videoEl: HTMLVideoElement, stream: MediaStream) {
+  videoEl.srcObject = stream;
+
+  try {
+    await videoEl.play();
+  } catch (err: any) {
+    if (err.name === 'NotAllowedError') {
+      // Autoplay blocked — show a "Tap to unmute" button
+      // This happens if the user hasn't interacted with the page yet
+      showUnmuteButton(() => videoEl.play());
+    }
+  }
+}
+
+function showUnmuteButton(onTap: () => void) {
+  const btn = document.createElement('button');
+  btn.textContent = 'Tap to hear audio';
+  btn.className = 'fixed bottom-4 left-1/2 -translate-x-1/2 bg-blue-600 text-white px-4 py-2 rounded';
+  btn.onclick = () => {
+    onTap();
+    btn.remove();
+  };
+  document.body.appendChild(btn);
+}</code></pre>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters</div>
+      <p>On the mobile app, audio just plays. In browsers, Chrome and Safari require a user gesture (click, tap) before audio can play. Since the holder already clicked "Start Conversation" on the redeem page, audio should work for calls they initiate. But <em>incoming</em> calls may need a "Tap to answer" prompt.</p>
+    </div>
+
+    <h2>Reconnection and cleanup</h2>
+
+    <pre><code>// React hook for WebSocket lifecycle
+import { useEffect, useRef } from 'react';
+
+export function useWebSocket(url: string, token: string | null) {
+  const clientRef = useRef&lt;ReturnType&lt;typeof createWSClient&gt; | null&gt;(null);
+
+  useEffect(() => {
+    if (!token) return;
+
+    const client = createWSClient(url, token);
+    clientRef.current = client;
+
+    return () => {
+      // Cleanup on unmount or token change
+      client.disconnect();
+      clientRef.current = null;
+    };
+  }, [url, token]);
+
+  return clientRef;
+}</code></pre>
+
+    <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0002-token-redemption-flow.html">← Previous: Token Redemption Flow</a>
+      <a href="./0004-no-app-experience.html">Next: No-App-Installed Experience →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// Simulating WebSocket reconnection with exponential backoff
+
+function simulateReconnection() {
+  let attempt = 0;
+  const maxDelay = 30000; // 30 seconds max
+
+  function getDelay() {
+    attempt++;
+    const delay = Math.min(1000 * Math.pow(2, attempt), maxDelay);
+    return delay;
+  }
+
+  console.log('Connection lost! Starting reconnection...');
+  console.log('');
+
+  for (let i = 0; i < 7; i++) {
+    const delay = getDelay();
+    console.log(\`Attempt \${attempt}: wait \${delay}ms (\${delay/1000}s) before retry\`);
+  }
+
+  console.log('');
+  console.log('Pattern: 2s, 4s, 8s, 16s, 30s, 30s, 30s (capped)');
+  console.log('This prevents hammering the server when it\\'s down.');
+}
+
+simulateReconnection();
+
+console.log('');
+console.log('--- ICE candidate flow ---');
+// Simulating ICE candidates
+const candidates = [
+  { type: 'host', address: '192.168.1.5:54321' },
+  { type: 'srflx', address: '203.0.113.1:12345' },
+  { type: 'relay', address: '198.51.100.1:443' },
+];
+
+candidates.forEach(c => {
+  console.log(\`ICE candidate: \${c.type} - \${c.address}\`);
+});
+console.log('Best path chosen: host (LAN) > srflx (STUN) > relay (TURN)');`);
+
+    createSolution("exercise-1", {
+      exercise: "Build the complete WebSocket and WebRTC modules for the web app: (1) A WebSocket client class with auto-reconnection (exponential backoff, max 30s), typed message sending, and event handlers. (2) A WebRTC call manager that handles the complete offer/answer/ICE flow using native browser APIs. (3) A useCall React hook that integrates both — takes video element refs, returns startCall/endCall/toggleMute functions. Handle all browser-specific concerns: HTTPS check, autoplay policy, permission errors.",
+      hints: [
+        "The WebSocket reconnect delay formula: Math.min(1000 * 2^attempt, 30000)",
+        "RTCPeerConnection.ontrack fires when remote media arrives — set the stream as srcObject on the video element.",
+        "Always stop all MediaStreamTracks in cleanup to release the camera/mic."
+      ],
+      solution: `// web/src/lib/ws.ts — WebSocket client with reconnection
+export class TokenWSClient {
+  private ws: WebSocket | null = null;
+  private url: string;
+  private token: string;
+  private handlers = new Map<string, Function[]>();
+  private attempt = 0;
+  private reconnectTimer: number | null = null;
+
+  constructor(url: string, token: string) {
+    this.url = url;
+    this.token = token;
+    this.connect();
+  }
+
+  private connect() {
+    this.ws = new WebSocket(\`\${this.url}/ws?token=\${this.token}\`);
+
+    this.ws.onopen = () => {
+      this.attempt = 0;
+      this.emit('connected');
+    };
+
+    this.ws.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      this.emit(msg.type, msg);
+    };
+
+    this.ws.onclose = () => {
+      this.emit('disconnected');
+      this.scheduleReconnect();
+    };
+  }
+
+  private scheduleReconnect() {
+    this.attempt++;
+    const delay = Math.min(1000 * Math.pow(2, this.attempt), 30000);
+    this.reconnectTimer = window.setTimeout(() => this.connect(), delay);
+  }
+
+  send(type: string, payload: any) {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type, ...payload }));
+    }
+  }
+
+  on(event: string, handler: Function) {
+    if (!this.handlers.has(event)) this.handlers.set(event, []);
+    this.handlers.get(event)!.push(handler);
+  }
+
+  private emit(event: string, data?: any) {
+    this.handlers.get(event)?.forEach(h => h(data));
+  }
+
+  destroy() {
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.ws?.close();
+  }
+}
+
+// web/src/hooks/useCall.ts — React hook for calls
+import { useRef, useState, useCallback } from 'react';
+
+export function useCall(wsClient: TokenWSClient | null) {
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [callState, setCallState] = useState<'idle'|'calling'|'active'>('idle');
+  const [muted, setMuted] = useState(false);
+
+  const startCall = useCallback(async (
+    localVideoEl: HTMLVideoElement,
+    remoteVideoEl: HTMLVideoElement,
+    withVideo: boolean
+  ) => {
+    if (!wsClient) return;
+
+    // Check HTTPS (required for getUserMedia)
+    if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+      throw new Error('Calls require HTTPS');
+    }
+
+    setCallState('calling');
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: withVideo,
+    });
+    streamRef.current = stream;
+
+    if (withVideo) {
+      localVideoEl.srcObject = stream;
+      localVideoEl.muted = true;
+      await localVideoEl.play();
+    }
+
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+    });
+    pcRef.current = pc;
+
+    stream.getTracks().forEach(t => pc.addTrack(t, stream));
+
+    pc.ontrack = (event) => {
+      remoteVideoEl.srcObject = event.streams[0];
+      remoteVideoEl.play().catch(() => {});
+      setCallState('active');
+    };
+
+    pc.onicecandidate = (e) => {
+      if (e.candidate) {
+        wsClient.send('ice-candidate', { candidate: e.candidate.toJSON() });
+      }
+    };
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    wsClient.send('call-offer', { sdp: offer.sdp, type: offer.type, withVideo });
+
+    // Listen for answer
+    wsClient.on('call-answer', (msg: any) => {
+      pc.setRemoteDescription(new RTCSessionDescription(msg));
+    });
+    wsClient.on('ice-candidate', (msg: any) => {
+      pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+    });
+  }, [wsClient]);
+
+  const endCall = useCallback(() => {
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    pcRef.current?.close();
+    pcRef.current = null;
+    streamRef.current = null;
+    setCallState('idle');
+    wsClient?.send('call-end', {});
+  }, [wsClient]);
+
+  const toggleMute = useCallback(() => {
+    const audioTrack = streamRef.current?.getAudioTracks()[0];
+    if (audioTrack) {
+      audioTrack.enabled = !audioTrack.enabled;
+      setMuted(!audioTrack.enabled);
+    }
+  }, []);
+
+  return { callState, muted, startCall, endCall, toggleMute };
+}`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "What happens when this runs on a plain HTTP page (not localhost)?",
+        code: "const stream = await navigator.mediaDevices.getUserMedia({ audio: true });\nconsole.log(stream.getTracks().length);",
+        answer: "TypeError: Cannot read properties of undefined (reading 'getUserMedia')",
+        explanation: "On non-HTTPS origins (except localhost), navigator.mediaDevices is undefined. The browser completely hides the API to prevent insecure media capture. You must serve over HTTPS in production for WebRTC to work."
+      },
+      {
+        type: "fill-blank",
+        question: "Set the remote video stream on a video element:",
+        code: "pc.ontrack = (event) => {\n  remoteVideoEl.___ = event.streams[0];\n};",
+        answer: "srcObject",
+        explanation: "HTMLVideoElement.srcObject accepts a MediaStream directly. This replaced the old createObjectURL pattern. The video element will render whatever tracks are in the stream — typically one audio and one video track from the remote peer."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this WebSocket reconnection logic?",
+        code: "ws.onclose = () => {\n  setTimeout(() => {\n    connect();\n  }, 1000);\n};",
+        options: [
+          "setTimeout doesn't work inside WebSocket handlers",
+          "connect() can't be called after close",
+          "Fixed 1-second delay will hammer the server during outages — needs exponential backoff",
+          "onclose doesn't fire when connection drops"
+        ],
+        correct: 2,
+        explanation: "A fixed 1-second retry means the client hammers the server with connection attempts every second during an outage. With 1000 connected holders, that's 1000 requests/second hitting a struggling server. Exponential backoff (2s, 4s, 8s, 16s, capped at 30s) gives the server breathing room to recover."
+      },
+      {
+        type: "which-breaks",
+        question: "Which WebRTC code will fail in the browser?",
+        variants: [
+          "const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });",
+          "const offer = await pc.createOffer();\nawait pc.setLocalDescription(offer);",
+          "const stream = await navigator.mediaDevices.getUserMedia({ audio: true });\npc.addTrack(stream);"
+        ],
+        correct: 2,
+        explanation: "pc.addTrack() requires two arguments: (track, stream). You must add individual tracks from the stream, not the stream itself. Correct: stream.getTracks().forEach(track => pc.addTrack(track, stream)). The method signature is addTrack(track: MediaStreamTrack, ...streams: MediaStream[])."
+      },
+      {
+        type: "order-steps",
+        question: "Order the WebRTC call setup steps (caller side):",
+        steps: [
+          "getUserMedia() to capture local audio/video",
+          "Create RTCPeerConnection with ICE servers",
+          "Add local tracks to the peer connection",
+          "Create offer and set as local description",
+          "Send offer via WebSocket signalling to remote peer",
+          "Receive answer and set as remote description"
+        ],
+        correctOrder: [0, 1, 2, 3, 4, 5],
+        explanation: "The order matters: you need media before creating the connection (so tracks are included in the SDP offer), you need the connection before creating the offer, and you need to send the offer before you can receive an answer. ICE candidates start flowing after setLocalDescription."
+      }
+    ]);
+  </script>
+</body>
+</html>

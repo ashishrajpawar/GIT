@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>A11 — Animations &amp; Gestures</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Polish &amp; Publish</a> &rsaquo;
+        <span>Animations &amp; Gestures</span>
+    </nav>
+
+    <h1>Animations &amp; Gestures</h1>
+    <p class="lesson-meta">A11 &mdash; Lesson 1 of 5 &nbsp;|&nbsp; ~50 min</p>
+
+    <div class="callout">
+        <strong>Why this matters for Token:</strong> The user swipes a token card to revoke it. They
+        drag a bottom sheet up to reveal token details. They long-press a conversation to archive it.
+        None of this <em>works</em> without gesture handling, and none of it <em>feels right</em>
+        without running animations on the UI thread at 60 fps. React Native's built-in
+        <code>Animated</code> API runs on the JS thread &mdash; one heavy render and the animation
+        stutters. Reanimated runs animations on the native UI thread, completely decoupled from JS.
+    </div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>The Animation Problem in React Native</h2>
+
+    <p>React Native has two threads that matter for UI:</p>
+    <ul>
+        <li><strong>JS thread</strong> &mdash; runs your component logic, state updates, API calls</li>
+        <li><strong>UI thread</strong> &mdash; renders native views, handles touch events, paints frames</li>
+    </ul>
+
+    <p>The built-in <code>Animated</code> API sends animation frame updates from JS → UI via the
+    bridge. If the JS thread is busy (parsing a large JSON response, re-rendering a list), frames
+    get dropped and the animation stutters.</p>
+
+    <p><strong>Reanimated</strong> compiles animation logic into worklets &mdash; small functions that
+    execute directly on the UI thread. The JS thread can be completely blocked and your animations
+    still run at 60 fps.</p>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Installing the Libraries</h2>
+
+    <pre><code># In your app/ directory
+npx expo install react-native-reanimated react-native-gesture-handler</code></pre>
+
+    <p>Add the Reanimated Babel plugin to <code>babel.config.js</code>:</p>
+
+    <pre><code>// app/babel.config.js
+module.exports = function (api) {
+  api.cache(true);
+  return {
+    presets: ['babel-preset-expo'],
+    plugins: ['react-native-reanimated/plugin'], // must be last
+  };
+};</code></pre>
+
+    <p>Wrap your app entry with <code>GestureHandlerRootView</code>:</p>
+
+    <pre><code>// app/App.tsx
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+
+export default function App() {
+  return (
+    &lt;GestureHandlerRootView style={{ flex: 1 }}&gt;
+      {/* your navigation and screens */}
+    &lt;/GestureHandlerRootView&gt;
+  );
+}</code></pre>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Core Concepts: Shared Values &amp; Animated Styles</h2>
+
+    <p>Reanimated introduces two key primitives:</p>
+
+    <h3>useSharedValue</h3>
+    <p>A value that lives on the UI thread. Changing it does <em>not</em> trigger a React re-render.</p>
+
+    <pre><code>import { useSharedValue } from 'react-native-reanimated';
+
+const offset = useSharedValue(0);
+
+// On the UI thread, set it directly:
+offset.value = 100;</code></pre>
+
+    <h3>useAnimatedStyle</h3>
+    <p>A hook that returns a style object recalculated on the UI thread whenever a shared value changes:</p>
+
+    <pre><code>import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
+
+function FadeBox() {
+  const opacity = useSharedValue(1);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    opacity: opacity.value,
+  }));
+
+  return &lt;Animated.View style={[styles.box, animatedStyle]} /&gt;;
+}</code></pre>
+
+    <p><code>Animated.View</code> here is from Reanimated (not the built-in <code>Animated</code>).
+    It knows how to read animated styles from the UI thread.</p>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Timing &amp; Spring Animations</h2>
+
+    <p>To animate a shared value over time, use <code>withTiming</code> or <code>withSpring</code>:</p>
+
+    <pre><code>import { withTiming, withSpring, Easing } from 'react-native-reanimated';
+
+// Timing: fixed duration, specific easing curve
+offset.value = withTiming(200, {
+  duration: 300,
+  easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+});
+
+// Spring: physics-based, feels natural for UI interactions
+offset.value = withSpring(200, {
+  damping: 15,
+  stiffness: 120,
+});</code></pre>
+
+    <p><strong>When to use which:</strong></p>
+    <ul>
+        <li><code>withTiming</code> &mdash; fades, colour transitions, progress bars (predictable duration)</li>
+        <li><code>withSpring</code> &mdash; drags, swipes, snapping (physics feel)</li>
+    </ul>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Gesture Handler: Pan, Tap, Long Press</h2>
+
+    <p>The <code>react-native-gesture-handler</code> library replaces React Native's built-in touch
+    system with native-level gesture recognizers.</p>
+
+    <h3>Gesture object API (v2)</h3>
+
+    <pre><code>import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
+
+function DraggableCard() {
+  const translateX = useSharedValue(0);
+  const translateY = useSharedValue(0);
+  const startX = useSharedValue(0);
+  const startY = useSharedValue(0);
+
+  const pan = Gesture.Pan()
+    .onStart(() => {
+      startX.value = translateX.value;
+      startY.value = translateY.value;
+    })
+    .onUpdate((event) => {
+      translateX.value = startX.value + event.translationX;
+      translateY.value = startY.value + event.translationY;
+    })
+    .onEnd(() => {
+      // Snap back to origin
+      translateX.value = withSpring(0);
+      translateY.value = withSpring(0);
+    });
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: translateX.value },
+      { translateY: translateY.value },
+    ],
+  }));
+
+  return (
+    &lt;GestureDetector gesture={pan}&gt;
+      &lt;Animated.View style={[styles.card, animatedStyle]}&gt;
+        {/* card content */}
+      &lt;/Animated.View&gt;
+    &lt;/GestureDetector&gt;
+  );
+}</code></pre>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Building: Swipe-to-Revoke</h2>
+
+    <p>Token's killer interaction &mdash; the user swipes a token card left to reveal a revoke button.
+    If they swipe past the threshold, the token is revoked immediately with a satisfying animation.</p>
+
+    <pre><code>// app/src/components/SwipeableTokenCard.tsx
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  withTiming,
+  runOnJS,
+  interpolate,
+  Extrapolation,
+} from 'react-native-reanimated';
+import { View, Text, StyleSheet, Dimensions } from 'react-native';
+
+const SCREEN_WIDTH = Dimensions.get('window').width;
+const SWIPE_THRESHOLD = -SCREEN_WIDTH * 0.35;
+
+interface Props {
+  tokenCode: string;
+  issuedTo: string;
+  onRevoke: (tokenCode: string) =&gt; void;
+}
+
+export function SwipeableTokenCard({ tokenCode, issuedTo, onRevoke }: Props) {
+  const translateX = useSharedValue(0);
+
+  const pan = Gesture.Pan()
+    .activeOffsetX([-10, 10])
+    .onUpdate((event) =&gt; {
+      // Only allow left swipe
+      translateX.value = Math.min(0, event.translationX);
+    })
+    .onEnd(() =&gt; {
+      if (translateX.value &lt; SWIPE_THRESHOLD) {
+        // Past threshold — animate off-screen and revoke
+        translateX.value = withTiming(-SCREEN_WIDTH, { duration: 200 }, () =&gt; {
+          runOnJS(onRevoke)(tokenCode);
+        });
+      } else {
+        // Snap back
+        translateX.value = withSpring(0);
+      }
+    });
+
+  const cardStyle = useAnimatedStyle(() =&gt; ({
+    transform: [{ translateX: translateX.value }],
+  }));
+
+  const revokeStyle = useAnimatedStyle(() =&gt; ({
+    opacity: interpolate(
+      translateX.value,
+      [0, SWIPE_THRESHOLD],
+      [0, 1],
+      Extrapolation.CLAMP
+    ),
+  }));
+
+  return (
+    &lt;View style={styles.container}&gt;
+      {/* Background revoke action */}
+      &lt;Animated.View style={[styles.revokeAction, revokeStyle]}&gt;
+        &lt;Text style={styles.revokeText}&gt;Revoke&lt;/Text&gt;
+      &lt;/Animated.View&gt;
+
+      {/* Foreground card */}
+      &lt;GestureDetector gesture={pan}&gt;
+        &lt;Animated.View style={[styles.card, cardStyle]}&gt;
+          &lt;Text style={styles.code}&gt;{tokenCode}&lt;/Text&gt;
+          &lt;Text style={styles.issuedTo}&gt;Issued to: {issuedTo}&lt;/Text&gt;
+        &lt;/Animated.View&gt;
+      &lt;/GestureDetector&gt;
+    &lt;/View&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    marginVertical: 8,
+    marginHorizontal: 16,
+  },
+  revokeAction: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#e74c3c',
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'flex-end',
+    paddingRight: 24,
+  },
+  revokeText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 16,
+  },
+  card: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
+  code: {
+    fontSize: 18,
+    fontFamily: 'monospace',
+    fontWeight: '600',
+  },
+  issuedTo: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 4,
+  },
+});</code></pre>
+
+    <p>Key details:</p>
+    <ul>
+        <li><code>activeOffsetX([-10, 10])</code> &mdash; prevents accidental swipes; the gesture only activates after 10px of horizontal movement</li>
+        <li><code>runOnJS(onRevoke)(tokenCode)</code> &mdash; bridges back from the UI thread to the JS thread for the API call</li>
+        <li><code>interpolate</code> &mdash; maps one range to another (swipe distance → opacity)</li>
+        <li><code>Extrapolation.CLAMP</code> &mdash; prevents values from exceeding the output range</li>
+    </ul>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Bottom Sheet: Token Detail Panel</h2>
+
+    <p>A bottom sheet is a panel that slides up from the bottom. The user drags it to different snap
+    points. We'll use <code>@gorhom/bottom-sheet</code> which is built on Reanimated and gesture-handler:</p>
+
+    <pre><code># Install
+npx expo install @gorhom/bottom-sheet</code></pre>
+
+    <pre><code>// app/src/components/TokenDetailSheet.tsx
+import BottomSheet, { BottomSheetView } from '@gorhom/bottom-sheet';
+import { useCallback, useMemo, useRef } from 'react';
+import { Text, View, StyleSheet } from 'react-native';
+
+interface Props {
+  tokenCode: string;
+  issuedTo: string;
+  createdAt: string;
+  expiresAt: string | null;
+  status: 'active' | 'paused' | 'revoked';
+}
+
+export function TokenDetailSheet(props: Props) {
+  const sheetRef = useRef&lt;BottomSheet&gt;(null);
+  const snapPoints = useMemo(() =&gt; ['25%', '60%', '90%'], []);
+
+  const handleSheetChange = useCallback((index: number) =&gt; {
+    console.log('Sheet snapped to index:', index);
+  }, []);
+
+  return (
+    &lt;BottomSheet
+      ref={sheetRef}
+      index={0}
+      snapPoints={snapPoints}
+      onChange={handleSheetChange}
+      enablePanDownToClose
+      backgroundStyle={styles.sheetBackground}
+      handleIndicatorStyle={styles.indicator}
+    &gt;
+      &lt;BottomSheetView style={styles.content}&gt;
+        &lt;Text style={styles.code}&gt;{props.tokenCode}&lt;/Text&gt;
+        &lt;View style={styles.row}&gt;
+          &lt;Text style={styles.label}&gt;Issued to&lt;/Text&gt;
+          &lt;Text style={styles.value}&gt;{props.issuedTo}&lt;/Text&gt;
+        &lt;/View&gt;
+        &lt;View style={styles.row}&gt;
+          &lt;Text style={styles.label}&gt;Status&lt;/Text&gt;
+          &lt;Text style={[styles.value, styles[props.status]]}&gt;
+            {props.status.toUpperCase()}
+          &lt;/Text&gt;
+        &lt;/View&gt;
+        &lt;View style={styles.row}&gt;
+          &lt;Text style={styles.label}&gt;Created&lt;/Text&gt;
+          &lt;Text style={styles.value}&gt;{props.createdAt}&lt;/Text&gt;
+        &lt;/View&gt;
+        &lt;View style={styles.row}&gt;
+          &lt;Text style={styles.label}&gt;Expires&lt;/Text&gt;
+          &lt;Text style={styles.value}&gt;{props.expiresAt ?? 'Never'}&lt;/Text&gt;
+        &lt;/View&gt;
+      &lt;/BottomSheetView&gt;
+    &lt;/BottomSheet&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  sheetBackground: {
+    backgroundColor: '#f8f9fa',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+  },
+  indicator: {
+    backgroundColor: '#ccc',
+    width: 40,
+  },
+  content: {
+    padding: 24,
+  },
+  code: {
+    fontSize: 22,
+    fontFamily: 'monospace',
+    fontWeight: '700',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  row: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  label: {
+    fontSize: 14,
+    color: '#666',
+  },
+  value: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  active: { color: '#27ae60' },
+  paused: { color: '#f39c12' },
+  revoked: { color: '#e74c3c' },
+});</code></pre>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Layout Animations: Entering &amp; Exiting</h2>
+
+    <p>When a token gets revoked, the card should animate out and the remaining cards should smoothly
+    fill the gap. Reanimated provides layout animations for this:</p>
+
+    <pre><code>import Animated, { FadeOut, Layout, SlideInRight } from 'react-native-reanimated';
+
+function TokenList({ tokens, onRevoke }) {
+  return (
+    &lt;View&gt;
+      {tokens.map((token) =&gt; (
+        &lt;Animated.View
+          key={token.code}
+          entering={SlideInRight.duration(300)}
+          exiting={FadeOut.duration(200)}
+          layout={Layout.springify()}
+        &gt;
+          &lt;SwipeableTokenCard
+            tokenCode={token.code}
+            issuedTo={token.issuedTo}
+            onRevoke={onRevoke}
+          /&gt;
+        &lt;/Animated.View&gt;
+      ))}
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <p><code>Layout.springify()</code> animates position changes when items above are removed &mdash;
+    the remaining cards spring upward to fill the gap.</p>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Long-press to Archive a Conversation</h2>
+
+    <p>Combine a long-press gesture with a scale animation for haptic-like feedback:</p>
+
+    <pre><code>import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, { useSharedValue, useAnimatedStyle, withSpring, runOnJS } from 'react-native-reanimated';
+import * as Haptics from 'expo-haptics';
+
+function ConversationItem({ conversation, onArchive }) {
+  const scale = useSharedValue(1);
+
+  const longPress = Gesture.LongPress()
+    .minDuration(500)
+    .onStart(() =&gt; {
+      scale.value = withSpring(0.95);
+      runOnJS(Haptics.impactAsync)(Haptics.ImpactFeedbackStyle.Medium);
+    })
+    .onEnd((_event, success) =&gt; {
+      scale.value = withSpring(1);
+      if (success) {
+        runOnJS(onArchive)(conversation.id);
+      }
+    });
+
+  const animatedStyle = useAnimatedStyle(() =&gt; ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  return (
+    &lt;GestureDetector gesture={longPress}&gt;
+      &lt;Animated.View style={[styles.conversationCard, animatedStyle]}&gt;
+        {/* conversation content */}
+      &lt;/Animated.View&gt;
+    &lt;/GestureDetector&gt;
+  );
+}</code></pre>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Performance Rules</h2>
+
+    <ol>
+        <li><strong>Never read <code>.value</code> in a component body</strong> &mdash; it bypasses React and won't re-render. Only read inside <code>useAnimatedStyle</code> or worklets.</li>
+        <li><strong>Keep worklets pure</strong> &mdash; no API calls, no <code>console.log</code>, no accessing JS-thread closures. Use <code>runOnJS</code> to bridge back.</li>
+        <li><strong>Avoid <code>useAnimatedStyle</code> in lists of 100+ items</strong> &mdash; each instance has a UI-thread listener. Use <code>entering</code>/<code>exiting</code> props for list item animations.</li>
+        <li><strong>Combine gestures with <code>Gesture.Simultaneous()</code> or <code>Gesture.Exclusive()</code></strong> &mdash; don't nest <code>GestureDetector</code> components.</li>
+    </ol>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <h2>Quiz</h2>
+    <div id="lesson-quiz"></div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <nav class="lesson-nav">
+        <a href="./README.html">&larr; Module Overview</a>
+        <a href="./0002-theming-dark-mode.html">Theming &amp; Dark Mode &rarr;</a>
+    </nav>
+
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+
+    <script>
+    createSolution("exercise-1", {
+      exercise: `Build a "pull-to-dismiss" notification banner component for Token.\n\nRequirements:\n1. A banner slides in from the top (entering animation)\n2. The user can drag it upward to dismiss\n3. If dragged up past 50% of banner height, it animates out. Otherwise it snaps back.\n4. Use Gesture.Pan() and Reanimated shared values\n5. Show the token code and a short message ("New message on MERC-8GH2")`,
+      hints: [
+        "Use useSharedValue for translateY, start at 0 (visible position).",
+        "In onUpdate, only allow negative translateY (upward drag).",
+        "In onEnd, compare translateY.value to -(bannerHeight * 0.5) to decide dismiss vs snap-back.",
+        "Use entering={SlideInUp} for the initial appearance."
+      ],
+      solution: `// app/src/components/NotificationBanner.tsx
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  withTiming,
+  runOnJS,
+  SlideInUp,
+} from 'react-native-reanimated';
+import { Text, StyleSheet } from 'react-native';
+
+const BANNER_HEIGHT = 80;
+const DISMISS_THRESHOLD = -(BANNER_HEIGHT * 0.5);
+
+interface Props {
+  tokenCode: string;
+  message: string;
+  onDismiss: () => void;
+}
+
+export function NotificationBanner({ tokenCode, message, onDismiss }: Props) {
+  const translateY = useSharedValue(0);
+
+  const pan = Gesture.Pan()
+    .onUpdate((event) => {
+      // Only allow upward drag
+      translateY.value = Math.min(0, event.translationY);
+    })
+    .onEnd(() => {
+      if (translateY.value < DISMISS_THRESHOLD) {
+        translateY.value = withTiming(-BANNER_HEIGHT, { duration: 150 }, () => {
+          runOnJS(onDismiss)();
+        });
+      } else {
+        translateY.value = withSpring(0);
+      }
+    });
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: translateY.value }],
+  }));
+
+  return (
+    <GestureDetector gesture={pan}>
+      <Animated.View
+        entering={SlideInUp.duration(300)}
+        style={[styles.banner, animatedStyle]}
+      >
+        <Text style={styles.code}>{tokenCode}</Text>
+        <Text style={styles.message}>{message}</Text>
+      </Animated.View>
+    </GestureDetector>
+  );
+}
+
+const styles = StyleSheet.create({
+  banner: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: BANNER_HEIGHT,
+    backgroundColor: '#2c3e50',
+    padding: 16,
+    justifyContent: 'center',
+    borderBottomLeftRadius: 12,
+    borderBottomRightRadius: 12,
+  },
+  code: {
+    color: '#fff',
+    fontFamily: 'monospace',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  message: {
+    color: '#ecf0f1',
+    fontSize: 13,
+    marginTop: 4,
+  },
+});`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        code: `const offset = useSharedValue(0);\noffset.value = withSpring(100);\nconsole.log(offset.value);`,
+        answer: "0",
+        explanation: "withSpring starts an animation that runs on the UI thread over time. The console.log executes immediately on the JS thread, before the animation has progressed — so .value is still 0 at that instant."
+      },
+      {
+        type: "spot-the-bug",
+        code: `function Broken() {\n  const x = useSharedValue(0);\n  const style = useAnimatedStyle(() => ({\n    transform: [{ translateX: x.value }],\n  }));\n  console.log('Current x:', x.value); // line 6\n  return <Animated.View style={style} />;\n}`,
+        bugLine: 6,
+        options: ["Line 2: useSharedValue must use a ref", "Line 6: reading .value in the component body", "Line 3: useAnimatedStyle can't return transform"],
+        correct: 1,
+        explanation: "Reading a shared value's .value in the component body doesn't trigger re-renders and will always show the initial value. Shared values should only be read inside useAnimatedStyle or worklets."
+      },
+      {
+        type: "fill-blank",
+        code: `const pan = Gesture.Pan()\n  .onEnd(() => {\n    translateX.value = ___(0);\n  });`,
+        answer: "withSpring",
+        explanation: "withSpring animates back to 0 with physics-based motion — the natural choice for snapping a dragged element back to its origin."
+      },
+      {
+        type: "which-breaks",
+        variants: [
+          "offset.value = withTiming(100, { duration: 300 });",
+          "offset.value = withSpring(100, { damping: 15 });",
+          "offset.value = withTiming(100, { duration: 300 }, () => { runOnJS(handleDone)(); });"
+        ],
+        correct: 2,
+        explanation: "Trick question — none of these break at runtime. But variant C is noteworthy: the callback runs on the UI thread, so calling a JS function requires runOnJS. All three are correct usage."
+      },
+      {
+        type: "order-steps",
+        steps: [
+          "Install react-native-reanimated and gesture-handler",
+          "Add reanimated/plugin to babel.config.js",
+          "Wrap App with GestureHandlerRootView",
+          "Create shared values and animated styles",
+          "Attach Gesture to GestureDetector"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Setup order matters: install packages first, configure Babel (so worklets compile), wrap the app root (so gestures work anywhere), then build your animated components."
+      }
+    ]);
+    </script>
+</body>
+</html>

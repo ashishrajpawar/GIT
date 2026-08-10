@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>coturn Setup — B6.2</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">B6 — WebRTC Signalling</a>
+      <span class="sep">›</span>
+      <span class="current">coturn Setup</span>
+    </nav>
+
+    <h1>coturn Setup</h1>
+    <div class="lesson-meta">
+      <span>B6 — Lesson 2 of 2</span>
+      <span>~50 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>STUN tells each peer its public IP address. That's enough when both users can reach each other directly. But when one user is behind a strict corporate NAT or a carrier-grade NAT (common in India with Jio/Airtel), direct connections fail. TURN relays the actual media traffic through your server as a fallback. Without TURN, ~15% of calls would simply fail to connect. coturn is the open-source TURN server you run yourself — no third-party dependency, no per-minute fees.</p>
+    </div>
+
+    <h2>STUN vs. TURN — when each is used</h2>
+
+    <table>
+      <thead>
+        <tr><th></th><th>STUN</th><th>TURN</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Purpose</td><td>Discover your public IP:port</td><td>Relay all media traffic</td></tr>
+        <tr><td>Data flow</td><td>Only during ICE (discovery)</td><td>Entire call duration</td></tr>
+        <tr><td>Bandwidth cost</td><td>Negligible (few KB)</td><td>Same as the call (audio/video)</td></tr>
+        <tr><td>When used</td><td>Always (first attempt)</td><td>Fallback when direct fails</td></tr>
+        <tr><td>Latency</td><td>None (P2P after discovery)</td><td>Added hop through server</td></tr>
+        <tr><td>Cost</td><td>Free (Google provides public STUN)</td><td>You pay for bandwidth</td></tr>
+      </tbody>
+    </table>
+
+    <pre><code>// ICE candidate priority (WebRTC tries in this order):
+// 1. host      — direct LAN connection (fastest, free)
+// 2. srflx     — public IP via STUN (still P2P, free)
+// 3. relay     — through TURN server (guaranteed to work, costs bandwidth)</code></pre>
+
+    <h2>Why self-host TURN?</h2>
+
+    <ul>
+      <li><strong>No third-party dependency</strong> — Token's architecture avoids external services</li>
+      <li><strong>No per-minute fees</strong> — Twilio/Xirsys charge per GB of TURN traffic. Self-hosted = your VPS bandwidth cost only</li>
+      <li><strong>Data sovereignty</strong> — media never leaves your infrastructure (important for Indian DPDP compliance)</li>
+      <li><strong>Privacy</strong> — relay-only mode (A7 lesson 5) hides user IPs, matching Token's privacy ethos</li>
+    </ul>
+
+    <h2>Installing coturn</h2>
+
+    <p>coturn is available in most Linux package managers. On your Coolify VPS (Ubuntu/Debian):</p>
+
+    <pre><code># Install coturn
+sudo apt update
+sudo apt install coturn -y
+
+# Enable it as a service
+sudo systemctl enable coturn</code></pre>
+
+    <h3>Or via Docker (for Coolify)</h3>
+
+    <pre><code># docker-compose.yml — add to your existing stack
+services:
+  coturn:
+    image: coturn/coturn:latest
+    network_mode: host
+    volumes:
+      - ./turnserver.conf:/etc/turnserver.conf:ro
+    restart: unless-stopped</code></pre>
+
+    <p><strong><code>network_mode: host</code></strong> is important — TURN needs to bind to the host's public IP directly. Docker's default bridge networking breaks TURN because NAT inside Docker confuses ICE.</p>
+
+    <h2>Configuration</h2>
+
+    <pre><code># /etc/turnserver.conf (or ./turnserver.conf for Docker)
+
+# Network
+listening-port=3478
+tls-listening-port=5349
+external-ip=YOUR_VPS_PUBLIC_IP
+realm=tokn.app
+
+# Authentication
+lt-cred-mech
+use-auth-secret
+static-auth-secret=YOUR_LONG_RANDOM_SECRET
+
+# Logging
+log-file=/var/log/turnserver.log
+verbose
+
+# Security
+no-multicast-peers
+no-cli
+denied-peer-ip=10.0.0.0-10.255.255.255
+denied-peer-ip=172.16.0.0-172.31.255.255
+denied-peer-ip=192.168.0.0-192.168.255.255
+
+# Bandwidth (per-session limits)
+max-bps=1000000        # 1 Mbps per session
+total-quota=100        # max 100 concurrent sessions
+
+# TLS (use Let's Encrypt cert from Coolify)
+cert=/etc/letsencrypt/live/turn.tokn.app/fullchain.pem
+pkey=/etc/letsencrypt/live/turn.tokn.app/privkey.pem</code></pre>
+
+    <h3>Configuration explained</h3>
+
+    <table>
+      <thead>
+        <tr><th>Setting</th><th>Purpose</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>external-ip</code></td><td>Your VPS's public IP — clients use this to reach TURN</td></tr>
+        <tr><td><code>realm</code></td><td>Domain name — identifies your TURN server</td></tr>
+        <tr><td><code>use-auth-secret</code></td><td>Time-limited credentials (not static passwords)</td></tr>
+        <tr><td><code>static-auth-secret</code></td><td>Shared secret between your API and coturn</td></tr>
+        <tr><td><code>denied-peer-ip</code></td><td>Prevents TURN from relaying to private networks (security)</td></tr>
+        <tr><td><code>max-bps</code></td><td>Bandwidth cap per session — prevents abuse</td></tr>
+        <tr><td><code>total-quota</code></td><td>Max concurrent relay sessions — protects server resources</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Temporary credentials (TURN REST API)</h2>
+
+    <p>You don't want static TURN credentials hardcoded in the app — anyone who decompiles the APK could steal them and relay their own traffic through your server. Instead, generate short-lived credentials for each call:</p>
+
+    <pre><code>// api/src/routes/turn.ts
+import { Router } from 'express';
+import { createHmac } from 'crypto';
+import { requireAuth } from '../middleware/auth';
+
+const router = Router();
+const TURN_SECRET = process.env.TURN_SECRET!; // same as static-auth-secret in coturn config
+const TURN_SERVER = process.env.TURN_SERVER || 'turn.tokn.app';
+
+router.get('/turn/credentials', requireAuth, (req, res) =&gt; {
+  // Credentials valid for 24 hours
+  const ttl = 86400;
+  const timestamp = Math.floor(Date.now() / 1000) + ttl;
+  const username = `${timestamp}:${req.user.id}`;
+
+  // HMAC-SHA1 of username with the shared secret
+  const credential = createHmac('sha1', TURN_SECRET)
+    .update(username)
+    .digest('base64');
+
+  res.json({
+    data: {
+      iceServers: [
+        {
+          urls: [
+            `stun:${TURN_SERVER}:3478`,
+            `turn:${TURN_SERVER}:3478?transport=udp`,
+            `turn:${TURN_SERVER}:3478?transport=tcp`,
+            `turns:${TURN_SERVER}:5349?transport=tcp`,
+          ],
+          username,
+          credential,
+        },
+        {
+          urls: ['stun:stun.l.google.com:19302'],  // free STUN fallback
+        },
+      ],
+      ttl,
+    },
+  });
+});
+
+export default router;</code></pre>
+
+    <h3>How time-limited credentials work</h3>
+
+    <ol>
+      <li>Client requests <code>GET /turn/credentials</code> before starting a call</li>
+      <li>Server generates: username = <code>expiry_timestamp:userId</code>, credential = HMAC-SHA1(username, secret)</li>
+      <li>Client passes these to <code>RTCPeerConnection({ iceServers: [...] })</code></li>
+      <li>When the client connects to coturn, coturn independently computes HMAC-SHA1(username, same_secret) and compares</li>
+      <li>coturn also checks the timestamp — if expired, rejects</li>
+    </ol>
+
+    <p>The API server and coturn share the same <code>static-auth-secret</code>. They never communicate directly — the credential is self-validating.</p>
+
+    <h2>Firewall / ports to open</h2>
+
+    <pre><code># Required ports for coturn:
+3478/tcp   — STUN/TURN over TCP
+3478/udp   — STUN/TURN over UDP (primary)
+5349/tcp   — TURN over TLS (for restrictive networks)
+49152-65535/udp — relay ports (media traffic range)</code></pre>
+
+    <p><strong>The relay port range is large</strong> because each TURN session allocates a unique port. With a 100-session quota, you'll use at most 100 ports from this range.</p>
+
+    <h2>Testing your TURN server</h2>
+
+    <pre><code># 1. Test STUN (should return your public IP):
+# Use the Trickle ICE test page: https://webrtc.github.io/samples/src/content/peerconnection/trickle-ice/
+# Enter: stun:YOUR_VPS_IP:3478
+# Click Gather — you should see a srflx candidate
+
+# 2. Test TURN (should return a relay candidate):
+# Enter: turn:YOUR_VPS_IP:3478
+# Username: timestamp:userid (from your API)
+# Credential: the HMAC output
+# Click Gather — you should see a relay candidate
+
+# 3. Command-line test:
+turnutils_uclient -t -u timestamp:1 -w HMAC_CREDENTIAL YOUR_VPS_IP</code></pre>
+
+    <h2>Client-side ICE configuration</h2>
+
+    <pre><code>// app/src/webrtc/config.ts
+import { apiRequest } from '../api/client';
+
+interface IceServer {
+  urls: string[];
+  username?: string;
+  credential?: string;
+}
+
+let cachedServers: IceServer[] | null = null;
+let cacheExpiry = 0;
+
+export async function getIceServers(): Promise&lt;IceServer[]&gt; {
+  // Cache credentials (valid for 24h, refresh every 12h)
+  if (cachedServers && Date.now() &lt; cacheExpiry) {
+    return cachedServers;
+  }
+
+  const res = await apiRequest&lt;{ data: { iceServers: IceServer[]; ttl: number } }&gt;(
+    'GET', '/turn/credentials'
+  );
+
+  cachedServers = res.data.iceServers;
+  cacheExpiry = Date.now() + (res.data.ttl * 500); // refresh at half TTL
+  return cachedServers;
+}
+
+// Usage in RTCPeerConnection:
+// const iceServers = await getIceServers();
+// const pc = new RTCPeerConnection({ iceServers });</code></pre>
+
+    <h2>Bandwidth planning</h2>
+
+    <p>TURN relays media — it costs bandwidth. Budget for it:</p>
+
+    <table>
+      <thead>
+        <tr><th>Call type</th><th>Bitrate</th><th>Per minute</th><th>Per hour</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Voice (Opus)</td><td>~32 kbps</td><td>~0.24 MB</td><td>~14 MB</td></tr>
+        <tr><td>Video (VP8 480p)</td><td>~500 kbps</td><td>~3.75 MB</td><td>~225 MB</td></tr>
+        <tr><td>Video (VP8 720p)</td><td>~1.5 Mbps</td><td>~11.25 MB</td><td>~675 MB</td></tr>
+      </tbody>
+    </table>
+
+    <p>Only ~15% of calls use TURN (the rest connect P2P via STUN). On a typical VPS with 1TB/month transfer, that supports thousands of hours of relay per month.</p>
+
+    <h2>Relay-only mode (privacy feature)</h2>
+
+    <p>Token is a privacy app. Direct P2P connections expose both parties' IP addresses to each other. For maximum privacy, force all traffic through TURN:</p>
+
+    <pre><code>// Force relay — no direct connections
+const pc = new RTCPeerConnection({
+  iceServers: await getIceServers(),
+  iceTransportPolicy: 'relay',  // ONLY use TURN, never direct
+});</code></pre>
+
+    <p><strong>Trade-off:</strong></p>
+    <ul>
+      <li><strong>Pro:</strong> Neither party ever learns the other's IP address. Full privacy.</li>
+      <li><strong>Con:</strong> ALL traffic goes through your server. Higher latency (~50-100ms extra), and you pay bandwidth for every call.</li>
+    </ul>
+
+    <p>This should be a user-configurable option. Default to normal ICE (best quality), let privacy-conscious users enable relay-only mode. Covered in detail in A7 lesson 5.</p>
+
+    <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0001-signalling-server.html">← Previous: Signalling Server</a>
+      <a href="../a7-voice-video/0001-webrtc-refresher.html">Next module: A7 Voice &amp; Video →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// Simulate TURN credential generation
+function generateTurnCredentials(userId, secret) {
+  // In real code: crypto.createHmac('sha1', secret).update(username).digest('base64')
+  // Here we simulate with a placeholder
+  const ttl = 86400; // 24 hours
+  const timestamp = Math.floor(Date.now() / 1000) + ttl;
+  const username = timestamp + ':' + userId;
+
+  // Simulated HMAC (in reality this is crypto)
+  const credential = 'HMAC_SHA1(' + username + ', secret)';
+
+  return {
+    iceServers: [
+      {
+        urls: ['stun:turn.tokn.app:3478', 'turn:turn.tokn.app:3478?transport=udp'],
+        username: username,
+        credential: credential,
+      },
+      { urls: ['stun:stun.l.google.com:19302'] }
+    ],
+    ttl: ttl
+  };
+}
+
+const creds = generateTurnCredentials(42, 'my_secret');
+console.log('Generated TURN credentials:');
+console.log('Username:', creds.iceServers[0].username);
+console.log('Credential:', creds.iceServers[0].credential);
+console.log('TTL:', creds.ttl, 'seconds (' + (creds.ttl/3600) + ' hours)');
+console.log('');
+console.log('ICE servers:');
+creds.iceServers.forEach(s => {
+  console.log('  ' + s.urls.join(', '));
+});
+console.log('');
+console.log('Expires:', new Date((parseInt(creds.iceServers[0].username) * 1000)).toISOString());`);
+
+    createSolution("exercise-1", {
+      exercise: "Set up the complete TURN infrastructure:\n\n1. Write the coturn configuration file (turnserver.conf): listening ports, external IP, realm, auth secret, security settings (deny private IPs), and bandwidth limits.\n\n2. Create the `GET /turn/credentials` API endpoint: generate time-limited HMAC-SHA1 credentials, return iceServers array with STUN + TURN URLs.\n\n3. Create `app/src/webrtc/config.ts` with `getIceServers()`: fetches credentials from the API, caches them until half-TTL, returns the iceServers array.\n\n4. Document the firewall ports that need to be opened (3478, 5349, relay range).\n\n5. Explain how to test: use Trickle ICE web tool to verify both srflx (STUN working) and relay (TURN working) candidates appear.\n\n6. Show how iceTransportPolicy: 'relay' forces all traffic through TURN for privacy.",
+      hints: [
+        "The static-auth-secret in coturn config must EXACTLY match the TURN_SECRET env var in your API.",
+        "Username format is 'timestamp:userId' where timestamp is the expiry time in Unix seconds.",
+        "createHmac('sha1', secret).update(username).digest('base64') produces the credential coturn expects.",
+        "Cache credentials on the client — don't fetch on every ICE restart. Refresh at half TTL to avoid expiry mid-call."
+      ],
+      solution: `// === turnserver.conf ===
+// See the full config in the lesson above.
+// Key settings: external-ip, use-auth-secret, static-auth-secret,
+// denied-peer-ip (block private ranges), max-bps, total-quota
+
+// === api/src/routes/turn.ts ===
+import { Router } from 'express';
+import { createHmac } from 'crypto';
+import { requireAuth } from '../middleware/auth';
+
+const router = Router();
+const TURN_SECRET = process.env.TURN_SECRET!;
+const TURN_SERVER = process.env.TURN_SERVER || 'turn.tokn.app';
+
+router.get('/turn/credentials', requireAuth, (req, res) => {
+  const ttl = 86400;
+  const timestamp = Math.floor(Date.now() / 1000) + ttl;
+  const username = \`\${timestamp}:\${req.user.id}\`;
+  const credential = createHmac('sha1', TURN_SECRET)
+    .update(username)
+    .digest('base64');
+
+  res.json({
+    data: {
+      iceServers: [
+        {
+          urls: [
+            \`stun:\${TURN_SERVER}:3478\`,
+            \`turn:\${TURN_SERVER}:3478?transport=udp\`,
+            \`turn:\${TURN_SERVER}:3478?transport=tcp\`,
+            \`turns:\${TURN_SERVER}:5349?transport=tcp\`,
+          ],
+          username,
+          credential,
+        },
+        { urls: ['stun:stun.l.google.com:19302'] },
+      ],
+      ttl,
+    },
+  });
+});
+
+export default router;
+
+// === app/src/webrtc/config.ts ===
+// getIceServers() with TTL-based caching — see lesson code above.
+
+// === Privacy mode ===
+// { iceTransportPolicy: 'relay' } forces TURN-only
+// User setting: stored in app preferences, passed to RTCPeerConnection config`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "What happens when a user behind a strict NAT tries to call without a TURN server?",
+        code: "// ICE candidates gathered:\n// - host: 192.168.1.5:12345 (local, unreachable from outside)\n// - srflx: 103.45.67.89:54321 (public, but NAT won't allow inbound)\n// - relay: (none — no TURN configured)\n\n// ICE tries: host ❌, srflx ❌, relay ❌\n// Result: ???",
+        answer: "ICE fails. Call never connects.",
+        explanation: "Without TURN, the only candidates are host (LAN-only) and srflx (public IP, but strict NAT blocks incoming packets from unknown peers). No relay candidate exists. ICE exhausts all candidates and fails. The user sees 'call failed' — about 15% of real-world calls hit this without TURN."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this TURN credential approach?",
+        code: "// In the mobile app's source code:\nconst iceServers = [\n  {\n    urls: ['turn:turn.tokn.app:3478'],\n    username: 'token_app_user',\n    credential: 'hardcoded_password_123',\n  }\n];",
+        options: [
+          "Static credentials in the app source — anyone who decompiles the APK can steal them and relay arbitrary traffic through your TURN server forever",
+          "The URLs format is wrong",
+          "username should be an email address",
+          "credential should be a JWT"
+        ],
+        correct: 0,
+        explanation: "Hardcoded credentials in client code are extractable by anyone with an APK decompiler. They'd use your TURN server as a free VPN/proxy. Fix: generate short-lived credentials (24h TTL) via your API, using HMAC-SHA1 with a shared secret. Each credential is unique per user and expires."
+      },
+      {
+        type: "which-breaks",
+        question: "Which coturn setting prevents attackers from using your TURN server to probe internal networks?",
+        variants: [
+          "max-bps=1000000 (bandwidth limit)",
+          "denied-peer-ip=10.0.0.0-10.255.255.255 (block private ranges)",
+          "total-quota=100 (session limit)",
+          "verbose (detailed logging)"
+        ],
+        correct: 1,
+        explanation: "Without denied-peer-ip, an attacker with TURN credentials could relay traffic to your server's internal network (10.x, 172.16.x, 192.168.x). TURN would happily forward packets to internal services. Denying private IP ranges ensures TURN only relays to public internet addresses — peers, not your infrastructure."
+      },
+      {
+        type: "fill-blank",
+        question: "Force all media through TURN for maximum privacy:",
+        code: "const pc = new RTCPeerConnection({\n  iceServers: await getIceServers(),\n  ___: 'relay',\n});",
+        answer: "iceTransportPolicy",
+        explanation: "iceTransportPolicy: 'relay' tells WebRTC to ONLY use relay (TURN) candidates. Host and srflx candidates are discarded. This means neither peer ever learns the other's real IP — all traffic routes through your TURN server. The trade-off is added latency and bandwidth cost."
+      },
+      {
+        type: "order-steps",
+        question: "Put the TURN credential flow in order:",
+        steps: [
+          "Client calls GET /turn/credentials before starting a call",
+          "Server generates username (timestamp:userId) and HMAC-SHA1 credential",
+          "Client passes iceServers to new RTCPeerConnection()",
+          "WebRTC internally connects to coturn with the credentials",
+          "coturn verifies: recomputes HMAC, checks timestamp not expired, grants relay"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "The API and coturn never talk directly — they share the same secret and the credential is self-validating. The client is just a messenger. coturn independently verifies by recomputing the HMAC with its own copy of the secret and checking the embedded expiry timestamp."
+      }
+    ]);
+  </script>
+</body>
+</html>

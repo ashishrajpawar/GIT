@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Token Schema — B2.1</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">B2 — Schema Design</a>
+      <span class="sep">›</span>
+      <span class="current">Token Schema</span>
+    </nav>
+
+    <h1>Token Schema</h1>
+    <div class="lesson-meta">
+      <span>B2 — Lesson 1 of 3</span>
+      <span>~55 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>This is the real schema — the one you'll run in production. Every design decision here shapes what the app can do: how tokens are issued, what rules are enforced, how revocation propagates. A schema mistake early on means painful migrations later. We design it right, once, with constraints that enforce Token's privacy promise at the database level.</p>
+    </div>
+
+    <h2>Design principles</h2>
+
+    <ol>
+      <li><strong>Constraints over code</strong> — if a rule must always hold (revoked tokens stay revoked), enforce it in the database, not only in application code.</li>
+      <li><strong>Normalize first</strong> — one fact in one place. If a user changes their name, it changes everywhere because it's stored once.</li>
+      <li><strong>Use the right types</strong> — timestamps for time, integers for counts, JSONB for flexible payloads.</li>
+      <li><strong>Plan for queries</strong> — think about what the app needs to ask, then design tables that answer those questions efficiently.</li>
+    </ol>
+
+    <h2>The users table</h2>
+
+    <pre><code>CREATE TABLE users (
+  id            SERIAL PRIMARY KEY,
+  phone_hash    TEXT NOT NULL UNIQUE,
+  display_name  TEXT NOT NULL,
+  avatar_url    TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);</code></pre>
+
+    <p>Design notes:</p>
+    <ul>
+      <li><strong>phone_hash</strong> — not the raw phone number. Token is privacy-first: store a one-way hash. You can verify "is this the same phone?" without storing the actual number.</li>
+      <li><strong>TIMESTAMPTZ</strong> — timestamp with timezone. Always use this over plain TIMESTAMP — it stores UTC internally and converts to the user's timezone on display. India has one timezone (IST), but this is correct practice for any app.</li>
+      <li><strong>updated_at</strong> — tracks when the row was last modified. Useful for sync and caching.</li>
+    </ul>
+
+    <h3>Auto-updating updated_at</h3>
+
+    <pre><code>CREATE OR REPLACE FUNCTION update_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER users_updated_at
+BEFORE UPDATE ON users
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at();</code></pre>
+
+    <p>This trigger automatically sets <code>updated_at</code> on every UPDATE — you never need to remember to set it in your API code.</p>
+
+    <h2>The tokens table</h2>
+
+    <pre><code>CREATE TABLE tokens (
+  id          SERIAL PRIMARY KEY,
+  code        TEXT NOT NULL UNIQUE,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  label       TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'active'
+              CHECK (status IN ('active', 'paused', 'revoked')),
+  max_uses    INTEGER NOT NULL DEFAULT 0
+              CHECK (max_uses >= 0),
+  use_count   INTEGER NOT NULL DEFAULT 0
+              CHECK (use_count >= 0),
+  expires_at  TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  revoked_at  TIMESTAMPTZ,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  -- Business rule: revoked_at must be set when status is 'revoked'
+  CHECK (
+    (status != 'revoked') OR (revoked_at IS NOT NULL)
+  ),
+  -- Business rule: if max_uses > 0, use_count can't exceed it
+  CHECK (
+    max_uses = 0 OR use_count <= max_uses
+  )
+);</code></pre>
+
+    <p>Let's unpack the decisions:</p>
+
+    <ul>
+      <li><strong>code</strong> — the user-visible identifier (e.g. <code>MERC-8GH2-LP4X</code>). UNIQUE enforced by the database.</li>
+      <li><strong>label</strong> — who the token is for ("Amazon Delivery", "NoBroker Agent"). The user names them.</li>
+      <li><strong>status</strong> — only three valid values, enforced by CHECK. You cannot invent a fourth state by accident.</li>
+      <li><strong>max_uses = 0</strong> means unlimited. Otherwise it's a cap.</li>
+      <li><strong>use_count</strong> — how many times the token has been redeemed. Simpler than counting redemption_events every time.</li>
+      <li><strong>expires_at</strong> — nullable. If set, the token auto-expires. Your API checks this on every redemption.</li>
+      <li><strong>ON DELETE RESTRICT</strong> — you can't delete a user who has tokens. Explicit cleanup first.</li>
+      <li><strong>CHECK constraints</strong> — the database enforces that revoked tokens have a revoked_at timestamp, and use_count never exceeds max_uses.</li>
+    </ul>
+
+    <h2>The access_rules table</h2>
+
+    <pre><code>CREATE TABLE access_rules (
+  id          SERIAL PRIMARY KEY,
+  token_id    INTEGER NOT NULL REFERENCES tokens(id) ON DELETE CASCADE,
+  rule_type   TEXT NOT NULL
+              CHECK (rule_type IN ('time_window', 'call_limit', 'category', 'cooldown')),
+  payload     JSONB NOT NULL,
+  is_active   BOOLEAN NOT NULL DEFAULT true,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  UNIQUE(token_id, rule_type)
+);</code></pre>
+
+    <p>Design notes:</p>
+    <ul>
+      <li><strong>ON DELETE CASCADE</strong> — when a token is deleted, its rules are automatically removed. Rules can't exist without a token.</li>
+      <li><strong>UNIQUE(token_id, rule_type)</strong> — one rule of each type per token. Simplifies the API and enables UPSERT.</li>
+      <li><strong>JSONB payload</strong> — each rule type has different fields. Time windows need start/end hours; call limits need max_per_day; categories need an allowed list. JSONB handles this without one table per rule type.</li>
+      <li><strong>is_active</strong> — lets users disable a rule without deleting it (they might want to re-enable later).</li>
+    </ul>
+
+    <h3>Payload shapes by rule_type</h3>
+
+    <pre><code>-- time_window
+{"start_hour": 9, "end_hour": 18, "timezone": "Asia/Kolkata", "days": [1,2,3,4,5]}
+
+-- call_limit
+{"max_per_day": 2, "max_per_week": 10}
+
+-- category
+{"allowed": ["delivery", "support"], "blocked": ["marketing", "spam"]}
+
+-- cooldown
+{"min_minutes_between": 30}</code></pre>
+
+    <h2>The redemption_events table</h2>
+
+    <pre><code>CREATE TABLE redemption_events (
+  id          SERIAL PRIMARY KEY,
+  token_id    INTEGER NOT NULL REFERENCES tokens(id) ON DELETE RESTRICT,
+  holder_ip   TEXT,
+  holder_name TEXT,
+  user_agent  TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);</code></pre>
+
+    <p>This is an <strong>append-only audit log</strong> — you never UPDATE or DELETE rows here. Every redemption is recorded permanently. This is how the user sees "who used this token and when."</p>
+
+    <p>ON DELETE RESTRICT because you'd never want to accidentally erase redemption history by deleting a token.</p>
+
+    <h2>Indexes for Token's queries</h2>
+
+    <pre><code>-- Token list for a user (the main screen)
+CREATE INDEX idx_tokens_user_id ON tokens(user_id);
+
+-- Token lookup by code (the redemption path)
+-- Already covered by the UNIQUE constraint on code
+
+-- Active tokens only (partial index — smaller, faster)
+CREATE INDEX idx_tokens_active ON tokens(user_id)
+WHERE status = 'active';
+
+-- Rules by token
+CREATE INDEX idx_rules_token_id ON access_rules(token_id);
+
+-- Redemption history by token
+CREATE INDEX idx_redemptions_token_id ON redemption_events(token_id);
+
+-- Recent redemptions (for the dashboard)
+CREATE INDEX idx_redemptions_created_at ON redemption_events(created_at DESC);</code></pre>
+
+    <p>The <strong>partial index</strong> on active tokens is clever: it only indexes rows where status = 'active'. Since most queries on the token list filter by active status, this index is smaller and faster than indexing all tokens.</p>
+
+    <h2>The full schema as a single migration file</h2>
+
+    <pre><code>-- api/migrations/001_initial_schema.sql
+
+BEGIN;
+
+-- Users
+CREATE TABLE users (
+  id            SERIAL PRIMARY KEY,
+  phone_hash    TEXT NOT NULL UNIQUE,
+  display_name  TEXT NOT NULL,
+  avatar_url    TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Tokens
+CREATE TABLE tokens (
+  id          SERIAL PRIMARY KEY,
+  code        TEXT NOT NULL UNIQUE,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  label       TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'active'
+              CHECK (status IN ('active', 'paused', 'revoked')),
+  max_uses    INTEGER NOT NULL DEFAULT 0 CHECK (max_uses >= 0),
+  use_count   INTEGER NOT NULL DEFAULT 0 CHECK (use_count >= 0),
+  expires_at  TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  revoked_at  TIMESTAMPTZ,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK ((status != 'revoked') OR (revoked_at IS NOT NULL)),
+  CHECK (max_uses = 0 OR use_count <= max_uses)
+);
+
+-- Access rules
+CREATE TABLE access_rules (
+  id          SERIAL PRIMARY KEY,
+  token_id    INTEGER NOT NULL REFERENCES tokens(id) ON DELETE CASCADE,
+  rule_type   TEXT NOT NULL
+              CHECK (rule_type IN ('time_window', 'call_limit', 'category', 'cooldown')),
+  payload     JSONB NOT NULL,
+  is_active   BOOLEAN NOT NULL DEFAULT true,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(token_id, rule_type)
+);
+
+-- Redemption events (append-only audit log)
+CREATE TABLE redemption_events (
+  id          SERIAL PRIMARY KEY,
+  token_id    INTEGER NOT NULL REFERENCES tokens(id) ON DELETE RESTRICT,
+  holder_ip   TEXT,
+  holder_name TEXT,
+  user_agent  TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Indexes
+CREATE INDEX idx_tokens_user_id ON tokens(user_id);
+CREATE INDEX idx_tokens_active ON tokens(user_id) WHERE status = 'active';
+CREATE INDEX idx_rules_token_id ON access_rules(token_id);
+CREATE INDEX idx_redemptions_token_id ON redemption_events(token_id);
+CREATE INDEX idx_redemptions_created_at ON redemption_events(created_at DESC);
+
+-- Triggers
+CREATE OR REPLACE FUNCTION update_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN NEW.updated_at = NOW(); RETURN NEW; END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER users_updated_at BEFORE UPDATE ON users
+FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+CREATE TRIGGER tokens_updated_at BEFORE UPDATE ON tokens
+FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+COMMIT;</code></pre>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <span class="disabled">← Previous</span>
+      <a href="./0002-messaging-schema.html">Next: Messaging Schema →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createSolution("exercise-1", {
+      exercise: "Create the full initial schema migration file (001_initial_schema.sql) for the Token project. Include all four tables (users, tokens, access_rules, redemption_events), all constraints, indexes, and the updated_at trigger. Run it against your local Postgres and verify with \\dt (list tables) and \\d tokens (describe a table).",
+      hints: [
+        "Wrap the entire migration in BEGIN; ... COMMIT; so it's atomic — if anything fails, nothing is created.",
+        "Create tables in dependency order: users first (referenced by tokens), then tokens (referenced by access_rules and redemption_events).",
+        "After running, verify: psql token_dev -c '\\dt' should show 4 tables."
+      ],
+      solution: `-- File: api/migrations/001_initial_schema.sql
+-- Run with: psql token_dev < api/migrations/001_initial_schema.sql
+
+BEGIN;
+
+CREATE TABLE users (
+  id            SERIAL PRIMARY KEY,
+  phone_hash    TEXT NOT NULL UNIQUE,
+  display_name  TEXT NOT NULL,
+  avatar_url    TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE tokens (
+  id          SERIAL PRIMARY KEY,
+  code        TEXT NOT NULL UNIQUE,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  label       TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'active'
+              CHECK (status IN ('active', 'paused', 'revoked')),
+  max_uses    INTEGER NOT NULL DEFAULT 0 CHECK (max_uses >= 0),
+  use_count   INTEGER NOT NULL DEFAULT 0 CHECK (use_count >= 0),
+  expires_at  TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  revoked_at  TIMESTAMPTZ,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK ((status != 'revoked') OR (revoked_at IS NOT NULL)),
+  CHECK (max_uses = 0 OR use_count <= max_uses)
+);
+
+CREATE TABLE access_rules (
+  id          SERIAL PRIMARY KEY,
+  token_id    INTEGER NOT NULL REFERENCES tokens(id) ON DELETE CASCADE,
+  rule_type   TEXT NOT NULL
+              CHECK (rule_type IN ('time_window', 'call_limit', 'category', 'cooldown')),
+  payload     JSONB NOT NULL,
+  is_active   BOOLEAN NOT NULL DEFAULT true,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(token_id, rule_type)
+);
+
+CREATE TABLE redemption_events (
+  id          SERIAL PRIMARY KEY,
+  token_id    INTEGER NOT NULL REFERENCES tokens(id) ON DELETE RESTRICT,
+  holder_ip   TEXT,
+  holder_name TEXT,
+  user_agent  TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_tokens_user_id ON tokens(user_id);
+CREATE INDEX idx_tokens_active ON tokens(user_id) WHERE status = 'active';
+CREATE INDEX idx_rules_token_id ON access_rules(token_id);
+CREATE INDEX idx_redemptions_token_id ON redemption_events(token_id);
+CREATE INDEX idx_redemptions_created_at ON redemption_events(created_at DESC);
+
+CREATE OR REPLACE FUNCTION update_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN NEW.updated_at = NOW(); RETURN NEW; END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER users_updated_at BEFORE UPDATE ON users
+FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+CREATE TRIGGER tokens_updated_at BEFORE UPDATE ON tokens
+FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+COMMIT;
+
+-- Verify:
+-- psql token_dev -c '\\dt'
+-- psql token_dev -c '\\d tokens'`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "What happens when you try this INSERT?",
+        code: "INSERT INTO tokens (code, user_id, label, status, revoked_at)\nVALUES ('TEST-1234', 1, 'Test', 'revoked', NULL);",
+        answer: "ERROR: new row violates check constraint — status is 'revoked' but revoked_at is NULL",
+        explanation: "The CHECK constraint requires that revoked tokens always have a revoked_at timestamp. This prevents an invalid state where a token is marked revoked but nobody knows when it happened."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this schema decision?",
+        code: "CREATE TABLE tokens (\n  ...\n  user_phone TEXT NOT NULL,  -- store the user's phone directly\n  user_name TEXT NOT NULL,   -- store the user's name directly\n  ...\n);",
+        options: [
+          "TEXT is the wrong type for phone numbers",
+          "This duplicates user data — if the name changes, every token row must be updated separately",
+          "You can't have two TEXT columns in one table",
+          "NOT NULL is too restrictive"
+        ],
+        correct: 1,
+        explanation: "This violates normalization. The user's name belongs in the users table. Tokens reference it via user_id. When the name changes, you update ONE row in users — not hundreds of token rows. This is why relational databases use foreign keys."
+      },
+      {
+        type: "fill-blank",
+        question: "Create a partial index that only covers active tokens for a given user:",
+        code: "CREATE INDEX idx_tokens_active ON tokens(user_id)\nWHERE status = '___';",
+        answer: "active",
+        explanation: "A partial index only includes rows matching the WHERE condition. Since most list queries filter for active tokens, this index is smaller and faster than indexing all tokens. Postgres still uses a full-table scan for queries asking about revoked tokens — acceptable since that's less common."
+      },
+      {
+        question: "Why does redemption_events use ON DELETE RESTRICT while access_rules uses ON DELETE CASCADE?",
+        options: [
+          "There's no difference — both are equally safe",
+          "Rules are owned by the token (delete together); redemption history is an audit trail that must never be lost accidentally",
+          "CASCADE is faster, RESTRICT is slower",
+          "RESTRICT is for TEXT columns, CASCADE is for INTEGER columns"
+        ],
+        correct: 1,
+        explanation: "Access rules are configuration — if you delete a token, its rules should go with it. But redemption events are an audit log — you'd never want to silently erase the record of who contacted the user. RESTRICT forces you to handle the history explicitly."
+      },
+      {
+        type: "which-breaks",
+        question: "Which INSERT will the database reject?",
+        variants: [
+          "INSERT INTO tokens (code, user_id, label, max_uses) VALUES ('A', 1, 'Test', 5);",
+          "INSERT INTO tokens (code, user_id, label, max_uses, use_count) VALUES ('B', 1, 'Test', 3, 5);",
+          "INSERT INTO tokens (code, user_id, label) VALUES ('C', 1, 'Test');"
+        ],
+        correct: 1,
+        explanation: "The CHECK constraint says: max_uses = 0 OR use_count <= max_uses. With max_uses = 3 and use_count = 5, use_count exceeds max_uses — the database rejects this. It's impossible to have a token used more times than its limit allows."
+      }
+    ]);
+  </script>
+</body>
+</html>

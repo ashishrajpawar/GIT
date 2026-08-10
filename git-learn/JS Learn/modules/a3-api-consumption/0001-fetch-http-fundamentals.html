@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>fetch &amp; HTTP Fundamentals — A3.1</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A3 — API Consumption</a>
+      <span class="sep">›</span>
+      <span class="current">fetch &amp; HTTP Fundamentals</span>
+    </nav>
+
+    <h1>fetch &amp; HTTP Fundamentals</h1>
+    <div class="lesson-meta">
+      <span>A3 — Lesson 1 of 4</span>
+      <span>~50 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>The mobile app and web page talk to your API over HTTP. Every screen that shows data — the token list, a conversation, user settings — makes HTTP requests to your Express server. Understanding the request/response cycle, status codes, headers, and JSON parsing is fundamental to connecting your clients to the backend you just built.</p>
+    </div>
+
+    <h2>HTTP request anatomy</h2>
+
+    <p>Every HTTP request has:</p>
+    <ul>
+      <li><strong>Method</strong> — GET, POST, PATCH, DELETE (what to do)</li>
+      <li><strong>URL</strong> — where to send it (<code>http://localhost:3000/api/tokens</code>)</li>
+      <li><strong>Headers</strong> — metadata (auth token, content type)</li>
+      <li><strong>Body</strong> — data payload (JSON for POST/PATCH)</li>
+    </ul>
+
+    <p>The response has:</p>
+    <ul>
+      <li><strong>Status code</strong> — 200, 201, 400, 401, 404, 500</li>
+      <li><strong>Headers</strong> — content type, rate limit info, caching</li>
+      <li><strong>Body</strong> — the JSON response data</li>
+    </ul>
+
+    <h2>fetch — the built-in HTTP client</h2>
+
+    <p><code>fetch</code> is available in both React Native and browsers. No libraries needed:</p>
+
+    <pre><code>// GET request (simplest)
+const response = await fetch('http://localhost:3000/api/tokens');
+const json = await response.json();
+console.log(json.data);</code></pre>
+
+    <p>Two steps: (1) <code>fetch</code> sends the request and returns a Response object, (2) <code>.json()</code> parses the body as JSON.</p>
+
+    <h2>Making different request types</h2>
+
+    <pre><code>// POST — create a token
+const response = await fetch('http://localhost:3000/api/tokens', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer eyJhbG...',
+  },
+  body: JSON.stringify({
+    label: 'Amazon Delivery',
+    maxUses: 3,
+  }),
+});
+
+const result = await response.json();
+// result = { data: { code: 'MERC-8GH2-LP4X', ... }, success: true }</code></pre>
+
+    <pre><code>// PATCH — update a token
+await fetch('http://localhost:3000/api/tokens/MERC-8GH2-LP4X', {
+  method: 'PATCH',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer eyJhbG...',
+  },
+  body: JSON.stringify({ label: 'Amazon Prime Delivery' }),
+});
+
+// DELETE — revoke a token
+await fetch('http://localhost:3000/api/tokens/MERC-8GH2-LP4X', {
+  method: 'DELETE',
+  headers: { 'Authorization': 'Bearer eyJhbG...' },
+});</code></pre>
+
+    <h2>Handling responses properly</h2>
+
+    <p><code>fetch</code> does NOT throw on 4xx/5xx errors — only on network failures. You must check <code>response.ok</code>:</p>
+
+    <pre><code>const response = await fetch(url, options);
+
+if (!response.ok) {
+  // Status is 4xx or 5xx
+  const error = await response.json();
+  throw new Error(error.error || `HTTP ${response.status}`);
+}
+
+const data = await response.json();
+return data;</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">Common mistake</div>
+      <p><code>fetch</code> only throws on network errors (no connection, DNS failure). A 404 or 500 response is still a "successful" fetch — you get a Response object with <code>response.ok === false</code>. Always check before parsing.</p>
+    </div>
+
+    <h2>Status code handling</h2>
+
+    <pre><code>async function apiCall(url: string, options?: RequestInit) {
+  const response = await fetch(url, options);
+
+  switch (response.status) {
+    case 401:
+      // Token expired — trigger refresh flow
+      throw new AuthExpiredError();
+    case 403:
+      throw new Error('Access denied');
+    case 404:
+      return null;  // resource doesn't exist
+    case 429:
+      // Rate limited — extract retry time from headers
+      const retryAfter = response.headers.get('RateLimit-Reset');
+      throw new RateLimitError(retryAfter);
+  }
+
+  if (!response.ok) {
+    const body = await response.json().catch(() =&gt; ({}));
+    throw new Error(body.error || `Request failed: ${response.status}`);
+  }
+
+  // 204 No Content — no body to parse
+  if (response.status === 204) return null;
+
+  return response.json();
+}</code></pre>
+
+    <h2>Headers you'll use in Token</h2>
+
+    <pre><code>// Request headers
+'Content-Type': 'application/json'     // telling the server: body is JSON
+'Authorization': 'Bearer <accessToken>' // authenticating the request
+'Accept': 'application/json'           // telling the server: send JSON back
+
+// Response headers you'll read
+'RateLimit-Remaining'                  // requests left before throttle
+'RateLimit-Reset'                      // when the limit resets</code></pre>
+
+    <h2>The base URL problem</h2>
+
+    <p>Different environments need different API URLs:</p>
+
+    <pre><code>// Development: your local machine
+http://localhost:3000/api
+
+// Staging: a test server
+https://staging.tokn.app/api
+
+// Production: the real thing
+https://api.tokn.app/api</code></pre>
+
+    <p>Never hardcode the URL. Use environment config (covered in detail in A11, but the principle now):</p>
+
+    <pre><code>// app/config.ts
+const API_URL = __DEV__
+  ? 'http://localhost:3000/api'     // development
+  : 'https://api.tokn.app/api';     // production
+
+export { API_URL };</code></pre>
+
+    <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <span class="disabled">← Previous</span>
+      <a href="./0002-api-client-layer.html">Next: API Client Layer →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// Simulating HTTP request/response cycle
+// (can't make real fetch in this playground, but we can model the logic)
+
+function simulateFetch(status, body) {
+  return { ok: status >= 200 && status < 300, status, json: () => body };
+}
+
+// Successful response
+const success = simulateFetch(200, { data: { code: 'MERC-8GH2' }, success: true });
+console.log("200 OK:", success.ok, success.json());
+
+// Not found
+const notFound = simulateFetch(404, { error: 'Token not found', success: false });
+console.log("404:", notFound.ok, notFound.json());
+
+// Unauthorized
+const unauth = simulateFetch(401, { error: 'Token expired', success: false });
+console.log("401:", unauth.ok, unauth.json());
+
+// Key lesson: fetch doesn't throw on 4xx/5xx!
+// You must check response.ok yourself.`);
+
+    createSolution("exercise-1", {
+      exercise: "Write a complete set of fetch calls to test your Token API from the mobile app: (1) Register a new user, (2) Login and store the tokens, (3) Create a token with the access token, (4) List all tokens, (5) Revoke the token. Handle errors for each call (check response.ok, parse error messages). Run these against your local API from the previous module.",
+      hints: [
+        "Start with the base URL constant. Use the same headers pattern for all authenticated requests.",
+        "Login returns { data: { accessToken, refreshToken, user } } — store the access token for subsequent calls.",
+        "For DELETE (revoke), the response is 204 with no body — don't try to parse JSON."
+      ],
+      solution: `const API = 'http://localhost:3000/api';
+let accessToken = '';
+
+// Helper
+async function api(path, options = {}) {
+  const response = await fetch(API + path, {
+    headers: {
+      'Content-Type': 'application/json',
+      ...(accessToken && { 'Authorization': \`Bearer \${accessToken}\` }),
+    },
+    ...options,
+  });
+  if (response.status === 204) return null;
+  const json = await response.json();
+  if (!response.ok) throw new Error(json.error || \`HTTP \${response.status}\`);
+  return json;
+}
+
+// 1. Register
+const reg = await api('/auth/register', {
+  method: 'POST',
+  body: JSON.stringify({ email: 'test@token.app', password: '12345678', displayName: 'Test' }),
+});
+console.log('Registered:', reg.data);
+
+// 2. Login
+const login = await api('/auth/login', {
+  method: 'POST',
+  body: JSON.stringify({ email: 'test@token.app', password: '12345678' }),
+});
+accessToken = login.data.accessToken;
+console.log('Logged in, got access token');
+
+// 3. Create token
+const created = await api('/tokens', {
+  method: 'POST',
+  body: JSON.stringify({ label: 'Amazon Delivery', maxUses: 3 }),
+});
+console.log('Created:', created.data.code);
+
+// 4. List tokens
+const list = await api('/tokens');
+console.log('Tokens:', list.data.items.length);
+
+// 5. Revoke
+await api(\`/tokens/\${created.data.code}\`, { method: 'DELETE' });
+console.log('Revoked');`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "Does this code throw an error?",
+        code: "const response = await fetch('http://localhost:3000/api/nonexistent');\nconsole.log(response.status);",
+        answer: "No error thrown. Logs: 404",
+        explanation: "fetch only throws on network failures (server unreachable, DNS error). A 404 is a valid HTTP response — the server responded, just with 'not found'. You must check response.ok or response.status yourself."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this API call?",
+        code: "const response = await fetch('http://localhost:3000/api/tokens', {\n  method: 'POST',\n  body: JSON.stringify({ label: 'Test' }),\n});",
+        options: [
+          "JSON.stringify is wrong for fetch",
+          "Missing Content-Type header — server won't parse the JSON body",
+          "POST doesn't accept a body",
+          "await doesn't work with fetch"
+        ],
+        correct: 1,
+        explanation: "Without 'Content-Type': 'application/json', Express's json() middleware doesn't know to parse the body. req.body will be undefined on the server. Always set the Content-Type header when sending JSON."
+      },
+      {
+        type: "fill-blank",
+        question: "Send the access token with an API request:",
+        code: "headers: {\n  'Authorization': '___ ' + accessToken\n}",
+        answer: "Bearer",
+        explanation: "The Authorization header uses the 'Bearer' scheme for JWT tokens. The server's requireAuth middleware expects this exact format: 'Bearer <token>'. It splits on the space and verifies the token part."
+      },
+      {
+        question: "Why does Token's API return 204 No Content on DELETE instead of 200 with JSON?",
+        options: [
+          "Express can't send JSON with DELETE",
+          "There's nothing useful to return — the resource is gone. 204 communicates 'success, no body' clearly.",
+          "It's faster than 200",
+          "DELETE must always return 204 per the HTTP spec"
+        ],
+        correct: 1,
+        explanation: "After revoking a token, what would you put in the body? The token no longer exists in its previous form. 204 says 'action succeeded, nothing to show you.' The client knows it worked without parsing anything."
+      },
+      {
+        type: "which-breaks",
+        question: "Which response handling code has a bug?",
+        variants: [
+          "if (!response.ok) { const err = await response.json(); throw new Error(err.error); }",
+          "const data = await response.json(); if (!data.success) throw new Error(data.error);",
+          "const data = response.json(); console.log(data.items);"
+        ],
+        correct: 2,
+        explanation: "response.json() returns a Promise — you must await it. Without await, 'data' is a Promise object, not the parsed JSON. data.items would be undefined. Always: const data = await response.json();"
+      }
+    ]);
+  </script>
+</body>
+</html>

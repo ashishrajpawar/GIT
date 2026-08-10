@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>B10 — India's DPDP Act</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Security &amp; Compliance</a> &rsaquo;
+        <span>India's DPDP Act</span>
+    </nav>
+
+    <h1>India's DPDP Act</h1>
+    <p class="lesson-meta">B10 &mdash; Lesson 2 of 2 &nbsp;|&nbsp; ~50 min</p>
+
+    <div class="callout">
+        <strong>Why this matters for Token:</strong> The Digital Personal Data Protection Act (2023)
+        is India's equivalent of GDPR. Token is a privacy product <em>by definition</em> &mdash; its
+        entire value proposition is controlling who can contact you. The DPDP Act isn't an obstacle;
+        it's the <em>legal framework that validates your product's design</em>. Token already does
+        most of what the law requires. This lesson maps the legal requirements to your implementation.
+    </div>
+
+    <h2>DPDP Act &mdash; The Key Concepts</h2>
+    <p>The Act was passed in August 2023. Its rules are being notified in phases. Here's what
+    matters for Token:</p>
+
+    <table>
+        <tr><th>Legal term</th><th>Plain English</th><th>Token equivalent</th></tr>
+        <tr><td>Data Principal</td><td>The person whose data it is</td><td>Your user (the token issuer)</td></tr>
+        <tr><td>Data Fiduciary</td><td>The entity that decides how data is used</td><td>You (the app developer/company)</td></tr>
+        <tr><td>Data Processor</td><td>Entity that processes data on behalf of fiduciary</td><td>Your VPS provider, Expo (for push)</td></tr>
+        <tr><td>Consent</td><td>Permission to process data, for a stated purpose</td><td>The user signing up and issuing tokens</td></tr>
+        <tr><td>Purpose limitation</td><td>Data used only for the stated purpose</td><td>Messages only for communication, not ads/profiling</td></tr>
+        <tr><td>Data minimisation</td><td>Collect only what you need</td><td>No phone number or email required (the whole point!)</td></tr>
+    </table>
+
+    <h2>The Seven Obligations</h2>
+    <p>The DPDP Act imposes these obligations on Data Fiduciaries (you). Here's how Token implements each:</p>
+
+    <h3>1. Lawful Purpose &amp; Consent</h3>
+    <p>You must have a lawful basis for processing personal data, and consent must be:</p>
+    <ul>
+        <li><strong>Free</strong> &mdash; not coerced</li>
+        <li><strong>Specific</strong> &mdash; for a stated purpose</li>
+        <li><strong>Informed</strong> &mdash; the user knows what they're consenting to</li>
+        <li><strong>Unconditional</strong> &mdash; not bundled with other terms</li>
+    </ul>
+
+    <pre><code>// Implementation: clear consent screen during registration
+// NOT a 50-page terms of service with a single "I agree" checkbox
+
+// api/src/routes/auth.ts — registration endpoint
+const registrationSchema = z.object({
+  username: z.string().min(3).max(30),
+  password: z.string().min(8),
+  consent: z.object({
+    dataProcessing: z.literal(true),    // "I consent to Token storing my messages"
+    pushNotifications: z.boolean(),      // Optional — separate consent
+    analytics: z.boolean(),              // Optional — separate consent
+    consentedAt: z.string().datetime(),  // When they consented (client timestamp)
+  }),
+});
+
+// Store consent records — you need proof of what the user consented to
+// api/migrations/015_consent_records.sql
+/*
+CREATE TABLE consent_records (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id),
+  purpose VARCHAR(50) NOT NULL,        -- 'data_processing', 'push', 'analytics'
+  granted BOOLEAN NOT NULL,
+  granted_at TIMESTAMPTZ NOT NULL,
+  withdrawn_at TIMESTAMPTZ,
+  app_version VARCHAR(20),             -- Which version of the consent text
+  UNIQUE(user_id, purpose)             -- One record per purpose per user
+);
+*/</code></pre>
+
+    <h3>2. Right to Withdraw Consent</h3>
+    <p>The user can withdraw consent at any time, and withdrawal must be as easy as granting it.</p>
+
+    <pre><code>// api/src/routes/consent.ts
+router.delete('/consent/:purpose', authenticateJWT, async (req, res) => {
+  const { purpose } = req.params;
+  const userId = req.user.id;
+
+  // Record withdrawal
+  await db.query(
+    'UPDATE consent_records SET withdrawn_at = NOW() WHERE user_id = $1 AND purpose = $2',
+    [userId, purpose]
+  );
+
+  // Act on withdrawal immediately
+  if (purpose === 'push_notifications') {
+    // Delete push token — stop sending notifications
+    await db.query('UPDATE users SET push_token = NULL WHERE id = $1', [userId]);
+  }
+
+  if (purpose === 'data_processing') {
+    // This is withdrawing ALL consent — equivalent to account deletion request
+    // Queue account deletion (must complete within 72 hours per DPDP)
+    await db.query(
+      'INSERT INTO deletion_queue (user_id, requested_at, deadline) VALUES ($1, NOW(), NOW() + interval \'72 hours\')',
+      [userId]
+    );
+  }
+
+  req.log.info({ userId, purpose }, 'consent withdrawn');
+  res.json({ withdrawn: true, effectiveImmediately: true });
+});</code></pre>
+
+    <h3>3. Right to Access (Data Portability)</h3>
+    <p>The user can request a copy of all their personal data in a machine-readable format.</p>
+
+    <pre><code>// api/src/routes/dataExport.ts
+router.get('/me/data-export', authenticateJWT, async (req, res) => {
+  const userId = req.user.id;
+
+  // Gather all user data
+  const [user, tokens, messages, consents, redemptions] = await Promise.all([
+    db.query('SELECT id, username, created_at FROM users WHERE id = $1', [userId]),
+    db.query('SELECT id, code, label, created_at, revoked_at FROM tokens WHERE user_id = $1', [userId]),
+    db.query('SELECT id, conversation_id, content, created_at FROM messages WHERE sender_id = $1', [userId]),
+    db.query('SELECT purpose, granted, granted_at, withdrawn_at FROM consent_records WHERE user_id = $1', [userId]),
+    db.query('SELECT id, token_id, redeemed_at, ip_address FROM redemption_events WHERE token_id IN (SELECT id FROM tokens WHERE user_id = $1)', [userId]),
+  ]);
+
+  const exportData = {
+    exportedAt: new Date().toISOString(),
+    format: 'DPDP-compliant-export-v1',
+    user: user.rows[0],
+    tokens: tokens.rows,
+    messages: messages.rows,
+    consentRecords: consents.rows,
+    redemptionEvents: redemptions.rows,
+  };
+
+  // Return as downloadable JSON
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Content-Disposition', 'attachment; filename="token-data-export.json"');
+  res.json(exportData);
+});</code></pre>
+
+    <h3>4. Right to Correction</h3>
+    <p>Users must be able to correct inaccurate personal data.</p>
+    <pre><code>// For Token, this means:
+// - Change username
+// - Update token labels
+// - Edit access rules
+// All of these are already standard CRUD operations in your API.
+// The legal requirement is that they EXIST and are accessible.</code></pre>
+
+    <h3>5. Right to Erasure (Account Deletion)</h3>
+    <p>The user can request complete deletion of their data. This must be <em>actual</em> deletion,
+    not soft-delete.</p>
+
+    <pre><code>// api/src/routes/account.ts
+router.delete('/me', authenticateJWT, async (req, res) => {
+  const userId = req.user.id;
+
+  req.log.info({ userId }, 'account deletion requested');
+
+  // Start deletion in a transaction
+  await db.query('BEGIN');
+
+  try {
+    // Delete in dependency order (foreign keys)
+    await db.query('DELETE FROM consent_records WHERE user_id = $1', [userId]);
+    await db.query('DELETE FROM redemption_events WHERE token_id IN (SELECT id FROM tokens WHERE user_id = $1)', [userId]);
+    await db.query('DELETE FROM access_rules WHERE token_id IN (SELECT id FROM tokens WHERE user_id = $1)', [userId]);
+    await db.query('DELETE FROM messages WHERE sender_id = $1', [userId]);
+    await db.query('DELETE FROM participants WHERE user_id = $1', [userId]);
+    await db.query('DELETE FROM tokens WHERE user_id = $1', [userId]);
+    await db.query('DELETE FROM users WHERE id = $1', [userId]);
+
+    await db.query('COMMIT');
+
+    req.log.info({ userId }, 'account deleted completely');
+    res.json({ deleted: true });
+  } catch (err) {
+    await db.query('ROLLBACK');
+    req.log.error({ err, userId }, 'account deletion failed');
+    res.status(500).json({ error: 'deletion failed — please contact support' });
+  }
+});
+
+// IMPORTANT: This is HARD deletion. Once done, the data is gone.
+// The only thing you may retain is an anonymised record that an account
+// existed (for audit purposes) — but NO personal data.</code></pre>
+
+    <h3>6. Grievance Redressal</h3>
+    <p>You must provide a mechanism for users to raise data-related complaints and get a response.</p>
+    <pre><code>// Minimum requirement: a contact email or in-app form
+// that reaches a human within a reasonable timeframe.
+
+// For a solo developer, this can be:
+// - An email address displayed in the app's settings: privacy@tokn.app
+// - A simple form that creates a ticket in your issue tracker
+// - The app's "Contact" screen that sends a message to your admin account
+
+// The law requires you to respond within a "reasonable time"
+// (specific timelines will be in the rules, expected 15-30 days)</code></pre>
+
+    <h3>7. Data Breach Notification</h3>
+    <p>If personal data is breached, you must notify the Data Protection Board of India (DPBI)
+    and affected users.</p>
+    <pre><code>// What counts as a breach:
+// - Database dump leaked
+// - Unauthorised access to user accounts
+// - Backup stolen or exposed
+// - Server compromised with data exfiltration
+
+// What to do:
+// 1. Contain the breach (revoke compromised credentials, patch the vulnerability)
+// 2. Assess what data was affected
+// 3. Notify DPBI "without unreasonable delay"
+// 4. Notify affected Data Principals (your users)
+// 5. Document everything (what happened, when, what you did)
+
+// Preparation (do this NOW, not during a breach):
+// - Incident response plan documented
+// - Contact details for DPBI ready
+// - Notification template drafted
+// - Logging comprehensive enough to determine breach scope</code></pre>
+
+    <h2>Token's Natural Compliance Advantage</h2>
+    <p>Token's privacy-first design means you're already mostly compliant:</p>
+
+    <table>
+        <tr><th>DPDP requirement</th><th>Token already does this</th></tr>
+        <tr><td>Data minimisation</td><td>No phone number, no email, no real name required</td></tr>
+        <tr><td>Purpose limitation</td><td>Data used only for communication (no ads, no profiling)</td></tr>
+        <tr><td>Consent</td><td>Every token is an explicit consent grant from the user</td></tr>
+        <tr><td>Right to withdraw</td><td>Token revocation IS consent withdrawal</td></tr>
+        <tr><td>Security safeguards</td><td>End-to-end encrypted (planned), encrypted at rest</td></tr>
+    </table>
+
+    <p><strong>The product IS the compliance mechanism.</strong> A token is a consent artifact &mdash;
+    it represents the user's decision to allow contact, with specific rules, revocable at any time.
+    This is exactly what the DPDP Act envisions.</p>
+
+    <h2>Privacy Policy &mdash; What to Include</h2>
+    <p>Your privacy policy must be in clear language (not legalese) and state:</p>
+
+    <pre><code>// Required sections for Token's privacy policy:
+
+// 1. What data you collect
+//    - Username (chosen by user, need not be real name)
+//    - Password (hashed, never stored in plaintext)
+//    - Messages (content of conversations)
+//    - Token metadata (when created, rules, redemption events)
+//    - Device push tokens (for notifications)
+//    - IP addresses (in server logs, retained 30 days)
+
+// 2. Why you collect it (purpose)
+//    - Account management
+//    - Delivering messages between token issuers and holders
+//    - Push notifications for new messages and calls
+//    - Security (rate limiting, abuse prevention)
+
+// 3. Who you share it with
+//    - No third parties (no ads, no analytics services, no data brokers)
+//    - Expo (only push tokens, for notification delivery)
+//    - VPS provider (data at rest on their hardware)
+
+// 4. How long you retain it
+//    - Account data: until account deletion
+//    - Messages: until account deletion
+//    - Server logs: 30 days
+//    - Backups: 7 days (then overwritten)
+
+// 5. How to exercise your rights
+//    - Export: Settings → Download My Data
+//    - Delete: Settings → Delete Account
+//    - Withdraw consent: Settings → Privacy → toggle each purpose
+//    - Grievance: privacy@tokn.app
+
+// 6. Contact details
+//    - Name of Data Fiduciary
+//    - Email for privacy queries</code></pre>
+
+    <h2>Implementation: Consent UI Flow</h2>
+    <pre><code>// app/src/screens/ConsentScreen.tsx
+// Shown during registration — NOT a wall of text with one checkbox
+
+interface ConsentItem {
+  purpose: string;
+  title: string;
+  description: string;
+  required: boolean;
+}
+
+const CONSENT_ITEMS: ConsentItem[] = [
+  {
+    purpose: 'data_processing',
+    title: 'Store your messages',
+    description: 'Token stores messages between you and token holders so you can see conversation history.',
+    required: true, // Can't use the app without this
+  },
+  {
+    purpose: 'push_notifications',
+    title: 'Send push notifications',
+    description: 'Get notified when someone redeems your token or sends a message. You can disable this later.',
+    required: false,
+  },
+  {
+    purpose: 'analytics',
+    title: 'Anonymous usage analytics',
+    description: 'Help improve Token by sharing anonymous usage patterns (never message content).',
+    required: false,
+  },
+];
+
+// Each item is a separate toggle — granular consent, not all-or-nothing.
+// Required items explain WHY they're required.
+// The user can proceed with only the required consents.</code></pre>
+
+    <h2>Children's Data</h2>
+    <p>The DPDP Act has strict rules about processing children's data (under 18 in India).
+    Token's approach:</p>
+    <pre><code>// Option 1 (simplest): Declare the app is for 18+ users
+// - Add to terms of service
+// - No age verification needed for general-purpose apps (yet)
+// - If you KNOW a user is under 18, you need verifiable parental consent
+
+// Option 2: If you want users under 18:
+// - Implement verifiable parental consent mechanism
+// - Don't serve behavioural tracking or targeted content to them
+// - Don't process their data for any purpose beyond the service itself
+
+// For Token v1: Option 1 is appropriate.
+// A communication privacy app for adults is the simplest path.</code></pre>
+
+    <h2>Cross-Border Data Transfer</h2>
+    <p>If your server is outside India (e.g., Singapore VPS), you're transferring data cross-border.
+    The DPDP Act allows this to countries not blacklisted by the government. Singapore is fine.
+    If the government blacklists a country, you'd need to move your data.</p>
+
+    <pre><code>// Best practice: document where data lives
+// - Primary database: Hetzner Singapore
+// - Backups: [your backup location]
+// - Push notification relay: Expo (US-based)
+// - No other third parties
+
+// If you choose a VPS in India (e.g., Mumbai region on AWS/DigitalOcean),
+// cross-border transfer isn't an issue at all.</code></pre>
+
+    <h2>Playground: Data Export Builder</h2>
+    <div id="playground-1"></div>
+
+    <h2>Exercise: Implement DPDP Compliance</h2>
+    <div id="exercise-1"></div>
+
+    <h2>Quiz</h2>
+    <div id="lesson-quiz"></div>
+
+    <div class="lesson-nav">
+        <a href="./0001-security-hardening.html">&larr; Previous: Security Hardening</a>
+        <span class="disabled">Next module: A11 Polish &amp; Publish &rarr;</span>
+    </div>
+
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+    <script>
+        createPlayground("playground-1", `// Simulate a DPDP-compliant data export
+
+function generateDataExport(userId) {
+  // Simulated user data
+  const exportData = {
+    exportedAt: "2024-03-15T10:30:00.000Z",
+    format: "DPDP-compliant-export-v1",
+    dataFiduciary: "Token App",
+    dataPrincipal: { id: userId },
+
+    user: {
+      id: userId,
+      username: "ashish_dev",
+      createdAt: "2024-01-15T08:00:00Z",
+    },
+
+    tokens: [
+      { id: "t1", code: "MERC-8GH2-LP4X", label: "Delivery service", createdAt: "2024-02-01", revokedAt: null },
+      { id: "t2", code: "XPRD-4KL9-MN2T", label: "Old gym", createdAt: "2024-01-20", revokedAt: "2024-03-01" },
+    ],
+
+    messages: [
+      { id: "m1", conversationId: "c1", content: "Your package is ready", createdAt: "2024-03-10" },
+      { id: "m2", conversationId: "c1", content: "Thanks, will pick up today", createdAt: "2024-03-10" },
+    ],
+
+    consentRecords: [
+      { purpose: "data_processing", granted: true, grantedAt: "2024-01-15", withdrawnAt: null },
+      { purpose: "push_notifications", granted: true, grantedAt: "2024-01-15", withdrawnAt: null },
+      { purpose: "analytics", granted: false, grantedAt: "2024-01-15", withdrawnAt: null },
+    ],
+
+    redemptionEvents: [
+      { tokenId: "t1", redeemedAt: "2024-02-05", ipAddress: "[redacted]" },
+    ],
+  };
+
+  return exportData;
+}
+
+const exportData = generateDataExport("user-42");
+console.log("=== DPDP Data Export ===");
+console.log("Format: " + exportData.format);
+console.log("Exported at: " + exportData.exportedAt);
+console.log("");
+console.log("User: " + exportData.user.username + " (since " + exportData.user.createdAt + ")");
+console.log("Tokens: " + exportData.tokens.length + " (" + exportData.tokens.filter(t => !t.revokedAt).length + " active)");
+console.log("Messages: " + exportData.messages.length);
+console.log("Consent records: " + exportData.consentRecords.length);
+console.log("Redemption events: " + exportData.redemptionEvents.length);
+console.log("");
+console.log("Consent status:");
+exportData.consentRecords.forEach(c => {
+  console.log("  " + c.purpose + ": " + (c.granted ? "GRANTED" : "DECLINED") + (c.withdrawnAt ? " (withdrawn)" : ""));
+});
+console.log("");
+console.log("Total export size: " + JSON.stringify(exportData).length + " bytes");`);
+
+        createSolution("exercise-1", {
+            exercise: "Implement the DPDP compliance features for Token:\n\n1. Write the SQL migration for a `consent_records` table that tracks granular consent per user per purpose.\n2. Write the consent withdrawal endpoint that immediately acts on the withdrawal (e.g., deletes push tokens if push consent is withdrawn).\n3. Write the data export endpoint that gathers all of a user's personal data into a single JSON response.\n4. Write the account deletion endpoint that performs HARD deletion of all user data in the correct order (respecting foreign key constraints).\n5. Write the consent UI data structure (what the app displays during registration).",
+            hints: [
+                "The consent_records table needs a UNIQUE constraint on (user_id, purpose) — one record per purpose per user.",
+                "For account deletion, delete in reverse dependency order: consent → redemption_events → access_rules → messages → participants → tokens → users.",
+                "The data export should include consent records themselves — the user should see what they consented to.",
+                "Use Promise.all for the export queries — they're independent reads that can run in parallel."
+            ],
+            solution: `-- api/migrations/015_consent_records.sql
+
+CREATE TABLE consent_records (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  purpose VARCHAR(50) NOT NULL,
+  granted BOOLEAN NOT NULL,
+  granted_at TIMESTAMPTZ NOT NULL,
+  withdrawn_at TIMESTAMPTZ,
+  app_version VARCHAR(20),
+  UNIQUE(user_id, purpose)
+);
+
+CREATE INDEX idx_consent_user ON consent_records(user_id);
+
+---
+
+// api/src/routes/consent.ts
+import { Router } from 'express';
+import { authenticateJWT } from '../middleware/auth';
+import { db } from '../db';
+
+const router = Router();
+
+// Grant consent
+router.post('/consent', authenticateJWT, async (req, res) => {
+  const { purpose, granted } = req.body;
+  const userId = req.user.id;
+
+  await db.query(\`
+    INSERT INTO consent_records (user_id, purpose, granted, granted_at, app_version)
+    VALUES ($1, $2, $3, NOW(), $4)
+    ON CONFLICT (user_id, purpose)
+    DO UPDATE SET granted = $3, granted_at = NOW(), withdrawn_at = NULL
+  \`, [userId, purpose, granted, req.headers['x-app-version'] || 'unknown']);
+
+  res.json({ purpose, granted });
+});
+
+// Withdraw consent
+router.delete('/consent/:purpose', authenticateJWT, async (req, res) => {
+  const { purpose } = req.params;
+  const userId = req.user.id;
+
+  await db.query(
+    'UPDATE consent_records SET withdrawn_at = NOW(), granted = false WHERE user_id = $1 AND purpose = $2',
+    [userId, purpose]
+  );
+
+  // Immediate effect
+  if (purpose === 'push_notifications') {
+    await db.query('UPDATE users SET push_token = NULL WHERE id = $1', [userId]);
+  }
+
+  if (purpose === 'data_processing') {
+    // Queue full account deletion
+    await db.query(
+      'INSERT INTO deletion_queue (user_id, requested_at) VALUES ($1, NOW()) ON CONFLICT DO NOTHING',
+      [userId]
+    );
+  }
+
+  req.log.info({ userId, purpose }, 'consent withdrawn');
+  res.json({ withdrawn: true });
+});
+
+export default router;
+
+---
+
+// api/src/routes/dataExport.ts
+router.get('/me/data-export', authenticateJWT, async (req, res) => {
+  const userId = req.user.id;
+
+  const [user, tokens, messages, consents, redemptions] = await Promise.all([
+    db.query('SELECT id, username, created_at FROM users WHERE id = $1', [userId]),
+    db.query('SELECT id, code, label, created_at, revoked_at FROM tokens WHERE user_id = $1 ORDER BY created_at', [userId]),
+    db.query('SELECT id, conversation_id, content, created_at FROM messages WHERE sender_id = $1 ORDER BY created_at', [userId]),
+    db.query('SELECT purpose, granted, granted_at, withdrawn_at FROM consent_records WHERE user_id = $1', [userId]),
+    db.query('SELECT r.id, r.token_id, r.redeemed_at FROM redemption_events r JOIN tokens t ON t.id = r.token_id WHERE t.user_id = $1', [userId]),
+  ]);
+
+  res.setHeader('Content-Disposition', 'attachment; filename="token-data-export.json"');
+  res.json({
+    exportedAt: new Date().toISOString(),
+    format: 'DPDP-compliant-export-v1',
+    user: user.rows[0],
+    tokens: tokens.rows,
+    messages: messages.rows,
+    consentRecords: consents.rows,
+    redemptionEvents: redemptions.rows,
+  });
+});
+
+---
+
+// api/src/routes/account.ts
+router.delete('/me', authenticateJWT, async (req, res) => {
+  const userId = req.user.id;
+
+  await db.query('BEGIN');
+  try {
+    await db.query('DELETE FROM consent_records WHERE user_id = $1', [userId]);
+    await db.query('DELETE FROM redemption_events WHERE token_id IN (SELECT id FROM tokens WHERE user_id = $1)', [userId]);
+    await db.query('DELETE FROM access_rules WHERE token_id IN (SELECT id FROM tokens WHERE user_id = $1)', [userId]);
+    await db.query('DELETE FROM messages WHERE sender_id = $1', [userId]);
+    await db.query('DELETE FROM participants WHERE user_id = $1', [userId]);
+    await db.query('DELETE FROM tokens WHERE user_id = $1', [userId]);
+    await db.query('DELETE FROM users WHERE id = $1', [userId]);
+    await db.query('COMMIT');
+    res.json({ deleted: true });
+  } catch (err) {
+    await db.query('ROLLBACK');
+    res.status(500).json({ error: 'deletion failed' });
+  }
+});`
+        });
+
+        createQuiz("lesson-quiz", [
+            {
+                type: "predict-output",
+                code: "const consent = { purpose: 'push_notifications', granted: true, withdrawnAt: null };\nconst isActive = consent.granted && !consent.withdrawnAt;\nconsole.log(isActive ? 'ACTIVE' : 'WITHDRAWN');",
+                answer: "ACTIVE",
+                explanation: "Consent is active when granted is true AND withdrawnAt is null. Once withdrawn_at is set, the consent is no longer valid regardless of the granted field."
+            },
+            {
+                type: "spot-the-bug",
+                code: "router.delete('/me', auth, async (req, res) => {\n  await db.query('UPDATE users SET deleted = true WHERE id = $1', [req.user.id]);\n  res.json({ deleted: true });\n});",
+                bugLine: 2,
+                options: [
+                    "Line 2 — soft delete doesn't satisfy DPDP right to erasure",
+                    "Line 2 — should use a transaction",
+                    "Line 1 — DELETE method wrong for this operation"
+                ],
+                correct: 0,
+                explanation: "The DPDP Act requires actual erasure, not soft-delete. Setting a 'deleted' flag means the personal data still exists in your database. You must DELETE the rows (or fully anonymise them beyond recovery)."
+            },
+            {
+                type: "which-breaks",
+                question: "Which consent implementation violates the DPDP Act?",
+                variants: [
+                    "Separate toggles for each purpose (messaging, push, analytics) with individual descriptions",
+                    "One checkbox: 'I agree to all terms, privacy policy, and data processing'",
+                    "Required consent for core functionality + optional toggles for extras"
+                ],
+                correct: 1,
+                explanation: "Bundled consent ('agree to everything at once') violates the DPDP requirement that consent be specific and granular. Each purpose needs its own consent, and the user must be able to decline optional processing without losing the service."
+            },
+            {
+                type: "fill-blank",
+                code: "// Data export must include ALL personal data\nconst [user, tokens, messages, consents] = await Promise.___([...queries]);",
+                answer: "all",
+                explanation: "Promise.all runs all queries in parallel and waits for all to complete. Since these are independent SELECT queries for different tables, running them in parallel is faster than sequential queries."
+            },
+            {
+                type: "order-steps",
+                question: "Order the account deletion steps respecting foreign key constraints:",
+                steps: [
+                    "DELETE FROM consent_records WHERE user_id = $1",
+                    "DELETE FROM redemption_events WHERE token_id IN (user's tokens)",
+                    "DELETE FROM access_rules WHERE token_id IN (user's tokens)",
+                    "DELETE FROM tokens WHERE user_id = $1",
+                    "DELETE FROM messages WHERE sender_id = $1",
+                    "DELETE FROM users WHERE id = $1"
+                ],
+                correctOrder: [0, 1, 2, 4, 3, 5],
+                explanation: "You must delete child records before parents (foreign keys prevent otherwise). Users is last because everything references it. Tokens must come after access_rules and redemption_events which reference tokens."
+            }
+        ]);
+    </script>
+</body>
+</html>

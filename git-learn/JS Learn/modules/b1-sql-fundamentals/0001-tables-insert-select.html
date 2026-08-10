@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tables, INSERT, SELECT — B1.1</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">B1 — SQL Fundamentals</a>
+      <span class="sep">›</span>
+      <span class="current">Tables, INSERT, SELECT</span>
+    </nav>
+
+    <h1>Tables, INSERT, SELECT</h1>
+    <div class="lesson-meta">
+      <span>B1 — Lesson 1 of 4</span>
+      <span>~50 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>Every token, user, message, and access rule lives in a PostgreSQL database. When someone redeems a token, it's a SQL query that checks if it exists, whether it's revoked, and what rules apply. You write every query yourself — no ORM hides the database from you. This is where your data lives, and SQL is how you talk to it.</p>
+    </div>
+
+    <h2>What is a relational database?</h2>
+
+    <p>A relational database stores data in <strong>tables</strong> — like spreadsheets with strict rules. Each table has:</p>
+
+    <ul>
+      <li><strong>Columns</strong> — the fields (name, type, constraints)</li>
+      <li><strong>Rows</strong> — the actual data entries</li>
+      <li><strong>Primary key</strong> — a column that uniquely identifies each row</li>
+    </ul>
+
+    <p>PostgreSQL (often called "Postgres") is the database Token uses. It's open source, battle-tested, and handles everything from startups to enterprises.</p>
+
+    <h2>Setting up Postgres locally</h2>
+
+    <pre><code># macOS (via Homebrew)
+brew install postgresql@16
+brew services start postgresql@16
+
+# Windows (download installer from postgresql.org)
+# Or use Docker (covered in B9):
+docker run --name token-db -e POSTGRES_PASSWORD=dev -p 5432:5432 -d postgres:16
+
+# Create a database for Token
+createdb token_dev
+
+# Connect to it
+psql token_dev</code></pre>
+
+    <p>You're now in the <code>psql</code> shell — everything you type here is SQL, sent directly to Postgres.</p>
+
+    <h2>CREATE TABLE</h2>
+
+    <p>Let's create the first table Token needs — users:</p>
+
+    <pre><code>CREATE TABLE users (
+  id          SERIAL PRIMARY KEY,
+  phone_hash  TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  created_at  TIMESTAMP NOT NULL DEFAULT NOW()
+);</code></pre>
+
+    <p>Breaking this down:</p>
+    <ul>
+      <li><code>SERIAL PRIMARY KEY</code> — auto-incrementing integer, unique identifier for each row</li>
+      <li><code>TEXT NOT NULL</code> — text column that can't be empty (null)</li>
+      <li><code>UNIQUE</code> — no two rows can have the same value</li>
+      <li><code>DEFAULT NOW()</code> — if you don't provide a value, use the current timestamp</li>
+    </ul>
+
+    <p>Now the tokens table:</p>
+
+    <pre><code>CREATE TABLE tokens (
+  id          SERIAL PRIMARY KEY,
+  code        TEXT NOT NULL UNIQUE,
+  user_id     INTEGER NOT NULL REFERENCES users(id),
+  issued_to   TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'revoked')),
+  max_uses    INTEGER NOT NULL DEFAULT 0,
+  created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+  revoked_at  TIMESTAMP
+);</code></pre>
+
+    <p>New concepts here:</p>
+    <ul>
+      <li><code>REFERENCES users(id)</code> — a <strong>foreign key</strong>. This token must belong to a real user. Postgres rejects inserts with a non-existent user_id.</li>
+      <li><code>CHECK (status IN (...))</code> — a constraint. Only these three values are allowed. The database enforces this, not your app code.</li>
+      <li><code>revoked_at TIMESTAMP</code> — no NOT NULL, so it can be null (token not yet revoked)</li>
+    </ul>
+
+    <div class="callout success">
+      <div class="callout-title">Why constraints matter</div>
+      <p>A revoked token must <strong>never</strong> be honoured. If that rule lives only in application code, a bug can bypass it. If it's a database constraint, it's physically impossible to violate — the database rejects the invalid state before it's stored. Token's privacy promise depends on this.</p>
+    </div>
+
+    <h2>INSERT — adding data</h2>
+
+    <pre><code>-- Insert a user
+INSERT INTO users (phone_hash, display_name)
+VALUES ('sha256_abc123', 'Ashish');
+
+-- Insert a token (user_id 1 = the user we just created)
+INSERT INTO tokens (code, user_id, issued_to, max_uses)
+VALUES ('MERC-8GH2-LP4X', 1, 'Amazon Delivery', 3);
+
+-- Insert multiple tokens at once
+INSERT INTO tokens (code, user_id, issued_to, max_uses) VALUES
+  ('SHOP-4KN9-RT2M', 1, 'Flipkart', 5),
+  ('RENT-2WX7-JP8N', 1, 'NoBroker Agent', 1);</code></pre>
+
+    <p>Notice: we didn't provide <code>id</code>, <code>status</code>, or <code>created_at</code> — they use their defaults (auto-increment, 'active', NOW()).</p>
+
+    <h2>SELECT — reading data</h2>
+
+    <pre><code>-- Get all tokens
+SELECT * FROM tokens;
+
+-- Get specific columns
+SELECT code, issued_to, status FROM tokens;
+
+-- Filter with WHERE
+SELECT * FROM tokens WHERE status = 'active';
+
+-- Multiple conditions
+SELECT * FROM tokens WHERE status = 'active' AND max_uses > 1;
+
+-- Sort results
+SELECT * FROM tokens ORDER BY created_at DESC;
+
+-- Limit results (pagination preview)
+SELECT * FROM tokens ORDER BY created_at DESC LIMIT 10;</code></pre>
+
+    <h2>WHERE operators</h2>
+
+    <pre><code>-- Equality
+SELECT * FROM tokens WHERE code = 'MERC-8GH2-LP4X';
+
+-- Not equal
+SELECT * FROM tokens WHERE status != 'revoked';
+
+-- Greater/less than (works with numbers and dates)
+SELECT * FROM tokens WHERE max_uses > 3;
+SELECT * FROM tokens WHERE created_at > '2025-01-01';
+
+-- NULL checks (use IS NULL, not = NULL)
+SELECT * FROM tokens WHERE revoked_at IS NULL;      -- not revoked
+SELECT * FROM tokens WHERE revoked_at IS NOT NULL;  -- revoked
+
+-- Pattern matching
+SELECT * FROM tokens WHERE issued_to LIKE '%Delivery%';
+
+-- IN — match any value in a list
+SELECT * FROM tokens WHERE status IN ('active', 'paused');</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">NULL is special</div>
+      <p><code>WHERE revoked_at = NULL</code> does NOT work — it always returns zero rows. NULL represents "unknown", and nothing equals unknown. Always use <code>IS NULL</code> or <code>IS NOT NULL</code>.</p>
+    </div>
+
+    <h2>UPDATE — modifying data</h2>
+
+    <pre><code>-- Revoke a token
+UPDATE tokens
+SET status = 'revoked', revoked_at = NOW()
+WHERE code = 'MERC-8GH2-LP4X';
+
+-- Pause all tokens for a user
+UPDATE tokens
+SET status = 'paused'
+WHERE user_id = 1 AND status = 'active';</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">Always include WHERE</div>
+      <p><code>UPDATE tokens SET status = 'revoked'</code> without a WHERE clause revokes <strong>every token in the table</strong>. Always double-check your WHERE before running an UPDATE or DELETE.</p>
+    </div>
+
+    <h2>DELETE — removing data</h2>
+
+    <pre><code>-- Delete a specific token
+DELETE FROM tokens WHERE code = 'RENT-2WX7-JP8N';
+
+-- Delete all revoked tokens older than 30 days
+DELETE FROM tokens
+WHERE status = 'revoked'
+AND revoked_at < NOW() - INTERVAL '30 days';</code></pre>
+
+    <p>In Token's case, you'll rarely DELETE — you'll revoke (set status) instead. Keeping revoked tokens means you have an audit trail.</p>
+
+    <h2>Counting and aggregating</h2>
+
+    <pre><code>-- How many tokens does a user have?
+SELECT COUNT(*) FROM tokens WHERE user_id = 1;
+
+-- How many active vs revoked?
+SELECT status, COUNT(*) FROM tokens GROUP BY status;
+
+-- Average max_uses across all tokens
+SELECT AVG(max_uses) FROM tokens;</code></pre>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <span class="disabled">← Previous</span>
+      <a href="./0002-joins-relationships.html">Next: Joins &amp; Relationships →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createSolution("exercise-1", {
+      exercise: "Write the SQL to: (1) Create the users and tokens tables as shown above, (2) Insert yourself as a user, (3) Insert 3 tokens with different statuses, (4) Write a query that finds all active tokens with more than 1 allowed use, ordered by newest first, (5) Revoke the oldest token.",
+      hints: [
+        "Use SERIAL PRIMARY KEY for auto-incrementing IDs.",
+        "The CHECK constraint on status ensures only valid values can be stored.",
+        "For the revoke: UPDATE ... SET status = 'revoked', revoked_at = NOW() WHERE ..."
+      ],
+      solution: `-- 1. Create tables
+CREATE TABLE users (
+  id          SERIAL PRIMARY KEY,
+  phone_hash  TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  created_at  TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE tokens (
+  id          SERIAL PRIMARY KEY,
+  code        TEXT NOT NULL UNIQUE,
+  user_id     INTEGER NOT NULL REFERENCES users(id),
+  issued_to   TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'revoked')),
+  max_uses    INTEGER NOT NULL DEFAULT 0,
+  created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+  revoked_at  TIMESTAMP
+);
+
+-- 2. Insert a user
+INSERT INTO users (phone_hash, display_name)
+VALUES ('sha256_myphone', 'Ashish');
+
+-- 3. Insert 3 tokens (user_id = 1)
+INSERT INTO tokens (code, user_id, issued_to, max_uses, status) VALUES
+  ('MERC-8GH2-LP4X', 1, 'Amazon Delivery', 3, 'active'),
+  ('SHOP-4KN9-RT2M', 1, 'Flipkart Returns', 5, 'active'),
+  ('OLD1-AAAA-BBBB', 1, 'Old Service', 1, 'paused');
+
+-- 4. Find active tokens with max_uses > 1, newest first
+SELECT code, issued_to, max_uses, created_at
+FROM tokens
+WHERE status = 'active' AND max_uses > 1
+ORDER BY created_at DESC;
+
+-- 5. Revoke the oldest token
+UPDATE tokens
+SET status = 'revoked', revoked_at = NOW()
+WHERE id = (SELECT id FROM tokens ORDER BY created_at ASC LIMIT 1);`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "What does this query return?",
+        code: "SELECT COUNT(*) FROM tokens WHERE revoked_at = NULL;",
+        answer: "0",
+        explanation: "This ALWAYS returns 0, regardless of how many tokens exist. NULL can't be compared with =. You must use IS NULL. This is one of SQL's most common gotchas."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's dangerous about this SQL?",
+        code: "UPDATE tokens SET status = 'revoked', revoked_at = NOW();",
+        options: [
+          "NOW() is not a valid function",
+          "You can't SET two columns at once",
+          "There's no WHERE clause — this revokes EVERY token in the table",
+          "status should be an integer, not text"
+        ],
+        correct: 2,
+        explanation: "Without WHERE, UPDATE affects every row. This would revoke every user's every token — catastrophic for a privacy app. Always include a WHERE clause on UPDATE and DELETE."
+      },
+      {
+        type: "fill-blank",
+        question: "Ensure the status column only accepts valid values:",
+        code: "status TEXT NOT NULL DEFAULT 'active' ___ (status IN ('active', 'paused', 'revoked'))",
+        answer: "CHECK",
+        explanation: "CHECK constraints enforce business rules at the database level. Even if your application code has a bug, the database rejects invalid values. For Token, this means a revoked token can never accidentally become 'active' via a bad UPDATE."
+      },
+      {
+        question: "Why does Token use REFERENCES users(id) on the tokens table?",
+        options: [
+          "It makes queries faster",
+          "It's a foreign key — ensures every token belongs to a real user that exists",
+          "It automatically deletes tokens when a user is deleted",
+          "It's required by PostgreSQL for all INTEGER columns"
+        ],
+        correct: 1,
+        explanation: "A foreign key constraint means you can't insert a token with user_id = 999 if no user with id 999 exists. The database guarantees referential integrity — orphaned tokens are impossible."
+      },
+      {
+        type: "order-steps",
+        question: "Put these SQL operations in the correct order for setting up Token's database:",
+        steps: ["CREATE TABLE users", "CREATE TABLE tokens (with REFERENCES users)", "INSERT INTO users", "INSERT INTO tokens"],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "Tables with foreign keys must be created AFTER the table they reference. And you must insert a user before inserting tokens that reference that user — the foreign key constraint enforces this order."
+      }
+    ]);
+  </script>
+</body>
+</html>

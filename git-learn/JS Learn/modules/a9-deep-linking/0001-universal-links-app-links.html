@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Universal Links &amp; App Links — A9.1</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A9 — Deep Linking &amp; Routing</a>
+      <span class="sep">›</span>
+      <span class="current">Universal Links &amp; App Links</span>
+    </nav>
+
+    <h1>Universal Links &amp; App Links</h1>
+    <div class="lesson-meta">
+      <span>A9 — Lesson 1 of 2</span>
+      <span>~45 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p><code>tokn.app/t/CODE</code> must open the mobile app if installed, or fall back to the web page if not. This seamless routing is done via Universal Links (iOS) and App Links (Android) — OS-level features that associate your domain with your app. Without this, holders always land on the web page, even if they have the app installed.</p>
+    </div>
+
+    <h2>How the OS decides where to send a link</h2>
+
+    <p>When a user taps a <code>tokn.app/t/MERC-8GH2-LP4X</code> link (in a message, email, or anywhere), the operating system checks:</p>
+
+    <ol>
+      <li><strong>Is there an app installed that claims this domain?</strong></li>
+      <li><strong>Does the domain confirm that claim?</strong> (via a verification file hosted on the domain)</li>
+      <li>If both yes: open the app directly. If no: open the browser.</li>
+    </ol>
+
+    <p>The key insight: the <em>domain</em> must confirm the association, not just the app. This prevents malicious apps from hijacking your links.</p>
+
+    <h2>iOS — Apple App Site Association (AASA)</h2>
+
+    <p>Apple requires a JSON file at <code>https://tokn.app/.well-known/apple-app-site-association</code>:</p>
+
+    <pre><code>// .well-known/apple-app-site-association
+// NO file extension — it's served as application/json
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appIDs": ["TEAM_ID.app.tokn.mobile"],
+        "components": [
+          {
+            "/": "/t/*",
+            "comment": "Token redemption links"
+          }
+        ]
+      }
+    ]
+  }
+}</code></pre>
+
+    <p>Key points:</p>
+    <ul>
+      <li><code>appIDs</code> uses format: <code>TEAM_ID.bundleIdentifier</code></li>
+      <li><code>TEAM_ID</code> comes from your Apple Developer account</li>
+      <li><code>"apps": []</code> must be present and empty (legacy requirement)</li>
+      <li>The <code>components</code> array uses pattern matching — <code>/t/*</code> matches any token code</li>
+      <li>File must be served over HTTPS with <code>Content-Type: application/json</code></li>
+      <li>No redirects allowed — Apple fetches this directly</li>
+    </ul>
+
+    <div class="callout warning">
+      <div class="callout-title">Critical detail</div>
+      <p>Apple caches the AASA file. It is NOT fetched every time a link is tapped. iOS checks it when the app is installed or updated. Changes can take hours or days to propagate. Test thoroughly before shipping.</p>
+    </div>
+
+    <h2>Android — Digital Asset Links (assetlinks.json)</h2>
+
+    <p>Android uses a similar file at <code>https://tokn.app/.well-known/assetlinks.json</code>:</p>
+
+    <pre><code>// .well-known/assetlinks.json
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "app.tokn.mobile",
+      "sha256_cert_fingerprints": [
+        "14:6D:E9:83:C5:73:06:50:D8:EE:B9:95:2F:34:FC:64:16:A0:83:42:E6:1D:BE:A8:8A:04:96:B2:3F:CF:44:E5"
+      ]
+    }
+  }
+]</code></pre>
+
+    <p>Key differences from iOS:</p>
+    <ul>
+      <li>The file IS named with a <code>.json</code> extension</li>
+      <li>You need the SHA-256 fingerprint of your app's signing certificate</li>
+      <li><code>package_name</code> matches what's in your <code>app.json</code></li>
+      <li>For debug builds, use the debug keystore fingerprint. For production, use the upload key fingerprint from Play Console.</li>
+    </ul>
+
+    <h3>Getting your SHA-256 fingerprint</h3>
+
+    <pre><code># For EAS-managed builds (production)
+eas credentials --platform android
+
+# For local debug keystore
+keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android
+
+# Look for the SHA256 line:
+# SHA256: 14:6D:E9:83:C5:73:06:50:...</code></pre>
+
+    <h2>Hosting the verification files</h2>
+
+    <p>Both files live in the <code>.well-known/</code> directory of your domain. In the Token project, these are served by the <code>web/</code> container (Vite + React) since it handles <code>tokn.app</code>:</p>
+
+    <pre><code>// In web/public/.well-known/apple-app-site-association
+// (Vite serves files from public/ as-is at the root path)
+
+// In web/public/.well-known/assetlinks.json
+// Same — Vite's public/ folder maps to the root
+
+// Directory structure:
+web/
+  public/
+    .well-known/
+      apple-app-site-association    // no extension!
+      assetlinks.json</code></pre>
+
+    <p>Vite serves everything in <code>public/</code> at the domain root, so <code>public/.well-known/assetlinks.json</code> becomes <code>https://tokn.app/.well-known/assetlinks.json</code>.</p>
+
+    <div class="callout warning">
+      <div class="callout-title">AASA content type</div>
+      <p>The AASA file has no extension, so your server might not set the right content type. Ensure your hosting (Coolify/nginx) serves it as <code>application/json</code>. In Vite you may need a plugin or a Coolify nginx config block.</p>
+    </div>
+
+    <h2>Expo linking configuration</h2>
+
+    <p>Expo needs to know about these associations in <code>app.config.js</code>:</p>
+
+    <pre><code>// app/app.config.js
+export default {
+  expo: {
+    name: "Token",
+    slug: "token",
+    scheme: "tokn",  // for tokn:// custom scheme (fallback)
+    ios: {
+      bundleIdentifier: "app.tokn.mobile",
+      associatedDomains: ["applinks:tokn.app"],
+      // This tells iOS: "check tokn.app for an AASA file"
+    },
+    android: {
+      package: "app.tokn.mobile",
+      intentFilters: [
+        {
+          action: "VIEW",
+          autoVerify: true,  // triggers assetlinks.json check
+          data: [
+            {
+              scheme: "https",
+              host: "tokn.app",
+              pathPrefix: "/t/"
+            }
+          ],
+          category: ["BROWSABLE", "DEFAULT"]
+        }
+      ],
+    },
+  },
+};</code></pre>
+
+    <p>Key config explained:</p>
+    <ul>
+      <li><code>scheme: "tokn"</code> — registers a custom URL scheme (<code>tokn://</code>) as a fallback for development</li>
+      <li><code>associatedDomains</code> — iOS reads this during install to know which domains to check</li>
+      <li><code>autoVerify: true</code> — tells Android to fetch and verify <code>assetlinks.json</code> at install time</li>
+      <li><code>pathPrefix: "/t/"</code> — only claim the redemption path, not the entire domain</li>
+    </ul>
+
+    <h2>The full flow — what happens when a link is tapped</h2>
+
+    <pre><code>// User taps: https://tokn.app/t/MERC-8GH2-LP4X
+
+// iOS flow:
+// 1. iOS checks: is tokn.app in any installed app's associatedDomains?
+// 2. Yes — iOS already cached the AASA from install time
+// 3. AASA says /t/* belongs to TEAM_ID.app.tokn.mobile
+// 4. That app IS installed → open it, pass the full URL
+// 5. App receives: "https://tokn.app/t/MERC-8GH2-LP4X"
+
+// Android flow:
+// 1. Android checks: does any app have an intent filter matching this URL?
+// 2. Yes — app.tokn.mobile has autoVerify:true for https://tokn.app/t/*
+// 3. Android already verified assetlinks.json at install time
+// 4. App IS installed → open it, pass the URL as an intent
+// 5. App receives the URL via the Linking API
+
+// Not installed flow (both platforms):
+// 1. OS finds no app claiming the domain
+// 2. Falls through to the browser
+// 3. Browser loads https://tokn.app/t/MERC-8GH2-LP4X
+// 4. The web/ app renders the redemption page (built in A8)</code></pre>
+
+    <h2>Testing deep links</h2>
+
+    <p>You cannot test Universal Links by typing in Safari's address bar. The link must be tapped from outside the browser:</p>
+
+    <pre><code># Android — simulate a link tap via adb
+adb shell am start -a android.intent.action.VIEW \
+  -d "https://tokn.app/t/TEST-CODE-1234" \
+  app.tokn.mobile
+
+# iOS Simulator — use xcrun
+xcrun simctl openurl booted "https://tokn.app/t/TEST-CODE-1234"
+
+# Expo development — use uri-scheme
+npx uri-scheme open "https://tokn.app/t/TEST-CODE-1234" --android
+npx uri-scheme open "https://tokn.app/t/TEST-CODE-1234" --ios
+
+# Custom scheme (development only)
+npx uri-scheme open "tokn://t/TEST-CODE-1234" --android</code></pre>
+
+    <div class="callout">
+      <div class="callout-title">Development vs Production</div>
+      <p>During development, Universal Links and App Links won't work because your domain verification files aren't served from the real domain. Use the custom scheme (<code>tokn://</code>) for local testing. Universal/App Links only work with a real HTTPS domain and a production build.</p>
+    </div>
+
+    <h2>Common pitfalls</h2>
+
+    <ul>
+      <li><strong>AASA not updating</strong> — Apple caches aggressively. Use Apple's <a href="https://search.developer.apple.com/appsearch-validation-tool/">validation tool</a> to check. On-device, delete and reinstall the app.</li>
+      <li><strong>Wrong fingerprint</strong> — If you use EAS Build, the signing key is different from your local debug keystore. Use <code>eas credentials</code> to get the right one.</li>
+      <li><strong>Redirect on .well-known</strong> — Neither Apple nor Google follows redirects to these files. They must be served directly at the path.</li>
+      <li><strong>Missing autoVerify</strong> — Without it, Android shows a disambiguation dialog instead of opening your app directly.</li>
+      <li><strong>Claiming too much</strong> — Only claim paths your app handles (<code>/t/</code>). Don't claim the entire domain or the web page won't load for other routes.</li>
+    </ul>
+
+    <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./README.html">← Module overview</a>
+      <a href="./0002-in-app-deep-link-handling.html">Next: In-App Deep Link Handling →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// Simulating the OS link routing decision
+function routeLink(url, appInstalled, domainVerified) {
+  const parsed = new URL(url);
+  const path = parsed.pathname;
+
+  console.log("Link tapped:", url);
+  console.log("Path:", path);
+  console.log("App installed:", appInstalled);
+  console.log("Domain verified:", domainVerified);
+
+  if (appInstalled && domainVerified) {
+    console.log("-> OPEN APP with URL:", url);
+    // Extract token code from /t/XXXX-XXXX-XXXX
+    const tokenCode = path.replace("/t/", "");
+    console.log("-> Token code:", tokenCode);
+  } else {
+    console.log("-> OPEN BROWSER (web fallback)");
+    console.log("-> Web app renders redemption page");
+  }
+}
+
+// Scenario 1: app installed
+routeLink("https://tokn.app/t/MERC-8GH2-LP4X", true, true);
+console.log("---");
+
+// Scenario 2: app NOT installed
+routeLink("https://tokn.app/t/MERC-8GH2-LP4X", false, true);
+console.log("---");
+
+// Scenario 3: domain not verified (broken config)
+routeLink("https://tokn.app/t/MERC-8GH2-LP4X", true, false);`);
+
+    createSolution("exercise-1", {
+      exercise: "Create the complete deep linking setup for Token: (1) Write the apple-app-site-association file claiming /t/* paths, (2) Write the assetlinks.json file with a placeholder fingerprint, (3) Write the Expo app.config.js section that registers both iOS and Android for these URLs. Place the verification files in the correct directory structure for your web/ Vite project.",
+      hints: [
+        "AASA goes in web/public/.well-known/apple-app-site-association (no file extension).",
+        "The appID format is TEAM_ID.bundleIdentifier — use a placeholder like ABCDE12345.app.tokn.mobile.",
+        "For Android intent filters, autoVerify:true is what triggers automatic verification."
+      ],
+      solution: `// File: web/public/.well-known/apple-app-site-association
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appIDs": ["ABCDE12345.app.tokn.mobile"],
+        "components": [
+          {
+            "/": "/t/*",
+            "comment": "Token redemption deep links"
+          }
+        ]
+      }
+    ]
+  }
+}
+
+// File: web/public/.well-known/assetlinks.json
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "app.tokn.mobile",
+      "sha256_cert_fingerprints": [
+        "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
+      ]
+    }
+  }
+]
+
+// File: app/app.config.js
+export default {
+  expo: {
+    name: "Token",
+    slug: "token",
+    scheme: "tokn",
+    ios: {
+      bundleIdentifier: "app.tokn.mobile",
+      associatedDomains: ["applinks:tokn.app"],
+    },
+    android: {
+      package: "app.tokn.mobile",
+      intentFilters: [
+        {
+          action: "VIEW",
+          autoVerify: true,
+          data: [
+            {
+              scheme: "https",
+              host: "tokn.app",
+              pathPrefix: "/t/"
+            }
+          ],
+          category: ["BROWSABLE", "DEFAULT"]
+        }
+      ],
+    },
+    plugins: ["expo-linking"],
+  },
+};`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "What does iOS do when a user taps a tokn.app/t/CODE link but the AASA file returns a 404?",
+        code: "// User taps: https://tokn.app/t/MERC-8GH2-LP4X\n// .well-known/apple-app-site-association returns 404\n// App IS installed on the device",
+        answer: "Opens in browser (web page)",
+        explanation: "Without a valid AASA file, iOS cannot verify that the app is authorized to handle this domain. Even though the app is installed, the OS falls back to opening the URL in Safari. The domain MUST confirm the association."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this AASA file?",
+        code: "{\n  \"applinks\": {\n    \"details\": [\n      {\n        \"appIDs\": [\"app.tokn.mobile\"],\n        \"components\": [\n          { \"/\": \"/t/*\" }\n        ]\n      }\n    ]\n  }\n}",
+        options: [
+          "components syntax is wrong",
+          "Missing 'apps': [] (required legacy field) AND appID missing TEAM_ID prefix",
+          "applinks should be appLinks (camelCase)",
+          "The file needs a .json extension"
+        ],
+        correct: 1,
+        explanation: "Two issues: (1) 'apps': [] must be present even though it's always empty — it's a legacy requirement Apple never removed. (2) appIDs must be in the format TEAM_ID.bundleIdentifier, not just the bundle ID alone. Without the team ID prefix, iOS cannot match it to your app."
+      },
+      {
+        type: "order-steps",
+        question: "Put the Universal Link verification flow in correct order (iOS):",
+        steps: [
+          "User installs app from App Store",
+          "iOS reads associatedDomains from the app's entitlements",
+          "iOS fetches .well-known/apple-app-site-association from the domain",
+          "iOS caches the path patterns from the AASA",
+          "User taps a matching link — iOS opens the app directly"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Verification happens at install time, not at link-tap time. iOS fetches and caches the AASA when the app is installed. Later, when a link is tapped, iOS already knows which paths belong to which app — it doesn't re-fetch."
+      },
+      {
+        question: "Why does Token only claim /t/* in its deep link configuration instead of the entire tokn.app domain?",
+        options: [
+          "Apple limits you to one path per app",
+          "Claiming the whole domain would prevent the web page from loading for non-token routes (landing page, privacy policy, etc.)",
+          "You can only deep link to paths with parameters",
+          "It's faster to verify a single path"
+        ],
+        correct: 1,
+        explanation: "If you claim the entire domain, every link to tokn.app opens the app — including the landing page, docs, or privacy policy. Users who want the website would be forced into the app. Claim only the paths your app actually handles."
+      },
+      {
+        type: "fill-blank",
+        question: "In Expo's app.config.js, the Android intent filter property that triggers automatic assetlinks.json verification is:",
+        code: "intentFilters: [{\n  action: \"VIEW\",\n  ___: true,\n  data: [{ scheme: \"https\", host: \"tokn.app\", pathPrefix: \"/t/\" }],\n  category: [\"BROWSABLE\", \"DEFAULT\"]\n}]",
+        answer: "autoVerify",
+        explanation: "autoVerify: true tells Android to automatically fetch and verify assetlinks.json when the app is installed. Without it, Android shows a 'choose an app' dialog instead of opening your app directly."
+      }
+    ]);
+  </script>
+</body>
+</html>

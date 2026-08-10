@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Migrations — B2.3</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">B2 — Schema Design</a>
+      <span class="sep">›</span>
+      <span class="current">Migrations</span>
+    </nav>
+
+    <h1>Migrations</h1>
+    <div class="lesson-meta">
+      <span>B2 — Lesson 3 of 3</span>
+      <span>~40 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>Your schema will change — you'll add columns, create tables, modify constraints. In production, you can't just DROP and recreate tables (you'd lose all user data). Migrations let you evolve the schema incrementally: each change is a numbered script that runs in order. Your production database knows which migrations it has already applied and only runs the new ones.</p>
+    </div>
+
+    <h2>What is a migration?</h2>
+
+    <p>A migration is a SQL file that changes the database schema. Migrations are:</p>
+
+    <ul>
+      <li><strong>Numbered sequentially</strong> — 001, 002, 003... so they run in order</li>
+      <li><strong>Immutable once applied</strong> — never edit a migration that's been run in production. Write a new one.</li>
+      <li><strong>Reversible</strong> — each migration has an "up" (apply) and "down" (undo) direction</li>
+      <li><strong>Tracked</strong> — the database records which migrations have run</li>
+    </ul>
+
+    <h2>Token's migration folder structure</h2>
+
+    <pre><code>api/
+  migrations/
+    001_initial_schema.sql
+    002_messaging.sql
+    003_add_token_description.sql
+    ...
+  migrate.js          ← simple script that runs pending migrations</code></pre>
+
+    <h2>Building a simple migration runner</h2>
+
+    <p>You don't need a heavy tool for this. A simple Node script that:</p>
+
+    <ol>
+      <li>Creates a <code>schema_migrations</code> table to track what's been applied</li>
+      <li>Lists all <code>.sql</code> files in the migrations folder</li>
+      <li>Skips the ones already recorded</li>
+      <li>Runs the remaining ones in order</li>
+    </ol>
+
+    <pre><code>// api/migrate.js
+const { Pool } = require('pg');
+const fs = require('fs');
+const path = require('path');
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL || 'postgres://localhost:5432/token_dev',
+});
+
+async function migrate() {
+  const client = await pool.connect();
+
+  try {
+    // Create migrations tracking table if it doesn't exist
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        id SERIAL PRIMARY KEY,
+        filename TEXT NOT NULL UNIQUE,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    // Get already-applied migrations
+    const { rows: applied } = await client.query(
+      'SELECT filename FROM schema_migrations ORDER BY filename'
+    );
+    const appliedSet = new Set(applied.map(r => r.filename));
+
+    // Get all migration files
+    const migrationsDir = path.join(__dirname, 'migrations');
+    const files = fs.readdirSync(migrationsDir)
+      .filter(f => f.endsWith('.sql'))
+      .sort();
+
+    // Run pending migrations
+    for (const file of files) {
+      if (appliedSet.has(file)) {
+        console.log(`  skip: ${file} (already applied)`);
+        continue;
+      }
+
+      console.log(`  applying: ${file}...`);
+      const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
+      await client.query(sql);
+      await client.query(
+        'INSERT INTO schema_migrations (filename) VALUES ($1)',
+        [file]
+      );
+      console.log(`  done: ${file}`);
+    }
+
+    console.log('All migrations applied.');
+  } finally {
+    client.release();
+    await pool.end();
+  }
+}
+
+migrate().catch(err => {
+  console.error('Migration failed:', err);
+  process.exit(1);
+});</code></pre>
+
+    <p>Run it with:</p>
+
+    <pre><code>node api/migrate.js</code></pre>
+
+    <h2>Writing a new migration</h2>
+
+    <p>Say you want to add a <code>description</code> field to tokens. Don't edit <code>001_initial_schema.sql</code> — write a new migration:</p>
+
+    <pre><code>-- api/migrations/003_add_token_description.sql
+
+BEGIN;
+
+ALTER TABLE tokens ADD COLUMN description TEXT;
+
+-- Backfill: set existing tokens' description to their label
+UPDATE tokens SET description = label WHERE description IS NULL;
+
+COMMIT;</code></pre>
+
+    <h3>Rules for writing migrations</h3>
+
+    <ul>
+      <li><strong>One concern per migration</strong> — don't mix "add a column" with "create a new table" unless they're tightly coupled.</li>
+      <li><strong>Wrap in a transaction</strong> — BEGIN/COMMIT ensures the migration either fully applies or not at all.</li>
+      <li><strong>Think about existing data</strong> — if you add NOT NULL, you need a DEFAULT or a backfill.</li>
+      <li><strong>Never delete data implicitly</strong> — dropping a column destroys its data. Be explicit about what's lost.</li>
+    </ul>
+
+    <h2>Common migration patterns</h2>
+
+    <h3>Adding a column</h3>
+
+    <pre><code>-- Safe: nullable column, no default needed
+ALTER TABLE tokens ADD COLUMN description TEXT;
+
+-- Safe: with a default (Postgres fills existing rows instantly)
+ALTER TABLE tokens ADD COLUMN is_public BOOLEAN NOT NULL DEFAULT false;
+
+-- DANGEROUS: NOT NULL without a default on a table with existing rows
+-- ALTER TABLE tokens ADD COLUMN required_field TEXT NOT NULL;
+-- This FAILS if any rows exist! Add a default or backfill first.</code></pre>
+
+    <h3>Removing a column</h3>
+
+    <pre><code>-- api/migrations/004_remove_deprecated_field.sql
+BEGIN;
+
+-- Step 1: remove the column
+ALTER TABLE tokens DROP COLUMN IF EXISTS deprecated_field;
+
+COMMIT;</code></pre>
+
+    <h3>Renaming a column</h3>
+
+    <pre><code>ALTER TABLE tokens RENAME COLUMN issued_to TO label;</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">Rename with caution</div>
+      <p>Renaming a column breaks any running code that references the old name. In production, the safe approach is: (1) add the new column, (2) backfill data from the old column, (3) deploy code that uses the new column, (4) drop the old column in a later migration. For Token at this stage (no production users yet), a simple RENAME is fine.</p>
+    </div>
+
+    <h3>Adding a constraint to existing data</h3>
+
+    <pre><code>-- api/migrations/005_add_status_check.sql
+BEGIN;
+
+-- First, fix any invalid data
+UPDATE tokens SET status = 'active' WHERE status NOT IN ('active', 'paused', 'revoked');
+
+-- Then add the constraint
+ALTER TABLE tokens ADD CONSTRAINT tokens_status_check
+CHECK (status IN ('active', 'paused', 'revoked'));
+
+COMMIT;</code></pre>
+
+    <h3>Creating an index (without locking)</h3>
+
+    <pre><code>-- CONCURRENTLY doesn't lock the table during index creation
+-- (Important on large tables in production)
+CREATE INDEX CONCURRENTLY idx_tokens_expires_at ON tokens(expires_at)
+WHERE expires_at IS NOT NULL;</code></pre>
+
+    <p>Note: CREATE INDEX CONCURRENTLY can't run inside a transaction (BEGIN/COMMIT). It's one of the few cases where you skip the transaction wrapper.</p>
+
+    <h2>Down migrations (rollback)</h2>
+
+    <p>A "down" migration undoes the "up". For simple projects, you can keep them in the same file or a separate folder:</p>
+
+    <pre><code>-- api/migrations/003_add_token_description.sql
+
+-- UP
+ALTER TABLE tokens ADD COLUMN description TEXT;
+
+-- DOWN (in case you need to roll back)
+-- ALTER TABLE tokens DROP COLUMN description;</code></pre>
+
+    <p>For Token, keep the DOWN as a comment. You'll rarely need it in development, and in production you'd write a new migration to undo changes (going forward, not backward).</p>
+
+    <h2>Add the migration script to package.json</h2>
+
+    <pre><code>{
+  "scripts": {
+    "migrate": "node api/migrate.js",
+    "migrate:fresh": "dropdb token_dev && createdb token_dev && node api/migrate.js"
+  }
+}</code></pre>
+
+    <p><code>npm run migrate</code> applies pending migrations. <code>npm run migrate:fresh</code> rebuilds from scratch (development only — never in production).</p>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0002-messaging-schema.html">← Previous: Messaging Schema</a>
+      <span class="disabled">Next module: B3 Node &amp; HTTP Server →</span>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createSolution("exercise-1", {
+      exercise: "Set up Token's migration system: (1) Create the api/migrations/ folder structure, (2) Write migrate.js (the runner script), (3) Move your schema into 001_initial_schema.sql and 002_messaging.sql, (4) Write a third migration (003_add_token_notes.sql) that adds a 'notes' TEXT column to the tokens table, (5) Run the migration system and verify all three applied correctly.",
+      hints: [
+        "The migrate.js script needs the 'pg' package — run npm install pg in the api/ folder.",
+        "Set DATABASE_URL in a .env file or pass it directly: DATABASE_URL=postgres://localhost:5432/token_dev node api/migrate.js",
+        "After running, check: SELECT * FROM schema_migrations; should show all three files."
+      ],
+      solution: `# Folder structure:
+# api/
+#   migrations/
+#     001_initial_schema.sql  (from B2 lesson 1)
+#     002_messaging.sql       (from B2 lesson 2)
+#     003_add_token_notes.sql (new)
+#   migrate.js
+#   package.json
+
+# --- 003_add_token_notes.sql ---
+# BEGIN;
+# ALTER TABLE tokens ADD COLUMN notes TEXT;
+# COMMENT ON COLUMN tokens.notes IS 'Private notes visible only to the token owner';
+# COMMIT;
+
+# --- Setup and run ---
+cd api
+npm init -y
+npm install pg
+
+# Create the migration files (copy from lessons)
+# Then run:
+DATABASE_URL=postgres://localhost:5432/token_dev node migrate.js
+
+# Expected output:
+#   applying: 001_initial_schema.sql...
+#   done: 001_initial_schema.sql
+#   applying: 002_messaging.sql...
+#   done: 002_messaging.sql
+#   applying: 003_add_token_notes.sql...
+#   done: 003_add_token_notes.sql
+#   All migrations applied.
+
+# Verify:
+psql token_dev -c 'SELECT * FROM schema_migrations;'
+# Should show 3 rows with filenames and timestamps
+
+# Run again — should skip all:
+DATABASE_URL=postgres://localhost:5432/token_dev node migrate.js
+#   skip: 001_initial_schema.sql (already applied)
+#   skip: 002_messaging.sql (already applied)
+#   skip: 003_add_token_notes.sql (already applied)
+#   All migrations applied.`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "You run migrate.js twice in a row. What happens the second time?",
+        code: "node api/migrate.js\n# first run: applies 001, 002, 003\n\nnode api/migrate.js\n# second run: ???",
+        answer: "All three are skipped (already applied). Output: 'All migrations applied.' with no changes.",
+        explanation: "The schema_migrations table records what's been applied. The second run checks the table, finds all files already listed, and skips them. This is why migrations are safe to run repeatedly — they're idempotent."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this migration on a table that already has 10,000 rows?",
+        code: "-- 004_make_label_required.sql\nBEGIN;\nALTER TABLE tokens ALTER COLUMN label SET NOT NULL;\nCOMMIT;",
+        options: [
+          "You can't use ALTER TABLE inside a transaction",
+          "If any existing row has label = NULL, the migration FAILS — you need to backfill first",
+          "NOT NULL doesn't work with ALTER",
+          "SET NOT NULL requires a DEFAULT"
+        ],
+        correct: 1,
+        explanation: "If even one row has label = NULL, adding NOT NULL fails. The safe pattern: first UPDATE tokens SET label = 'Unknown' WHERE label IS NULL, then ALTER COLUMN SET NOT NULL. Always handle existing data before tightening constraints."
+      },
+      {
+        type: "fill-blank",
+        question: "Add a column with a default value so existing rows are automatically filled:",
+        code: "ALTER TABLE tokens ADD COLUMN is_public BOOLEAN NOT NULL ___ false;",
+        answer: "DEFAULT",
+        explanation: "DEFAULT false means: (1) existing rows get the value false immediately, and (2) future INSERTs that don't specify is_public also get false. Without DEFAULT, adding NOT NULL on a non-empty table fails."
+      },
+      {
+        question: "Why should you never edit a migration that's already been applied to production?",
+        options: [
+          "SQL files can't be modified after creation",
+          "The migration runner would try to apply it again and fail (or silently skip the change)",
+          "It corrupts the database",
+          "Git won't allow it"
+        ],
+        correct: 1,
+        explanation: "The runner tracks migrations by filename. If you edit 001.sql after it's been applied, the runner sees '001 already applied' and skips it — your edit never runs. Production still has the old version. Write a NEW migration (004_fix_xyz.sql) instead."
+      },
+      {
+        type: "which-breaks",
+        question: "Which migration approach is dangerous in production?",
+        variants: [
+          "ALTER TABLE tokens ADD COLUMN notes TEXT;",
+          "DROP TABLE tokens;",
+          "ALTER TABLE tokens ADD COLUMN is_public BOOLEAN NOT NULL DEFAULT false;"
+        ],
+        correct: 1,
+        explanation: "DROP TABLE destroys all data in the table permanently. In production with real users, this erases everything. The other two are safe: adding a nullable column or adding a column with a default doesn't affect existing data."
+      }
+    ]);
+  </script>
+</body>
+</html>

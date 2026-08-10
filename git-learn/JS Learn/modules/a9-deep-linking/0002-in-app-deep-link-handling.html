@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>In-App Deep Link Handling — A9.2</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A9 — Deep Linking &amp; Routing</a>
+      <span class="sep">›</span>
+      <span class="current">In-App Deep Link Handling</span>
+    </nav>
+
+    <h1>In-App Deep Link Handling</h1>
+    <div class="lesson-meta">
+      <span>A9 — Lesson 2 of 2</span>
+      <span>~50 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>When the app opens from a <code>tokn.app/t/CODE</code> link, it needs to parse the URL, extract the token code, and navigate directly to the redemption screen — not just open to the home screen. The user who tapped that link expects to land on that specific token immediately.</p>
+    </div>
+
+    <h2>Two scenarios: cold start vs warm</h2>
+
+    <p>When a deep link opens your app, one of two things is happening:</p>
+
+    <ul>
+      <li><strong>Cold start</strong> — the app was NOT running. The OS launches it fresh and passes the URL. You get it from <code>Linking.getInitialURL()</code>.</li>
+      <li><strong>Warm start</strong> — the app was already running (backgrounded). The OS brings it to the foreground and fires a URL event. You get it from the <code>Linking.addEventListener('url', ...)</code> listener.</li>
+    </ul>
+
+    <p>You must handle BOTH. If you only handle warm start, cold-start users will land on the home screen. If you only handle cold start, background users won't navigate when they tap a second link.</p>
+
+    <h2>Expo Linking API basics</h2>
+
+    <pre><code>import * as Linking from 'expo-linking';
+
+// Cold start — get the URL that launched the app
+const initialUrl = await Linking.getInitialURL();
+// Returns string | null
+// null means the app was opened normally (from icon)
+
+// Warm start — listen for new URLs while app is running
+const subscription = Linking.addEventListener('url', (event) => {
+  // event.url is the full URL string
+  handleDeepLink(event.url);
+});
+
+// Clean up when component unmounts
+subscription.remove();</code></pre>
+
+    <h2>Parsing the URL to extract the token code</h2>
+
+    <p>The URL will be either <code>https://tokn.app/t/MERC-8GH2-LP4X</code> (Universal Link) or <code>tokn://t/MERC-8GH2-LP4X</code> (custom scheme in development):</p>
+
+    <pre><code>import * as Linking from 'expo-linking';
+
+function parseTokenUrl(url: string): string | null {
+  // Linking.parse handles both https:// and custom scheme://
+  const parsed = Linking.parse(url);
+  // parsed = { scheme: 'https', hostname: 'tokn.app', path: 't/MERC-8GH2-LP4X', ... }
+  // or parsed = { scheme: 'tokn', hostname: null, path: 't/MERC-8GH2-LP4X', ... }
+
+  // Extract token code from the path
+  if (parsed.path?.startsWith('t/')) {
+    const tokenCode = parsed.path.replace('t/', '');
+    return tokenCode || null;
+  }
+
+  return null;
+}
+
+// Usage:
+parseTokenUrl('https://tokn.app/t/MERC-8GH2-LP4X');  // 'MERC-8GH2-LP4X'
+parseTokenUrl('tokn://t/MERC-8GH2-LP4X');             // 'MERC-8GH2-LP4X'
+parseTokenUrl('https://tokn.app/about');               // null</code></pre>
+
+    <h2>React Navigation deep linking config</h2>
+
+    <p>Instead of manually parsing URLs and calling <code>navigation.navigate()</code>, React Navigation can handle this declaratively via its <code>linking</code> prop:</p>
+
+    <pre><code>// app/src/navigation/linking.ts
+import * as Linking from 'expo-linking';
+
+const prefix = Linking.createURL('/');
+// In dev: "tokn://"
+// In production: handled by Universal/App Links
+
+export const linkingConfig = {
+  prefixes: [
+    'https://tokn.app',
+    'tokn://',        // custom scheme for development
+    prefix,           // Expo development URL
+  ],
+  config: {
+    screens: {
+      // Maps URL paths to screen names in your navigation tree
+      Main: {
+        screens: {
+          Tokens: {
+            screens: {
+              TokenRedeem: 't/:code',
+              // URL /t/MERC-8GH2-LP4X → TokenRedeem screen with params.code = "MERC-8GH2-LP4X"
+            },
+          },
+        },
+      },
+      // Auth screens (no deep linking needed)
+      Login: 'login',
+    },
+  },
+};</code></pre>
+
+    <p>Then apply it to your NavigationContainer:</p>
+
+    <pre><code>// app/src/navigation/RootNavigator.tsx
+import { NavigationContainer } from '@react-navigation/native';
+import { linkingConfig } from './linking';
+
+export function RootNavigator() {
+  return (
+    &lt;NavigationContainer linking={linkingConfig}&gt;
+      {/* Your stack/tab navigators */}
+    &lt;/NavigationContainer&gt;
+  );
+}</code></pre>
+
+    <p>With this config, React Navigation automatically:</p>
+    <ul>
+      <li>Calls <code>Linking.getInitialURL()</code> on cold start</li>
+      <li>Subscribes to <code>Linking.addEventListener</code> for warm start</li>
+      <li>Parses the URL using your <code>config.screens</code> mapping</li>
+      <li>Navigates to the matching screen with the extracted params</li>
+    </ul>
+
+    <h2>Screen params from deep links</h2>
+
+    <p>The <code>:code</code> in <code>'t/:code'</code> becomes a route param:</p>
+
+    <pre><code>// app/src/screens/TokenRedeemScreen.tsx
+import { useRoute } from '@react-navigation/native';
+
+type TokenRedeemParams = {
+  code: string;  // from the URL: /t/:code
+};
+
+export function TokenRedeemScreen() {
+  const route = useRoute();
+  const { code } = route.params as TokenRedeemParams;
+
+  // code = "MERC-8GH2-LP4X" (extracted from the URL automatically)
+
+  // Now fetch the token details from the API
+  const [token, setToken] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    async function loadToken() {
+      try {
+        const result = await api.tokens.getByCode(code);
+        setToken(result);
+      } catch (err) {
+        setError(err.message);
+      }
+    }
+    loadToken();
+  }, [code]);
+
+  if (error) return &lt;TokenError code={code} message={error} /&gt;;
+  if (!token) return &lt;LoadingSpinner /&gt;;
+  return &lt;TokenRedemption token={token} /&gt;;
+}</code></pre>
+
+    <h2>Handling invalid and expired tokens</h2>
+
+    <p>A deep link might carry a token code that is invalid, expired, or revoked. You need graceful error handling:</p>
+
+    <pre><code>// app/src/screens/TokenRedeemScreen.tsx
+function TokenError({ code, message }: { code: string; message: string }) {
+  return (
+    &lt;View style={styles.errorContainer}&gt;
+      &lt;Text style={styles.errorTitle}&gt;Token unavailable&lt;/Text&gt;
+      &lt;Text style={styles.errorCode}&gt;{code}&lt;/Text&gt;
+      &lt;Text style={styles.errorMessage}&gt;{message}&lt;/Text&gt;
+      &lt;TouchableOpacity onPress={() =&gt; navigation.navigate('Main')}&gt;
+        &lt;Text&gt;Go to home screen&lt;/Text&gt;
+      &lt;/TouchableOpacity&gt;
+    &lt;/View&gt;
+  );
+}
+
+// API responses to handle:
+// 404 — token code doesn't exist
+// 410 — token was revoked (Gone)
+// 403 — token has reached max uses</code></pre>
+
+    <h2>Auth gate for deep links</h2>
+
+    <p>What if the user is not logged in when the deep link opens? The token redemption screen requires authentication. You need to:</p>
+
+    <ol>
+      <li>Detect that auth is needed</li>
+      <li>Save the intended deep link destination</li>
+      <li>Show login/register</li>
+      <li>After auth completes, navigate to the saved destination</li>
+    </ol>
+
+    <pre><code>// app/src/navigation/RootNavigator.tsx
+import { useAuth } from '../hooks/useAuth';
+
+export function RootNavigator() {
+  const { isAuthenticated, isLoading } = useAuth();
+  const [pendingDeepLink, setPendingDeepLink] = useState&lt;string | null&gt;(null);
+
+  const linkingConfig = {
+    prefixes: ['https://tokn.app', 'tokn://'],
+    config: { /* ... */ },
+    // Custom getInitialURL to intercept when not authed
+    async getInitialURL() {
+      const url = await Linking.getInitialURL();
+      if (url && !isAuthenticated) {
+        setPendingDeepLink(url);
+        return null;  // don't navigate yet
+      }
+      return url;
+    },
+  };
+
+  // After login completes, process the pending deep link
+  useEffect(() => {
+    if (isAuthenticated && pendingDeepLink) {
+      // Slight delay to let navigation mount
+      setTimeout(() => {
+        Linking.openURL(pendingDeepLink);
+        setPendingDeepLink(null);
+      }, 100);
+    }
+  }, [isAuthenticated, pendingDeepLink]);
+
+  return (
+    &lt;NavigationContainer linking={linkingConfig}&gt;
+      {isAuthenticated ? &lt;MainTabs /&gt; : &lt;AuthStack /&gt;}
+    &lt;/NavigationContainer&gt;
+  );
+}</code></pre>
+
+    <h2>Testing deep links in development</h2>
+
+    <pre><code># Using Expo CLI (development build)
+npx uri-scheme open "tokn://t/TEST-1234-ABCD" --ios
+npx uri-scheme open "tokn://t/TEST-1234-ABCD" --android
+
+# Using React Navigation's linking debug
+// Add to your NavigationContainer:
+&lt;NavigationContainer
+  linking={linkingConfig}
+  onStateChange={(state) =&gt; console.log('Nav state:', state)}
+  fallback={&lt;LoadingSpinner /&gt;}
+/&gt;
+
+# Verify URL parsing in isolation
+import * as Linking from 'expo-linking';
+const parsed = Linking.parse('https://tokn.app/t/MERC-8GH2-LP4X');
+console.log(parsed);
+// { scheme: 'https', hostname: 'tokn.app', path: 't/MERC-8GH2-LP4X', queryParams: {} }</code></pre>
+
+    <h2>Complete deep linking flow — putting it all together</h2>
+
+    <pre><code>// The full sequence when a holder taps a token link:
+
+// 1. OS routes to app (Universal Link / App Link — lesson 1)
+// 2. App receives URL
+
+// 3a. COLD START:
+//   - App launches → NavigationContainer mounts
+//   - linkingConfig.getInitialURL() is called
+//   - Returns "https://tokn.app/t/MERC-8GH2-LP4X"
+//   - React Navigation parses it against config.screens
+//   - Matches: Main → Tokens → TokenRedeem with params { code: "MERC-8GH2-LP4X" }
+//   - Navigates directly to TokenRedeemScreen
+
+// 3b. WARM START:
+//   - App is already running (backgrounded)
+//   - Linking 'url' event fires
+//   - React Navigation receives the event (it subscribed internally)
+//   - Same parsing and navigation as above
+
+// 4. TokenRedeemScreen mounts
+//   - Reads route.params.code → "MERC-8GH2-LP4X"
+//   - Calls API: GET /api/tokens/MERC-8GH2-LP4X/redeem
+//   - Shows token info, lets holder communicate
+
+// 5. Error cases:
+//   - 404 → "This token doesn't exist"
+//   - 410 → "This token has been revoked"
+//   - 403 → "This token has reached its usage limit"
+//   - Not authed → save link, show login, then redirect</code></pre>
+
+    <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0001-universal-links-app-links.html">← Previous: Universal Links &amp; App Links</a>
+      <span class="disabled">Next module: Phase 6 →</span>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// Simulating deep link URL parsing and routing
+function parseLinkingUrl(url) {
+  try {
+    // Handle both https:// and custom scheme://
+    let path;
+    if (url.startsWith('https://')) {
+      const parsed = new URL(url);
+      path = parsed.pathname.slice(1); // remove leading /
+    } else {
+      // Custom scheme: tokn://t/CODE
+      path = url.split('://')[1] || '';
+    }
+
+    console.log("URL:", url);
+    console.log("Path:", path);
+
+    // Route matching (simulating React Navigation config)
+    if (path.startsWith('t/')) {
+      const code = path.replace('t/', '');
+      console.log("-> Route: TokenRedeem");
+      console.log("-> Params: { code:", JSON.stringify(code), "}");
+      return { screen: 'TokenRedeem', params: { code } };
+    }
+
+    console.log("-> No matching route, go to Home");
+    return { screen: 'Home', params: {} };
+  } catch (e) {
+    console.log("-> Parse error:", e.message);
+    return null;
+  }
+}
+
+// Test different URL formats
+console.log("=== Universal Link (production) ===");
+parseLinkingUrl('https://tokn.app/t/MERC-8GH2-LP4X');
+
+console.log("\\n=== Custom Scheme (development) ===");
+parseLinkingUrl('tokn://t/TEST-1234-ABCD');
+
+console.log("\\n=== Non-matching URL ===");
+parseLinkingUrl('https://tokn.app/about');
+
+console.log("\\n=== Empty token code ===");
+parseLinkingUrl('https://tokn.app/t/');`);
+
+    createSolution("exercise-1", {
+      exercise: "Implement the complete deep linking setup for the Token app: (1) Create the linkingConfig object with prefixes and screen mapping for /t/:code, (2) Write a TokenRedeemScreen that reads the code param, fetches from the API, and handles loading/error/success states, (3) Handle the auth gate — if the user is not logged in when the deep link arrives, save it and redirect after login.",
+      hints: [
+        "The linking config needs prefixes for both https://tokn.app and the tokn:// custom scheme.",
+        "React Navigation's config.screens is nested to match your navigator structure: Main > Tokens > TokenRedeem.",
+        "For the auth gate, use a ref or state to store the pending URL, and process it in a useEffect that watches isAuthenticated."
+      ],
+      solution: `// 1. Linking configuration
+// File: app/src/navigation/linking.ts
+import * as Linking from 'expo-linking';
+
+const prefix = Linking.createURL('/');
+
+export const linkingConfig = {
+  prefixes: [
+    'https://tokn.app',
+    'tokn://',
+    prefix,
+  ],
+  config: {
+    screens: {
+      Main: {
+        screens: {
+          Tokens: {
+            screens: {
+              TokenRedeem: 't/:code',
+            },
+          },
+        },
+      },
+      Login: 'login',
+    },
+  },
+};
+
+// 2. Token Redeem Screen
+// File: app/src/screens/TokenRedeemScreen.tsx
+import React, { useState, useEffect } from 'react';
+import { View, Text, ActivityIndicator, TouchableOpacity, StyleSheet } from 'react-native';
+import { useRoute, useNavigation } from '@react-navigation/native';
+import { apiClient } from '../api/client';
+
+type RedeemParams = { code: string };
+
+export function TokenRedeemScreen() {
+  const route = useRoute();
+  const navigation = useNavigation();
+  const { code } = route.params as RedeemParams;
+
+  const [token, setToken] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function fetchToken() {
+      try {
+        setLoading(true);
+        setError(null);
+        const result = await apiClient.get(\`/tokens/\${code}/redeem\`);
+        setToken(result.data);
+      } catch (err: any) {
+        if (err.status === 404) {
+          setError('This token does not exist.');
+        } else if (err.status === 410) {
+          setError('This token has been revoked by its owner.');
+        } else if (err.status === 403) {
+          setError('This token has reached its maximum usage limit.');
+        } else {
+          setError('Something went wrong. Please try again.');
+        }
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchToken();
+  }, [code]);
+
+  if (loading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" />
+        <Text>Loading token {code}...</Text>
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.errorTitle}>Token Unavailable</Text>
+        <Text style={styles.code}>{code}</Text>
+        <Text style={styles.errorMsg}>{error}</Text>
+        <TouchableOpacity
+          style={styles.button}
+          onPress={() => navigation.navigate('Main' as never)}
+        >
+          <Text style={styles.buttonText}>Go Home</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.center}>
+      <Text style={styles.title}>Token Active</Text>
+      <Text style={styles.code}>{code}</Text>
+      <Text>Label: {token.label}</Text>
+      <Text>Issued by: {token.ownerDisplayName}</Text>
+      {/* Render communication interface here */}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
+  title: { fontSize: 24, fontWeight: 'bold', marginBottom: 8 },
+  errorTitle: { fontSize: 20, fontWeight: 'bold', color: '#c0392b', marginBottom: 8 },
+  code: { fontFamily: 'monospace', fontSize: 16, marginBottom: 12, color: '#555' },
+  errorMsg: { fontSize: 14, color: '#666', textAlign: 'center', marginBottom: 20 },
+  button: { backgroundColor: '#2d3436', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8 },
+  buttonText: { color: '#fff', fontWeight: '600' },
+});
+
+// 3. Auth gate in RootNavigator
+// File: app/src/navigation/RootNavigator.tsx
+import React, { useState, useEffect, useRef } from 'react';
+import { NavigationContainer } from '@react-navigation/native';
+import * as Linking from 'expo-linking';
+import { useAuth } from '../hooks/useAuth';
+import { linkingConfig } from './linking';
+import { MainTabs } from './MainTabs';
+import { AuthStack } from './AuthStack';
+
+export function RootNavigator() {
+  const { isAuthenticated, isLoading } = useAuth();
+  const pendingUrl = useRef<string | null>(null);
+  const navigationRef = useRef(null);
+
+  const augmentedLinking = {
+    ...linkingConfig,
+    async getInitialURL() {
+      const url = await Linking.getInitialURL();
+      if (url && !isAuthenticated) {
+        pendingUrl.current = url;
+        return null;
+      }
+      return url;
+    },
+    subscribe(listener: (url: string) => void) {
+      const sub = Linking.addEventListener('url', ({ url }) => {
+        if (!isAuthenticated) {
+          pendingUrl.current = url;
+        } else {
+          listener(url);
+        }
+      });
+      return () => sub.remove();
+    },
+  };
+
+  useEffect(() => {
+    if (isAuthenticated && pendingUrl.current) {
+      const url = pendingUrl.current;
+      pendingUrl.current = null;
+      setTimeout(() => Linking.openURL(url), 200);
+    }
+  }, [isAuthenticated]);
+
+  if (isLoading) return null;
+
+  return (
+    <NavigationContainer ref={navigationRef} linking={augmentedLinking}>
+      {isAuthenticated ? <MainTabs /> : <AuthStack />}
+    </NavigationContainer>
+  );
+}`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "What does Linking.getInitialURL() return if the app was opened from the home screen icon (not a deep link)?",
+        code: "import * as Linking from 'expo-linking';\nconst url = await Linking.getInitialURL();\nconsole.log(url);",
+        answer: "null",
+        explanation: "getInitialURL() returns null when the app was launched normally (not from a link). This is how you distinguish a deep link cold start from a regular app launch. Always check for null before trying to parse the URL."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this React Navigation linking config?",
+        code: "const linkingConfig = {\n  prefixes: ['https://tokn.app', 'tokn://'],\n  config: {\n    screens: {\n      TokenRedeem: 't/:code',\n    },\n  },\n};",
+        options: [
+          "prefixes array can only have one entry",
+          "Screen path mapping must reflect the full navigator nesting (Main > Tokens > TokenRedeem), not just the screen name at the top level",
+          "The :code param syntax is wrong — use {code} instead",
+          "You cannot mix https and custom scheme prefixes"
+        ],
+        correct: 1,
+        explanation: "React Navigation needs the config.screens structure to mirror your navigator hierarchy. If TokenRedeem is inside a Tokens stack, which is inside Main tabs, the config must nest: Main > screens > Tokens > screens > TokenRedeem. A flat mapping only works if the screen is at the root level."
+      },
+      {
+        type: "fill-blank",
+        question: "Listen for deep links while the app is already running (warm start):",
+        code: "const subscription = Linking.___(\"url\", (event) => {\n  handleDeepLink(event.url);\n});",
+        answer: "addEventListener",
+        explanation: "Linking.addEventListener('url', callback) fires when the app is already running and receives a new URL. This handles the warm-start scenario — the app is in the background and the OS brings it to the foreground with a new link."
+      },
+      {
+        question: "Why must you handle BOTH getInitialURL (cold start) AND addEventListener (warm start)?",
+        options: [
+          "getInitialURL is for iOS, addEventListener is for Android",
+          "getInitialURL is faster, addEventListener is more reliable",
+          "getInitialURL only works once on app launch; addEventListener catches links tapped while the app is already running. Missing either means some deep links silently fail.",
+          "It's optional — React Navigation handles both internally"
+        ],
+        correct: 2,
+        explanation: "If you only handle cold start, then when a user already has the app open and taps a new token link, nothing happens — the event fires but nobody listens. If you only handle warm start, fresh launches from a link will land on the home screen. React Navigation's linking prop handles both when configured, but if you're doing manual handling, you need both."
+      },
+      {
+        type: "which-breaks",
+        question: "Which deep link handling code has a bug?",
+        variants: [
+          "const { code } = route.params as { code: string };\nuseEffect(() => { fetchToken(code); }, [code]);",
+          "const url = await Linking.getInitialURL();\nif (url) {\n  const code = url.split('/t/')[1];\n  navigation.navigate('TokenRedeem', { code });\n}",
+          "Linking.addEventListener('url', (url) => {\n  handleDeepLink(url);\n});"
+        ],
+        correct: 2,
+        explanation: "The addEventListener callback receives an EVENT object with a .url property, not the URL string directly. The correct form is: (event) => handleDeepLink(event.url). Passing the whole event object to handleDeepLink would result in trying to parse '[object Object]' as a URL."
+      }
+    ]);
+  </script>
+</body>
+</html>

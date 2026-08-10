@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Node.js Debugging — X2.2</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">X2 — Debugging</a>
+      <span class="sep">›</span>
+      <span class="current">Node.js Debugging</span>
+    </nav>
+
+    <h1>Node.js Debugging</h1>
+    <div class="lesson-meta">
+      <span>X2 — Lesson 2 of 2</span>
+      <span>~40 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>Token's API server runs on Node.js. When a token redemption fails, or a WebSocket message doesn't arrive, you need to trace the problem through middleware, database queries, and socket events. Server bugs are harder than UI bugs — there's no visual feedback. These tools replace your eyes.</p>
+    </div>
+
+    <h2>The --inspect flag</h2>
+
+    <p>Node's built-in debugger connects to Chrome DevTools — same interface you already know:</p>
+
+    <pre><code># Start your server with the inspector:
+node --inspect api/src/server.ts
+
+# Or with ts-node for TypeScript:
+npx ts-node --inspect api/src/server.ts
+
+# Or with nodemon for auto-restart:
+npx nodemon --inspect api/src/server.ts</code></pre>
+
+    <p>Then open Chrome and go to <code>chrome://inspect</code>. Your Node process appears under "Remote Target" — click "inspect" to open DevTools.</p>
+
+    <h2>Setting breakpoints in VS Code</h2>
+
+    <p>VS Code has a built-in Node debugger — no Chrome needed:</p>
+
+    <ol>
+      <li>Click the line number gutter to set a breakpoint (red dot appears)</li>
+      <li>Open the Run &amp; Debug panel (Ctrl+Shift+D)</li>
+      <li>Create a launch config or use "Node.js: Launch Program"</li>
+    </ol>
+
+    <p>Add to <code>.vscode/launch.json</code>:</p>
+
+    <pre><code>{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug API",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/api/src/server.ts",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["ts-node"],
+      "console": "integratedTerminal",
+      "env": {
+        "NODE_ENV": "development",
+        "DATABASE_URL": "postgres://localhost:5432/token_dev"
+      }
+    }
+  ]
+}</code></pre>
+
+    <p>Press F5 to start debugging. Execution pauses at breakpoints. You can inspect variables, step through code, and watch expressions.</p>
+
+    <h2>Structured logging</h2>
+
+    <p>In production, you can't attach a debugger. Logs are your only visibility. Make them useful:</p>
+
+    <pre><code>// Bad — unstructured, no context
+console.log('token redeemed');
+console.log(error);
+
+// Good — structured, searchable, contextual
+console.log(JSON.stringify({
+  event: 'token_redeemed',
+  tokenCode: token.code,
+  holderIp: req.ip,
+  timestamp: new Date().toISOString(),
+}));
+
+console.error(JSON.stringify({
+  event: 'token_redemption_failed',
+  tokenCode: req.params.code,
+  reason: error.message,
+  stack: error.stack,
+}));</code></pre>
+
+    <p>In later lessons (B9 — Docker &amp; Deployment), you'll use a proper logging library (pino). For now, structured JSON is the habit to build.</p>
+
+    <h2>Reading Node.js stack traces</h2>
+
+    <pre><code>Error: Token not found
+    at findToken (api/src/services/tokens.ts:42:11)
+    at redeemHandler (api/src/routes/redeem.ts:18:24)
+    at Layer.handle (node_modules/express/lib/router/layer.js:95:5)
+    at next (node_modules/express/lib/router/route.js:144:13)
+    at authMiddleware (api/src/middleware/auth.ts:31:5)</code></pre>
+
+    <p>Read top-down:</p>
+    <ol>
+      <li><strong>The error</strong>: "Token not found"</li>
+      <li><strong>Where it was thrown</strong>: <code>tokens.ts:42</code> in the <code>findToken</code> function</li>
+      <li><strong>Who called it</strong>: <code>redeemHandler</code> at <code>redeem.ts:18</code></li>
+      <li><strong>Framework internals</strong>: Express routing (you can ignore these)</li>
+      <li><strong>Earlier middleware</strong>: <code>authMiddleware</code> ran first (bottom = earliest)</li>
+    </ol>
+
+    <p>Focus on <strong>your code</strong> (the <code>api/src/</code> paths). Framework internals (<code>node_modules/</code>) are rarely the problem.</p>
+
+    <h2>Debugging database queries</h2>
+
+    <p>When a query returns wrong results or fails:</p>
+
+    <pre><code>// Log the actual query being sent to Postgres
+async function findTokenByCode(code: string) {
+  const query = 'SELECT * FROM tokens WHERE code = $1 AND status = $2';
+  const params = [code, 'active'];
+
+  console.log('[DB]', query, params);  // See exactly what's sent
+
+  const result = await db.query(query, params);
+  console.log('[DB] Rows returned:', result.rows.length);
+
+  return result.rows[0];
+}</code></pre>
+
+    <p>Common issues:</p>
+    <ul>
+      <li><strong>Empty result</strong> — is the WHERE clause too restrictive? Log the params.</li>
+      <li><strong>Wrong data</strong> — are column names what you expect? Log <code>result.fields</code>.</li>
+      <li><strong>Connection error</strong> — is DATABASE_URL correct? Is Postgres running?</li>
+    </ul>
+
+    <h2>Debugging async code</h2>
+
+    <p>The trickiest Node bugs involve async operations — promises that silently fail, callbacks that never fire, or errors that vanish:</p>
+
+    <pre><code>// Bug: unhandled promise rejection (error disappears silently)
+app.get('/api/tokens/:code', (req, res) =&gt; {
+  findToken(req.params.code).then(token =&gt; {
+    res.json(token);
+  });
+  // If findToken throws, nothing catches it!
+});
+
+// Fix: always handle errors in async routes
+app.get('/api/tokens/:code', async (req, res, next) =&gt; {
+  try {
+    const token = await findToken(req.params.code);
+    res.json(token);
+  } catch (err) {
+    next(err);  // Express error handler catches it
+  }
+});</code></pre>
+
+    <p>Add a global unhandled rejection handler during development:</p>
+
+    <pre><code>process.on('unhandledRejection', (reason, promise) =&gt; {
+  console.error('Unhandled Rejection:', reason);
+  // In dev: crash loudly so you notice
+  process.exit(1);
+});</code></pre>
+
+    <h2>Environment-specific debugging</h2>
+
+    <pre><code>// Only log in development
+if (process.env.NODE_ENV === 'development') {
+  console.log('[DEBUG]', data);
+}
+
+// Or use a DEBUG flag
+const DEBUG = process.env.DEBUG === 'true';
+
+function debugLog(...args: unknown[]) {
+  if (DEBUG) console.log('[DEBUG]', ...args);
+}
+
+// Run with: DEBUG=true node api/src/server.ts</code></pre>
+
+    <h2>Quick reference: when to use what</h2>
+
+    <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;font-weight:600;">Situation</td>
+        <td style="padding:0.5rem;font-weight:600;">Tool</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;">Quick check of a value</td>
+        <td style="padding:0.5rem;">console.log</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;">Need to step through logic line by line</td>
+        <td style="padding:0.5rem;">VS Code debugger or --inspect + Chrome</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;">API returning wrong data</td>
+        <td style="padding:0.5rem;">Log the query + params sent to the database</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;">Error silently disappearing</td>
+        <td style="padding:0.5rem;">Add unhandledRejection handler, wrap in try/catch</td>
+      </tr>
+      <tr>
+        <td style="padding:0.5rem;">Production issue</td>
+        <td style="padding:0.5rem;">Structured JSON logs + search them</td>
+      </tr>
+    </table>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0001-react-native-debugging.html">← Previous: React Native Debugging</a>
+      <span class="disabled">Next phase: B1 SQL Fundamentals →</span>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createSolution("exercise-1", {
+      exercise: "You have an Express route that should return a token by code, but it always returns 404. The route is: GET /api/tokens/:code. Debug it: add structured logging at each step (route hit, param extraction, DB query, result), identify the bug, and fix it.",
+      hints: [
+        "Log req.params first — is the code being extracted correctly?",
+        "Log the actual SQL query and its parameters — is the WHERE clause correct?",
+        "Check if the DB query returns rows — if 0, the token might not exist or the status filter is wrong."
+      ],
+      solution: `// api/src/routes/tokens.ts — BEFORE (buggy)
+app.get('/api/tokens/:code', async (req, res) => {
+  const token = await db.query(
+    'SELECT * FROM tokens WHERE code = $1',
+    [req.params.tokenCode]  // BUG: should be req.params.code
+  );
+  if (!token.rows[0]) return res.status(404).json({ error: 'Not found' });
+  res.json(token.rows[0]);
+});
+
+// DEBUGGING PROCESS:
+app.get('/api/tokens/:code', async (req, res) => {
+  // Step 1: Is the route being hit?
+  console.log(JSON.stringify({
+    event: 'token_lookup',
+    params: req.params,
+    url: req.url,
+  }));
+  // OUTPUT: { params: { code: "MERC-8GH2" }, url: "/api/tokens/MERC-8GH2" }
+  // So req.params.code exists, but we're reading req.params.tokenCode!
+
+  // Step 2: Log the query
+  const paramValue = req.params.tokenCode;
+  console.log('Query param value:', paramValue);  // undefined!
+  // FOUND IT: req.params.tokenCode is undefined, should be req.params.code
+
+  // FIXED:
+  const result = await db.query(
+    'SELECT * FROM tokens WHERE code = $1',
+    [req.params.code]  // Fixed: matches the :code in the route
+  );
+  console.log('Rows found:', result.rows.length);
+
+  if (!result.rows[0]) return res.status(404).json({ error: 'Not found' });
+  res.json(result.rows[0]);
+});`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "spot-the-bug",
+        question: "Why does this error disappear silently?",
+        code: "app.get('/api/tokens', (req, res) => {\n  fetchTokensFromDB().then(tokens => {\n    res.json(tokens);\n  });\n});",
+        options: [
+          "fetchTokensFromDB doesn't return a promise",
+          "There's no .catch() — if the promise rejects, the error is swallowed",
+          "res.json can't handle arrays",
+          "The route path is wrong"
+        ],
+        correct: 1,
+        explanation: "Without .catch() (or try/catch with async/await), a rejected promise just vanishes — no error response, no log, the client hangs forever. Always use async/await with try/catch in route handlers."
+      },
+      {
+        type: "fill-blank",
+        question: "Start Node with the debugger attached:",
+        code: "node ___ api/src/server.ts",
+        answer: "--inspect",
+        explanation: "The --inspect flag starts Node's V8 inspector, which Chrome DevTools (or VS Code) can connect to. Then you can set breakpoints, step through code, and inspect variables."
+      },
+      {
+        type: "predict-output",
+        question: "Given this stack trace, what file and line should you look at FIRST?",
+        code: "Error: Cannot read property 'status' of undefined\n    at revokeToken (api/src/services/tokens.ts:28:15)\n    at handler (api/src/routes/tokens.ts:45:9)\n    at Layer.handle (node_modules/express/lib/router/layer.js:95:5)",
+        answer: "api/src/services/tokens.ts line 28",
+        explanation: "The top of the stack trace is where the error was thrown. tokens.ts:28 is trying to read .status on something undefined. That's your starting point — check what variable is undefined and trace back to see why."
+      },
+      {
+        question: "Why use structured JSON logs instead of console.log('error happened')?",
+        options: [
+          "JSON is faster to write to disk",
+          "Structured logs are searchable, filterable, and include context (who, what, when)",
+          "console.log is deprecated in Node.js",
+          "JSON logs use less memory"
+        ],
+        correct: 1,
+        explanation: "In production with hundreds of requests per second, you need to search logs by token code, user, or error type. Structured JSON lets you filter: 'show me all token_redemption_failed events for MERC-8GH2'. Plain text strings are almost unsearchable."
+      },
+      {
+        type: "order-steps",
+        question: "Put the server debugging process in order:",
+        steps: ["Check if the route is being hit (log request)", "Log the parameters being used", "Log the database query and results", "Check the response being sent"],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "Follow the data flow: request arrives → params extracted → query runs → response sent. If you find the data is correct at step 2 but wrong at step 3, the bug is in the query or the response transformation."
+      }
+    ]);
+  </script>
+</body>
+</html>

@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WS Connection Lifecycle — B5.1</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">B5 — WebSocket Server</a>
+      <span class="sep">›</span>
+      <span class="current">WS Connection Lifecycle</span>
+    </nav>
+
+    <h1>WS Connection Lifecycle</h1>
+    <div class="lesson-meta">
+      <span>B5 — Lesson 1 of 3</span>
+      <span>~55 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>HTTP is request-response: the client asks, the server answers, the connection closes. But chat needs the server to <em>push</em> messages to the client the instant they arrive — without the client asking. WebSocket gives you a persistent, bidirectional channel. One connection stays open for the entire session. The server can push a message at any moment. This is how real-time chat, typing indicators, and presence all work.</p>
+    </div>
+
+    <h2>HTTP vs. WebSocket — the mental model</h2>
+
+    <table>
+      <thead>
+        <tr><th></th><th>HTTP</th><th>WebSocket</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Connection</td><td>Opens, sends request, gets response, closes</td><td>Opens once, stays open indefinitely</td></tr>
+        <tr><td>Direction</td><td>Client → Server (server can only respond)</td><td>Both directions at any time</td></tr>
+        <tr><td>Overhead</td><td>Full HTTP headers on every request</td><td>2-byte frame header after handshake</td></tr>
+        <tr><td>Server push</td><td>Not possible (polling or SSE as workarounds)</td><td>Native — server sends whenever it wants</td></tr>
+        <tr><td>Use case</td><td>REST APIs, page loads, file uploads</td><td>Chat, live updates, gaming, presence</td></tr>
+      </tbody>
+    </table>
+
+    <h2>The upgrade handshake</h2>
+
+    <p>A WebSocket connection starts as a normal HTTP request with special headers asking to "upgrade" the protocol:</p>
+
+    <pre><code>// Client sends:
+GET /ws HTTP/1.1
+Host: api.tokn.app
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+Sec-WebSocket-Version: 13
+
+// Server responds:
+HTTP/1.1 101 Switching Protocols
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=</code></pre>
+
+    <p>After this handshake, the TCP connection stays open and both sides can send frames at any time. The HTTP server hands off the socket to the WebSocket library.</p>
+
+    <h2>Setting up the WS server</h2>
+
+    <p>We use the <code>ws</code> library — the most mature, fastest WebSocket implementation for Node.js. It's the foundation that Socket.IO uses internally.</p>
+
+    <pre><code>npm install ws
+npm install -D @types/ws</code></pre>
+
+    <h3>Attaching to the existing HTTP server</h3>
+
+    <pre><code>// api/src/ws/server.ts
+import { WebSocketServer, WebSocket } from 'ws';
+import { Server as HttpServer } from 'http';
+import { verifyWsToken } from './auth';
+import { setupHeartbeat } from './heartbeat';
+
+interface AuthenticatedSocket extends WebSocket {
+  userId: number;
+  isAlive: boolean;
+}
+
+const clients = new Map&lt;number, Set&lt;AuthenticatedSocket&gt;&gt;();
+
+export function createWsServer(httpServer: HttpServer) {
+  const wss = new WebSocketServer({ noServer: true });
+
+  // Handle the HTTP upgrade manually (for auth)
+  httpServer.on('upgrade', async (request, socket, head) =&gt; {
+    try {
+      const userId = await verifyWsToken(request);
+      wss.handleUpgrade(request, socket, head, (ws) =&gt; {
+        const authWs = ws as AuthenticatedSocket;
+        authWs.userId = userId;
+        authWs.isAlive = true;
+        wss.emit('connection', authWs, request);
+      });
+    } catch (err) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      socket.destroy();
+    }
+  });
+
+  wss.on('connection', (ws: AuthenticatedSocket) =&gt; {
+    // Track this connection
+    if (!clients.has(ws.userId)) {
+      clients.set(ws.userId, new Set());
+    }
+    clients.get(ws.userId)!.add(ws);
+
+    console.log(`User ${ws.userId} connected (${clients.get(ws.userId)!.size} devices)`);
+
+    ws.on('message', (data) =&gt; {
+      handleMessage(ws, data);
+    });
+
+    ws.on('close', () =&gt; {
+      clients.get(ws.userId)?.delete(ws);
+      if (clients.get(ws.userId)?.size === 0) {
+        clients.delete(ws.userId);
+      }
+      console.log(`User ${ws.userId} disconnected`);
+    });
+
+    ws.on('pong', () =&gt; {
+      ws.isAlive = true;
+    });
+  });
+
+  setupHeartbeat(wss);
+
+  return wss;
+}
+
+export function getClients() {
+  return clients;
+}</code></pre>
+
+    <h2>Authenticating on connect</h2>
+
+    <p>Unlike HTTP requests where you send an Authorization header with every call, WebSocket authenticates once — during the upgrade handshake. The token is sent as a query parameter (because you can't set custom headers in the browser's WebSocket API):</p>
+
+    <pre><code>// api/src/ws/auth.ts
+import { IncomingMessage } from 'http';
+import { URL } from 'url';
+import jwt from 'jsonwebtoken';
+
+const JWT_SECRET = process.env.JWT_SECRET!;
+
+export async function verifyWsToken(request: IncomingMessage): Promise&lt;number&gt; {
+  const url = new URL(request.url!, `http://${request.headers.host}`);
+  const token = url.searchParams.get('token');
+
+  if (!token) {
+    throw new Error('No token provided');
+  }
+
+  try {
+    const payload = jwt.verify(token, JWT_SECRET) as { sub: number };
+    return payload.sub;
+  } catch {
+    throw new Error('Invalid token');
+  }
+}</code></pre>
+
+    <p><strong>Why query parameter, not header?</strong> The browser's <code>new WebSocket(url)</code> API doesn't support custom headers. The only way to send auth credentials is via the URL itself. This is standard practice — even Socket.IO does it this way.</p>
+
+    <p><strong>Security note:</strong> The token in the URL will appear in server access logs. Use a short-lived access token (15 min), not the refresh token. If the access token expires mid-connection, the server can request re-authentication over the WebSocket itself.</p>
+
+    <h2>The <code>noServer</code> pattern</h2>
+
+    <p>We use <code>noServer: true</code> instead of passing the HTTP server directly to WebSocketServer. This gives us control over the upgrade event — specifically, we can reject unauthorized connections <em>before</em> the WebSocket handshake completes:</p>
+
+    <pre><code>// With noServer: true, we manually handle 'upgrade':
+httpServer.on('upgrade', async (request, socket, head) =&gt; {
+  // Authenticate FIRST
+  const userId = await verifyWsToken(request);
+  // Only THEN complete the handshake
+  wss.handleUpgrade(request, socket, head, (ws) =&gt; { ... });
+});
+
+// Without noServer, auth would have to happen AFTER connection:
+// wss.on('connection', (ws) => { /* too late — handshake already done */ });</code></pre>
+
+    <p>Rejecting before handshake is cleaner — unauthorized clients get a proper 401, not a connected-then-immediately-closed experience.</p>
+
+    <h2>Heartbeat — detecting dead connections</h2>
+
+    <p>TCP connections can die silently — phone loses signal, laptop lid closed, router reboots. Without heartbeat, the server keeps dead sockets open indefinitely, leaking memory and corrupting presence state.</p>
+
+    <p>The WebSocket protocol has built-in ping/pong frames for this:</p>
+
+    <pre><code>// api/src/ws/heartbeat.ts
+import { WebSocketServer, WebSocket } from 'ws';
+
+interface AuthenticatedSocket extends WebSocket {
+  userId: number;
+  isAlive: boolean;
+}
+
+export function setupHeartbeat(wss: WebSocketServer) {
+  const interval = setInterval(() =&gt; {
+    wss.clients.forEach((ws) =&gt; {
+      const authWs = ws as AuthenticatedSocket;
+      if (!authWs.isAlive) {
+        // Didn't respond to last ping — connection is dead
+        authWs.terminate();
+        return;
+      }
+      authWs.isAlive = false;   // reset flag
+      authWs.ping();            // send ping frame
+    });
+  }, 30000); // every 30 seconds
+
+  wss.on('close', () =&gt; {
+    clearInterval(interval);
+  });
+}</code></pre>
+
+    <h3>How it works</h3>
+
+    <ol>
+      <li>Every 30 seconds, server sends a <strong>ping</strong> frame to every client</li>
+      <li>Live clients automatically respond with a <strong>pong</strong> frame (handled by the WS protocol, not your code)</li>
+      <li>On receiving pong, we set <code>isAlive = true</code></li>
+      <li>On the next interval, if <code>isAlive</code> is still false — the client didn't respond. Connection is dead. <code>terminate()</code>.</li>
+    </ol>
+
+    <p><strong>Why 30 seconds?</strong> A balance between detection speed and battery/bandwidth. Mobile clients on cellular don't want pings every 5 seconds (drains battery). But waiting 60+ seconds means dead connections linger too long.</p>
+
+    <h2>Integrating with Express</h2>
+
+    <pre><code>// api/src/index.ts
+import express from 'express';
+import { createServer } from 'http';
+import { createWsServer } from './ws/server';
+
+const app = express();
+
+// ... existing middleware and routes ...
+
+// Create HTTP server (don't use app.listen — we need the server reference)
+const httpServer = createServer(app);
+
+// Attach WebSocket server
+createWsServer(httpServer);
+
+const PORT = process.env.PORT || 3000;
+httpServer.listen(PORT, () =&gt; {
+  console.log(`HTTP + WS server listening on port ${PORT}`);
+});</code></pre>
+
+    <p><strong>Important:</strong> We use <code>createServer(app)</code> instead of <code>app.listen()</code>. Both start an HTTP server, but <code>createServer</code> gives us the <code>httpServer</code> reference we need to attach the WebSocket upgrade handler. <code>app.listen()</code> creates the server internally and doesn't return it in a useful way for WebSocket attachment.</p>
+
+    <h2>Message protocol</h2>
+
+    <p>We need a consistent format for messages sent over the WebSocket. JSON with a <code>type</code> field:</p>
+
+    <pre><code>// Client → Server
+{ "type": "chat:send", "payload": { "conversationId": 7, "text": "Hello" } }
+{ "type": "typing:start", "payload": { "conversationId": 7 } }
+{ "type": "typing:stop", "payload": { "conversationId": 7 } }
+
+// Server → Client
+{ "type": "chat:receive", "payload": { "id": 123, "from": 5, "text": "Hello", "sentAt": "..." } }
+{ "type": "typing:update", "payload": { "conversationId": 7, "userId": 5, "isTyping": true } }
+{ "type": "presence:update", "payload": { "userId": 5, "status": "online" } }
+{ "type": "error", "payload": { "message": "Invalid conversation" } }</code></pre>
+
+    <h3>Parsing incoming messages</h3>
+
+    <pre><code>// api/src/ws/router.ts
+import { WebSocket } from 'ws';
+
+interface WsMessage {
+  type: string;
+  payload: unknown;
+}
+
+interface AuthenticatedSocket extends WebSocket {
+  userId: number;
+  isAlive: boolean;
+}
+
+type Handler = (ws: AuthenticatedSocket, payload: any) =&gt; void | Promise&lt;void&gt;;
+
+const handlers = new Map&lt;string, Handler&gt;();
+
+export function registerHandler(type: string, handler: Handler) {
+  handlers.set(type, handler);
+}
+
+export function handleMessage(ws: AuthenticatedSocket, raw: Buffer | string) {
+  let message: WsMessage;
+
+  try {
+    message = JSON.parse(raw.toString());
+  } catch {
+    sendError(ws, 'Invalid JSON');
+    return;
+  }
+
+  if (!message.type || typeof message.type !== 'string') {
+    sendError(ws, 'Missing message type');
+    return;
+  }
+
+  const handler = handlers.get(message.type);
+  if (!handler) {
+    sendError(ws, `Unknown message type: ${message.type}`);
+    return;
+  }
+
+  handler(ws, message.payload);
+}
+
+export function sendError(ws: WebSocket, message: string) {
+  ws.send(JSON.stringify({ type: 'error', payload: { message } }));
+}
+
+export function sendTo(ws: WebSocket, type: string, payload: unknown) {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type, payload }));
+  }
+}</code></pre>
+
+    <h2>Graceful shutdown</h2>
+
+    <p>When the server restarts (deploy, crash, scaling), don't just kill connections. Give clients a close frame so they know to reconnect:</p>
+
+    <pre><code>// api/src/index.ts — add to existing server setup
+process.on('SIGTERM', () =&gt; {
+  console.log('SIGTERM received — closing WebSocket connections');
+
+  wss.clients.forEach((ws) =&gt; {
+    ws.close(1001, 'Server shutting down');
+  });
+
+  httpServer.close(() =&gt; {
+    console.log('HTTP server closed');
+    process.exit(0);
+  });
+
+  // Force exit after 10 seconds if connections don't close cleanly
+  setTimeout(() =&gt; process.exit(1), 10000);
+});</code></pre>
+
+    <p>Close code <code>1001</code> means "going away" — the server is shutting down intentionally. The client knows to reconnect after a brief delay.</p>
+
+    <h2>Client-side connection (preview)</h2>
+
+    <p>This is covered fully in A6, but here's how the client connects:</p>
+
+    <pre><code>// app/src/ws/connection.ts (client side — preview)
+import { getAccessToken } from '../api/client';
+
+const WS_URL = __DEV__ ? 'ws://localhost:3000' : 'wss://api.tokn.app';
+
+function connect() {
+  const token = getAccessToken();
+  const ws = new WebSocket(`${WS_URL}/ws?token=${token}`);
+
+  ws.onopen = () =&gt; console.log('WS connected');
+  ws.onmessage = (event) =&gt; {
+    const msg = JSON.parse(event.data);
+    // dispatch to handlers based on msg.type
+  };
+  ws.onclose = (event) =&gt; {
+    if (event.code === 1001) {
+      // Server shutting down — reconnect after brief delay
+      setTimeout(connect, 2000);
+    }
+  };
+}</code></pre>
+
+    <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./README.html">← Module overview</a>
+      <a href="./0002-message-routing.html">Next: Message Routing →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// Simulate the heartbeat logic
+class FakeSocket {
+  constructor(name) { this.name = name; this.isAlive = true; this.terminated = false; }
+  ping() { console.log('  PING → ' + this.name); }
+  terminate() { this.terminated = true; console.log('  TERMINATE ' + this.name + ' (dead)'); }
+}
+
+// Three connected clients
+const sockets = [
+  new FakeSocket('Alice-phone'),
+  new FakeSocket('Bob-laptop'),
+  new FakeSocket('Charlie-tablet'),
+];
+
+// Simulate: Charlie's connection dies (no pong)
+console.log('--- Heartbeat round 1 ---');
+sockets.forEach(s => {
+  s.isAlive = false;  // reset
+  s.ping();           // send ping
+});
+
+// Alice and Bob respond with pong
+sockets[0].isAlive = true;  // Alice pong
+sockets[1].isAlive = true;  // Bob pong
+// Charlie: no pong (connection dead)
+
+console.log('\\n--- Heartbeat round 2 (30s later) ---');
+sockets.forEach(s => {
+  if (!s.isAlive) {
+    s.terminate();  // Charlie gets terminated
+    return;
+  }
+  s.isAlive = false;
+  s.ping();
+});
+
+console.log('\\nResult:');
+sockets.forEach(s => console.log(s.name + ': ' + (s.terminated ? 'DISCONNECTED' : 'alive')));`);
+
+    createSolution("exercise-1", {
+      exercise: "Build the complete WebSocket server infrastructure:\n\n1. Create `api/src/ws/server.ts`: attach a WebSocketServer to the HTTP server using the noServer pattern. Handle the upgrade event with authentication.\n\n2. Create `api/src/ws/auth.ts`: extract JWT from the URL query parameter, verify it, and return the user ID.\n\n3. Create `api/src/ws/heartbeat.ts`: ping every 30 seconds, terminate connections that don't respond.\n\n4. Create `api/src/ws/router.ts`: parse incoming JSON, dispatch to handlers by message type, and send error responses for invalid messages.\n\n5. Modify `api/src/index.ts` to use createServer(app) and attach the WebSocket server.\n\n6. Test: connect with wscat (`npx wscat -c 'ws://localhost:3000/ws?token=YOUR_JWT'`), send a JSON message, verify you get a response.",
+      hints: [
+        "Use noServer: true and manually handle the 'upgrade' event — this lets you reject unauthorized connections before the handshake completes.",
+        "The browser WebSocket API doesn't support custom headers. Send the JWT as a query parameter: ws://host/ws?token=...",
+        "For heartbeat: set isAlive=false before ping, set isAlive=true on pong. If still false on next interval → terminate.",
+        "Always check ws.readyState === WebSocket.OPEN before sending — the connection might have closed between your logic and the send."
+      ],
+      solution: `// === api/src/ws/server.ts ===
+
+import { WebSocketServer, WebSocket } from 'ws';
+import { Server as HttpServer } from 'http';
+import { verifyWsToken } from './auth';
+import { setupHeartbeat } from './heartbeat';
+import { handleMessage } from './router';
+
+interface AuthenticatedSocket extends WebSocket {
+  userId: number;
+  isAlive: boolean;
+}
+
+const clients = new Map<number, Set<AuthenticatedSocket>>();
+
+export function createWsServer(httpServer: HttpServer) {
+  const wss = new WebSocketServer({ noServer: true });
+
+  httpServer.on('upgrade', async (request, socket, head) => {
+    try {
+      const userId = await verifyWsToken(request);
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        const authWs = ws as AuthenticatedSocket;
+        authWs.userId = userId;
+        authWs.isAlive = true;
+        wss.emit('connection', authWs, request);
+      });
+    } catch {
+      socket.write('HTTP/1.1 401 Unauthorized\\r\\n\\r\\n');
+      socket.destroy();
+    }
+  });
+
+  wss.on('connection', (ws: AuthenticatedSocket) => {
+    if (!clients.has(ws.userId)) clients.set(ws.userId, new Set());
+    clients.get(ws.userId)!.add(ws);
+
+    ws.on('message', (data) => handleMessage(ws, data));
+    ws.on('close', () => {
+      clients.get(ws.userId)?.delete(ws);
+      if (clients.get(ws.userId)?.size === 0) clients.delete(ws.userId);
+    });
+    ws.on('pong', () => { ws.isAlive = true; });
+  });
+
+  setupHeartbeat(wss);
+  return wss;
+}
+
+export function getClients() { return clients; }
+
+
+// === api/src/ws/auth.ts ===
+
+import { IncomingMessage } from 'http';
+import { URL } from 'url';
+import jwt from 'jsonwebtoken';
+
+export async function verifyWsToken(request: IncomingMessage): Promise<number> {
+  const url = new URL(request.url!, \`http://\${request.headers.host}\`);
+  const token = url.searchParams.get('token');
+  if (!token) throw new Error('No token');
+  const payload = jwt.verify(token, process.env.JWT_SECRET!) as { sub: number };
+  return payload.sub;
+}
+
+
+// === api/src/ws/heartbeat.ts ===
+
+import { WebSocketServer } from 'ws';
+
+export function setupHeartbeat(wss: WebSocketServer) {
+  const interval = setInterval(() => {
+    wss.clients.forEach((ws: any) => {
+      if (!ws.isAlive) { ws.terminate(); return; }
+      ws.isAlive = false;
+      ws.ping();
+    });
+  }, 30000);
+  wss.on('close', () => clearInterval(interval));
+}
+
+
+// === api/src/ws/router.ts ===
+
+import { WebSocket } from 'ws';
+
+const handlers = new Map();
+
+export function registerHandler(type, handler) {
+  handlers.set(type, handler);
+}
+
+export function handleMessage(ws, raw) {
+  let message;
+  try { message = JSON.parse(raw.toString()); }
+  catch { sendTo(ws, 'error', { message: 'Invalid JSON' }); return; }
+
+  if (!message.type) { sendTo(ws, 'error', { message: 'Missing type' }); return; }
+
+  const handler = handlers.get(message.type);
+  if (!handler) { sendTo(ws, 'error', { message: 'Unknown type: ' + message.type }); return; }
+  handler(ws, message.payload);
+}
+
+export function sendTo(ws, type, payload) {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type, payload }));
+  }
+}
+
+
+// === api/src/index.ts (modified) ===
+
+import express from 'express';
+import { createServer } from 'http';
+import { createWsServer } from './ws/server';
+
+const app = express();
+// ... middleware and routes ...
+
+const httpServer = createServer(app);
+createWsServer(httpServer);
+
+httpServer.listen(3000, () => console.log('HTTP + WS on port 3000'));`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "What HTTP status code does the server send for a successful WebSocket upgrade?",
+        code: "// Client sends: GET /ws HTTP/1.1 with Upgrade: websocket\n// Server responds with status: ???",
+        answer: "101",
+        explanation: "HTTP 101 Switching Protocols tells the client: 'I'm upgrading this connection from HTTP to WebSocket now.' After this response, both sides speak the WebSocket frame protocol — no more HTTP on this connection."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this WebSocket authentication approach?",
+        code: "const wss = new WebSocketServer({ server: httpServer });\n\nwss.on('connection', (ws, request) => {\n  const url = new URL(request.url, 'http://localhost');\n  const token = url.searchParams.get('token');\n  const payload = jwt.verify(token, SECRET);\n  ws.userId = payload.sub;\n});",
+        options: [
+          "Authentication happens AFTER the handshake completes — an unauthorized client is already 'connected' before being checked",
+          "jwt.verify is synchronous and will block the event loop",
+          "WebSocket doesn't support URL query parameters",
+          "ws.userId can't be assigned after construction"
+        ],
+        correct: 0,
+        explanation: "By the time the 'connection' event fires, the HTTP upgrade is already complete — the client has a live WebSocket connection. If auth fails, you'd have to close an already-open connection. With the noServer pattern, you intercept the 'upgrade' event and reject unauthorized requests with 401 BEFORE the handshake completes."
+      },
+      {
+        type: "which-breaks",
+        question: "Which heartbeat interval is best for a mobile chat app?",
+        variants: [
+          "Every 5 seconds — detect dead connections fast",
+          "Every 30 seconds — balance between detection speed and battery",
+          "Every 5 minutes — minimal battery impact",
+          "No heartbeat — rely on TCP keepalive"
+        ],
+        correct: 1,
+        explanation: "5 seconds wastes battery and bandwidth on mobile (cellular radios power up for each ping). 5 minutes means dead connections linger too long (presence shows 'online' for 5 min after disconnect). TCP keepalive is OS-level and often set to 2+ hours — useless for presence. 30 seconds is the industry standard for mobile real-time apps."
+      },
+      {
+        type: "fill-blank",
+        question: "Only send a message if the WebSocket is still open:",
+        code: "function sendTo(ws, type, payload) {\n  if (ws.readyState === WebSocket.___) {\n    ws.send(JSON.stringify({ type, payload }));\n  }\n}",
+        answer: "OPEN",
+        explanation: "WebSocket.readyState has 4 values: CONNECTING (0), OPEN (1), CLOSING (2), CLOSED (3). Only send when the state is OPEN. Sending to a CLOSING or CLOSED socket throws an error. Sending to CONNECTING would queue the message but it's unreliable."
+      },
+      {
+        type: "order-steps",
+        question: "Put the WebSocket connection lifecycle in order:",
+        steps: [
+          "Client sends HTTP request with Upgrade: websocket header",
+          "Server verifies JWT from query parameter in the upgrade handler",
+          "Server responds with 101 Switching Protocols",
+          "Connection is now bidirectional — both sides can send frames",
+          "Heartbeat ping/pong keeps the connection alive"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "It starts as HTTP, authenticates during the upgrade, switches protocol with 101, becomes bidirectional, and heartbeat maintains it. If auth fails at step 2, the server sends 401 and destroys the socket — no WebSocket connection is ever established."
+      }
+    ]);
+  </script>
+</body>
+</html>

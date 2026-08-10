@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>B9 — Coolify Setup</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Docker &amp; Deployment</a> &rsaquo;
+        <span>Coolify Setup</span>
+    </nav>
+
+    <h1>Coolify Setup</h1>
+    <p class="lesson-meta">B9 &mdash; Lesson 2 of 3 &nbsp;|&nbsp; ~55 min</p>
+
+    <div class="callout">
+        <strong>Why this matters for Token:</strong> You could deploy with raw <code>docker compose</code>
+        on a VPS &mdash; but then you're manually SSHing in for every deploy, handling TLS certificates
+        yourself, and restarting containers by hand when they crash. Coolify gives you a Heroku-like
+        experience on your own hardware: push to git &rarr; automatic build &rarr; deploy &rarr; TLS.
+        It's open source, runs on a single $12/month VPS, and you own everything.
+    </div>
+
+    <h2>What is Coolify?</h2>
+    <p>Coolify is an open-source, self-hosted PaaS (Platform as a Service). Think Heroku or Vercel,
+    but running on your own VPS. It manages:</p>
+    <ul>
+        <li><strong>Builds</strong> &mdash; detects your Dockerfile, builds images on the server</li>
+        <li><strong>Deploys</strong> &mdash; zero-downtime deploys with health checks</li>
+        <li><strong>TLS</strong> &mdash; automatic Let's Encrypt certificates</li>
+        <li><strong>Databases</strong> &mdash; one-click Postgres, Redis, etc. with backups</li>
+        <li><strong>Domains</strong> &mdash; custom domain routing with a built-in reverse proxy (Traefik)</li>
+        <li><strong>Environment variables</strong> &mdash; encrypted secrets stored in Coolify's database</li>
+    </ul>
+
+    <h2>Infrastructure Architecture for Token</h2>
+    <pre><code>┌─────────────────────────────── VPS (4GB RAM, 2 vCPU) ───────────────────────────────┐
+│                                                                                      │
+│  ┌────────────────┐                                                                  │
+│  │    Coolify      │  ← Management UI (port 8000)                                    │
+│  │  (Traefik)      │  ← Reverse proxy: routes domains → containers                   │
+│  └───────┬────────┘                                                                  │
+│          │                                                                           │
+│  ┌───────┼──────────────────────────────────────────────────────────┐                │
+│  │       ▼                                                          │                │
+│  │  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐     │                │
+│  │  │  api     │   │   web    │   │ postgres │   │  redis   │     │                │
+│  │  │ :3000    │   │  :80     │   │ :5432    │   │ :6379    │     │                │
+│  │  └──────────┘   └──────────┘   └──────────┘   └──────────┘     │                │
+│  │                                                                  │                │
+│  │  Docker network (internal)                                       │                │
+│  └──────────────────────────────────────────────────────────────────┘                │
+│                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────┘
+
+External traffic:
+  api.tokn.app  → Traefik → api container :3000
+  tokn.app      → Traefik → web container :80
+  (postgres and redis are NOT exposed to the internet)</code></pre>
+
+    <h2>Step 1: Get a VPS</h2>
+    <p>Any VPS provider works (Hetzner, DigitalOcean, Linode, Vultr). Requirements for Token:</p>
+    <table>
+        <tr><th>Resource</th><th>Minimum</th><th>Recommended</th></tr>
+        <tr><td>RAM</td><td>2 GB</td><td>4 GB</td></tr>
+        <tr><td>CPU</td><td>1 vCPU</td><td>2 vCPU</td></tr>
+        <tr><td>Disk</td><td>40 GB SSD</td><td>80 GB SSD</td></tr>
+        <tr><td>OS</td><td>Ubuntu 22.04+</td><td>Ubuntu 24.04</td></tr>
+        <tr><td>Cost</td><td>~$6/month</td><td>~$12/month</td></tr>
+    </table>
+
+    <p><strong>Hetzner</strong> is the best value for Indian developers &mdash; their Singapore and
+    US datacenters offer 4 GB ARM VPS for ~&#8377;500/month. Latency from India to Singapore is ~50ms.</p>
+
+    <h2>Step 2: Install Coolify</h2>
+    <p>SSH into your VPS and run the one-line installer:</p>
+    <pre><code># SSH in
+ssh root@your-vps-ip
+
+# Install Coolify (one command)
+curl -fsSL https://cdn.coollabs.io/coolify/install.sh | bash
+
+# This installs:
+# - Docker
+# - Docker Compose
+# - Coolify itself (as a Docker container)
+# - Traefik (reverse proxy)
+# - A PostgreSQL instance for Coolify's own data</code></pre>
+
+    <p>After installation, Coolify's dashboard is at <code>http://your-vps-ip:8000</code>. Create your
+    admin account on first visit.</p>
+
+    <h2>Step 3: Connect Your Git Repository</h2>
+    <p>In Coolify's dashboard:</p>
+    <ol>
+        <li>Go to <strong>Sources</strong> &rarr; Add GitHub</li>
+        <li>Authorize Coolify's GitHub App on your Token repository</li>
+        <li>Coolify can now pull your code and detect pushes</li>
+    </ol>
+
+    <h2>Step 4: Deploy the Database Services</h2>
+    <p>Deploy Postgres and Redis as Coolify-managed services (not from your Dockerfile):</p>
+
+    <h3>Postgres</h3>
+    <ol>
+        <li>Resources &rarr; New &rarr; Database &rarr; PostgreSQL</li>
+        <li>Version: <code>16-alpine</code></li>
+        <li>Database name: <code>token_prod</code></li>
+        <li>Set a strong password (Coolify generates one by default)</li>
+        <li>Enable <strong>Persistent Storage</strong></li>
+        <li>Do NOT expose to the internet &mdash; only internal network access</li>
+    </ol>
+
+    <h3>Redis</h3>
+    <ol>
+        <li>Resources &rarr; New &rarr; Database &rarr; Redis</li>
+        <li>Version: <code>7-alpine</code></li>
+        <li>Enable persistent storage</li>
+        <li>Do NOT expose to the internet</li>
+    </ol>
+
+    <p>After deploying, Coolify shows you the internal connection URLs. Copy these &mdash; you'll put
+    them in the API's environment variables.</p>
+
+    <h2>Step 5: Deploy the API</h2>
+    <ol>
+        <li>Resources &rarr; New &rarr; Application</li>
+        <li>Source: your GitHub repo</li>
+        <li>Branch: <code>main</code></li>
+        <li>Build Pack: <strong>Dockerfile</strong></li>
+        <li>Dockerfile location: <code>api/Dockerfile</code></li>
+        <li>Port: <code>3000</code></li>
+    </ol>
+
+    <h3>Environment Variables</h3>
+    <p>In the application settings, add:</p>
+    <pre><code>DATABASE_URL=postgres://token:GENERATED_PASSWORD@postgres-container:5432/token_prod
+REDIS_URL=redis://redis-container:6379
+JWT_SECRET=generate-a-64-char-random-string
+JWT_REFRESH_SECRET=different-64-char-random-string
+NODE_ENV=production
+CORS_ORIGIN=https://tokn.app
+EXPO_ACCESS_TOKEN=your-expo-token-for-push-notifications</code></pre>
+
+    <p><strong>Generating secrets:</strong></p>
+    <pre><code># Run locally to generate a cryptographically secure random string
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+# Output: a1b2c3d4e5f6...64 hex characters</code></pre>
+
+    <h3>Domain &amp; TLS</h3>
+    <ol>
+        <li>In application settings &rarr; Domain: <code>api.tokn.app</code></li>
+        <li>Coolify automatically provisions a Let's Encrypt certificate</li>
+        <li>Point your DNS A record to the VPS IP</li>
+    </ol>
+
+    <h3>Health Check</h3>
+    <pre><code>// api/src/routes/health.ts
+import { Router } from 'express';
+import { db } from '../db';
+
+const router = Router();
+
+router.get('/health', async (req, res) => {
+  try {
+    await db.query('SELECT 1');
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(503).json({ status: 'unhealthy', error: 'database unreachable' });
+  }
+});
+
+export default router;</code></pre>
+
+    <p>Configure Coolify to use <code>/health</code> as the health check path. It will only route
+    traffic to the new container after it responds 200.</p>
+
+    <h2>Step 6: Deploy the Web Page</h2>
+    <ol>
+        <li>Resources &rarr; New &rarr; Application</li>
+        <li>Source: same GitHub repo</li>
+        <li>Build Pack: <strong>Dockerfile</strong></li>
+        <li>Dockerfile location: <code>web/Dockerfile</code></li>
+        <li>Port: <code>80</code></li>
+        <li>Domain: <code>tokn.app</code></li>
+    </ol>
+
+    <h3>Web Environment Variables</h3>
+    <pre><code># These are build-time variables (Vite embeds them at build time)
+VITE_API_URL=https://api.tokn.app
+VITE_WS_URL=wss://api.tokn.app/ws</code></pre>
+
+    <p><strong>Important:</strong> Vite environment variables are embedded at build time, not runtime.
+    If you change <code>VITE_API_URL</code>, you need to redeploy (rebuild) for it to take effect.</p>
+
+    <h2>Step 7: DNS Configuration</h2>
+    <p>At your domain registrar, add these A records:</p>
+    <pre><code># DNS records (replace 203.0.113.50 with your actual VPS IP)
+tokn.app        A    203.0.113.50
+api.tokn.app    A    203.0.113.50</code></pre>
+
+    <p>After DNS propagates (usually 5&ndash;30 minutes), Coolify's Traefik will route:</p>
+    <ul>
+        <li><code>https://tokn.app</code> &rarr; web container</li>
+        <li><code>https://api.tokn.app</code> &rarr; API container</li>
+    </ul>
+
+    <h2>Automatic Deploys</h2>
+    <p>With the GitHub integration, every push to <code>main</code> triggers:</p>
+    <ol>
+        <li>Coolify pulls the latest code</li>
+        <li>Builds a new Docker image using your Dockerfile</li>
+        <li>Starts the new container alongside the old one</li>
+        <li>Runs the health check on the new container</li>
+        <li>If healthy: routes traffic to the new container, stops the old one</li>
+        <li>If unhealthy: keeps the old container running, marks deploy as failed</li>
+    </ol>
+
+    <p>This is <strong>zero-downtime deployment</strong> &mdash; users never see an error page during
+    deploys.</p>
+
+    <h2>Running Migrations on Deploy</h2>
+    <p>Your API needs to run database migrations before it starts serving traffic. Add a pre-start
+    script:</p>
+    <pre><code>// api/package.json
+{
+  "scripts": {
+    "start": "node dist/server.js",
+    "prestart": "node dist/migrate.js",
+    "build": "tsc"
+  }
+}</code></pre>
+
+    <pre><code># Or use a custom start command in the Dockerfile
+CMD ["sh", "-c", "node dist/migrate.js && node dist/server.js"]</code></pre>
+
+    <p><strong>Warning:</strong> If a migration fails, the container won't start, the health check
+    won't pass, and Coolify will keep the old container running. This is the safe behavior &mdash;
+    a failed migration never reaches users.</p>
+
+    <h2>Cost Breakdown</h2>
+    <table>
+        <tr><th>Item</th><th>Provider</th><th>Monthly cost</th></tr>
+        <tr><td>VPS (4GB, 2vCPU)</td><td>Hetzner</td><td>~&#8377;500</td></tr>
+        <tr><td>Domain (tokn.app)</td><td>Any registrar</td><td>~&#8377;100</td></tr>
+        <tr><td>TLS certificate</td><td>Let's Encrypt (via Coolify)</td><td>Free</td></tr>
+        <tr><td>DNS</td><td>Cloudflare (free tier)</td><td>Free</td></tr>
+        <tr><td>Coolify</td><td>Self-hosted</td><td>Free (open source)</td></tr>
+        <tr><td><strong>Total</strong></td><td></td><td><strong>~&#8377;600/month</strong></td></tr>
+    </table>
+
+    <p>Compare this to Heroku ($25/month per dyno + $15 for Postgres) or AWS (variable, easily
+    $50+/month). You get more control for less money.</p>
+
+    <h2>Playground: Deployment Flow Simulation</h2>
+    <div id="playground-1"></div>
+
+    <h2>Exercise: Plan Your Production Deployment</h2>
+    <div id="exercise-1"></div>
+
+    <h2>Quiz</h2>
+    <div id="lesson-quiz"></div>
+
+    <div class="lesson-nav">
+        <a href="./0001-docker-fundamentals.html">&larr; Previous: Docker Fundamentals</a>
+        <a href="./0003-logs-backups-monitoring.html">Next: Logs, Backups &amp; Monitoring &rarr;</a>
+    </div>
+
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+    <script>
+        createPlayground("playground-1", `// Simulate Coolify's zero-downtime deployment
+function deploy(steps) {
+  console.log("=== Deployment started ===\\n");
+  let currentStep = 0;
+
+  steps.forEach((step, i) => {
+    currentStep = i + 1;
+    const status = step.success ? "✓" : "✗";
+    console.log(status + " Step " + currentStep + ": " + step.name);
+    if (step.detail) console.log("  " + step.detail);
+  });
+
+  const allPassed = steps.every(s => s.success);
+  console.log("\\n=== Result: " + (allPassed ? "DEPLOYED" : "ROLLED BACK") + " ===");
+  if (!allPassed) {
+    console.log("Old container still serving traffic — no downtime.");
+  }
+}
+
+console.log("--- Successful deploy ---");
+deploy([
+  { name: "Pull latest code", success: true, detail: "git pull origin main" },
+  { name: "Build Docker image", success: true, detail: "docker build -t api:v42 ." },
+  { name: "Start new container", success: true, detail: "api:v42 running on :3001" },
+  { name: "Health check", success: true, detail: "GET /health → 200 OK" },
+  { name: "Switch traffic", success: true, detail: "Traefik now routes to :3001" },
+  { name: "Stop old container", success: true, detail: "api:v41 stopped" },
+]);
+
+console.log("\\n--- Failed deploy (bad migration) ---");
+deploy([
+  { name: "Pull latest code", success: true, detail: "git pull origin main" },
+  { name: "Build Docker image", success: true, detail: "docker build -t api:v43 ." },
+  { name: "Start new container", success: true, detail: "api:v43 running on :3002" },
+  { name: "Health check", success: false, detail: "GET /health → 503 (migration failed)" },
+]);`);
+
+        createSolution("exercise-1", {
+            exercise: "Plan and write the complete deployment configuration for Token:\n\n1. Write a health check endpoint (`/health`) that verifies database connectivity and returns the appropriate status code.\n2. Write the DNS records needed (as a comment/documentation block).\n3. List all environment variables the API needs in production with explanations.\n4. Write a migration runner script (`api/src/migrate.ts`) that runs all pending SQL migrations before the server starts, and exits with code 1 on failure.",
+            hints: [
+                "The health check should try a simple database query (SELECT 1) and return 503 if it fails.",
+                "For the migration runner, read .sql files from a migrations/ directory in sorted order.",
+                "Track which migrations have run in a migrations table — only run new ones.",
+                "Exit with process.exit(1) on failure so Docker knows the container didn't start correctly."
+            ],
+            solution: `// api/src/routes/health.ts
+import { Router, Request, Response } from 'express';
+import { db } from '../db';
+
+const router = Router();
+
+router.get('/health', async (req: Request, res: Response) => {
+  try {
+    // Verify database connectivity
+    const result = await db.query('SELECT 1 AS ok');
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      version: process.env.npm_package_version || 'unknown',
+    });
+  } catch (err) {
+    res.status(503).json({
+      status: 'unhealthy',
+      error: 'database unreachable',
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
+export default router;
+
+// ---
+
+// api/src/migrate.ts
+import fs from 'fs';
+import path from 'path';
+import { db } from './db';
+
+async function runMigrations(): Promise<void> {
+  // Ensure migrations tracking table exists
+  await db.query(\`
+    CREATE TABLE IF NOT EXISTS migrations (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(255) NOT NULL UNIQUE,
+      applied_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  \`);
+
+  // Get already-applied migrations
+  const applied = await db.query('SELECT name FROM migrations ORDER BY name');
+  const appliedSet = new Set(applied.rows.map(r => r.name));
+
+  // Read migration files in sorted order
+  const migrationsDir = path.join(__dirname, '..', 'migrations');
+  const files = fs.readdirSync(migrationsDir)
+    .filter(f => f.endsWith('.sql'))
+    .sort();
+
+  // Run new migrations in a transaction
+  for (const file of files) {
+    if (appliedSet.has(file)) continue;
+
+    console.log('Running migration:', file);
+    const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf-8');
+
+    await db.query('BEGIN');
+    try {
+      await db.query(sql);
+      await db.query('INSERT INTO migrations (name) VALUES ($1)', [file]);
+      await db.query('COMMIT');
+      console.log('  ✓ Applied:', file);
+    } catch (err) {
+      await db.query('ROLLBACK');
+      console.error('  ✗ Failed:', file, err);
+      process.exit(1);
+    }
+  }
+
+  console.log('All migrations applied successfully.');
+}
+
+runMigrations()
+  .then(() => process.exit(0))
+  .catch((err) => {
+    console.error('Migration runner failed:', err);
+    process.exit(1);
+  });
+
+// ---
+
+// DNS Records (at your registrar):
+// tokn.app        A    <VPS_IP>
+// api.tokn.app    A    <VPS_IP>
+
+// ---
+
+// Production environment variables:
+// DATABASE_URL          — Postgres connection string (from Coolify's DB service)
+// REDIS_URL             — Redis connection string (from Coolify's Redis service)
+// JWT_SECRET            — 64-char hex string for signing access tokens
+// JWT_REFRESH_SECRET    — Different 64-char hex string for refresh tokens
+// NODE_ENV              — "production"
+// CORS_ORIGIN           — "https://tokn.app" (the web client's origin)
+// EXPO_ACCESS_TOKEN     — Expo push notification credentials
+// PORT                  — 3000 (the port the API listens on)`
+        });
+
+        createQuiz("lesson-quiz", [
+            {
+                type: "which-breaks",
+                question: "Which environment variable configuration will break the deployment?",
+                variants: [
+                    "DATABASE_URL=postgres://token:pass@db-internal:5432/token_prod",
+                    "DATABASE_URL=postgres://token:pass@localhost:5432/token_prod",
+                    "DATABASE_URL=postgres://token:pass@postgres-service.internal:5432/token_prod"
+                ],
+                correct: 1,
+                explanation: "localhost inside a container refers to the container itself, not the host machine or other containers. The Postgres container has its own network identity — use its container/service name on the Docker network."
+            },
+            {
+                type: "predict-output",
+                code: "// Coolify health check configuration:\n// Path: /health, Interval: 10s, Retries: 3\n// Container starts, migration takes 8 seconds\nconsole.log('t=0s: container starts, migration running');\nconsole.log('t=8s: migration done, server listening');\nconsole.log('t=10s: health check #1 → 200 OK');\nconsole.log('Result: traffic routed to new container');",
+                answer: "t=0s: container starts, migration running\nt=8s: migration done, server listening\nt=10s: health check #1 → 200 OK\nResult: traffic routed to new container",
+                explanation: "The health check interval gives the migration time to complete. By the time the first check fires at 10s, the server is already listening. This is why health checks exist — they let you do startup work before receiving traffic."
+            },
+            {
+                type: "fill-blank",
+                code: "# Generate a cryptographically secure secret for JWT signing\nnode -e \"console.log(require('crypto').randomBytes(32).toString('___'))\"",
+                answer: "hex",
+                explanation: "toString('hex') converts the 32 random bytes into a 64-character hexadecimal string — safe for environment variables (no special characters that might need escaping)."
+            },
+            {
+                type: "order-steps",
+                question: "Order the zero-downtime deployment steps:",
+                steps: [
+                    "Coolify detects git push to main",
+                    "Builds new Docker image from Dockerfile",
+                    "Starts new container alongside old one",
+                    "Health check passes on new container",
+                    "Traefik routes traffic to new container",
+                    "Old container is stopped and removed"
+                ],
+                correctOrder: [0, 1, 2, 3, 4, 5],
+                explanation: "The key insight is that the old container keeps serving traffic until the new one is verified healthy. If any step fails, the old container remains — users never see downtime."
+            },
+            {
+                question: "Why should Postgres and Redis NOT be exposed to the internet?",
+                options: [
+                    "They don't support TLS encryption",
+                    "They consume too much bandwidth",
+                    "They're attack surfaces — only the API should be reachable from outside",
+                    "Coolify doesn't support exposing database ports"
+                ],
+                correct: 2,
+                explanation: "Databases should only be accessible from the internal Docker network. Exposing them to the internet means anyone can attempt to connect — even with a password, this invites brute-force attacks and exploits against the database software itself."
+            }
+        ]);
+    </script>
+</body>
+</html>

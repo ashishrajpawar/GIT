@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>1:1 Video Call — A7.3</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A7 — Voice &amp; Video</a>
+      <span class="sep">›</span>
+      <span class="current">1:1 Video Call</span>
+    </nav>
+
+    <h1>1:1 Video Call</h1>
+    <div class="lesson-meta">
+      <span>A7 — Lesson 3 of 5</span>
+      <span>~55 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>Video calls let the issuer visually verify who they're dealing with — a delivery person can show the package, a repair technician can show the problem. Video adds trust without revealing identity (the holder still doesn't know the issuer's phone number). The UI challenge: showing both the remote video (full screen) and local preview (small PiP) while keeping controls accessible.</p>
+    </div>
+
+    <h2>Adding video to the peer connection</h2>
+
+    <p>The only difference from voice: request video in getUserMedia and render the streams:</p>
+
+    <pre><code>// In TokenPeerConnection.initialize():
+this.localStream = await mediaDevices.getUserMedia({
+  audio: true,
+  video: this.options.type === 'video'
+    ? { facingMode: 'user', width: 640, height: 480 }
+    : false,
+});</code></pre>
+
+    <h2>RTCView — rendering video streams</h2>
+
+    <pre><code>import { RTCView } from 'react-native-webrtc';
+
+// Remote video (full screen)
+&lt;RTCView
+  streamURL={remoteStream?.toURL()}
+  style={styles.remoteVideo}
+  objectFit="cover"
+  zOrder={0}
+/&gt;
+
+// Local preview (small PiP)
+&lt;RTCView
+  streamURL={localStream?.toURL()}
+  style={styles.localVideo}
+  objectFit="cover"
+  mirror={true}    // mirror front camera (natural feel)
+  zOrder={1}       // render above remote video
+/&gt;</code></pre>
+
+    <h2>The VideoCall screen</h2>
+
+    <pre><code>// app/src/screens/VideoCall.tsx
+import { useState, useEffect, useRef } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { RTCView, MediaStream } from 'react-native-webrtc';
+import { TokenPeerConnection } from '../webrtc/PeerConnection';
+import InCallManager from 'react-native-incall-manager';
+
+export function VideoCallScreen({ route, navigation }) {
+  const { callId, conversationId, isCaller, tokenLabel } = route.params;
+  const [callState, setCallState] = useState('connecting');
+  const [localStream, setLocalStream] = useState&lt;MediaStream | null&gt;(null);
+  const [remoteStream, setRemoteStream] = useState&lt;MediaStream | null&gt;(null);
+  const [muted, setMuted] = useState(false);
+  const [videoOff, setVideoOff] = useState(false);
+  const [frontCamera, setFrontCamera] = useState(true);
+  const pcRef = useRef&lt;TokenPeerConnection | null&gt;(null);
+
+  useEffect(() =&gt; {
+    startCall();
+    return () =&gt; cleanup();
+  }, []);
+
+  async function startCall() {
+    InCallManager.start({ media: 'video' });
+
+    const pc = new TokenPeerConnection({
+      conversationId,
+      callId,
+      type: 'video',
+      isCaller,
+      onRemoteStream: (stream) =&gt; setRemoteStream(stream),
+      onConnectionStateChange: (state) =&gt; setCallState(state),
+      onHangup: () =&gt; navigation.goBack(),
+    });
+
+    pcRef.current = pc;
+    const stream = await pc.initialize();
+    setLocalStream(stream);
+
+    if (isCaller) await pc.createOffer();
+  }
+
+  function handleMute() {
+    const isMuted = pcRef.current?.toggleMute();
+    setMuted(isMuted ?? false);
+  }
+
+  function handleVideoToggle() {
+    const isOff = pcRef.current?.toggleVideo();
+    setVideoOff(isOff ?? false);
+  }
+
+  function handleCameraFlip() {
+    pcRef.current?.switchCamera();
+    setFrontCamera(f =&gt; !f);
+  }
+
+  function handleHangup() {
+    pcRef.current?.hangup();
+    navigation.goBack();
+  }
+
+  function cleanup() {
+    pcRef.current?.cleanup();
+    InCallManager.stop();
+  }
+
+  return (
+    &lt;View style={styles.container}&gt;
+      {/* Remote video — full screen */}
+      {remoteStream ? (
+        &lt;RTCView
+          streamURL={remoteStream.toURL()}
+          style={styles.remoteVideo}
+          objectFit="cover"
+          zOrder={0}
+        /&gt;
+      ) : (
+        &lt;View style={styles.remoteVideo}&gt;
+          &lt;Text style={styles.connectingText}&gt;
+            {callState === 'connected' ? 'No video' : 'Connecting...'}
+          &lt;/Text&gt;
+        &lt;/View&gt;
+      )}
+
+      {/* Local preview — PiP */}
+      {localStream && !videoOff && (
+        &lt;RTCView
+          streamURL={localStream.toURL()}
+          style={styles.localVideo}
+          objectFit="cover"
+          mirror={frontCamera}
+          zOrder={1}
+        /&gt;
+      )}
+
+      {/* Controls overlay */}
+      &lt;View style={styles.controls}&gt;
+        &lt;TouchableOpacity
+          style={[styles.btn, muted && styles.btnActive]}
+          onPress={handleMute}
+        &gt;
+          &lt;Text style={styles.btnText}&gt;{muted ? 'Unmute' : 'Mute'}&lt;/Text&gt;
+        &lt;/TouchableOpacity&gt;
+
+        &lt;TouchableOpacity
+          style={[styles.btn, videoOff && styles.btnActive]}
+          onPress={handleVideoToggle}
+        &gt;
+          &lt;Text style={styles.btnText}&gt;{videoOff ? 'Video On' : 'Video Off'}&lt;/Text&gt;
+        &lt;/TouchableOpacity&gt;
+
+        &lt;TouchableOpacity style={styles.btn} onPress={handleCameraFlip}&gt;
+          &lt;Text style={styles.btnText}&gt;Flip&lt;/Text&gt;
+        &lt;/TouchableOpacity&gt;
+
+        &lt;TouchableOpacity style={styles.hangupBtn} onPress={handleHangup}&gt;
+          &lt;Text style={styles.hangupText}&gt;End&lt;/Text&gt;
+        &lt;/TouchableOpacity&gt;
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#000' },
+  remoteVideo: { flex: 1, backgroundColor: '#1e293b', justifyContent: 'center', alignItems: 'center' },
+  connectingText: { color: '#94a3b8', fontSize: 16 },
+  localVideo: {
+    position: 'absolute', top: 60, right: 16,
+    width: 120, height: 160,
+    borderRadius: 12, overflow: 'hidden',
+    borderWidth: 2, borderColor: '#fff',
+  },
+  controls: {
+    position: 'absolute', bottom: 40,
+    left: 0, right: 0,
+    flexDirection: 'row', justifyContent: 'center',
+    gap: 16,
+  },
+  btn: {
+    width: 56, height: 56, borderRadius: 28,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  btnActive: { backgroundColor: 'rgba(255,255,255,0.4)' },
+  btnText: { color: '#fff', fontSize: 10, textAlign: 'center' },
+  hangupBtn: {
+    width: 56, height: 56, borderRadius: 28,
+    backgroundColor: '#ef4444',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  hangupText: { color: '#fff', fontSize: 12, fontWeight: '600' },
+});</code></pre>
+
+    <h2>Camera switching</h2>
+
+    <p><code>react-native-webrtc</code> provides a private <code>_switchCamera()</code> method on video tracks:</p>
+
+    <pre><code>async function switchCamera() {
+  const videoTrack = localStream?.getVideoTracks()[0];
+  if (videoTrack && '_switchCamera' in videoTrack) {
+    (videoTrack as any)._switchCamera();
+  }
+}</code></pre>
+
+    <p>This toggles between front and back camera without renegotiation. The remote peer sees the switch instantly — no interruption.</p>
+
+    <h2>Video constraints</h2>
+
+    <pre><code>// Requesting specific resolution:
+const stream = await mediaDevices.getUserMedia({
+  audio: true,
+  video: {
+    facingMode: 'user',  // 'user' = front, 'environment' = back
+    width: { ideal: 640 },
+    height: { ideal: 480 },
+    frameRate: { ideal: 30 },
+  },
+});
+
+// Lower quality for slow connections:
+// width: 320, height: 240, frameRate: 15</code></pre>
+
+    <p><strong>Adaptive bitrate:</strong> WebRTC automatically adjusts video quality based on available bandwidth. You don't need to manually lower resolution — the encoder adapts. But starting with a reasonable constraint (640x480) prevents the initial quality from being unnecessarily high.</p>
+
+    <h2>Mirror mode for front camera</h2>
+
+    <p>When using the front camera, your local preview should be mirrored (like looking in a mirror). But the remote peer sees you un-mirrored (correct orientation).</p>
+
+    <pre><code>&lt;RTCView
+  mirror={frontCamera}  // only mirror when front camera is active
+  // ...
+/&gt;</code></pre>
+
+    <h2>Platform differences</h2>
+
+    <table>
+      <thead>
+        <tr><th>Feature</th><th>iOS</th><th>Android</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Camera permission</td><td>Info.plist + runtime dialog</td><td>AndroidManifest + runtime</td></tr>
+        <tr><td>PiP overlay</td><td>Works with zOrder</td><td>May need elevation</td></tr>
+        <tr><td>Camera switch</td><td>_switchCamera() works</td><td>_switchCamera() works</td></tr>
+        <tr><td>Background video</td><td>Camera paused by OS</td><td>Camera may continue briefly</td></tr>
+      </tbody>
+    </table>
+
+    <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0002-voice-call.html">← Previous: 1:1 Voice Call</a>
+      <a href="./0004-incoming-calls.html">Next: Incoming Calls →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// Video call layout calculation
+// Remote video: full screen
+// Local PiP: small rectangle in corner
+
+const screen = { width: 390, height: 844 }; // iPhone 14 dimensions
+const pip = { width: 120, height: 160, top: 60, right: 16 };
+
+console.log('Screen:', screen.width + 'x' + screen.height);
+console.log('Remote video: full screen (' + screen.width + 'x' + screen.height + ')');
+console.log('Local PiP: ' + pip.width + 'x' + pip.height + ' at top-right');
+console.log('PiP aspect ratio:', (pip.width / pip.height).toFixed(2), '(3:4 portrait)');
+console.log('');
+console.log('PiP area:', pip.width * pip.height, 'px²');
+console.log('Screen area:', screen.width * screen.height, 'px²');
+console.log('PiP is', ((pip.width * pip.height) / (screen.width * screen.height) * 100).toFixed(1) + '% of screen');`);
+
+    createSolution("exercise-1", {
+      exercise: "Build the complete video call screen:\n\n1. Create `VideoCallScreen` with: full-screen remote RTCView, PiP local preview (120x160, top-right corner, mirrored for front camera), overlay controls.\n\n2. Controls: mute (audio), video off (hides local video + stops sending), camera flip (front/back), hangup.\n\n3. Handle 'connecting' state: show a dark background with 'Connecting...' text before remote stream arrives.\n\n4. Mirror the local preview only when the front camera is active. Un-mirror on flip.\n\n5. Use InCallManager with media: 'video' for speaker mode by default (video calls use speaker, not earpiece).\n\n6. Test: two EAS development builds on two devices. Start a video call, verify both streams display. Flip camera, mute, toggle video off.",
+      hints: [
+        "RTCView needs streamURL={stream.toURL()} — not the stream object directly.",
+        "zOrder controls layering: remote video = 0 (back), local PiP = 1 (front).",
+        "_switchCamera() on the video track toggles front/back without creating a new stream.",
+        "When video is toggled off, hide the local RTCView AND set videoTrack.enabled=false (stops sending to peer)."
+      ],
+      solution: `// See the full VideoCallScreen implementation above.
+// Key differences from VoiceCall:
+// 1. getUserMedia includes video: { facingMode: 'user', width: 640, height: 480 }
+// 2. RTCView renders both remote (full screen) and local (PiP) streams
+// 3. Camera flip via _switchCamera() on the video track
+// 4. Video toggle: videoTrack.enabled + hide/show local RTCView
+// 5. InCallManager.start({ media: 'video' }) uses speaker by default
+// 6. Mirror only for front camera (mirror={frontCamera})`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "What does the remote peer see when you call videoTrack.enabled = false?",
+        code: "const videoTrack = localStream.getVideoTracks()[0];\nvideoTrack.enabled = false;\n// Remote peer sees: ???",
+        answer: "A black/frozen frame (last frame before disable or black)",
+        explanation: "Like audio mute sending silence, video disable sends black frames (or the last frame freezes, depending on implementation). The track still exists in the connection — no renegotiation. The remote RTCView shows black or frozen. Enable it again and video resumes instantly."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this local video preview?",
+        code: "<RTCView\n  streamURL={localStream.toURL()}\n  style={styles.localVideo}\n  objectFit=\"cover\"\n  mirror={true}\n/>",
+        options: [
+          "mirror={true} is always on — when the user switches to the back camera, their preview is incorrectly mirrored (text appears backwards)",
+          "objectFit should be 'contain' for local video",
+          "toURL() is not a function on MediaStream",
+          "RTCView doesn't support the mirror prop"
+        ],
+        correct: 0,
+        explanation: "Mirror should only be true for the front camera. The back camera shows the world — mirroring it makes text backwards and confuses the user. Track which camera is active (front/back state) and set mirror={frontCamera}."
+      },
+      {
+        type: "which-breaks",
+        question: "What's the correct InCallManager mode for a video call?",
+        variants: [
+          "InCallManager.start({ media: 'audio' }) — earpiece mode",
+          "InCallManager.start({ media: 'video' }) — speaker mode",
+          "InCallManager.start() — no media parameter",
+          "Don't use InCallManager for video calls"
+        ],
+        correct: 1,
+        explanation: "Video calls use the speaker by default (you hold the phone away from your ear to see the video). media: 'video' tells InCallManager to route audio to the loudspeaker. media: 'audio' routes to the earpiece (phone-against-ear mode for voice calls)."
+      },
+      {
+        type: "fill-blank",
+        question: "Render the remote video stream full-screen:",
+        code: "<RTCView\n  streamURL={remoteStream?.___()} \n  style={{ flex: 1 }}\n  objectFit=\"cover\"\n  zOrder={0}\n/>",
+        answer: "toURL",
+        explanation: "RTCView expects a streamURL string, not a MediaStream object. The toURL() method on MediaStream (specific to react-native-webrtc) returns a string identifier that RTCView can render. Without it, the video won't display."
+      },
+      {
+        type: "order-steps",
+        question: "Put the video call UI layers in order (back to front):",
+        steps: [
+          "Remote video RTCView (zOrder=0, full screen)",
+          "Local PiP RTCView (zOrder=1, small corner rectangle)",
+          "Semi-transparent controls overlay (positioned absolute, bottom)",
+          "Status text / connecting indicator (center, visible only when no remote stream)"
+        ],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "Remote video is the base layer (full screen background). Local PiP floats above it in the corner. Controls overlay above both at the bottom. Status text is highest z-index but only visible during the connecting phase (before remote stream arrives)."
+      }
+    ]);
+  </script>
+</body>
+</html>

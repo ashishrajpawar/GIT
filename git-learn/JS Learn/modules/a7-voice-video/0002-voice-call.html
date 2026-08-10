@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>1:1 Voice Call — A7.2</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A7 — Voice &amp; Video</a>
+      <span class="sep">›</span>
+      <span class="current">1:1 Voice Call</span>
+    </nav>
+
+    <h1>1:1 Voice Call</h1>
+    <div class="lesson-meta">
+      <span>A7 — Lesson 2 of 5</span>
+      <span>~55 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>A voice call is the fastest way for a token holder to reach the issuer. "Which floor are you on?" takes 3 seconds by voice, 30 seconds by text. The call must connect quickly, sound clear, and have simple controls (mute, speaker, hangup). This is the first real use of the WebRTC + signalling infrastructure you've built.</p>
+    </div>
+
+    <h2>The VoiceCall screen</h2>
+
+    <pre><code>// app/src/screens/VoiceCall.tsx
+import { useState, useEffect, useRef } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { TokenPeerConnection } from '../webrtc/PeerConnection';
+import { InCallManager } from 'react-native-incall-manager';
+
+interface VoiceCallProps {
+  route: { params: { callId: string; conversationId: number; isCaller: boolean; tokenLabel: string } };
+  navigation: any;
+}
+
+export function VoiceCallScreen({ route, navigation }: VoiceCallProps) {
+  const { callId, conversationId, isCaller, tokenLabel } = route.params;
+  const [callState, setCallState] = useState&lt;string&gt;('connecting');
+  const [muted, setMuted] = useState(false);
+  const [speakerOn, setSpeakerOn] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const pcRef = useRef&lt;TokenPeerConnection | null&gt;(null);
+  const timerRef = useRef&lt;ReturnType&lt;typeof setInterval&gt; | null&gt;(null);
+
+  useEffect(() =&gt; {
+    startCall();
+    return () =&gt; cleanup();
+  }, []);
+
+  // Call timer
+  useEffect(() =&gt; {
+    if (callState === 'connected') {
+      timerRef.current = setInterval(() =&gt; {
+        setDuration(d =&gt; d + 1);
+      }, 1000);
+    }
+    return () =&gt; { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [callState]);
+
+  async function startCall() {
+    InCallManager.start({ media: 'audio' });
+    InCallManager.setForceSpeakerphoneOn(false);
+
+    const pc = new TokenPeerConnection({
+      conversationId,
+      callId,
+      type: 'voice',
+      isCaller,
+      onRemoteStream: () =&gt; {},  // audio plays automatically
+      onConnectionStateChange: (state) =&gt; setCallState(state),
+      onHangup: () =&gt; navigation.goBack(),
+    });
+
+    pcRef.current = pc;
+    await pc.initialize();
+
+    if (isCaller) {
+      await pc.createOffer();
+    }
+  }
+
+  function handleMute() {
+    const isMuted = pcRef.current?.toggleMute();
+    setMuted(isMuted ?? false);
+  }
+
+  function handleSpeaker() {
+    const newState = !speakerOn;
+    InCallManager.setForceSpeakerphoneOn(newState);
+    setSpeakerOn(newState);
+  }
+
+  function handleHangup() {
+    pcRef.current?.hangup();
+    navigation.goBack();
+  }
+
+  function cleanup() {
+    pcRef.current?.cleanup();
+    InCallManager.stop();
+    if (timerRef.current) clearInterval(timerRef.current);
+  }
+
+  function formatDuration(seconds: number): string {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  }
+
+  return (
+    &lt;View style={styles.container}&gt;
+      &lt;Text style={styles.label}&gt;{tokenLabel}&lt;/Text&gt;
+      &lt;Text style={styles.state}&gt;
+        {callState === 'connected' ? formatDuration(duration) : 'Connecting...'}
+      &lt;/Text&gt;
+
+      &lt;View style={styles.controls}&gt;
+        &lt;TouchableOpacity
+          style={[styles.controlBtn, muted && styles.controlActive]}
+          onPress={handleMute}
+        &gt;
+          &lt;Text style={styles.controlText}&gt;{muted ? 'Unmute' : 'Mute'}&lt;/Text&gt;
+        &lt;/TouchableOpacity&gt;
+
+        &lt;TouchableOpacity style={styles.hangupBtn} onPress={handleHangup}&gt;
+          &lt;Text style={styles.hangupText}&gt;End&lt;/Text&gt;
+        &lt;/TouchableOpacity&gt;
+
+        &lt;TouchableOpacity
+          style={[styles.controlBtn, speakerOn && styles.controlActive]}
+          onPress={handleSpeaker}
+        &gt;
+          &lt;Text style={styles.controlText}&gt;{speakerOn ? 'Earpiece' : 'Speaker'}&lt;/Text&gt;
+        &lt;/TouchableOpacity&gt;
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <h2>InCallManager — audio routing</h2>
+
+    <p><code>react-native-incall-manager</code> handles platform-specific audio routing during calls:</p>
+
+    <pre><code>npx expo install react-native-incall-manager</code></pre>
+
+    <ul>
+      <li><strong>Earpiece vs speaker</strong> — routes audio to the ear speaker (phone mode) or the loudspeaker</li>
+      <li><strong>Proximity sensor</strong> — turns off the screen when the phone is near your ear (prevents accidental taps)</li>
+      <li><strong>Audio focus</strong> — pauses music, takes priority over other audio apps</li>
+      <li><strong>Ringtone/vibration</strong> — plays ring sound for incoming calls</li>
+    </ul>
+
+    <pre><code>import InCallManager from 'react-native-incall-manager';
+
+// Start call audio session
+InCallManager.start({ media: 'audio' });
+
+// Route to speaker
+InCallManager.setForceSpeakerphoneOn(true);
+
+// Route to earpiece
+InCallManager.setForceSpeakerphoneOn(false);
+
+// Enable proximity sensor (screen off when near ear)
+InCallManager.setProximity(true);
+
+// Stop — restore normal audio
+InCallManager.stop();</code></pre>
+
+    <h2>Muting — how it works</h2>
+
+    <pre><code>// Mute = disable the audio track (stop sending audio to the peer)
+const audioTrack = localStream.getAudioTracks()[0];
+audioTrack.enabled = false;  // muted — peer hears silence
+audioTrack.enabled = true;   // unmuted — peer hears you again</code></pre>
+
+    <p><strong>Important:</strong> <code>enabled = false</code> sends silence frames. The track is still "there" — it's not removed. The peer's connection stays stable. <code>track.stop()</code> would permanently end the track and require renegotiation.</p>
+
+    <h2>Initiating a call from the message thread</h2>
+
+    <pre><code>// In MessageThreadScreen — add a call button in the header
+function handleVoiceCall() {
+  send('call:initiate', { conversationId, type: 'voice' });
+
+  // Listen for the server's response
+  const unsub = subscribe((type, payload) =&gt; {
+    if (type === 'call:accepted') {
+      unsub();
+      navigation.navigate('VoiceCall', {
+        callId: payload.callId,
+        conversationId,
+        isCaller: true,
+        tokenLabel,
+      });
+    } else if (type === 'call:busy' || type === 'call:unavailable') {
+      unsub();
+      Alert.alert('Cannot call', payload.reason);
+    }
+  });
+}</code></pre>
+
+    <h2>Styles</h2>
+
+    <pre><code>const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#1e293b',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 80,
+  },
+  label: {
+    fontSize: 24,
+    fontWeight: '600',
+    color: '#fff',
+  },
+  state: {
+    fontSize: 16,
+    color: '#94a3b8',
+    marginTop: 8,
+  },
+  controls: {
+    flexDirection: 'row',
+    gap: 24,
+    alignItems: 'center',
+  },
+  controlBtn: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#334155',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  controlActive: {
+    backgroundColor: '#475569',
+  },
+  controlText: {
+    color: '#fff',
+    fontSize: 11,
+    marginTop: 2,
+  },
+  hangupBtn: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#ef4444',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  hangupText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+});</code></pre>
+
+    <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0001-webrtc-refresher.html">← Previous: WebRTC Refresher</a>
+      <a href="./0003-video-call.html">Next: 1:1 Video Call →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// Call duration formatter
+function formatDuration(seconds) {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+
+  if (h > 0) return h + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+  return m + ':' + String(s).padStart(2, '0');
+}
+
+// Test various durations
+console.log('0 seconds:', formatDuration(0));
+console.log('45 seconds:', formatDuration(45));
+console.log('3 minutes 7 seconds:', formatDuration(187));
+console.log('1 hour 5 min 30 sec:', formatDuration(3930));`);
+
+    createSolution("exercise-1", {
+      exercise: "Build the complete voice call screen:\n\n1. Create `VoiceCallScreen` with: connection state display ('Connecting...' / timer), mute button, speaker toggle, hangup button.\n\n2. Integrate TokenPeerConnection: initialize on mount, createOffer if caller, cleanup on unmount.\n\n3. Add InCallManager: start audio session, earpiece by default, speaker toggle, proximity sensor.\n\n4. Add call timer: start counting when connectionState becomes 'connected', display as M:SS.\n\n5. Handle hangup from both sides: local hangup (button press) sends call:hangup and navigates back. Remote hangup (received via WS) triggers onHangup callback.\n\n6. Test: requires two devices with EAS development builds. Start a call from one, accept on the other, verify audio flows both ways.",
+      hints: [
+        "InCallManager.start({ media: 'audio' }) switches to phone call audio mode. Always call InCallManager.stop() on cleanup.",
+        "The call timer starts when callState === 'connected', not when the screen opens. Use setInterval with 1-second ticks.",
+        "audioTrack.enabled = false mutes (sends silence). audioTrack.stop() permanently ends the track — don't use stop() for mute.",
+        "Cleanup must happen in useEffect's return AND in handleHangup — cover both navigation back and screen unmount."
+      ],
+      solution: `// See the full VoiceCallScreen implementation in the lesson code above.
+// Key patterns:
+
+// State: callState, muted, speakerOn, duration
+// Ref: pcRef (TokenPeerConnection), timerRef (interval)
+// Mount: startCall() → InCallManager.start, new TokenPeerConnection, initialize, createOffer if caller
+// Timer: useEffect watching callState === 'connected' → setInterval
+// Mute: pcRef.current.toggleMute() → audioTrack.enabled toggle
+// Speaker: InCallManager.setForceSpeakerphoneOn(bool)
+// Hangup: pcRef.current.hangup(), navigation.goBack()
+// Cleanup: pcRef.current.cleanup(), InCallManager.stop(), clearInterval`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "What does the peer hear when you set audioTrack.enabled = false?",
+        code: "const audioTrack = localStream.getAudioTracks()[0];\naudioTrack.enabled = false;\n// What does the remote peer hear?",
+        answer: "Silence (the track sends empty/silent frames)",
+        explanation: "enabled=false doesn't remove the track or close the connection. It sends silence frames so the remote peer knows the track still exists but is muted. This is instant and requires no renegotiation. The peer's ontrack event doesn't fire again — the stream stays the same."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this call cleanup?",
+        code: "function VoiceCallScreen({ route, navigation }) {\n  const pc = useRef(null);\n\n  useEffect(() => {\n    startCall();\n    // no return/cleanup\n  }, []);\n\n  function handleHangup() {\n    navigation.goBack();\n  }\n}",
+        options: [
+          "No cleanup on unmount — microphone stays active, PC stays open, InCallManager keeps running, audio route stays in call mode",
+          "useRef is wrong for peer connections",
+          "startCall should be outside useEffect",
+          "navigation.goBack() doesn't work in useEffect"
+        ],
+        correct: 0,
+        explanation: "Missing: useEffect return function with pc.cleanup() and InCallManager.stop(). Also handleHangup doesn't call pc.hangup() — the remote peer never gets notified. The microphone remains captured, the audio route stays in call mode, and the system thinks a call is still active."
+      },
+      {
+        type: "which-breaks",
+        question: "When should InCallManager.start() be called?",
+        variants: [
+          "When the app launches (in App.tsx)",
+          "When the call screen mounts (before getUserMedia)",
+          "After the peer connection reaches 'connected' state",
+          "Only when the user taps the speaker button"
+        ],
+        correct: 1,
+        explanation: "InCallManager.start() switches the audio system to call mode (earpiece routing, proximity sensor, audio focus). It should activate when the call screen opens — before getUserMedia, so the microphone captures through the call audio path. Calling it after 'connected' means the first few seconds have wrong audio routing."
+      },
+      {
+        type: "fill-blank",
+        question: "Format 187 seconds as a call duration string:",
+        code: "function formatDuration(seconds) {\n  const m = Math.floor(seconds / ___);\n  const s = seconds % 60;\n  return m + ':' + String(s).padStart(2, '0');\n}\n// formatDuration(187) → '3:07'",
+        answer: "60",
+        explanation: "Divide by 60 to get minutes (187/60 = 3.1 → floor → 3). Modulo 60 gives remaining seconds (187%60 = 7). Pad seconds to 2 digits: '07'. Result: '3:07'."
+      },
+      {
+        type: "order-steps",
+        question: "Put the voice call startup sequence in order:",
+        steps: [
+          "InCallManager.start({ media: 'audio' }) — switch to call audio mode",
+          "Create TokenPeerConnection with callbacks",
+          "pc.initialize() — getUserMedia + set up ICE/track listeners",
+          "pc.createOffer() — generate SDP and send via signalling (caller only)",
+          "Wait for 'connected' state — start the call timer"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Audio mode first (so mic captures correctly). Create PC (configuration). Initialize (get media, set up WebRTC). Offer (start the negotiation). Timer starts when connected — not before, because the call might still be connecting or might fail."
+      }
+    ]);
+  </script>
+</body>
+</html>

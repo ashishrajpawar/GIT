@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Relay-Only Mode &amp; IP Privacy — A7.5</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A7 — Voice &amp; Video</a>
+      <span class="sep">›</span>
+      <span class="current">Relay-Only Mode &amp; IP Privacy</span>
+    </nav>
+
+    <h1>Relay-Only Mode &amp; IP Privacy</h1>
+    <div class="lesson-meta">
+      <span>A7 — Lesson 5 of 5</span>
+      <span>~40 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>In a normal WebRTC call, both peers exchange their IP addresses during ICE negotiation. An IP address can reveal your approximate location and ISP. For a privacy app where the whole point is that holders DON'T know who you are, leaking your IP is a problem. Relay-only mode forces all traffic through your TURN server — neither peer ever learns the other's IP. It's the final layer of Token's privacy promise.</p>
+    </div>
+
+    <h2>The IP exposure problem</h2>
+
+    <p>During normal ICE, both sides generate candidates that include IP addresses:</p>
+
+    <pre><code>// Candidate from Alice:
+candidate: "candidate:1 1 udp 2122260223 192.168.1.5 54321 typ host"
+candidate: "candidate:2 1 udp 1686052607 103.45.67.89 12345 typ srflx"
+
+// Bob now knows:
+// - Alice's local IP: 192.168.1.5 (not useful externally)
+// - Alice's public IP: 103.45.67.89 (reveals ISP, approximate city)</code></pre>
+
+    <p>With an IP address, someone can:</p>
+    <ul>
+      <li>Determine your approximate location (city/district level)</li>
+      <li>Identify your ISP (Jio, Airtel, BSNL)</li>
+      <li>Potentially correlate with other services (if the IP is static)</li>
+      <li>Target you for network-level attacks</li>
+    </ul>
+
+    <h2>The solution: iceTransportPolicy: 'relay'</h2>
+
+    <pre><code>// Normal mode (default):
+const pc = new RTCPeerConnection({
+  iceServers,
+  iceTransportPolicy: 'all',  // try host, srflx, then relay
+});
+// Both peers learn each other's IPs during ICE
+
+// Relay-only mode:
+const pc = new RTCPeerConnection({
+  iceServers,
+  iceTransportPolicy: 'relay',  // ONLY use TURN relay
+});
+// Neither peer ever sees the other's IP — only the TURN server's IP</code></pre>
+
+    <h3>What changes</h3>
+
+    <table>
+      <thead>
+        <tr><th></th><th>Normal (all)</th><th>Relay-only</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>IP privacy</td><td>Both IPs exposed</td><td>Both IPs hidden</td></tr>
+        <tr><td>Latency</td><td>Minimal (P2P)</td><td>+50-100ms (extra hop)</td></tr>
+        <tr><td>Bandwidth cost</td><td>Free (P2P)</td><td>Server bandwidth</td></tr>
+        <tr><td>Connection reliability</td><td>~85% success (may fail behind strict NAT)</td><td>~99% success (TURN always works)</td></tr>
+        <tr><td>Audio quality</td><td>Best possible</td><td>Slightly reduced (jitter from extra hop)</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Implementing the user setting</h2>
+
+    <pre><code>// app/src/settings/privacy.ts
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const RELAY_ONLY_KEY = 'settings:relay_only';
+
+export async function getRelayOnlyMode(): Promise&lt;boolean&gt; {
+  const value = await AsyncStorage.getItem(RELAY_ONLY_KEY);
+  return value === 'true';
+}
+
+export async function setRelayOnlyMode(enabled: boolean): Promise&lt;void&gt; {
+  await AsyncStorage.setItem(RELAY_ONLY_KEY, String(enabled));
+}</code></pre>
+
+    <h3>Integrating into PeerConnection</h3>
+
+    <pre><code>// app/src/webrtc/PeerConnection.ts — in initialize():
+import { getRelayOnlyMode } from '../settings/privacy';
+
+async initialize() {
+  const iceServers = await getIceServers();
+  const relayOnly = await getRelayOnlyMode();
+
+  this.pc = new RTCPeerConnection({
+    iceServers,
+    iceTransportPolicy: relayOnly ? 'relay' : 'all',
+  });
+
+  // ... rest of initialization
+}</code></pre>
+
+    <h2>Settings UI</h2>
+
+    <pre><code>// app/src/screens/Settings.tsx — privacy section
+import { View, Text, Switch, StyleSheet } from 'react-native';
+import { useState, useEffect } from 'react';
+import { getRelayOnlyMode, setRelayOnlyMode } from '../settings/privacy';
+
+function PrivacySection() {
+  const [relayOnly, setRelayOnly] = useState(false);
+
+  useEffect(() =&gt; {
+    getRelayOnlyMode().then(setRelayOnly);
+  }, []);
+
+  async function handleToggle(value: boolean) {
+    setRelayOnly(value);
+    await setRelayOnlyMode(value);
+  }
+
+  return (
+    &lt;View style={styles.section}&gt;
+      &lt;Text style={styles.sectionTitle}&gt;Call Privacy&lt;/Text&gt;
+
+      &lt;View style={styles.settingRow}&gt;
+        &lt;View style={styles.settingInfo}&gt;
+          &lt;Text style={styles.settingLabel}&gt;Hide IP Address&lt;/Text&gt;
+          &lt;Text style={styles.settingDesc}&gt;
+            Route all calls through the relay server. The other party
+            never sees your IP address. May add slight latency.
+          &lt;/Text&gt;
+        &lt;/View&gt;
+        &lt;Switch value={relayOnly} onValueChange={handleToggle} /&gt;
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <h2>The trade-off explained to users</h2>
+
+    <p>The settings screen should be honest about the trade-off. Token is for privacy-conscious users — they can make an informed choice:</p>
+
+    <pre><code>// When relay mode is OFF:
+"Direct connection — lowest latency, best call quality.
+ The other party can see your IP address (approximate location)."
+
+// When relay mode is ON:
+"Relay mode — your IP address is hidden from the other party.
+ Calls route through our server, which may add slight delay."</code></pre>
+
+    <h2>When to recommend relay mode</h2>
+
+    <p>Not all users need relay mode. Recommendations:</p>
+
+    <ul>
+      <li><strong>Tokens for strangers</strong> (delivery, service providers) — recommend relay ON. You don't want a random delivery person knowing your IP.</li>
+      <li><strong>Tokens for known contacts</strong> (friends, family) — relay OFF is fine. They already know where you live.</li>
+      <li><strong>High-threat users</strong> (journalists, activists, domestic abuse survivors) — relay ON is critical.</li>
+    </ul>
+
+    <p>Future enhancement: per-token relay setting. "This token always uses relay" vs "This token allows direct connection." For now, it's a global setting.</p>
+
+    <h2>Server-side: can the TURN server see the call content?</h2>
+
+    <p><strong>No.</strong> WebRTC media is encrypted end-to-end with DTLS-SRTP. The TURN server relays encrypted packets — it cannot decrypt them. Even if someone compromises your TURN server, they get encrypted gibberish.</p>
+
+    <pre><code>// What the TURN server sees:
+// Source IP → TURN → Destination IP
+// Encrypted audio/video bytes flowing through
+// It knows WHO is calling whom (IP-level routing)
+// It CANNOT hear or see the call content
+
+// This is inherent to WebRTC's design — not something you configure</code></pre>
+
+    <h2>Testing relay mode</h2>
+
+    <pre><code>// To verify relay mode is working:
+// 1. Enable relay mode in settings
+// 2. Start a call
+// 3. Check the ICE connection type:
+
+pc.getStats().then(stats =&gt; {
+  stats.forEach(report =&gt; {
+    if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+      console.log('Local candidate type:', report.localCandidateType);
+      console.log('Remote candidate type:', report.remoteCandidateType);
+      // Both should be 'relay' when relay mode is ON
+    }
+  });
+});</code></pre>
+
+    <h2>Cost implications</h2>
+
+    <p>Relay mode means ALL media traffic flows through your server:</p>
+
+    <pre><code>// Voice call (Opus 32kbps):
+// 32 kbps × 2 directions = 64 kbps through TURN
+// 1 hour = ~29 MB through your server
+
+// Video call (VP8 500kbps):
+// 500 kbps × 2 = 1 Mbps through TURN
+// 1 hour = ~450 MB through your server
+
+// With a 1TB/month VPS transfer limit:
+// ~2200 hours of relay voice OR ~2200 hours of relay video
+// In practice: most calls are short (1-5 min), and only some users enable relay</code></pre>
+
+    <p>For Token v1 with a small user base, this is fine. At scale, you'd monitor TURN bandwidth and potentially charge for relay mode or optimize with bandwidth-adaptive bitrate.</p>
+
+    <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0004-incoming-calls.html">← Previous: Incoming Calls</a>
+      <a href="../a8-redemption-web/0001-vite-react-setup.html">Next module: A8 Redemption Web Page →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// Calculate bandwidth cost of relay mode
+function calcRelayBandwidth(callType, durationMinutes) {
+  const bitrates = { voice: 32, video_480p: 500, video_720p: 1500 }; // kbps
+  const bps = bitrates[callType] * 1000;  // bits per second
+  const bytesPerSecond = bps / 8;
+  const totalBytes = bytesPerSecond * durationMinutes * 60 * 2; // ×2 for both directions
+  return totalBytes;
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
+console.log('Relay bandwidth per call (through your server):');
+console.log('────────────────────────────────────────────');
+console.log('5 min voice:', formatBytes(calcRelayBandwidth('voice', 5)));
+console.log('5 min video (480p):', formatBytes(calcRelayBandwidth('video_480p', 5)));
+console.log('5 min video (720p):', formatBytes(calcRelayBandwidth('video_720p', 5)));
+console.log('');
+console.log('1 hour voice:', formatBytes(calcRelayBandwidth('voice', 60)));
+console.log('1 hour video (480p):', formatBytes(calcRelayBandwidth('video_480p', 60)));
+console.log('');
+console.log('With 1TB/month server:');
+const voiceHours = (1024 * 1024 * 1024 * 1024) / calcRelayBandwidth('voice', 60);
+console.log('Max voice hours/month:', Math.floor(voiceHours));`);
+
+    createSolution("exercise-1", {
+      exercise: "Implement the relay-only privacy feature:\n\n1. Create settings persistence: getRelayOnlyMode() / setRelayOnlyMode() using AsyncStorage.\n\n2. Integrate into TokenPeerConnection: read the setting during initialize(), pass iceTransportPolicy: 'relay' or 'all' to RTCPeerConnection.\n\n3. Create the Settings UI: a toggle switch with clear explanation of the trade-off (privacy vs latency).\n\n4. Add a way to verify it's working: use pc.getStats() to check that connected candidates are type 'relay'.\n\n5. Test: enable relay mode, start a call. Use getStats() to confirm both local and remote candidates are 'relay' type. Disable relay mode, start another call, verify candidates are 'srflx' or 'host'.\n\n6. Consider future enhancement: document how per-token relay settings would work (stored in access_rules as a new rule type).",
+      hints: [
+        "AsyncStorage is simple key-value. Store 'true'/'false' as strings.",
+        "The setting must be read BEFORE creating the RTCPeerConnection — it can't be changed mid-call.",
+        "pc.getStats() returns a Map of RTCStatsReport objects. Filter for type === 'candidate-pair' with state === 'succeeded'.",
+        "The setting description should be honest about the trade-off — Token users are privacy-conscious and appreciate transparency."
+      ],
+      solution: `// See the lesson code above for full implementations.
+// Key decisions:
+
+// 1. Global setting (v1) — stored in AsyncStorage
+//    Future: per-token setting in access_rules table
+
+// 2. Read at PC creation time — can't change mid-call
+//    User must end and restart the call if they toggle the setting
+
+// 3. Settings UI:
+//    - Clear label: "Hide IP Address"
+//    - Honest description of trade-off (latency, quality)
+//    - Toggle (Switch component)
+
+// 4. Verification:
+//    pc.getStats() → find succeeded candidate-pair → check types
+//    relay mode: both should be 'relay'
+//    normal mode: typically 'srflx' or 'host'
+
+// 5. TURN server can't decrypt media (DTLS-SRTP)
+//    Even in relay mode, calls are end-to-end encrypted`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "In relay-only mode, what information can the other peer learn about you?",
+        code: "// iceTransportPolicy: 'relay'\n// ICE candidates exchanged:\n// Local: candidate:1 relay 159.89.XX.XX:PORT (TURN server IP)\n// Remote sees: ???",
+        answer: "Only the TURN server's IP address — not yours",
+        explanation: "With relay-only, only relay candidates are generated. These contain the TURN server's IP, not yours. The remote peer sees traffic coming from the TURN server. They can determine you're using tokn.app's infrastructure, but they cannot determine your real IP, location, or ISP."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this relay mode implementation?",
+        code: "// In a settings change handler:\nasync function handleRelayToggle(enabled) {\n  await setRelayOnlyMode(enabled);\n  // Update the existing peer connection\n  if (currentPC) {\n    currentPC.iceTransportPolicy = enabled ? 'relay' : 'all';\n  }\n}",
+        options: [
+          "iceTransportPolicy can't be changed on an existing RTCPeerConnection — it's set at creation time and is immutable. Must create a new PC (end and restart the call).",
+          "The property name is wrong",
+          "It should use setConfiguration() instead",
+          "AsyncStorage doesn't support boolean values"
+        ],
+        correct: 0,
+        explanation: "iceTransportPolicy is a construction-time parameter. You cannot change it on a live connection. The ICE agent has already gathered candidates with the original policy. To switch, you must close the current PC and create a new one — which means ending the call. That's why it's a setting you configure BEFORE calling, not during."
+      },
+      {
+        type: "which-breaks",
+        question: "Can your TURN server decrypt the audio in a relay-only call?",
+        variants: [
+          "Yes — it relays the raw audio data",
+          "No — WebRTC encrypts media end-to-end with DTLS-SRTP regardless of transport",
+          "Only if the server has the session keys",
+          "Only for voice, not video"
+        ],
+        correct: 1,
+        explanation: "WebRTC's DTLS-SRTP encryption is negotiated directly between the two peers during the DTLS handshake. The TURN server never participates in key exchange — it just forwards encrypted packets. Even if you own the TURN server and inspect every byte, you get encrypted gibberish. This is a fundamental WebRTC security guarantee."
+      },
+      {
+        type: "fill-blank",
+        question: "Force all traffic through TURN for privacy:",
+        code: "const pc = new RTCPeerConnection({\n  iceServers: await getIceServers(),\n  iceTransportPolicy: '___',\n});",
+        answer: "relay",
+        explanation: "iceTransportPolicy: 'relay' tells the ICE agent to discard all host and srflx candidates. Only relay candidates (from TURN) are used. This guarantees all media routes through the TURN server — neither peer discovers the other's real IP address."
+      },
+      {
+        type: "order-steps",
+        question: "Put the privacy decision flow in order:",
+        steps: [
+          "User enables 'Hide IP Address' in Settings (stored in AsyncStorage)",
+          "User initiates a call — app reads the relay setting",
+          "RTCPeerConnection created with iceTransportPolicy: 'relay'",
+          "ICE only generates relay candidates (TURN server IP)",
+          "Call connects through TURN — neither peer sees the other's real IP"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "The setting is configured ahead of time. When a call starts, the setting is read and baked into the PC configuration. ICE respects the policy and only gathers relay candidates. The call connects entirely through TURN. Privacy is enforced at the protocol level — not by trusting the other peer to not look at candidates."
+      }
+    ]);
+  </script>
+</body>
+</html>

@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>A10 — Biometric App Lock</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Device Security &amp; Storage</a> &rsaquo;
+        <span>Biometric App Lock</span>
+    </nav>
+
+    <h1>Biometric App Lock</h1>
+    <p class="lesson-meta">A10 &mdash; Lesson 2 of 2 &nbsp;|&nbsp; ~40 min</p>
+
+    <div class="callout">
+        <strong>Why this matters for Token:</strong> Token is a privacy-first app. If someone picks
+        up your unlocked phone, they should not be able to see your token list, read messages, or
+        impersonate you. A biometric lock screen (fingerprint or Face ID) adds a second barrier
+        &mdash; the phone being unlocked is not enough, the <em>app itself</em> requires your
+        biometric identity. This is especially important because Token holds the power to create,
+        revoke, and manage all access to the user.
+    </div>
+
+    <h2>How Biometric Authentication Works on Mobile</h2>
+    <p>Both iOS and Android provide system-level biometric APIs:</p>
+    <ul>
+        <li><strong>iOS:</strong> Face ID or Touch ID via the LocalAuthentication framework</li>
+        <li><strong>Android:</strong> Fingerprint, face, or iris via BiometricPrompt API</li>
+    </ul>
+    <p><code>expo-local-authentication</code> wraps both behind one API. The biometric data never leaves the device &mdash; you are not storing fingerprints. You are asking the OS: "Is this the device owner?" and getting back a yes/no answer.</p>
+
+    <pre><code># Install
+npx expo install expo-local-authentication</code></pre>
+
+    <h2>Checking Biometric Availability</h2>
+    <pre><code>import * as LocalAuthentication from 'expo-local-authentication';
+
+// Step 1: Does the device have biometric hardware?
+const hasHardware = await LocalAuthentication.hasHardwareAsync();
+// true on most modern phones, false on old devices or emulators
+
+// Step 2: Is any biometric enrolled (registered)?
+const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+// false if user hasn't set up fingerprint/Face ID in system settings
+
+// Step 3: What types are available?
+const types = await LocalAuthentication.supportedAuthenticationTypesAsync();
+// [1] = fingerprint, [2] = facial recognition, [3] = iris
+
+// Combine into a single check
+export async function canUseBiometrics(): Promise&lt;boolean&gt; {
+  const hardware = await LocalAuthentication.hasHardwareAsync();
+  const enrolled = await LocalAuthentication.isEnrolledAsync();
+  return hardware && enrolled;
+}</code></pre>
+
+    <h2>Performing Authentication</h2>
+    <pre><code>export async function authenticate(reason?: string): Promise&lt;boolean&gt; {
+  const result = await LocalAuthentication.authenticateAsync({
+    promptMessage: reason || 'Verify your identity to open Token',
+    // iOS: allow fallback to device passcode
+    fallbackLabel: 'Use Passcode',
+    // Android: allow device PIN/pattern/password as fallback
+    disableDeviceCredentialFallback: false,
+    // Cancel button label
+    cancelLabel: 'Cancel',
+  });
+
+  if (result.success) {
+    return true;
+  }
+
+  // result.error can be:
+  // 'user_cancel' — user pressed cancel
+  // 'system_cancel' — OS interrupted (incoming call)
+  // 'user_fallback' — user chose passcode fallback
+  // 'lockout' — too many failed attempts
+  // 'not_enrolled' — no biometric registered
+  // 'not_available' — hardware not available
+
+  if (result.error === 'lockout') {
+    // Device is temporarily locked — inform the user
+    console.warn('Too many failed attempts. Try again later.');
+  }
+
+  return false;
+}</code></pre>
+
+    <h2>The Lock Screen Component</h2>
+    <pre><code>// app/src/components/LockScreen.tsx
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { authenticate } from '../services/biometricAuth';
+
+interface LockScreenProps {
+  onUnlock: () => void;
+}
+
+export function LockScreen({ onUnlock }: LockScreenProps) {
+  const [error, setError] = useState&lt;string | null&gt;(null);
+  const [attempting, setAttempting] = useState(false);
+
+  // Attempt authentication on mount
+  useEffect(() => {
+    attemptUnlock();
+  }, []);
+
+  async function attemptUnlock() {
+    setAttempting(true);
+    setError(null);
+
+    const success = await authenticate('Unlock Token');
+    if (success) {
+      onUnlock();
+    } else {
+      setError('Authentication failed. Tap to try again.');
+    }
+    setAttempting(false);
+  }
+
+  return (
+    &lt;View style={styles.container}&gt;
+      &lt;Ionicons name="lock-closed" size={64} color="#4F46E5" /&gt;
+      &lt;Text style={styles.title}&gt;Token is Locked&lt;/Text&gt;
+      &lt;Text style={styles.subtitle}&gt;
+        Verify your identity to continue
+      &lt;/Text&gt;
+
+      {error && (
+        &lt;TouchableOpacity onPress={attemptUnlock} disabled={attempting}&gt;
+          &lt;Text style={styles.error}&gt;{error}&lt;/Text&gt;
+          &lt;Text style={styles.retry}&gt;Tap to retry&lt;/Text&gt;
+        &lt;/TouchableOpacity&gt;
+      )}
+    &lt;/View&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#0F0F0F',
+    padding: 32,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    marginTop: 24,
+  },
+  subtitle: {
+    fontSize: 16,
+    color: '#9CA3AF',
+    marginTop: 8,
+  },
+  error: {
+    fontSize: 14,
+    color: '#EF4444',
+    marginTop: 24,
+    textAlign: 'center',
+  },
+  retry: {
+    fontSize: 14,
+    color: '#4F46E5',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+});</code></pre>
+
+    <h2>Integrating the Lock Screen with App State</h2>
+    <pre><code>// app/src/providers/AppLockProvider.tsx
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { AppState, AppStateStatus } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { LockScreen } from '../components/LockScreen';
+import { canUseBiometrics } from '../services/biometricAuth';
+
+const LOCK_TIMEOUT_KEY = '@token/lock_timeout'; // seconds
+const LOCK_ENABLED_KEY = '@token/lock_enabled';
+const DEFAULT_TIMEOUT = 0; // 0 = lock immediately on background
+
+interface AppLockProviderProps {
+  children: React.ReactNode;
+}
+
+export function AppLockProvider({ children }: AppLockProviderProps) {
+  const [locked, setLocked] = useState(true);
+  const [lockEnabled, setLockEnabled] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const backgroundTimestamp = useRef&lt;number | null&gt;(null);
+
+  useEffect(() => {
+    checkLockSetting();
+  }, []);
+
+  async function checkLockSetting() {
+    const enabled = await AsyncStorage.getItem(LOCK_ENABLED_KEY);
+    const biometricsAvailable = await canUseBiometrics();
+
+    if (enabled === 'true' && biometricsAvailable) {
+      setLockEnabled(true);
+      setLocked(true); // Start locked
+    } else {
+      setLockEnabled(false);
+      setLocked(false); // No lock configured
+    }
+    setLoading(false);
+  }
+
+  // Track app state changes
+  useEffect(() => {
+    if (!lockEnabled) return;
+
+    const subscription = AppState.addEventListener('change', handleAppState);
+    return () => subscription.remove();
+  }, [lockEnabled]);
+
+  const handleAppState = useCallback(async (state: AppStateStatus) => {
+    if (state === 'background' || state === 'inactive') {
+      backgroundTimestamp.current = Date.now();
+    } else if (state === 'active' && backgroundTimestamp.current) {
+      const elapsed = (Date.now() - backgroundTimestamp.current) / 1000;
+      const timeoutStr = await AsyncStorage.getItem(LOCK_TIMEOUT_KEY);
+      const timeout = timeoutStr ? parseInt(timeoutStr, 10) : DEFAULT_TIMEOUT;
+
+      if (elapsed >= timeout) {
+        setLocked(true);
+      }
+      backgroundTimestamp.current = null;
+    }
+  }, []);
+
+  function handleUnlock() {
+    setLocked(false);
+  }
+
+  if (loading) return null; // Or a splash screen
+
+  if (locked && lockEnabled) {
+    return &lt;LockScreen onUnlock={handleUnlock} /&gt;;
+  }
+
+  return &lt;&gt;{children}&lt;/&gt;;
+}</code></pre>
+
+    <h2>Settings: Enable/Disable and Timeout</h2>
+    <pre><code>// app/src/screens/SecuritySettings.tsx
+import React, { useState, useEffect } from 'react';
+import { View, Text, Switch, StyleSheet } from 'react-native';
+import { Picker } from '@react-native-picker/picker';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { canUseBiometrics } from '../services/biometricAuth';
+import { authenticate } from '../services/biometricAuth';
+
+export function SecuritySettings() {
+  const [biometricAvailable, setBiometricAvailable] = useState(false);
+  const [lockEnabled, setLockEnabled] = useState(false);
+  const [timeout, setTimeout] = useState('0');
+
+  useEffect(() => {
+    loadSettings();
+  }, []);
+
+  async function loadSettings() {
+    const available = await canUseBiometrics();
+    setBiometricAvailable(available);
+
+    const enabled = await AsyncStorage.getItem('@token/lock_enabled');
+    setLockEnabled(enabled === 'true');
+
+    const savedTimeout = await AsyncStorage.getItem('@token/lock_timeout');
+    setTimeout(savedTimeout || '0');
+  }
+
+  async function toggleLock(value: boolean) {
+    if (value) {
+      // Require biometric verification to ENABLE the lock
+      const verified = await authenticate('Verify identity to enable app lock');
+      if (!verified) return;
+    }
+
+    await AsyncStorage.setItem('@token/lock_enabled', value ? 'true' : 'false');
+    setLockEnabled(value);
+  }
+
+  async function changeTimeout(value: string) {
+    await AsyncStorage.setItem('@token/lock_timeout', value);
+    setTimeout(value);
+  }
+
+  return (
+    &lt;View style={styles.container}&gt;
+      &lt;Text style={styles.heading}&gt;App Lock&lt;/Text&gt;
+
+      {!biometricAvailable && (
+        &lt;Text style={styles.warning}&gt;
+          No biometric authentication available. Set up fingerprint or
+          Face ID in your device settings first.
+        &lt;/Text&gt;
+      )}
+
+      &lt;View style={styles.row}&gt;
+        &lt;Text style={styles.label}&gt;Require biometric to open&lt;/Text&gt;
+        &lt;Switch
+          value={lockEnabled}
+          onValueChange={toggleLock}
+          disabled={!biometricAvailable}
+        /&gt;
+      &lt;/View&gt;
+
+      {lockEnabled && (
+        &lt;View style={styles.row}&gt;
+          &lt;Text style={styles.label}&gt;Lock after&lt;/Text&gt;
+          &lt;Picker
+            selectedValue={timeout}
+            onValueChange={changeTimeout}
+            style={styles.picker}
+          &gt;
+            &lt;Picker.Item label="Immediately" value="0" /&gt;
+            &lt;Picker.Item label="30 seconds" value="30" /&gt;
+            &lt;Picker.Item label="1 minute" value="60" /&gt;
+            &lt;Picker.Item label="5 minutes" value="300" /&gt;
+          &lt;/Picker&gt;
+        &lt;/View&gt;
+      )}
+    &lt;/View&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, padding: 16, backgroundColor: '#0F0F0F' },
+  heading: { fontSize: 20, fontWeight: '700', color: '#FFF', marginBottom: 16 },
+  warning: { color: '#F59E0B', marginBottom: 16, fontSize: 14 },
+  row: {
+    flexDirection: 'row', justifyContent: 'space-between',
+    alignItems: 'center', paddingVertical: 12,
+    borderBottomWidth: 1, borderBottomColor: '#1F1F1F',
+  },
+  label: { fontSize: 16, color: '#E5E7EB' },
+  picker: { width: 160, color: '#E5E7EB' },
+});</code></pre>
+
+    <h2>Handling Biometric Changes</h2>
+    <pre><code>// If a new fingerprint is added, should the app re-verify?
+// iOS: adding a new fingerprint invalidates Keychain items stored with
+//       kSecAccessControlBiometryCurrentSet — but SecureStore uses a
+//       less restrictive policy by default.
+// Android: new fingerprints don't invalidate existing keys by default.
+
+// Strategy for Token: when the user opens the app after a biometric change,
+// require the full device passcode once, then continue normally.
+
+export async function checkBiometricIntegrity(): Promise&lt;'ok' | 'changed' | 'unavailable'&gt; {
+  const available = await canUseBiometrics();
+  if (!available) return 'unavailable';
+
+  // We store a sentinel in SecureStore with biometryCurrentSet policy
+  // If reading it fails, biometrics changed since we wrote it
+  try {
+    const sentinel = await SecureStore.getItemAsync('bio_sentinel', {
+      keychainAccessible: SecureStore.WHEN_UNLOCKED,
+    });
+    if (sentinel === null) {
+      // First time or was cleared — set it
+      await SecureStore.setItemAsync('bio_sentinel', 'valid');
+      return 'ok';
+    }
+    return 'ok';
+  } catch {
+    return 'changed';
+  }
+}</code></pre>
+
+    <h2>UX Consideration: Don't Lock During Active Calls</h2>
+    <pre><code>// app/src/providers/AppLockProvider.tsx — enhanced handleAppState
+
+import { useCallState } from '../context/CallContext';
+
+// Inside the provider:
+const { activeCall } = useCallState();
+
+const handleAppState = useCallback(async (state: AppStateStatus) => {
+  // Never lock during an active call — the user may switch apps
+  // to check something and come back
+  if (activeCall) {
+    backgroundTimestamp.current = null;
+    return;
+  }
+
+  if (state === 'background' || state === 'inactive') {
+    backgroundTimestamp.current = Date.now();
+  } else if (state === 'active' && backgroundTimestamp.current) {
+    const elapsed = (Date.now() - backgroundTimestamp.current) / 1000;
+    const timeoutStr = await AsyncStorage.getItem(LOCK_TIMEOUT_KEY);
+    const timeout = timeoutStr ? parseInt(timeoutStr, 10) : DEFAULT_TIMEOUT;
+
+    if (elapsed >= timeout) {
+      setLocked(true);
+    }
+    backgroundTimestamp.current = null;
+  }
+}, [activeCall]);</code></pre>
+
+    <h2>Hiding Content in App Switcher</h2>
+    <pre><code>// When the app goes to background, iOS and Android take a screenshot
+// for the app switcher. This can expose sensitive content.
+
+import { AppState, View, StyleSheet } from 'react-native';
+import { useState, useEffect } from 'react';
+
+export function PrivacyOverlay({ children }: { children: React.ReactNode }) {
+  const [showOverlay, setShowOverlay] = useState(false);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      // Show a blank overlay when going to background
+      setShowOverlay(state === 'inactive' || state === 'background');
+    });
+    return () => subscription.remove();
+  }, []);
+
+  return (
+    &lt;View style={{ flex: 1 }}&gt;
+      {children}
+      {showOverlay && &lt;View style={styles.overlay} /&gt;}
+    &lt;/View&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#0F0F0F', // Matches app background
+    zIndex: 9999,
+  },
+});</code></pre>
+
+    <h2>Playground: Lock Timeout Logic</h2>
+    <div id="playground-1"></div>
+
+    <h2>Exercise: Build the Complete Biometric Lock System</h2>
+    <div id="exercise-1"></div>
+
+    <h2>Quiz</h2>
+    <div id="lesson-quiz"></div>
+
+    <div class="lesson-nav">
+        <a href="./0001-secure-storage.html">&larr; Previous: Secure Storage</a>
+        <a href="../b9-docker-deployment/README.html">Next: B9 Docker &amp; Deployment &rarr;</a>
+    </div>
+
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+    <script>
+        createPlayground("playground-1", `// Simulate the lock timeout logic
+function shouldLock(backgroundSeconds, timeoutSetting) {
+  // timeoutSetting: 0 = immediately, 30, 60, 300
+  const shouldLock = backgroundSeconds >= timeoutSetting;
+  console.log(
+    "Background: " + backgroundSeconds + "s, " +
+    "Timeout: " + timeoutSetting + "s => " +
+    (shouldLock ? "LOCK" : "stay unlocked")
+  );
+  return shouldLock;
+}
+
+// Simulate different scenarios
+console.log("--- User switches apps briefly (5 seconds) ---");
+shouldLock(5, 0);    // Immediate lock
+shouldLock(5, 30);   // 30s timeout — stays unlocked
+shouldLock(5, 60);   // 1 min timeout — stays unlocked
+
+console.log("\\n--- User puts phone down for 2 minutes ---");
+shouldLock(120, 0);   // Immediate lock
+shouldLock(120, 30);  // 30s timeout — locks
+shouldLock(120, 60);  // 1 min timeout — locks
+shouldLock(120, 300); // 5 min timeout — stays unlocked
+
+console.log("\\n--- Active call exception ---");
+const activeCall = true;
+if (activeCall) {
+  console.log("Active call detected — skip lock regardless of timeout");
+} else {
+  shouldLock(600, 0);
+}`);
+
+        createSolution("exercise-1", {
+            exercise: "Build the complete biometric lock system for Token:\n\n1. Create an `AppLockProvider` component that wraps the app and shows a `LockScreen` when the app comes to foreground after the configured timeout.\n2. Include logic to skip locking during active calls.\n3. Add a `PrivacyOverlay` that hides content in the app switcher screenshot.\n4. The lock should trigger immediately on first app open (if enabled), and respect the timeout when returning from background.\n5. Integrate it in App.tsx around the navigation container.",
+            hints: [
+                "Use AppState.addEventListener('change', ...) to track when the app goes to background and returns.",
+                "Store the timestamp when the app goes to background in a useRef — it persists across renders without causing re-renders.",
+                "The PrivacyOverlay needs StyleSheet.absoluteFillObject with a high zIndex to cover everything."
+            ],
+            solution: `// app/src/providers/AppLockProvider.tsx
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { AppState, AppStateStatus, View, StyleSheet } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { LockScreen } from '../components/LockScreen';
+import { canUseBiometrics, authenticate } from '../services/biometricAuth';
+
+const LOCK_ENABLED_KEY = '@token/lock_enabled';
+const LOCK_TIMEOUT_KEY = '@token/lock_timeout';
+
+interface Props {
+  children: React.ReactNode;
+  activeCall?: boolean;
+}
+
+export function AppLockProvider({ children, activeCall = false }: Props) {
+  const [locked, setLocked] = useState(true);
+  const [lockEnabled, setLockEnabled] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [showPrivacy, setShowPrivacy] = useState(false);
+  const bgTimestamp = useRef<number | null>(null);
+
+  // Check settings on mount
+  useEffect(() => {
+    (async () => {
+      const enabled = await AsyncStorage.getItem(LOCK_ENABLED_KEY);
+      const available = await canUseBiometrics();
+      const shouldLock = enabled === 'true' && available;
+      setLockEnabled(shouldLock);
+      setLocked(shouldLock); // Lock on first open if enabled
+      setReady(true);
+    })();
+  }, []);
+
+  // Monitor app state
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', handleAppState);
+    return () => sub.remove();
+  }, [lockEnabled, activeCall]);
+
+  const handleAppState = useCallback(async (state: AppStateStatus) => {
+    // Privacy overlay for app switcher
+    setShowPrivacy(state === 'inactive' || state === 'background');
+
+    // Skip locking during active calls
+    if (activeCall) {
+      bgTimestamp.current = null;
+      return;
+    }
+
+    if (!lockEnabled) return;
+
+    if (state === 'background') {
+      bgTimestamp.current = Date.now();
+    } else if (state === 'active' && bgTimestamp.current) {
+      const elapsed = (Date.now() - bgTimestamp.current) / 1000;
+      const raw = await AsyncStorage.getItem(LOCK_TIMEOUT_KEY);
+      const timeout = raw ? parseInt(raw, 10) : 0;
+
+      if (elapsed >= timeout) {
+        setLocked(true);
+      }
+      bgTimestamp.current = null;
+    }
+  }, [lockEnabled, activeCall]);
+
+  if (!ready) return null;
+
+  if (locked && lockEnabled) {
+    return <LockScreen onUnlock={() => setLocked(false)} />;
+  }
+
+  return (
+    <View style={{ flex: 1 }}>
+      {children}
+      {showPrivacy && <View style={styles.privacyOverlay} />}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  privacyOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#0F0F0F',
+    zIndex: 9999,
+  },
+});
+
+// --- Integration in App.tsx ---
+// import { AppLockProvider } from './src/providers/AppLockProvider';
+// import { useCallState } from './src/context/CallContext';
+//
+// function App() {
+//   const { activeCall } = useCallState();
+//   return (
+//     <AppLockProvider activeCall={!!activeCall}>
+//       <NavigationContainer>
+//         <RootNavigator />
+//       </NavigationContainer>
+//     </AppLockProvider>
+//   );
+// }`
+        });
+
+        createQuiz("lesson-quiz", [
+            {
+                type: "order-steps",
+                question: "Order the biometric lock flow when the user returns to the app:",
+                steps: [
+                    "AppState fires 'active' event",
+                    "Calculate elapsed time since background",
+                    "Compare elapsed time to timeout setting",
+                    "Show LockScreen component",
+                    "Call authenticateAsync() with prompt",
+                    "Set locked = false, render children"
+                ],
+                correctOrder: [0, 1, 2, 3, 4, 5],
+                explanation: "The flow starts with the OS notifying your app it's active again. You check how long it was in the background, compare to the timeout, and if exceeded, show the lock screen which triggers biometric auth."
+            },
+            {
+                type: "predict-output",
+                code: "const elapsed = 45;\nconst timeout = 30;\nconsole.log(elapsed >= timeout ? 'lock' : 'skip');",
+                answer: "lock",
+                explanation: "45 seconds in the background exceeds the 30-second timeout, so the app should lock and require biometric verification."
+            },
+            {
+                question: "Why should the app NOT lock during an active call?",
+                options: [
+                    "Biometric hardware is busy during calls",
+                    "The user might switch to another app to check info and return",
+                    "iOS does not allow biometric prompts during calls",
+                    "The lock screen would end the call"
+                ],
+                correct: 1,
+                explanation: "During a call, users commonly switch to other apps (checking an address, looking at a document) and return. Locking the app every time would be extremely frustrating. The call itself proves the user is present."
+            },
+            {
+                type: "fill-blank",
+                code: "const result = await LocalAuthentication.authenticateAsync({\n  promptMessage: 'Unlock Token',\n  ___: 'Use Passcode',\n});",
+                answer: "fallbackLabel",
+                explanation: "fallbackLabel sets the text for the button that lets users fall back to device passcode/PIN when biometric fails. On iOS this appears after a failed Face ID attempt."
+            },
+            {
+                type: "spot-the-bug",
+                code: "useEffect(() => {\n  const sub = AppState.addEventListener('change', handleAppState);\n}, [lockEnabled, activeCall]);",
+                bugLine: 3,
+                options: [
+                    "Line 1 — useEffect should not be used for AppState",
+                    "Line 2 — addEventListener is deprecated",
+                    "Line 3 — missing cleanup return to remove the subscription"
+                ],
+                correct: 2,
+                explanation: "Without returning a cleanup function (return () => sub.remove()), the event listener is never removed when the effect re-runs or the component unmounts. This causes memory leaks and duplicate handlers firing."
+            }
+        ]);
+    </script>
+</body>
+</html>

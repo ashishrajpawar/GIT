@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Node.js Fundamentals — B3.1</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">B3 — Node &amp; HTTP Server</a>
+      <span class="sep">›</span>
+      <span class="current">Node.js Fundamentals</span>
+    </nav>
+
+    <h1>Node.js Fundamentals</h1>
+    <div class="lesson-meta">
+      <span>B3 — Lesson 1 of 4</span>
+      <span>~50 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>Token's API server runs on Node.js — the same JavaScript you already know, but running on a server instead of in a browser. Node handles HTTP requests from your mobile app and web page, queries the database, manages WebSocket connections, and sends push notifications. Understanding how Node works under the hood prevents the most common server bugs.</p>
+    </div>
+
+    <h2>What is Node.js?</h2>
+
+    <p>Node.js is JavaScript running outside the browser. It uses the V8 engine (same as Chrome) but replaces browser APIs (DOM, window) with server APIs (filesystem, network, processes).</p>
+
+    <ul>
+      <li><strong>Browser JS</strong>: document, window, fetch, localStorage</li>
+      <li><strong>Node JS</strong>: fs (filesystem), http (server), path, process, crypto</li>
+      <li><strong>Both</strong>: console, setTimeout, Promise, JSON, Array, String</li>
+    </ul>
+
+    <h2>The event loop — Node's core concept</h2>
+
+    <p>Node is <strong>single-threaded</strong> but handles thousands of concurrent connections. How? The event loop:</p>
+
+    <ol>
+      <li>Your code runs top-to-bottom</li>
+      <li>When it hits an async operation (DB query, file read, network request), Node hands it off to the OS</li>
+      <li>Node continues running other code (serving other requests)</li>
+      <li>When the async operation completes, its callback is queued</li>
+      <li>The event loop picks up the callback and runs it</li>
+    </ol>
+
+    <div id="playground-1"></div>
+
+    <p>This means: <strong>never block the event loop</strong>. A heavy CPU computation or synchronous file read blocks ALL other requests. Everything I/O must be async.</p>
+
+    <h2>Modules — organizing code</h2>
+
+    <p>Node uses modules to split code across files. Token uses ES modules (the modern standard):</p>
+
+    <pre><code>// api/src/utils/token-code.ts
+export function generateTokenCode(prefix: string): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i &lt; 8; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return `${prefix}-${code.slice(0, 4)}-${code.slice(4)}`;
+}
+
+// api/src/routes/tokens.ts
+import { generateTokenCode } from '../utils/token-code.js';</code></pre>
+
+    <p>To use ES modules, set <code>"type": "module"</code> in <code>api/package.json</code>.</p>
+
+    <h2>Environment variables</h2>
+
+    <p>Configuration that changes between environments (dev vs production) lives in environment variables — never hardcoded:</p>
+
+    <pre><code>// Access via process.env
+const port = process.env.PORT || 3000;
+const dbUrl = process.env.DATABASE_URL || 'postgres://localhost:5432/token_dev';
+const jwtSecret = process.env.JWT_SECRET;  // must be set, no fallback for secrets
+
+if (!jwtSecret) {
+  console.error('JWT_SECRET is required');
+  process.exit(1);
+}</code></pre>
+
+    <p>Store them in a <code>.env</code> file (never committed to git):</p>
+
+    <pre><code># api/.env
+PORT=3000
+DATABASE_URL=postgres://localhost:5432/token_dev
+JWT_SECRET=dev-secret-change-in-production</code></pre>
+
+    <p>Load them with <code>dotenv</code>:</p>
+
+    <pre><code>npm install dotenv</code></pre>
+
+    <pre><code>// api/src/server.ts — first line
+import 'dotenv/config';</code></pre>
+
+    <h2>The built-in http module</h2>
+
+    <p>Node can create an HTTP server with zero dependencies:</p>
+
+    <pre><code>import { createServer } from 'http';
+
+const server = createServer((req, res) =&gt; {
+  // req = incoming request (URL, method, headers, body)
+  // res = your response (status code, headers, body)
+
+  if (req.method === 'GET' && req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok' }));
+    return;
+  }
+
+  res.writeHead(404);
+  res.end('Not found');
+});
+
+server.listen(3000, () =&gt; {
+  console.log('Server running on http://localhost:3000');
+});</code></pre>
+
+    <p>This works, but it's tedious for a real API. That's why we use Express or Fastify — they handle routing, parsing, and middleware. But understanding the raw <code>http</code> module helps when debugging.</p>
+
+    <h2>Filesystem operations</h2>
+
+    <pre><code>import { readFile, writeFile } from 'fs/promises';
+import { join } from 'path';
+
+// Read a file (async — doesn't block)
+const content = await readFile(join(process.cwd(), 'config.json'), 'utf8');
+const config = JSON.parse(content);
+
+// Write a file
+await writeFile('output.json', JSON.stringify(data, null, 2));</code></pre>
+
+    <p>For Token, you'll rarely read files at runtime — data lives in Postgres. But you'll use <code>fs</code> for migrations and configuration loading.</p>
+
+    <h2>The process object</h2>
+
+    <pre><code>// Current working directory
+console.log(process.cwd());
+
+// Environment variables
+console.log(process.env.NODE_ENV);
+
+// Command line arguments
+console.log(process.argv);  // ['node', 'script.js', ...args]
+
+// Exit the process
+process.exit(1);  // 1 = error, 0 = success
+
+// Handle graceful shutdown
+process.on('SIGTERM', () =&gt; {
+  console.log('Shutting down...');
+  server.close();
+  pool.end();  // close DB connections
+  process.exit(0);
+});</code></pre>
+
+    <p>Graceful shutdown is important for Token's production server — you want to finish serving active requests and close database connections cleanly before the process exits.</p>
+
+    <h2>Crypto — secure random values</h2>
+
+    <pre><code>import { randomBytes, createHash } from 'crypto';
+
+// Generate a secure random token code
+function generateSecureCode(): string {
+  return randomBytes(9)
+    .toString('base64url')
+    .slice(0, 12)
+    .toUpperCase();
+}
+
+// Hash a phone number (one-way — can't reverse)
+function hashPhone(phone: string): string {
+  return createHash('sha256').update(phone).digest('hex');
+}</code></pre>
+
+    <p>Always use <code>crypto.randomBytes</code> for security-sensitive values (token codes, session IDs). Never use <code>Math.random()</code> — it's predictable.</p>
+
+    <h2>Node's package.json for Token's API</h2>
+
+    <pre><code>{
+  "name": "token-api",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "migrate": "tsx migrate.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.0.0",
+    "pg": "^8.11.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "typescript": "^5.3.0",
+    "@types/node": "^20.0.0",
+    "@types/pg": "^8.10.0"
+  }
+}</code></pre>
+
+    <p><code>tsx</code> runs TypeScript directly without a build step (for development). In production, you build with <code>tsc</code> and run the compiled JavaScript.</p>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <span class="disabled">← Previous</span>
+      <a href="./0002-express-fastify-setup.html">Next: Express/Fastify Setup →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// The event loop in action
+// Async operations don't block — they run "later"
+
+console.log("1. Start");
+
+setTimeout(() => {
+  console.log("3. Timeout callback (async — runs after current code finishes)");
+}, 0);
+
+console.log("2. End");
+
+// Output order: 1, 2, 3
+// Even with 0ms delay, setTimeout is async — it waits for the current code to finish.
+// This is why Node can handle thousands of requests: while waiting for a DB query,
+// it serves other requests. The callback runs when the query completes.`);
+
+    createSolution("exercise-1", {
+      exercise: "Set up Token's API project from scratch: (1) Initialize the api/ folder with package.json (type: module), (2) Install dependencies (dotenv, pg, tsx, typescript, @types/node, @types/pg), (3) Create a .env file with PORT and DATABASE_URL, (4) Write a basic server (api/src/server.ts) using the raw http module that responds to GET /health with {status: 'ok'} and 404 for everything else, (5) Add graceful shutdown handling, (6) Run it with tsx and test with curl.",
+      hints: [
+        "Don't forget 'type': 'module' in package.json for ES module imports.",
+        "Load dotenv at the very top: import 'dotenv/config';",
+        "Test with: curl http://localhost:3000/health"
+      ],
+      solution: `# 1. Initialize
+cd token/api
+npm init -y
+# Edit package.json: add "type": "module" and scripts
+
+# 2. Install
+npm install dotenv pg
+npm install -D tsx typescript @types/node @types/pg
+
+# 3. Create .env
+cat > .env << 'EOF'
+PORT=3000
+DATABASE_URL=postgres://localhost:5432/token_dev
+JWT_SECRET=dev-secret-change-in-production
+EOF
+
+# 4 & 5. Create src/server.ts:
+mkdir -p src
+
+cat > src/server.ts << 'TSEOF'
+import 'dotenv/config';
+import { createServer } from 'http';
+
+const PORT = parseInt(process.env.PORT || '3000', 10);
+
+const server = createServer((req, res) => {
+  if (req.method === 'GET' && req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));
+    return;
+  }
+
+  res.writeHead(404, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: 'Not found' }));
+});
+
+server.listen(PORT, () => {
+  console.log(\`Token API running on http://localhost:\${PORT}\`);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received. Shutting down...');
+  server.close(() => {
+    console.log('Server closed.');
+    process.exit(0);
+  });
+});
+TSEOF
+
+# 6. Run and test
+npx tsx src/server.ts &
+curl http://localhost:3000/health
+# {"status":"ok","timestamp":"2025-..."}
+
+curl http://localhost:3000/nonexistent
+# {"error":"Not found"}`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "What's the output order?",
+        code: "console.log('A');\nsetTimeout(() => console.log('B'), 0);\nPromise.resolve().then(() => console.log('C'));\nconsole.log('D');",
+        answer: "A, D, C, B",
+        explanation: "Synchronous code (A, D) runs first. Then microtasks (Promise.then → C) run before macrotasks (setTimeout → B). This is the event loop priority: sync → microtasks → macrotasks."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this server code?",
+        code: "import { readFileSync } from 'fs';\n\nconst server = createServer((req, res) => {\n  const data = readFileSync('big-file.json', 'utf8');\n  res.end(data);\n});",
+        options: [
+          "readFileSync doesn't exist",
+          "readFileSync blocks the event loop — all other requests wait while this file loads",
+          "You can't use import with Node built-ins",
+          "res.end can't accept strings"
+        ],
+        correct: 1,
+        explanation: "readFileSync is synchronous — it blocks the ENTIRE event loop until the file is read. If this takes 100ms, every other connected client waits 100ms. Use the async version (readFile from 'fs/promises') or better yet, don't read files on every request."
+      },
+      {
+        type: "fill-blank",
+        question: "Generate a cryptographically secure random value:",
+        code: "import { ___ } from 'crypto';\nconst sessionId = ___(16).toString('hex');",
+        answer: "randomBytes",
+        explanation: "crypto.randomBytes generates cryptographically secure random bytes. For session IDs, token codes, and anything security-sensitive, this is the only correct choice. Math.random() is predictable and attackable."
+      },
+      {
+        question: "Why must JWT_SECRET crash the process if not set, while PORT can have a fallback?",
+        options: [
+          "PORT is a string but JWT_SECRET is a number",
+          "A missing secret means auth is broken and tokens can be forged — a wrong port just means the app is on a different URL",
+          "Environment variables only work for numbers",
+          "JWT_SECRET must be in .env but PORT can be inline"
+        ],
+        correct: 1,
+        explanation: "If JWT_SECRET is missing or wrong, anyone can forge authentication tokens and impersonate any user. That's a catastrophic security failure. A missing PORT just means the server starts on 3000 instead of the configured port — inconvenient but not dangerous."
+      },
+      {
+        type: "which-breaks",
+        question: "Which import statement fails in a Node.js ES module project?",
+        variants: [
+          "import { readFile } from 'fs/promises';",
+          "import express from 'express';",
+          "const express = require('express');"
+        ],
+        correct: 2,
+        explanation: "require() is CommonJS syntax. In an ES module project (\"type\": \"module\" in package.json), you must use import statements. Mixing require() and import causes a runtime error."
+      }
+    ]);
+  </script>
+</body>
+</html>

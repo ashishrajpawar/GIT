@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JWT &amp; Refresh Rotation — B4.2</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">B4 — Auth (Server)</a>
+      <span class="sep">›</span>
+      <span class="current">JWT &amp; Refresh Rotation</span>
+    </nav>
+
+    <h1>JWT &amp; Refresh Rotation</h1>
+    <div class="lesson-meta">
+      <span>B4 — Lesson 2 of 3</span>
+      <span>~55 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>After login, the mobile app needs to make API requests without sending the password every time. JWTs (JSON Web Tokens) are the standard: the server issues a signed token, the client sends it with every request, the server verifies the signature without a database lookup. But JWTs can't be revoked once issued — so we pair a short-lived access token with a longer-lived refresh token that can be rotated and revoked.</p>
+    </div>
+
+    <h2>How JWT works</h2>
+
+    <p>A JWT has three parts separated by dots: <code>header.payload.signature</code></p>
+
+    <pre><code>// Header: algorithm and token type
+{ "alg": "HS256", "typ": "JWT" }
+
+// Payload: your data (claims)
+{ "sub": "42", "email": "ashish@example.com", "iat": 1700000000, "exp": 1700000900 }
+
+// Signature: HMAC of header + payload using your secret
+// If anyone modifies the payload, the signature won't match → rejected</code></pre>
+
+    <p>The server signs it with a secret. Anyone can READ the payload (it's just base64), but nobody can MODIFY it without the secret. The server verifies the signature on every request.</p>
+
+    <pre><code>npm install jsonwebtoken
+npm install -D @types/jsonwebtoken</code></pre>
+
+    <h2>Access token + Refresh token pattern</h2>
+
+    <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
+      <tr style="border-bottom:2px solid var(--gray-200);">
+        <td style="padding:0.5rem;font-weight:600;"></td>
+        <td style="padding:0.5rem;font-weight:600;">Access Token</td>
+        <td style="padding:0.5rem;font-weight:600;">Refresh Token</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;">Lifetime</td>
+        <td style="padding:0.5rem;">15 minutes</td>
+        <td style="padding:0.5rem;">7 days</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;">Stored in</td>
+        <td style="padding:0.5rem;">Memory (client)</td>
+        <td style="padding:0.5rem;">Secure storage (Keychain/Keystore)</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;">Sent with</td>
+        <td style="padding:0.5rem;">Every API request (Authorization header)</td>
+        <td style="padding:0.5rem;">Only to /api/auth/refresh</td>
+      </tr>
+      <tr>
+        <td style="padding:0.5rem;">Revocable?</td>
+        <td style="padding:0.5rem;">No (expires naturally)</td>
+        <td style="padding:0.5rem;">Yes (stored in DB, can be deleted)</td>
+      </tr>
+    </table>
+
+    <p>The flow:</p>
+    <ol>
+      <li>User logs in → server issues access token + refresh token</li>
+      <li>Client sends access token with every request</li>
+      <li>Access token expires (15 min) → client sends refresh token to get a new pair</li>
+      <li>Old refresh token is invalidated, new pair issued (rotation)</li>
+      <li>If refresh token is stolen and used, rotation detects it (both tokens are invalid)</li>
+    </ol>
+
+    <h2>Issuing tokens on login</h2>
+
+    <pre><code>// api/src/services/auth.ts
+import jwt from 'jsonwebtoken';
+import { randomBytes } from 'crypto';
+import { pool } from '../db/pool.js';
+
+const ACCESS_SECRET = process.env.JWT_SECRET!;
+const ACCESS_EXPIRY = '15m';
+const REFRESH_EXPIRY_DAYS = 7;
+
+interface TokenPayload {
+  sub: string;  // user id
+  email: string;
+}
+
+export function signAccessToken(user: { id: number; email: string }): string {
+  return jwt.sign(
+    { sub: String(user.id), email: user.email } as TokenPayload,
+    ACCESS_SECRET,
+    { expiresIn: ACCESS_EXPIRY }
+  );
+}
+
+export async function createRefreshToken(userId: number): Promise&lt;string&gt; {
+  const token = randomBytes(40).toString('hex');
+  const expiresAt = new Date(Date.now() + REFRESH_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+
+  await pool.query(
+    `INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
+     VALUES ($1, $2, $3)`,
+    [userId, hashToken(token), expiresAt]
+  );
+
+  return token;
+}
+
+function hashToken(token: string): string {
+  const { createHash } = require('crypto');
+  return createHash('sha256').update(token).digest('hex');
+}</code></pre>
+
+    <h3>The refresh_tokens table</h3>
+
+    <pre><code>-- Migration: 005_refresh_tokens.sql
+CREATE TABLE refresh_tokens (
+  id          SERIAL PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash  TEXT NOT NULL UNIQUE,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  revoked_at  TIMESTAMPTZ
+);
+
+CREATE INDEX idx_refresh_tokens_user ON refresh_tokens(user_id);
+CREATE INDEX idx_refresh_tokens_hash ON refresh_tokens(token_hash);</code></pre>
+
+    <p>Store the <strong>hash</strong> of the refresh token, not the token itself. If the database is breached, attackers can't use the hashed values as refresh tokens.</p>
+
+    <h2>Updated login route</h2>
+
+    <pre><code>router.post('/login', async (req, res, next) =&gt; {
+  try {
+    const { email, password } = loginSchema.parse(req.body);
+
+    const { rows } = await pool.query(
+      'SELECT id, email, display_name, password_hash FROM users WHERE email = $1',
+      [email]
+    );
+    if (!rows[0]) throw ApiError.unauthorized('Invalid email or password');
+
+    const valid = await argon2.verify(rows[0].password_hash, password);
+    if (!valid) throw ApiError.unauthorized('Invalid email or password');
+
+    const user = rows[0];
+    const accessToken = signAccessToken(user);
+    const refreshToken = await createRefreshToken(user.id);
+
+    res.json({
+      data: {
+        user: { id: user.id, email: user.email, displayName: user.display_name },
+        accessToken,
+        refreshToken,
+      },
+      success: true,
+    });
+  } catch (err) { next(err); }
+});</code></pre>
+
+    <h2>Refresh endpoint with rotation</h2>
+
+    <pre><code>router.post('/refresh', async (req, res, next) =&gt; {
+  try {
+    const { refreshToken } = req.body;
+    if (!refreshToken) throw ApiError.unauthorized('Refresh token required');
+
+    const tokenHash = hashToken(refreshToken);
+
+    // Find the token in the database
+    const { rows } = await pool.query(
+      `SELECT rt.*, u.email, u.display_name
+       FROM refresh_tokens rt
+       JOIN users u ON rt.user_id = u.id
+       WHERE rt.token_hash = $1 AND rt.revoked_at IS NULL AND rt.expires_at > NOW()`,
+      [tokenHash]
+    );
+
+    if (!rows[0]) {
+      // Token not found or revoked — possible theft. Revoke ALL user's tokens.
+      await pool.query(
+        `UPDATE refresh_tokens SET revoked_at = NOW()
+         WHERE token_hash = $1 AND revoked_at IS NULL`,
+        [tokenHash]
+      );
+      throw ApiError.unauthorized('Invalid refresh token');
+    }
+
+    const record = rows[0];
+
+    // Rotation: revoke old token, issue new pair
+    await pool.query(
+      'UPDATE refresh_tokens SET revoked_at = NOW() WHERE id = $1',
+      [record.id]
+    );
+
+    const newAccessToken = signAccessToken({ id: record.user_id, email: record.email });
+    const newRefreshToken = await createRefreshToken(record.user_id);
+
+    res.json({
+      data: { accessToken: newAccessToken, refreshToken: newRefreshToken },
+      success: true,
+    });
+  } catch (err) { next(err); }
+});</code></pre>
+
+    <h2>Auth middleware — verifying access tokens</h2>
+
+    <pre><code>// api/src/middleware/auth.ts
+import jwt from 'jsonwebtoken';
+import { ApiError } from '../utils/api-error.js';
+
+export function requireAuth(req, res, next) {
+  const header = req.headers.authorization;
+  if (!header?.startsWith('Bearer ')) {
+    throw ApiError.unauthorized();
+  }
+
+  const token = header.slice(7);
+
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET!) as { sub: string; email: string };
+    req.user = { id: parseInt(payload.sub, 10), email: payload.email };
+    next();
+  } catch (err) {
+    if (err.name === 'TokenExpiredError') {
+      throw ApiError.unauthorized('Token expired');
+    }
+    throw ApiError.unauthorized('Invalid token');
+  }
+}</code></pre>
+
+    <h2>Logout — revoking refresh tokens</h2>
+
+    <pre><code>router.post('/logout', requireAuth, async (req, res, next) =&gt; {
+  try {
+    // Revoke all refresh tokens for this user
+    await pool.query(
+      'UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL',
+      [req.user.id]
+    );
+    res.json({ success: true });
+  } catch (err) { next(err); }
+});</code></pre>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0001-password-hashing-registration.html">← Previous: Password Hashing &amp; Registration</a>
+      <a href="./0003-rate-limiting.html">Next: Rate Limiting →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createSolution("exercise-1", {
+      exercise: "Implement the full JWT auth flow: (1) Create the refresh_tokens migration, (2) Write signAccessToken and createRefreshToken functions, (3) Update the login route to return both tokens, (4) Write the /refresh endpoint with rotation, (5) Write the requireAuth middleware, (6) Write the /logout endpoint. Test the full cycle: register → login (get tokens) → access a protected route → wait for expiry → refresh → access again → logout.",
+      hints: [
+        "Store the HASH of the refresh token in the database, not the raw value.",
+        "On refresh: revoke the old token, issue a new pair. If the old token is already revoked, someone stole it — revoke everything for that user.",
+        "The access token goes in the Authorization: Bearer <token> header. The refresh token is sent in the body to /api/auth/refresh."
+      ],
+      solution: `// Full implementation follows the code shown in this lesson.
+// Key test sequence with curl:
+
+# 1. Register
+curl -X POST http://localhost:3000/api/auth/register \\
+  -H "Content-Type: application/json" \\
+  -d '{"email":"test@example.com","password":"mypassword123","displayName":"Test User"}'
+
+# 2. Login (get tokens)
+curl -X POST http://localhost:3000/api/auth/login \\
+  -H "Content-Type: application/json" \\
+  -d '{"email":"test@example.com","password":"mypassword123"}'
+# Save the accessToken and refreshToken from response
+
+# 3. Access protected route
+curl http://localhost:3000/api/tokens \\
+  -H "Authorization: Bearer <accessToken>"
+
+# 4. Refresh (after access token expires)
+curl -X POST http://localhost:3000/api/auth/refresh \\
+  -H "Content-Type: application/json" \\
+  -d '{"refreshToken":"<refreshToken>"}'
+# Get new accessToken and refreshToken
+
+# 5. Old refresh token no longer works
+curl -X POST http://localhost:3000/api/auth/refresh \\
+  -H "Content-Type: application/json" \\
+  -d '{"refreshToken":"<oldRefreshToken>"}'
+# Returns 401 — old token was rotated out
+
+# 6. Logout
+curl -X POST http://localhost:3000/api/auth/logout \\
+  -H "Authorization: Bearer <accessToken>"
+# All refresh tokens revoked`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "order-steps",
+        question: "Put the JWT auth lifecycle in order:",
+        steps: ["Login → receive access + refresh tokens", "Send access token with API requests", "Access token expires (15 min)", "Send refresh token → get new pair", "Logout → revoke all refresh tokens"],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Login gives you both tokens. Access token authenticates requests. When it expires, the refresh token gets you a new pair without re-entering the password. Logout invalidates all refresh tokens so no new access tokens can be issued."
+      },
+      {
+        type: "predict-output",
+        question: "An attacker steals a refresh token and uses it. Then the real user tries to refresh. What happens?",
+        code: "// Attacker uses stolen refresh token → gets new pair, old is revoked\n// Real user tries to use their (now-revoked) refresh token\n// Server sees: token exists but is revoked",
+        answer: "Server detects reuse of a revoked token and revokes ALL tokens for that user, forcing re-login",
+        explanation: "Refresh token rotation detects theft. When a revoked token is reused, it means someone has a copy they shouldn't. The safest response is to revoke everything — both the attacker's new tokens and any other sessions. The real user must re-login."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with storing refresh tokens this way?",
+        code: "await pool.query(\n  'INSERT INTO refresh_tokens (user_id, token) VALUES ($1, $2)',\n  [userId, refreshToken]  // storing raw token\n);",
+        options: [
+          "The column name should be 'token_hash'",
+          "Storing the raw token — if the database is breached, attackers can use them directly",
+          "user_id should be a string",
+          "You can't INSERT with async/await"
+        ],
+        correct: 1,
+        explanation: "Store a SHA-256 hash of the refresh token, not the raw value. If attackers get your database, they get all active refresh tokens and can impersonate any user. With hashes, they'd need to reverse SHA-256 (impossible) to use them."
+      },
+      {
+        type: "fill-blank",
+        question: "Verify a JWT and extract the user data:",
+        code: "const payload = jwt.___(token, process.env.JWT_SECRET);",
+        answer: "verify",
+        explanation: "jwt.verify() checks the signature (proves it hasn't been tampered with) AND checks expiration (rejects expired tokens). If either check fails, it throws an error. On success, it returns the decoded payload."
+      },
+      {
+        type: "which-breaks",
+        question: "Which approach to token storage on the client is insecure?",
+        variants: [
+          "Access token in memory (JavaScript variable)",
+          "Refresh token in expo-secure-store (Keychain/Keystore)",
+          "Refresh token in AsyncStorage (unencrypted plaintext file)"
+        ],
+        correct: 2,
+        explanation: "AsyncStorage on React Native is an unencrypted JSON file. Any app with root access (or a backup extraction) can read it. Refresh tokens MUST go in secure storage (iOS Keychain, Android Keystore via expo-secure-store). Access tokens in memory are fine — they're short-lived and disappear when the app closes."
+      }
+    ]);
+  </script>
+</body>
+</html>

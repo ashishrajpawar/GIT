@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Message Thread UI — A6.2</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A6 — Chat &amp; Real-time</a>
+      <span class="sep">›</span>
+      <span class="current">Message Thread UI</span>
+    </nav>
+
+    <h1>Message Thread UI</h1>
+    <div class="lesson-meta">
+      <span>A6 — Lesson 2 of 3</span>
+      <span>~60 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>This is where the token holder and issuer actually communicate. The message thread is the payoff for all the infrastructure — token creation, QR scanning, authentication, WebSocket. If this screen feels laggy or confusing, nothing else matters. Messages must appear instantly (optimistic updates), show their delivery status (✓ ✓✓), and scroll smoothly through potentially hundreds of messages.</p>
+    </div>
+
+    <h2>Message data model (client side)</h2>
+
+    <pre><code>// app/src/types/message.ts
+export interface Message {
+  id: number | string;         // server ID (number) or temp local ID (string)
+  conversationId: number;
+  senderId: number;
+  text: string;
+  sentAt: string;              // ISO timestamp
+  status: 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
+}
+
+export interface Conversation {
+  id: number;
+  tokenId: number;
+  tokenLabel: string;
+  otherUserId: number;
+  otherUserName: string;
+  lastMessage: Message | null;
+  unreadCount: number;
+}</code></pre>
+
+    <h2>The MessageThread screen</h2>
+
+    <pre><code>// app/src/screens/MessageThread.tsx
+import { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  View, Text, FlatList, TextInput, TouchableOpacity,
+  KeyboardAvoidingView, Platform, StyleSheet,
+} from 'react-native';
+import { useAuth } from '../auth/AuthContext';
+import { useWsMessage } from '../ws/useWebSocket';
+import { send } from '../ws/connection';
+import { apiRequest } from '../api/client';
+import { MessageBubble } from '../components/MessageBubble';
+
+export function MessageThreadScreen({ route }) {
+  const { conversationId, tokenLabel } = route.params;
+  const { user } = useAuth();
+  const [messages, setMessages] = useState&lt;Message[]&gt;([]);
+  const [text, setText] = useState('');
+  const [loading, setLoading] = useState(true);
+  const flatListRef = useRef&lt;FlatList&gt;(null);
+
+  // Load message history via REST
+  useEffect(() =&gt; {
+    loadHistory();
+  }, [conversationId]);
+
+  async function loadHistory() {
+    const res = await apiRequest&lt;{ data: Message[] }&gt;(
+      'GET', `/conversations/${conversationId}/messages?limit=50`
+    );
+    setMessages(res.data.reverse()); // API returns newest-first, UI needs oldest-first
+    setLoading(false);
+  }
+
+  // Listen for incoming messages via WebSocket
+  useWsMessage('chat:receive', (payload) =&gt; {
+    if (payload.conversationId === conversationId) {
+      const incoming: Message = {
+        id: payload.id,
+        conversationId: payload.conversationId,
+        senderId: payload.senderId,
+        text: payload.text,
+        sentAt: payload.sentAt,
+        status: 'delivered',
+      };
+      setMessages(prev =&gt; [...prev, incoming]);
+
+      // Send read receipt since we're looking at this conversation
+      send('chat:read', { messageId: payload.id });
+    }
+  });
+
+  // Listen for sent acknowledgments
+  useWsMessage('chat:sent', (payload) =&gt; {
+    setMessages(prev =&gt;
+      prev.map(m =&gt;
+        m.id === payload.localId
+          ? { ...m, id: payload.id, sentAt: payload.sentAt, status: 'sent' }
+          : m
+      )
+    );
+  });
+
+  // Listen for delivery receipts
+  useWsMessage('chat:delivery-receipt', (payload) =&gt; {
+    setMessages(prev =&gt;
+      prev.map(m =&gt;
+        m.id === payload.messageId ? { ...m, status: 'delivered' } : m
+      )
+    );
+  });
+
+  function handleSend() {
+    if (!text.trim()) return;
+
+    const localId = `local-${Date.now()}`;
+    const optimistic: Message = {
+      id: localId,
+      conversationId,
+      senderId: user!.id,
+      text: text.trim(),
+      sentAt: new Date().toISOString(),
+      status: 'sending',
+    };
+
+    // Optimistic: add to UI immediately
+    setMessages(prev =&gt; [...prev, optimistic]);
+    setText('');
+
+    // Send via WebSocket
+    send('chat:send', {
+      conversationId,
+      text: text.trim(),
+      localId,
+    });
+  }
+
+  function renderMessage({ item }: { item: Message }) {
+    const isMine = item.senderId === user!.id;
+    return &lt;MessageBubble message={item} isMine={isMine} /&gt;;
+  }
+
+  return (
+    &lt;KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={90}
+    &gt;
+      &lt;FlatList
+        ref={flatListRef}
+        data={messages}
+        keyExtractor={item =&gt; item.id.toString()}
+        renderItem={renderMessage}
+        contentContainerStyle={styles.messageList}
+        onContentSizeChange={() =&gt; flatListRef.current?.scrollToEnd()}
+        onLayout={() =&gt; flatListRef.current?.scrollToEnd()}
+      /&gt;
+
+      &lt;View style={styles.inputRow}&gt;
+        &lt;TextInput
+          style={styles.input}
+          value={text}
+          onChangeText={setText}
+          placeholder="Type a message..."
+          multiline
+          maxLength={2000}
+        /&gt;
+        &lt;TouchableOpacity
+          style={[styles.sendButton, !text.trim() && styles.sendDisabled]}
+          onPress={handleSend}
+          disabled={!text.trim()}
+        &gt;
+          &lt;Text style={styles.sendText}&gt;Send&lt;/Text&gt;
+        &lt;/TouchableOpacity&gt;
+      &lt;/View&gt;
+    &lt;/KeyboardAvoidingView&gt;
+  );
+}</code></pre>
+
+    <h2>The MessageBubble component</h2>
+
+    <pre><code>// app/src/components/MessageBubble.tsx
+import { View, Text, StyleSheet } from 'react-native';
+import { Message } from '../types/message';
+
+interface MessageBubbleProps {
+  message: Message;
+  isMine: boolean;
+}
+
+export function MessageBubble({ message, isMine }: MessageBubbleProps) {
+  return (
+    &lt;View style={[styles.row, isMine && styles.rowMine]}&gt;
+      &lt;View style={[styles.bubble, isMine ? styles.bubbleMine : styles.bubbleTheirs]}&gt;
+        &lt;Text style={[styles.text, isMine && styles.textMine]}&gt;
+          {message.text}
+        &lt;/Text&gt;
+        &lt;View style={styles.meta}&gt;
+          &lt;Text style={[styles.time, isMine && styles.timeMine]}&gt;
+            {formatTime(message.sentAt)}
+          &lt;/Text&gt;
+          {isMine && &lt;StatusIcon status={message.status} /&gt;}
+        &lt;/View&gt;
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}
+
+function StatusIcon({ status }: { status: Message['status'] }) {
+  const icons: Record&lt;string, string&gt; = {
+    sending: '○',     // hollow circle — in flight
+    sent: '✓',       // single check — server received
+    delivered: '✓✓', // double check — recipient device got it
+    read: '✓✓',      // double check (blue in real app)
+    failed: '!',     // exclamation — send failed
+  };
+  const color = status === 'read' ? '#3b82f6' : status === 'failed' ? '#ef4444' : '#94a3b8';
+
+  return &lt;Text style={[styles.status, { color }]}&gt;{icons[status]}&lt;/Text&gt;;
+}
+
+function formatTime(iso: string): string {
+  const date = new Date(iso);
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+const styles = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    marginBottom: 8,
+    paddingHorizontal: 12,
+  },
+  rowMine: {
+    justifyContent: 'flex-end',
+  },
+  bubble: {
+    maxWidth: '75%',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+  },
+  bubbleMine: {
+    backgroundColor: '#2563eb',
+    borderBottomRightRadius: 4,
+  },
+  bubbleTheirs: {
+    backgroundColor: '#f1f5f9',
+    borderBottomLeftRadius: 4,
+  },
+  text: {
+    fontSize: 15,
+    color: '#1e293b',
+    lineHeight: 20,
+  },
+  textMine: {
+    color: '#fff',
+  },
+  meta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    marginTop: 4,
+    gap: 4,
+  },
+  time: {
+    fontSize: 11,
+    color: '#94a3b8',
+  },
+  timeMine: {
+    color: 'rgba(255,255,255,0.7)',
+  },
+  status: {
+    fontSize: 12,
+  },
+});</code></pre>
+
+    <h2>Optimistic updates — the pattern</h2>
+
+    <p>The user taps Send. The message should appear in the thread <em>immediately</em> — before the server responds. This is an optimistic update:</p>
+
+    <ol>
+      <li><strong>Create</strong> a local message with a temporary ID and status <code>'sending'</code></li>
+      <li><strong>Append</strong> it to the messages array (UI updates instantly)</li>
+      <li><strong>Send</strong> via WebSocket with the temporary ID attached</li>
+      <li><strong>On acknowledgment</strong> (<code>chat:sent</code>): replace temp ID with server ID, set status to <code>'sent'</code></li>
+      <li><strong>On failure</strong>: set status to <code>'failed'</code>, show retry button</li>
+    </ol>
+
+    <pre><code>// The local ID links the optimistic message to the server acknowledgment
+const localId = `local-${Date.now()}`;
+
+// Send with localId so the server can echo it back
+send('chat:send', { conversationId, text, localId });
+
+// Server echoes: { type: 'chat:sent', payload: { localId, id: 456, sentAt: '...' } }
+// Client maps localId back to the message and updates it</code></pre>
+
+    <h2>Handling send failures</h2>
+
+    <pre><code>// If WebSocket is disconnected when user taps Send:
+function handleSend() {
+  if (!text.trim()) return;
+
+  const localId = `local-${Date.now()}`;
+  const optimistic: Message = { /* ... */ status: 'sending' };
+  setMessages(prev =&gt; [...prev, optimistic]);
+  setText('');
+
+  const wsState = getConnectionState();
+  if (wsState !== 'connected') {
+    // Immediately mark as failed
+    setMessages(prev =&gt;
+      prev.map(m =&gt; m.id === localId ? { ...m, status: 'failed' } : m)
+    );
+    return;
+  }
+
+  send('chat:send', { conversationId, text: text.trim(), localId });
+
+  // Timeout: if no acknowledgment in 10s, mark as failed
+  setTimeout(() =&gt; {
+    setMessages(prev =&gt;
+      prev.map(m =&gt;
+        m.id === localId && m.status === 'sending'
+          ? { ...m, status: 'failed' }
+          : m
+      )
+    );
+  }, 10000);
+}</code></pre>
+
+    <h2>KeyboardAvoidingView — platform differences</h2>
+
+    <p>When the keyboard opens, the input should stay visible (not hidden behind the keyboard):</p>
+
+    <pre><code>&lt;KeyboardAvoidingView
+  style={{ flex: 1 }}
+  behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+  keyboardVerticalOffset={90}  // adjust for header height
+&gt;
+  {/* FlatList + input */}
+&lt;/KeyboardAvoidingView&gt;</code></pre>
+
+    <ul>
+      <li><strong>iOS:</strong> <code>behavior="padding"</code> works best — adds padding at the bottom to push content up</li>
+      <li><strong>Android:</strong> <code>behavior="height"</code> — resizes the view. Note: if <code>android:windowSoftInputMode="adjustResize"</code> is set in AndroidManifest, you might not even need KeyboardAvoidingView on Android</li>
+      <li><strong>keyboardVerticalOffset:</strong> accounts for the navigation header height. Adjust based on your header.</li>
+    </ul>
+
+    <h2>Scrolling to bottom on new messages</h2>
+
+    <pre><code>// Auto-scroll when new messages arrive (but only if already near bottom)
+const isNearBottom = useRef(true);
+
+&lt;FlatList
+  onScroll={(event) =&gt; {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const distanceFromBottom = contentSize.height - contentOffset.y - layoutMeasurement.height;
+    isNearBottom.current = distanceFromBottom &lt; 100;
+  }}
+  onContentSizeChange={() =&gt; {
+    if (isNearBottom.current) {
+      flatListRef.current?.scrollToEnd({ animated: true });
+    }
+  }}
+/&gt;</code></pre>
+
+    <p>Don't force-scroll if the user has scrolled up to read history. Only auto-scroll when they're near the bottom.</p>
+
+    <h2>Loading older messages (infinite scroll upward)</h2>
+
+    <pre><code>const [loadingOlder, setLoadingOlder] = useState(false);
+const [hasOlder, setHasOlder] = useState(true);
+const oldestId = useRef&lt;number | null&gt;(null);
+
+async function loadOlderMessages() {
+  if (loadingOlder || !hasOlder) return;
+  setLoadingOlder(true);
+
+  const cursor = oldestId.current;
+  const res = await apiRequest&lt;{ data: Message[]; hasMore: boolean }&gt;(
+    'GET', `/conversations/${conversationId}/messages?before=${cursor}&limit=30`
+  );
+
+  if (res.data.length > 0) {
+    oldestId.current = res.data[res.data.length - 1].id as number;
+    setMessages(prev =&gt; [...res.data.reverse(), ...prev]);
+  }
+  setHasOlder(res.hasMore);
+  setLoadingOlder(false);
+}
+
+// Trigger when scrolling to top
+&lt;FlatList
+  onStartReached={loadOlderMessages}  // react-native-bidirectional-infinite-scroll
+  // OR: detect scroll position near top manually
+/&gt;</code></pre>
+
+    <p><strong>Note:</strong> FlatList doesn't have a native <code>onStartReached</code>. You can detect it via the <code>onScroll</code> event (if <code>contentOffset.y &lt; 50</code>, load more) or use <code>inverted={true}</code> with <code>onEndReached</code> (inverted lists are a common chat pattern).</p>
+
+    <h2>The Conversation List screen</h2>
+
+    <pre><code>// app/src/screens/ConversationList.tsx
+import { useState, useEffect } from 'react';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet } from 'react-native';
+import { apiRequest } from '../api/client';
+import { useWsMessage } from '../ws/useWebSocket';
+
+export function ConversationListScreen({ navigation }) {
+  const [conversations, setConversations] = useState&lt;Conversation[]&gt;([]);
+
+  useEffect(() =&gt; {
+    apiRequest&lt;{ data: Conversation[] }&gt;('GET', '/conversations')
+      .then(res =&gt; setConversations(res.data));
+  }, []);
+
+  // Update last message in real time
+  useWsMessage('chat:receive', (payload) =&gt; {
+    setConversations(prev =&gt;
+      prev.map(c =&gt;
+        c.id === payload.conversationId
+          ? { ...c, lastMessage: payload, unreadCount: c.unreadCount + 1 }
+          : c
+      ).sort((a, b) =&gt;
+        // Most recent conversation first
+        new Date(b.lastMessage?.sentAt || 0).getTime() -
+        new Date(a.lastMessage?.sentAt || 0).getTime()
+      )
+    );
+  });
+
+  function renderConversation({ item }: { item: Conversation }) {
+    return (
+      &lt;TouchableOpacity
+        style={styles.convRow}
+        onPress={() =&gt; navigation.navigate('MessageThread', {
+          conversationId: item.id,
+          tokenLabel: item.tokenLabel,
+        })}
+      &gt;
+        &lt;View style={styles.convInfo}&gt;
+          &lt;Text style={styles.convName}&gt;{item.tokenLabel}&lt;/Text&gt;
+          &lt;Text style={styles.convPreview} numberOfLines={1}&gt;
+            {item.lastMessage?.text || 'No messages yet'}
+          &lt;/Text&gt;
+        &lt;/View&gt;
+        {item.unreadCount > 0 && (
+          &lt;View style={styles.badge}&gt;
+            &lt;Text style={styles.badgeText}&gt;{item.unreadCount}&lt;/Text&gt;
+          &lt;/View&gt;
+        )}
+      &lt;/TouchableOpacity&gt;
+    );
+  }
+
+  return (
+    &lt;FlatList
+      data={conversations}
+      keyExtractor={item =&gt; item.id.toString()}
+      renderItem={renderConversation}
+    /&gt;
+  );
+}</code></pre>
+
+    <h2>Styles for the chat input</h2>
+
+    <pre><code>const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
+  messageList: {
+    paddingVertical: 12,
+  },
+  inputRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+    backgroundColor: '#fff',
+  },
+  input: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    paddingTop: Platform.OS === 'ios' ? 8 : undefined, // iOS multiline fix
+    fontSize: 15,
+    maxHeight: 100,
+  },
+  sendButton: {
+    marginLeft: 8,
+    backgroundColor: '#2563eb',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  sendDisabled: {
+    backgroundColor: '#cbd5e1',
+  },
+  sendText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 15,
+  },
+});</code></pre>
+
+    <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0001-websocket-client.html">← Previous: WebSocket Basics on the Client</a>
+      <a href="./0003-typing-presence.html">Next: Typing Indicators &amp; Presence →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// Simulate optimistic message flow
+const messages = [];
+let nextServerId = 100;
+
+function sendMessage(text) {
+  const localId = 'local-' + Date.now();
+
+  // Step 1: Optimistic add
+  messages.push({ id: localId, text, status: 'sending' });
+  console.log('UI shows:', messages.map(m => m.text + ' [' + m.status + ']').join(', '));
+
+  // Step 2: Simulate server acknowledgment (200ms later)
+  setTimeout(() => {
+    const serverId = nextServerId++;
+    const idx = messages.findIndex(m => m.id === localId);
+    if (idx >= 0) {
+      messages[idx] = { ...messages[idx], id: serverId, status: 'sent' };
+    }
+    console.log('After ack:', messages.map(m => m.text + ' [' + m.status + ']').join(', '));
+
+    // Step 3: Simulate delivery receipt (500ms later)
+    setTimeout(() => {
+      messages[idx] = { ...messages[idx], status: 'delivered' };
+      console.log('After delivery:', messages.map(m => m.text + ' [' + m.status + ']').join(', '));
+    }, 300);
+  }, 200);
+}
+
+sendMessage('Hello!');
+console.log('(status updates happen async — see below)');`);
+
+    createSolution("exercise-1", {
+      exercise: "Build the complete message thread UI:\n\n1. Create `MessageThreadScreen`: load history via REST, listen for incoming messages via useWsMessage('chat:receive'), send with optimistic updates, handle send failures.\n\n2. Create `MessageBubble` component: own messages on the right (blue), theirs on the left (gray), time display, and status icons (○ → ✓ → ✓✓ → blue ✓✓).\n\n3. Implement optimistic sends: add message with 'sending' status immediately, update to 'sent' on chat:sent acknowledgment, update to 'delivered' on delivery receipt.\n\n4. Add KeyboardAvoidingView with correct platform behavior (padding on iOS, height on Android).\n\n5. Auto-scroll to bottom on new messages, but only when the user is already near the bottom.\n\n6. Create `ConversationListScreen` showing all conversations with last message preview and unread badge.",
+      hints: [
+        "Use a temporary localId (e.g. 'local-' + Date.now()) to link the optimistic message with the server acknowledgment.",
+        "FlatList's onContentSizeChange fires when messages are added — use it to auto-scroll. But check if the user was near the bottom first.",
+        "For status icons: 'sending'=○, 'sent'=✓, 'delivered'=✓✓, 'read'=✓✓(blue), 'failed'=!(red).",
+        "The ConversationList re-sorts when a new message arrives — most recent conversation floats to the top."
+      ],
+      solution: `// See the full implementation in the lesson code above.
+// Key patterns:
+
+// Optimistic updates:
+// 1. Create message with localId + status:'sending'
+// 2. Append to state immediately (UI updates)
+// 3. Send via WS with localId attached
+// 4. On 'chat:sent': find by localId, replace id + update status
+// 5. On failure/timeout: set status to 'failed'
+
+// Message rendering:
+// - isMine = message.senderId === user.id
+// - Align right + blue for mine, left + gray for theirs
+// - Status icons only on mine (the sender sees delivery status)
+// - Time formatted as HH:MM
+
+// Scroll behavior:
+// - Track if user is near bottom (contentOffset check)
+// - Auto-scroll on new message ONLY if near bottom
+// - Don't interrupt user reading history
+
+// ConversationList:
+// - Fetch all conversations on mount
+// - Listen for chat:receive to update lastMessage + unreadCount
+// - Re-sort by lastMessage.sentAt DESC`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "What status sequence does a sent message go through?",
+        code: "// User taps Send\n// → optimistic add\n// → server acknowledges\n// → recipient device receives\n// → recipient opens conversation\nconsole.log(['sending', 'sent', 'delivered', 'read'].join(' → '));",
+        answer: "sending → sent → delivered → read",
+        explanation: "sending: in-flight (not yet acknowledged). sent: server received and stored (✓). delivered: recipient's device got it (✓✓). read: recipient viewed the conversation (✓✓ blue). Each transition is driven by a different WebSocket event."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this auto-scroll implementation?",
+        code: "<FlatList\n  data={messages}\n  onContentSizeChange={() => {\n    flatListRef.current?.scrollToEnd({ animated: true });\n  }}\n/>",
+        options: [
+          "It scrolls to bottom on EVERY content change — even when the user has scrolled up to read history, forcing them back to the bottom",
+          "scrollToEnd doesn't exist on FlatList",
+          "onContentSizeChange doesn't fire when data changes",
+          "animated: true causes performance issues"
+        ],
+        correct: 0,
+        explanation: "If the user scrolled up to read old messages, any new message (or even loading older messages at the top) will yank them back to the bottom. Fix: track whether the user is near the bottom (via onScroll), and only auto-scroll if they are. If they've scrolled up, leave them alone."
+      },
+      {
+        type: "which-breaks",
+        question: "Which KeyboardAvoidingView behavior works on iOS?",
+        variants: [
+          "behavior='height' — works on iOS and Android",
+          "behavior='padding' — works on iOS, might double-adjust on Android",
+          "behavior='position' — works everywhere",
+          "No behavior prop needed — it auto-detects"
+        ],
+        correct: 1,
+        explanation: "'padding' adds bottom padding equal to the keyboard height — works correctly on iOS. On Android, the OS often handles keyboard avoidance via windowSoftInputMode='adjustResize', so 'padding' can double-adjust. Use Platform.OS to set 'padding' for iOS and 'height' for Android."
+      },
+      {
+        type: "fill-blank",
+        question: "Link the optimistic message to the server acknowledgment:",
+        code: "const ___ = `local-${Date.now()}`;\n\n// Add to UI:\nsetMessages(prev => [...prev, { id: ___, text, status: 'sending' }]);\n\n// Send via WS:\nsend('chat:send', { conversationId, text, ___ });",
+        answer: "localId",
+        explanation: "The localId is a temporary identifier that travels with the message from UI to server and back. When the server acknowledges with chat:sent { localId, id: 456 }, the client finds the message by localId and replaces it with the permanent server ID. This links the optimistic UI update to the actual stored message."
+      },
+      {
+        type: "order-steps",
+        question: "Put the optimistic message send flow in order:",
+        steps: [
+          "User taps Send — setText('') clears the input",
+          "Create message with localId and status 'sending', append to state",
+          "Send via WebSocket: { type: 'chat:send', payload: { localId, text, conversationId } }",
+          "Server stores message, echoes back: { type: 'chat:sent', payload: { localId, id, sentAt } }",
+          "Client finds message by localId, updates with server ID and status 'sent'"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Clear input immediately (prevents double-send). Add to UI (instant feedback). Send to server. Server acknowledges with the real ID. Client reconciles. The user never sees a delay — the message appears the instant they tap Send."
+      }
+    ]);
+  </script>
+</body>
+</html>

@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Message Routing — B5.2</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">B5 — WebSocket Server</a>
+      <span class="sep">›</span>
+      <span class="current">Message Routing</span>
+    </nav>
+
+    <h1>Message Routing</h1>
+    <div class="lesson-meta">
+      <span>B5 — Lesson 2 of 3</span>
+      <span>~55 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>When a token holder sends a message, it must reach the right user — and only that user. The routing logic maps a conversation to a set of sockets: the token issuer might be on their phone and tablet simultaneously, so the message fans out to both devices. If they're offline, it's stored for later delivery. This is the core of the chat system — the plumbing that makes messages appear instantly on the right screens.</p>
+    </div>
+
+    <h2>The conversation model</h2>
+
+    <p>In Token, a conversation is always between two parties: the <strong>token issuer</strong> (user) and a <strong>token holder</strong> (person who redeemed the token). Each redeemed token creates one conversation.</p>
+
+    <pre><code>// From B2 — the conversations table
+CREATE TABLE conversations (
+  id            SERIAL PRIMARY KEY,
+  token_id      INTEGER NOT NULL REFERENCES tokens(id),
+  issuer_id     INTEGER NOT NULL REFERENCES users(id),
+  holder_id     INTEGER NOT NULL REFERENCES users(id),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(token_id)  -- one conversation per token
+);
+
+CREATE TABLE messages (
+  id              SERIAL PRIMARY KEY,
+  conversation_id INTEGER NOT NULL REFERENCES conversations(id),
+  sender_id       INTEGER NOT NULL REFERENCES users(id),
+  text            TEXT NOT NULL,
+  sent_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  delivered_at    TIMESTAMPTZ,
+  read_at         TIMESTAMPTZ
+);</code></pre>
+
+    <h2>Routing a message</h2>
+
+    <p>When user A sends a message in conversation C, the server must:</p>
+
+    <ol>
+      <li>Validate: is user A a participant in conversation C?</li>
+      <li>Store the message in the database</li>
+      <li>Find the OTHER participant (user B)</li>
+      <li>Find ALL of user B's active WebSocket connections</li>
+      <li>Send the message to each connection</li>
+      <li>Also send to user A's OTHER devices (for multi-device sync)</li>
+    </ol>
+
+    <pre><code>// api/src/ws/handlers/chat.ts
+import { db } from '../../db';
+import { getClients } from '../server';
+import { sendTo } from '../router';
+import { WebSocket } from 'ws';
+
+interface AuthenticatedSocket extends WebSocket {
+  userId: number;
+  isAlive: boolean;
+}
+
+interface ChatSendPayload {
+  conversationId: number;
+  text: string;
+}
+
+export async function handleChatSend(ws: AuthenticatedSocket, payload: ChatSendPayload) {
+  const { conversationId, text } = payload;
+
+  if (!conversationId || !text?.trim()) {
+    sendTo(ws, 'error', { message: 'conversationId and text are required' });
+    return;
+  }
+
+  // 1. Validate participation
+  const conv = await db.query(
+    'SELECT issuer_id, holder_id FROM conversations WHERE id = $1',
+    [conversationId]
+  );
+
+  if (conv.rows.length === 0) {
+    sendTo(ws, 'error', { message: 'Conversation not found' });
+    return;
+  }
+
+  const { issuer_id, holder_id } = conv.rows[0];
+  if (ws.userId !== issuer_id && ws.userId !== holder_id) {
+    sendTo(ws, 'error', { message: 'Not a participant in this conversation' });
+    return;
+  }
+
+  // 2. Store in database
+  const result = await db.query(
+    `INSERT INTO messages (conversation_id, sender_id, text)
+     VALUES ($1, $2, $3)
+     RETURNING id, conversation_id, sender_id, text, sent_at`,
+    [conversationId, ws.userId, text.trim()]
+  );
+  const message = result.rows[0];
+
+  // 3. Determine recipient
+  const recipientId = ws.userId === issuer_id ? holder_id : issuer_id;
+
+  // 4. Build the outgoing payload
+  const outPayload = {
+    id: message.id,
+    conversationId: message.conversation_id,
+    senderId: message.sender_id,
+    text: message.text,
+    sentAt: message.sent_at,
+  };
+
+  // 5. Send to recipient's devices
+  deliverToUser(recipientId, 'chat:receive', outPayload);
+
+  // 6. Send to sender's OTHER devices (multi-device sync)
+  const senderSockets = getClients().get(ws.userId);
+  if (senderSockets) {
+    for (const sock of senderSockets) {
+      if (sock !== ws) {
+        sendTo(sock, 'chat:receive', outPayload);
+      }
+    }
+  }
+
+  // 7. Acknowledge to the sending socket
+  sendTo(ws, 'chat:sent', { id: message.id, sentAt: message.sent_at });
+}
+
+function deliverToUser(userId: number, type: string, payload: unknown) {
+  const sockets = getClients().get(userId);
+  if (sockets) {
+    for (const sock of sockets) {
+      sendTo(sock, type, payload);
+    }
+  }
+  // If no sockets — user is offline. Message is in the DB.
+  // They'll fetch it via REST when they come back online.
+}</code></pre>
+
+    <h2>Registering the handler</h2>
+
+    <pre><code>// api/src/ws/handlers/index.ts
+import { registerHandler } from '../router';
+import { handleChatSend } from './chat';
+import { handleTypingStart, handleTypingStop } from './typing';
+
+export function registerAllHandlers() {
+  registerHandler('chat:send', handleChatSend);
+  registerHandler('typing:start', handleTypingStart);
+  registerHandler('typing:stop', handleTypingStop);
+}
+
+// Call in server.ts after creating wss:
+// registerAllHandlers();</code></pre>
+
+    <h2>Multi-device fan-out</h2>
+
+    <p>A user might have the app open on their phone AND their tablet. The <code>clients</code> Map stores a <strong>Set</strong> of sockets per user — not a single socket:</p>
+
+    <pre><code>// Map&lt;userId, Set&lt;AuthenticatedSocket&gt;&gt;
+const clients = new Map();
+
+// User 5 connects from phone:
+// clients: { 5 => Set([phone-socket]) }
+
+// User 5 connects from tablet:
+// clients: { 5 => Set([phone-socket, tablet-socket]) }
+
+// Message arrives for user 5:
+// → Send to BOTH phone-socket AND tablet-socket</code></pre>
+
+    <p>When the sender sends a message, they also need to see it on their OTHER devices. That's why step 6 sends to the sender's sockets <em>except</em> the one that sent it (they already know — they typed it).</p>
+
+    <h2>Delivery acknowledgment</h2>
+
+    <p>When the server successfully stores a message and routes it, it sends back a <code>chat:sent</code> acknowledgment to the sender. This lets the client:</p>
+
+    <ul>
+      <li>Replace a temporary local ID with the server-assigned ID</li>
+      <li>Show a "sent" checkmark (✓)</li>
+      <li>Know the exact <code>sentAt</code> timestamp from the server</li>
+    </ul>
+
+    <pre><code>// Server → Sender
+{ "type": "chat:sent", "payload": { "id": 456, "sentAt": "2026-08-07T12:00:00Z" } }
+
+// Client updates its local message:
+// { localId: "temp-123", status: "sending" }
+// →
+// { id: 456, status: "sent", sentAt: "2026-08-07T12:00:00Z" }</code></pre>
+
+    <h2>Delivery receipts</h2>
+
+    <p>When the recipient's device receives the message, it sends back an acknowledgment:</p>
+
+    <pre><code>// Client → Server (recipient's device)
+{ "type": "chat:delivered", "payload": { "messageId": 456 } }
+
+// Server updates the database and notifies the sender:
+export async function handleChatDelivered(ws: AuthenticatedSocket, payload: { messageId: number }) {
+  const { messageId } = payload;
+
+  // Update delivery timestamp
+  await db.query(
+    'UPDATE messages SET delivered_at = NOW() WHERE id = $1 AND delivered_at IS NULL',
+    [messageId]
+  );
+
+  // Notify the sender (for the ✓✓ checkmark)
+  const msg = await db.query(
+    'SELECT sender_id, conversation_id FROM messages WHERE id = $1',
+    [messageId]
+  );
+
+  if (msg.rows.length > 0) {
+    deliverToUser(msg.rows[0].sender_id, 'chat:delivery-receipt', {
+      messageId,
+      conversationId: msg.rows[0].conversation_id,
+      deliveredAt: new Date().toISOString(),
+    });
+  }
+}</code></pre>
+
+    <h3>Message status progression</h3>
+
+    <pre><code>sending → sent (server acknowledged) → delivered (recipient got it) → read (recipient opened it)
+   ✓              ✓                           ✓✓                          ✓✓ (blue)</code></pre>
+
+    <h2>Offline message delivery</h2>
+
+    <p>If the recipient is offline (no active WebSocket connections), the message is already stored in the database. When they reconnect, the client fetches missed messages via REST:</p>
+
+    <pre><code>// Client — on WebSocket connect, fetch messages since last seen
+GET /conversations/7/messages?after=2026-08-07T11:00:00Z
+
+// Server returns all messages the client missed
+// Client renders them in the thread</code></pre>
+
+    <p>For v1, this simple approach works. The client tracks the timestamp of the last received message and fetches everything after it on reconnect. No complex offline queue on the server needed.</p>
+
+    <h2>Authorization — who can message whom?</h2>
+
+    <p>Not anyone can message anyone. The rules:</p>
+
+    <ul>
+      <li>A conversation exists only between token issuer and token holder</li>
+      <li>The token must be active (not revoked or paused)</li>
+      <li>Access rules must allow it (time window, channel restrictions)</li>
+    </ul>
+
+    <pre><code>// Enhanced validation in handleChatSend:
+async function validateCanSend(userId: number, conversationId: number): Promise&lt;boolean&gt; {
+  const result = await db.query(
+    `SELECT c.id, t.status
+     FROM conversations c
+     JOIN tokens t ON t.id = c.token_id
+     WHERE c.id = $1
+       AND (c.issuer_id = $2 OR c.holder_id = $2)
+       AND t.status = 'active'`,
+    [conversationId, userId]
+  );
+
+  return result.rows.length > 0;
+}
+
+// In handleChatSend, before storing:
+const canSend = await validateCanSend(ws.userId, conversationId);
+if (!canSend) {
+  sendTo(ws, 'error', { message: 'Token is not active or you are not a participant' });
+  return;
+}</code></pre>
+
+    <p><strong>Note:</strong> Access rules (time windows, contact limits) are enforced here too — that's covered in B7 (Token Engine). For now, just check token status.</p>
+
+    <h2>Error handling patterns</h2>
+
+    <pre><code>// Pattern: always send errors as structured messages, never throw
+export async function handleChatSend(ws: AuthenticatedSocket, payload: ChatSendPayload) {
+  try {
+    // ... routing logic ...
+  } catch (err) {
+    console.error('chat:send error:', err);
+    sendTo(ws, 'error', {
+      message: 'Failed to send message',
+      code: 'CHAT_SEND_FAILED',
+    });
+  }
+}
+
+// The client receives:
+// { "type": "error", "payload": { "message": "...", "code": "CHAT_SEND_FAILED" } }
+// and can show appropriate UI (retry button, error toast, etc.)</code></pre>
+
+    <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0001-ws-connection-lifecycle.html">← Previous: WS Connection Lifecycle</a>
+      <a href="./0003-presence-typing.html">Next: Presence &amp; Typing →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// Simulate multi-device fan-out
+const clients = new Map();
+
+// User 5 has 2 devices connected
+clients.set(5, new Set(['phone', 'tablet']));
+// User 8 has 1 device
+clients.set(8, new Set(['laptop']));
+
+function deliverToUser(userId, message) {
+  const sockets = clients.get(userId);
+  if (!sockets || sockets.size === 0) {
+    console.log('User ' + userId + ' is OFFLINE — message stored in DB');
+    return;
+  }
+  for (const device of sockets) {
+    console.log('  → Delivered to user ' + userId + ' on ' + device);
+  }
+}
+
+// User 8 sends a message to user 5
+console.log('User 8 sends "Hello" to user 5:');
+deliverToUser(5, 'Hello');
+
+console.log('\\nUser 5 sends reply to user 8:');
+deliverToUser(8, 'Hi back');
+
+// User 3 is offline
+console.log('\\nUser 5 sends to user 3 (offline):');
+deliverToUser(3, 'Are you there?');`);
+
+    createSolution("exercise-1", {
+      exercise: "Build the complete message routing system:\n\n1. Create `api/src/ws/handlers/chat.ts` with `handleChatSend`: validate participation, store in DB, route to recipient's devices, sync to sender's other devices, send acknowledgment.\n\n2. Add delivery receipts: when the recipient's client receives a message, it sends `chat:delivered`. The server updates `delivered_at` and notifies the sender.\n\n3. Add authorization: check that the token is active before allowing messages.\n\n4. Add multi-device fan-out: messages reach ALL of a user's connected devices, not just one.\n\n5. Handle the offline case: if the recipient has no active sockets, the message stays in the DB (no error — it's not a failure).\n\n6. Test: open two wscat connections as different users, send a message from one, verify it arrives on the other.",
+      hints: [
+        "The clients Map is Map<userId, Set<sockets>>. Iterate the Set to fan out to all devices.",
+        "When sending to the sender's other devices, exclude the socket that sent it (ws !== sock).",
+        "For delivery receipts: the recipient sends { type: 'chat:delivered', payload: { messageId } } automatically on receive.",
+        "Offline = no entry in the clients Map or empty Set. Not an error — just means REST fetch later."
+      ],
+      solution: `// See the full handleChatSend implementation in the lesson above.
+// Key architecture:
+
+// 1. VALIDATE: Is sender a participant? Is token active?
+// 2. STORE: INSERT into messages table → get server ID + timestamp
+// 3. ROUTE TO RECIPIENT: iterate all their sockets, send chat:receive
+// 4. SYNC SENDER: iterate sender's OTHER sockets, send chat:receive
+// 5. ACKNOWLEDGE: send chat:sent back to the sending socket
+// 6. OFFLINE: if recipient has no sockets, do nothing extra — DB has it
+
+// deliverToUser helper:
+function deliverToUser(userId, type, payload) {
+  const sockets = getClients().get(userId);
+  if (sockets) {
+    for (const sock of sockets) {
+      sendTo(sock, type, payload);
+    }
+  }
+}
+
+// Delivery receipt handler:
+registerHandler('chat:delivered', async (ws, payload) => {
+  await db.query(
+    'UPDATE messages SET delivered_at = NOW() WHERE id = $1 AND delivered_at IS NULL',
+    [payload.messageId]
+  );
+  const msg = await db.query('SELECT sender_id FROM messages WHERE id = $1', [payload.messageId]);
+  if (msg.rows[0]) {
+    deliverToUser(msg.rows[0].sender_id, 'chat:delivery-receipt', {
+      messageId: payload.messageId,
+      deliveredAt: new Date().toISOString(),
+    });
+  }
+});`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "User 5 has phone + tablet connected. User 8 sends them a message. How many WebSocket sends happen?",
+        code: "// clients Map:\n// 5 => Set([phone-socket, tablet-socket])\n// 8 => Set([laptop-socket])\n\n// User 8 sends 'Hello' to user 5\n// deliverToUser(5, ...) iterates the Set\n// Also: sendTo(ws, 'chat:sent', ...) back to user 8",
+        answer: "3",
+        explanation: "1 send to user 5's phone, 1 send to user 5's tablet (fan-out), and 1 send back to user 8's laptop (the chat:sent acknowledgment). If user 8 had a second device, that would also get a sync message — but they only have one."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this multi-device sync?",
+        code: "// Send to sender's other devices\nconst senderSockets = getClients().get(ws.userId);\nfor (const sock of senderSockets) {\n  sendTo(sock, 'chat:receive', outPayload);\n}",
+        options: [
+          "It sends to ALL sender sockets including the one that sent — the sender sees their own message twice",
+          "senderSockets could be undefined if the Map has no entry",
+          "for...of doesn't work on Sets",
+          "sendTo should use ws.send directly"
+        ],
+        correct: 0,
+        explanation: "The loop sends to every socket including the one that originally sent the message. That socket already knows about the message (the user typed it). Add `if (sock !== ws)` to skip the originating socket. Also: check that senderSockets exists (it could be undefined if the user disconnected between send and this code)."
+      },
+      {
+        type: "which-breaks",
+        question: "A user's token is revoked. Which behavior is correct?",
+        variants: [
+          "Messages already in the DB are deleted, and the WebSocket connection is closed",
+          "New messages are rejected with an error, but existing messages and the socket stay open",
+          "The server silently drops new messages without any error to the client",
+          "Nothing changes — messages continue to route normally"
+        ],
+        correct: 1,
+        explanation: "Revocation means 'no more contact' — new messages are rejected. But existing messages are historical records (evidence of contact). The socket stays open because the user might have other active tokens. The client should receive a clear error so it can show appropriate UI ('This token has been revoked')."
+      },
+      {
+        type: "fill-blank",
+        question: "Store the message and get the server-assigned ID:",
+        code: "const result = await db.query(\n  `INSERT INTO messages (conversation_id, sender_id, text)\n   VALUES ($1, $2, $3)\n   ___ id, conversation_id, sender_id, text, sent_at`,\n  [conversationId, ws.userId, text]\n);",
+        answer: "RETURNING",
+        explanation: "RETURNING clause in PostgreSQL returns the specified columns from the newly inserted row — including server-generated values like id (from SERIAL) and sent_at (from DEFAULT NOW()). Without it, you'd need a separate SELECT query to get the ID."
+      },
+      {
+        type: "order-steps",
+        question: "Put the message routing flow in order:",
+        steps: [
+          "Validate sender is a participant and token is active",
+          "INSERT message into the database",
+          "Deliver to recipient's connected sockets (fan-out)",
+          "Sync to sender's OTHER devices",
+          "Send chat:sent acknowledgment to the sending socket"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Validate first (reject unauthorized messages before touching the DB). Store second (message is durable even if delivery fails). Then deliver — recipient first (that's the primary goal), sender's other devices next (sync), and finally acknowledge to the sender (they need the server ID)."
+      }
+    ]);
+  </script>
+</body>
+</html>

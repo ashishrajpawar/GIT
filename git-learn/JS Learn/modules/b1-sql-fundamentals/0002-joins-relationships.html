@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Joins &amp; Relationships — B1.2</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">B1 — SQL Fundamentals</a>
+      <span class="sep">›</span>
+      <span class="current">Joins &amp; Relationships</span>
+    </nav>
+
+    <h1>Joins &amp; Relationships</h1>
+    <div class="lesson-meta">
+      <span>B1 — Lesson 2 of 4</span>
+      <span>~50 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>Token's data is spread across multiple tables: users, tokens, access_rules, messages, redemption_events. When the app shows a token list, it needs data from <code>tokens</code> joined with <code>users</code>. When displaying a chat, it joins <code>messages</code> with <code>tokens</code> and <code>redemption_events</code>. Joins are how you combine related data from different tables in a single query.</p>
+    </div>
+
+    <h2>Why multiple tables?</h2>
+
+    <p>You could put everything in one giant table — but that leads to duplicated data, inconsistencies, and impossible constraints. Instead, relational databases split data by entity and link them with keys:</p>
+
+    <pre><code>-- Bad: one flat table with duplicated user info
+-- If Ashish changes their display_name, you'd need to update EVERY token row
+
+-- Good: separate tables linked by user_id
+-- Change the name once in users, all tokens automatically "see" the new name</code></pre>
+
+    <h2>Relationships</h2>
+
+    <p>The three relationship types:</p>
+
+    <ul>
+      <li><strong>One-to-many</strong> — one user has many tokens. Each token has one user_id.</li>
+      <li><strong>One-to-one</strong> — one user has one profile. (Less common.)</li>
+      <li><strong>Many-to-many</strong> — many tokens can have many access rules. (Uses a junction table.)</li>
+    </ul>
+
+    <p>Token's core relationships:</p>
+
+    <pre><code>users (1) ──→ (many) tokens
+tokens (1) ──→ (many) access_rules
+tokens (1) ──→ (many) redemption_events
+tokens (1) ──→ (many) messages</code></pre>
+
+    <h2>INNER JOIN</h2>
+
+    <p>An INNER JOIN returns rows only where both tables have matching data:</p>
+
+    <pre><code>-- Get tokens with their owner's display name
+SELECT
+  tokens.code,
+  tokens.issued_to,
+  tokens.status,
+  users.display_name AS owner_name
+FROM tokens
+INNER JOIN users ON tokens.user_id = users.id;</code></pre>
+
+    <p>Result:</p>
+    <pre><code>code            | issued_to       | status | owner_name
+----------------+-----------------+--------+-----------
+MERC-8GH2-LP4X | Amazon Delivery | active | Ashish
+SHOP-4KN9-RT2M | Flipkart        | active | Ashish
+RENT-2WX7-JP8N | NoBroker Agent  | paused | Ashish</code></pre>
+
+    <p><code>ON tokens.user_id = users.id</code> is the join condition — it tells Postgres which rows to match.</p>
+
+    <h2>Table aliases</h2>
+
+    <p>Writing <code>tokens.code</code> and <code>users.display_name</code> everywhere gets verbose. Use aliases:</p>
+
+    <pre><code>SELECT t.code, t.issued_to, t.status, u.display_name
+FROM tokens t
+INNER JOIN users u ON t.user_id = u.id
+WHERE t.status = 'active';</code></pre>
+
+    <p><code>t</code> is short for <code>tokens</code>, <code>u</code> for <code>users</code>. Same query, easier to read.</p>
+
+    <h2>LEFT JOIN</h2>
+
+    <p>A LEFT JOIN returns all rows from the left table, even if there's no match in the right table (unmatched fields become NULL):</p>
+
+    <pre><code>-- All tokens, plus their most recent redemption (if any)
+SELECT
+  t.code,
+  t.issued_to,
+  r.redeemed_at,
+  r.holder_name
+FROM tokens t
+LEFT JOIN redemption_events r ON r.token_id = t.id;</code></pre>
+
+    <p>Tokens that have never been redeemed still appear — their <code>redeemed_at</code> and <code>holder_name</code> will be NULL.</p>
+
+    <h3>When to use which join</h3>
+
+    <ul>
+      <li><strong>INNER JOIN</strong> — you only want rows where both sides exist. "Show me tokens with their owner" (every token has an owner, so this always matches).</li>
+      <li><strong>LEFT JOIN</strong> — you want all rows from the left table, even without matches. "Show all tokens and their redemptions, including tokens never redeemed."</li>
+    </ul>
+
+    <h2>Joining more than two tables</h2>
+
+    <pre><code>-- Token detail view: token + owner + access rules
+SELECT
+  t.code,
+  t.issued_to,
+  t.status,
+  u.display_name AS owner,
+  ar.max_calls_per_day,
+  ar.allowed_hours
+FROM tokens t
+INNER JOIN users u ON t.user_id = u.id
+LEFT JOIN access_rules ar ON ar.token_id = t.id
+WHERE t.code = 'MERC-8GH2-LP4X';</code></pre>
+
+    <p>You can chain as many JOINs as needed. Each one adds columns from another table.</p>
+
+    <h2>Token's tables — building the full picture</h2>
+
+    <p>Let's add the tables referenced above:</p>
+
+    <pre><code>CREATE TABLE access_rules (
+  id              SERIAL PRIMARY KEY,
+  token_id        INTEGER NOT NULL REFERENCES tokens(id),
+  allowed_start   INTEGER NOT NULL DEFAULT 0,   -- hour 0-23
+  allowed_end     INTEGER NOT NULL DEFAULT 23,
+  max_calls_per_day INTEGER NOT NULL DEFAULT 0, -- 0 = unlimited
+  categories      TEXT[] DEFAULT '{}',          -- Postgres array
+  created_at      TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE redemption_events (
+  id          SERIAL PRIMARY KEY,
+  token_id    INTEGER NOT NULL REFERENCES tokens(id),
+  holder_name TEXT,
+  holder_ip   TEXT,
+  redeemed_at TIMESTAMP NOT NULL DEFAULT NOW()
+);</code></pre>
+
+    <h2>Subqueries</h2>
+
+    <p>A query inside another query — useful when you need to filter based on computed values:</p>
+
+    <pre><code>-- Find tokens that have been redeemed more than 3 times
+SELECT code, issued_to
+FROM tokens
+WHERE id IN (
+  SELECT token_id
+  FROM redemption_events
+  GROUP BY token_id
+  HAVING COUNT(*) > 3
+);
+
+-- Find the user with the most tokens
+SELECT display_name, token_count
+FROM (
+  SELECT u.display_name, COUNT(t.id) AS token_count
+  FROM users u
+  LEFT JOIN tokens t ON t.user_id = u.id
+  GROUP BY u.display_name
+) counts
+ORDER BY token_count DESC
+LIMIT 1;</code></pre>
+
+    <h2>Aggregate functions with GROUP BY</h2>
+
+    <pre><code>-- Count tokens per status
+SELECT status, COUNT(*) AS count
+FROM tokens
+GROUP BY status;
+
+-- Count tokens per user
+SELECT u.display_name, COUNT(t.id) AS token_count
+FROM users u
+LEFT JOIN tokens t ON t.user_id = u.id
+GROUP BY u.display_name;
+
+-- Find users with more than 5 active tokens
+SELECT u.display_name, COUNT(t.id) AS active_count
+FROM users u
+INNER JOIN tokens t ON t.user_id = u.id
+WHERE t.status = 'active'
+GROUP BY u.display_name
+HAVING COUNT(t.id) > 5;</code></pre>
+
+    <p><code>HAVING</code> is like WHERE but for aggregated results. WHERE filters rows before grouping; HAVING filters after.</p>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0001-tables-insert-select.html">← Previous: Tables, INSERT, SELECT</a>
+      <a href="./0003-indexes-transactions-constraints.html">Next: Indexes, Transactions, Constraints →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createSolution("exercise-1", {
+      exercise: "Write SQL queries for Token's dashboard: (1) Show all active tokens with their owner's display name, (2) Show each token with its redemption count (including tokens redeemed 0 times), (3) Find which user has the most active tokens, (4) Find tokens that have been redeemed in the last 24 hours with the holder's name.",
+      hints: [
+        "Query 1 uses INNER JOIN (every token has an owner).",
+        "Query 2 uses LEFT JOIN + GROUP BY + COUNT — LEFT because some tokens have 0 redemptions.",
+        "Query 4 filters on redemption_events.redeemed_at > NOW() - INTERVAL '24 hours'."
+      ],
+      solution: `-- 1. Active tokens with owner name
+SELECT t.code, t.issued_to, t.status, u.display_name AS owner
+FROM tokens t
+INNER JOIN users u ON t.user_id = u.id
+WHERE t.status = 'active'
+ORDER BY t.created_at DESC;
+
+-- 2. Each token with redemption count (including 0)
+SELECT t.code, t.issued_to, COUNT(r.id) AS redemption_count
+FROM tokens t
+LEFT JOIN redemption_events r ON r.token_id = t.id
+GROUP BY t.code, t.issued_to
+ORDER BY redemption_count DESC;
+
+-- 3. User with the most active tokens
+SELECT u.display_name, COUNT(t.id) AS active_tokens
+FROM users u
+INNER JOIN tokens t ON t.user_id = u.id
+WHERE t.status = 'active'
+GROUP BY u.display_name
+ORDER BY active_tokens DESC
+LIMIT 1;
+
+-- 4. Tokens redeemed in last 24 hours
+SELECT t.code, t.issued_to, r.holder_name, r.redeemed_at
+FROM redemption_events r
+INNER JOIN tokens t ON r.token_id = t.id
+WHERE r.redeemed_at > NOW() - INTERVAL '24 hours'
+ORDER BY r.redeemed_at DESC;`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "Token 'MERC-8GH2' has never been redeemed. What does this LEFT JOIN return for it?",
+        code: "SELECT t.code, r.holder_name\nFROM tokens t\nLEFT JOIN redemption_events r ON r.token_id = t.id\nWHERE t.code = 'MERC-8GH2';",
+        answer: "MERC-8GH2 | NULL",
+        explanation: "LEFT JOIN keeps the left table's row even without a match. Since there's no redemption event, holder_name is NULL. With INNER JOIN, this row would disappear entirely."
+      },
+      {
+        type: "spot-the-bug",
+        question: "Why does this query return fewer tokens than expected?",
+        code: "SELECT t.code, r.holder_name\nFROM tokens t\nINNER JOIN redemption_events r ON r.token_id = t.id;",
+        options: [
+          "The ON clause is wrong",
+          "INNER JOIN excludes tokens that have never been redeemed",
+          "You can't select from two tables at once",
+          "The column names are wrong"
+        ],
+        correct: 1,
+        explanation: "INNER JOIN only returns rows where BOTH sides have data. Tokens with zero redemptions disappear from the result. Use LEFT JOIN if you want all tokens regardless of whether they've been redeemed."
+      },
+      {
+        type: "fill-blank",
+        question: "Filter grouped results to find users with more than 5 tokens:",
+        code: "SELECT user_id, COUNT(*) AS total\nFROM tokens\nGROUP BY user_id\n___ COUNT(*) > 5;",
+        answer: "HAVING",
+        explanation: "WHERE filters individual rows before grouping. HAVING filters groups after aggregation. Since COUNT(*) is an aggregate, you need HAVING to filter on it."
+      },
+      {
+        question: "Token has users → tokens → messages. To get a user's messages, you need to:",
+        options: [
+          "JOIN users directly to messages",
+          "JOIN users to tokens, then tokens to messages (chain two JOINs)",
+          "Use a subquery for each table separately",
+          "Store user_id directly on messages (denormalize)"
+        ],
+        correct: 1,
+        explanation: "The relationship is users → tokens → messages. You follow the foreign keys: JOIN users to tokens (on user_id), then JOIN tokens to messages (on token_id). This is the relational model working as designed."
+      },
+      {
+        type: "which-breaks",
+        question: "Which query has a SQL error?",
+        variants: [
+          "SELECT t.code, COUNT(r.id) FROM tokens t LEFT JOIN redemption_events r ON r.token_id = t.id GROUP BY t.code;",
+          "SELECT t.code, COUNT(r.id) FROM tokens t LEFT JOIN redemption_events r ON r.token_id = t.id;",
+          "SELECT COUNT(*) FROM tokens WHERE status = 'active';"
+        ],
+        correct: 1,
+        explanation: "When you use an aggregate function (COUNT) alongside a non-aggregated column (t.code), you MUST include a GROUP BY for that column. The second query uses COUNT with t.code but has no GROUP BY — Postgres rejects this."
+      }
+    ]);
+  </script>
+</body>
+</html>

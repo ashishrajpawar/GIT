@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Token Redemption Flow — A8.2</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A8 — Redemption Web Page</a>
+      <span class="sep">›</span>
+      <span class="current">Token Redemption Flow</span>
+    </nav>
+
+    <h1>Token Redemption Flow</h1>
+    <div class="lesson-meta">
+      <span>A8 — Lesson 2 of 4</span>
+      <span>~55 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p><code>tokn.app/t/CODE</code> is the <strong>only way</strong> a holder reaches the issuer. This page must validate the token code, ask for the holder's nickname, create their session, and open a conversation — all without requiring sign-up. If this flow is confusing or broken, the holder gives up and the issuer's privacy system fails. The redemption flow is the entire product for holders.</p>
+    </div>
+
+    <h2>The redemption flow — step by step</h2>
+
+    <p>When a holder opens <code>tokn.app/t/MERC-8GH2-LP4X</code>:</p>
+
+    <ol>
+      <li><strong>URL parsed</strong> — React Router extracts the code from the URL</li>
+      <li><strong>Token validated</strong> — GET /api/tokens/:code/status checks if the token exists and is active</li>
+      <li><strong>Nickname prompted</strong> — holder enters a display name (no account needed)</li>
+      <li><strong>Redemption submitted</strong> — POST /api/tokens/:code/redeem with the nickname</li>
+      <li><strong>Session created</strong> — server returns a holder JWT and session ID</li>
+      <li><strong>Conversation opened</strong> — redirect to the chat page with the session</li>
+    </ol>
+
+    <h2>Flow states</h2>
+
+    <p>The redemption page has distinct states. Model them explicitly:</p>
+
+    <pre><code>type RedeemState =
+  | { status: 'loading' }              // checking token validity
+  | { status: 'valid'; label: string } // token is active, show nickname form
+  | { status: 'entering'; label: string } // holder is typing nickname
+  | { status: 'redeeming' }            // POST in progress
+  | { status: 'expired' }              // token past expiry date
+  | { status: 'revoked' }              // issuer revoked this token
+  | { status: 'maxed' }               // max uses reached
+  | { status: 'not-found' }           // code doesn't exist
+  | { status: 'error'; message: string }; // network or server error</code></pre>
+
+    <h2>URL parsing with React Router</h2>
+
+    <pre><code>import { useParams, useNavigate } from 'react-router-dom';
+
+export function RedeemPage() {
+  const { code } = useParams&lt;{ code: string }&gt;();
+  const navigate = useNavigate();
+
+  // code is the token like "MERC-8GH2-LP4X"
+  // extracted automatically from /t/:code
+}</code></pre>
+
+    <h2>The validation API call</h2>
+
+    <p>Before showing the nickname form, check if the token is redeemable:</p>
+
+    <pre><code>// GET /api/tokens/:code/status
+// No auth required — this is a public endpoint
+
+interface TokenStatus {
+  valid: boolean;
+  label: string;          // "Amazon Delivery" — helps holder confirm
+  reason?: 'expired' | 'revoked' | 'max_uses' | 'not_found';
+}
+
+async function checkTokenStatus(code: string): Promise&lt;TokenStatus&gt; {
+  const response = await fetch(\`/api/tokens/\${code}/status\`);
+
+  if (response.status === 404) {
+    return { valid: false, label: '', reason: 'not_found' };
+  }
+
+  if (!response.ok) {
+    throw new Error(\`Server error: \${response.status}\`);
+  }
+
+  return response.json();
+}</code></pre>
+
+    <h2>The redemption API call</h2>
+
+    <pre><code>// POST /api/tokens/:code/redeem
+// No auth required — creates a new holder session
+
+interface RedeemRequest {
+  nickname: string;  // "Delivery Agent Ravi"
+}
+
+interface RedeemResponse {
+  holderSessionId: string;
+  holderJwt: string;         // JWT for this holder session
+  conversationId: string;
+  issuerId: string;          // not exposed to holder UI, used for WebSocket routing
+}
+
+async function redeemToken(code: string, nickname: string): Promise&lt;RedeemResponse&gt; {
+  const response = await fetch(\`/api/tokens/\${code}/redeem\`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ nickname }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error || 'Redemption failed');
+  }
+
+  return response.json();
+}</code></pre>
+
+    <h2>Holder identity — no account required</h2>
+
+    <p>For v1, holders don't create accounts. They provide a nickname and get a JWT scoped to that one token session:</p>
+
+    <pre><code>// Server-side: what the holder JWT contains
+{
+  sub: 'holder_session_abc123',    // unique session ID
+  tokenCode: 'MERC-8GH2-LP4X',
+  nickname: 'Delivery Agent Ravi',
+  conversationId: 'conv_xyz',
+  iat: 1700000000,
+  exp: 1700086400,                 // 24 hours
+}</code></pre>
+
+    <p>This JWT lets the holder send messages and join calls — but only for this one token conversation. No broader access.</p>
+
+    <div class="callout">
+      <div class="callout-title">Privacy design</div>
+      <p>The holder JWT contains no information about the issuer (no email, no name, no phone). The holder only sees the token label ("Amazon Delivery") and communicates through the channel. The issuer's identity is never exposed.</p>
+    </div>
+
+    <h2>Complete RedeemPage component</h2>
+
+    <pre><code>import { useState, useEffect } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+
+type RedeemState =
+  | { status: 'loading' }
+  | { status: 'valid'; label: string }
+  | { status: 'entering'; label: string }
+  | { status: 'redeeming' }
+  | { status: 'expired' }
+  | { status: 'revoked' }
+  | { status: 'maxed' }
+  | { status: 'not-found' }
+  | { status: 'error'; message: string };
+
+export function RedeemPage() {
+  const { code } = useParams&lt;{ code: string }&gt;();
+  const navigate = useNavigate();
+  const [state, setState] = useState&lt;RedeemState&gt;({ status: 'loading' });
+  const [nickname, setNickname] = useState('');
+
+  // Step 1: Validate the token on mount
+  useEffect(() =&gt; {
+    if (!code) {
+      setState({ status: 'not-found' });
+      return;
+    }
+
+    fetch(\`/api/tokens/\${code}/status\`)
+      .then(async (res) =&gt; {
+        if (res.status === 404) {
+          setState({ status: 'not-found' });
+          return;
+        }
+        const data = await res.json();
+        if (!data.valid) {
+          setState({ status: data.reason || 'error' });
+        } else {
+          setState({ status: 'valid', label: data.label });
+        }
+      })
+      .catch((err) =&gt; setState({ status: 'error', message: err.message }));
+  }, [code]);
+
+  // Step 2: Submit redemption
+  async function handleRedeem(e: React.FormEvent) {
+    e.preventDefault();
+    if (!nickname.trim() || !code) return;
+
+    setState({ status: 'redeeming' });
+
+    try {
+      const res = await fetch(\`/api/tokens/\${code}/redeem\`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nickname: nickname.trim() }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error);
+      }
+
+      const data = await res.json();
+
+      // Store the holder JWT for subsequent API calls
+      sessionStorage.setItem('holderJwt', data.holderJwt);
+      sessionStorage.setItem('sessionId', data.holderSessionId);
+
+      // Navigate to chat
+      navigate(\`/t/\${code}/chat\`);
+    } catch (err: any) {
+      setState({ status: 'error', message: err.message });
+    }
+  }
+
+  // Render based on state
+  if (state.status === 'loading') {
+    return &lt;div className="min-h-screen flex items-center justify-center"&gt;
+      &lt;p className="text-gray-500"&gt;Checking token...&lt;/p&gt;
+    &lt;/div&gt;;
+  }
+
+  if (state.status === 'not-found') {
+    return &lt;div className="min-h-screen flex items-center justify-center"&gt;
+      &lt;div className="text-center"&gt;
+        &lt;h1 className="text-xl font-bold text-red-600"&gt;Token Not Found&lt;/h1&gt;
+        &lt;p className="mt-2 text-gray-600"&gt;This token code doesn't exist.&lt;/p&gt;
+      &lt;/div&gt;
+    &lt;/div&gt;;
+  }
+
+  if (state.status === 'expired' || state.status === 'revoked' || state.status === 'maxed') {
+    const messages = {
+      expired: 'This token has expired.',
+      revoked: 'This token has been revoked by the issuer.',
+      maxed: 'This token has reached its maximum number of uses.',
+    };
+    return &lt;div className="min-h-screen flex items-center justify-center"&gt;
+      &lt;div className="text-center"&gt;
+        &lt;h1 className="text-xl font-bold text-orange-600"&gt;Token Unavailable&lt;/h1&gt;
+        &lt;p className="mt-2 text-gray-600"&gt;{messages[state.status]}&lt;/p&gt;
+      &lt;/div&gt;
+    &lt;/div&gt;;
+  }
+
+  if (state.status === 'error') {
+    return &lt;div className="min-h-screen flex items-center justify-center"&gt;
+      &lt;div className="text-center"&gt;
+        &lt;h1 className="text-xl font-bold text-red-600"&gt;Something went wrong&lt;/h1&gt;
+        &lt;p className="mt-2 text-gray-600"&gt;{state.message}&lt;/p&gt;
+      &lt;/div&gt;
+    &lt;/div&gt;;
+  }
+
+  // Valid token — show nickname form
+  return &lt;div className="min-h-screen flex items-center justify-center p-4"&gt;
+    &lt;div className="w-full max-w-sm"&gt;
+      &lt;h1 className="text-2xl font-bold text-center"&gt;Connect&lt;/h1&gt;
+      &lt;p className="mt-2 text-center text-gray-600"&gt;
+        Token: {state.status === 'valid' &amp;&amp; state.label}
+      &lt;/p&gt;
+      &lt;form onSubmit={handleRedeem} className="mt-6 space-y-4"&gt;
+        &lt;input
+          type="text"
+          value={nickname}
+          onChange={(e) =&gt; setNickname(e.target.value)}
+          placeholder="Your name (visible to token issuer)"
+          className="w-full px-4 py-2 border rounded-lg"
+          maxLength={50}
+          required
+        /&gt;
+        &lt;button
+          type="submit"
+          disabled={state.status === 'redeeming' || !nickname.trim()}
+          className="w-full py-2 bg-blue-600 text-white rounded-lg"
+        &gt;
+          {state.status === 'redeeming' ? 'Connecting...' : 'Start Conversation'}
+        &lt;/button&gt;
+      &lt;/form&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;;
+}</code></pre>
+
+    <h2>Why sessionStorage, not localStorage?</h2>
+
+    <p>The holder JWT is stored in <code>sessionStorage</code> because:</p>
+    <ul>
+      <li>It's scoped to one browser tab — closing the tab clears it</li>
+      <li>Holders are ephemeral — no persistent identity</li>
+      <li>If they want to reconnect later, they open the same URL again and get a new session</li>
+      <li>This prevents stale JWTs from accumulating on shared/public devices</li>
+    </ul>
+
+    <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0001-vite-react-setup.html">← Previous: Vite + React Setup</a>
+      <a href="./0003-browser-webrtc-ws.html">Next: Browser WebRTC & WebSocket →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// Simulating the redemption flow state machine
+
+function simulateRedemption(tokenStatus, nickname) {
+  let state = { status: 'loading' };
+  console.log('1. Initial state:', JSON.stringify(state));
+
+  // Step 1: Check token status
+  if (tokenStatus === 'not_found') {
+    state = { status: 'not-found' };
+    console.log('2. Token not found:', JSON.stringify(state));
+    return state;
+  }
+
+  if (tokenStatus === 'revoked') {
+    state = { status: 'revoked' };
+    console.log('2. Token revoked:', JSON.stringify(state));
+    return state;
+  }
+
+  state = { status: 'valid', label: 'Amazon Delivery' };
+  console.log('2. Token valid:', JSON.stringify(state));
+
+  // Step 2: Holder enters nickname
+  state = { status: 'entering', label: 'Amazon Delivery' };
+  console.log('3. Entering nickname:', nickname);
+
+  // Step 3: Submit redemption
+  state = { status: 'redeeming' };
+  console.log('4. Redeeming...');
+
+  // Step 4: Success — would navigate to chat
+  const result = {
+    holderSessionId: 'sess_' + Math.random().toString(36).slice(2, 8),
+    holderJwt: 'eyJhbGciOi...(truncated)',
+    conversationId: 'conv_' + Math.random().toString(36).slice(2, 8),
+  };
+  console.log('5. Redeemed! Session:', result.holderSessionId);
+  console.log('   Navigate to: /t/MERC-8GH2-LP4X/chat');
+
+  return result;
+}
+
+simulateRedemption('active', 'Delivery Agent Ravi');
+console.log('---');
+simulateRedemption('revoked', 'Someone');`);
+
+    createSolution("exercise-1", {
+      exercise: "Build the complete redemption flow: (1) A useTokenStatus custom hook that calls GET /api/tokens/:code/status on mount and returns the state. (2) A RedeemForm component that takes the token label, shows a nickname input, validates it (2-50 chars, no empty), and calls the redeem API on submit. (3) Error handling for network failures (show retry button). (4) Store the holder JWT in sessionStorage after successful redemption.",
+      hints: [
+        "The custom hook should return { state, retry } where retry re-runs the status check.",
+        "Use a discriminated union type for the state so TypeScript narrows correctly in each branch.",
+        "Wrap the fetch in a try/catch — network failures (offline) throw, but 4xx/5xx responses don't."
+      ],
+      solution: `// useTokenStatus.ts — custom hook for token validation
+import { useState, useEffect, useCallback } from 'react';
+
+type TokenState =
+  | { status: 'loading' }
+  | { status: 'valid'; label: string }
+  | { status: 'expired' }
+  | { status: 'revoked' }
+  | { status: 'maxed' }
+  | { status: 'not-found' }
+  | { status: 'error'; message: string };
+
+export function useTokenStatus(code: string | undefined) {
+  const [state, setState] = useState<TokenState>({ status: 'loading' });
+
+  const checkStatus = useCallback(async () => {
+    if (!code) {
+      setState({ status: 'not-found' });
+      return;
+    }
+
+    setState({ status: 'loading' });
+
+    try {
+      const res = await fetch(\`/api/tokens/\${code}/status\`);
+
+      if (res.status === 404) {
+        setState({ status: 'not-found' });
+        return;
+      }
+
+      if (!res.ok) {
+        throw new Error(\`Server error: \${res.status}\`);
+      }
+
+      const data = await res.json();
+
+      if (!data.valid) {
+        setState({ status: data.reason || 'error' });
+      } else {
+        setState({ status: 'valid', label: data.label });
+      }
+    } catch (err: any) {
+      setState({ status: 'error', message: err.message });
+    }
+  }, [code]);
+
+  useEffect(() => { checkStatus(); }, [checkStatus]);
+
+  return { state, retry: checkStatus };
+}
+
+// RedeemForm.tsx
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+
+interface Props {
+  code: string;
+  label: string;
+}
+
+export function RedeemForm({ code, label }: Props) {
+  const navigate = useNavigate();
+  const [nickname, setNickname] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const isValid = nickname.trim().length >= 2 && nickname.trim().length <= 50;
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!isValid) return;
+
+    setSubmitting(true);
+    setError(null);
+
+    try {
+      const res = await fetch(\`/api/tokens/\${code}/redeem\`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nickname: nickname.trim() }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Redemption failed');
+      }
+
+      const data = await res.json();
+
+      // Store session in sessionStorage (not localStorage)
+      sessionStorage.setItem('holderJwt', data.holderJwt);
+      sessionStorage.setItem('sessionId', data.holderSessionId);
+      sessionStorage.setItem('conversationId', data.conversationId);
+
+      navigate(\`/t/\${code}/chat\`);
+    } catch (err: any) {
+      setError(err.message);
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <p>Connecting to: {label}</p>
+      <input
+        type="text"
+        value={nickname}
+        onChange={(e) => setNickname(e.target.value)}
+        placeholder="Your name"
+        maxLength={50}
+        required
+      />
+      {error && <p className="error">{error}</p>}
+      <button type="submit" disabled={submitting || !isValid}>
+        {submitting ? 'Connecting...' : 'Start Conversation'}
+      </button>
+    </form>
+  );
+}`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "What will this code log?",
+        code: "const status = 'revoked';\nconst messages = { expired: 'Gone', revoked: 'Taken back', maxed: 'Used up' };\nconsole.log(messages[status]);",
+        answer: "Taken back",
+        explanation: "Dynamic property access on an object — messages['revoked'] returns the value at that key. This pattern is used in the RedeemPage to map status codes to user-facing messages without a switch statement."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this redemption handler?",
+        code: "async function handleRedeem() {\n  const res = await fetch(`/api/tokens/${code}/redeem`, {\n    method: 'POST',\n    body: JSON.stringify({ nickname }),\n  });\n  const data = await res.json();\n  localStorage.setItem('holderJwt', data.holderJwt);\n  navigate(`/t/${code}/chat`);\n}",
+        options: [
+          "navigate() doesn't work in async functions",
+          "Missing Content-Type header AND should use sessionStorage (not localStorage) for holder JWT",
+          "JSON.stringify is unnecessary for POST requests",
+          "await is wrong before res.json()"
+        ],
+        correct: 1,
+        explanation: "Two issues: (1) Without 'Content-Type': 'application/json', the server won't parse the body. (2) Holder JWTs should use sessionStorage — holders are ephemeral and shouldn't persist across browser sessions. localStorage keeps data forever, which is wrong for a tab-scoped session."
+      },
+      {
+        type: "fill-blank",
+        question: "Extract the token code from the URL in a React Router component:",
+        code: "const { code } = ___<{ code: string }>();",
+        answer: "useParams",
+        explanation: "React Router's useParams() hook returns an object of URL parameters defined in the route pattern. Since the route is /t/:code, useParams() gives you { code: 'MERC-8GH2-LP4X' }. The generic type parameter provides TypeScript safety."
+      },
+      {
+        question: "Why does the redemption page check token status BEFORE showing the nickname form?",
+        options: [
+          "To reduce API calls — one call instead of two",
+          "To prevent a bad UX where the holder types their name then discovers the token is invalid",
+          "Because React requires data before rendering any form",
+          "The server requires validation before redemption is allowed"
+        ],
+        correct: 1,
+        explanation: "If you show the form immediately and only check validity on submit, the holder wastes time entering their name for a dead token. Validating first gives immediate feedback: 'expired', 'revoked', or 'enter your name'. The holder knows within 1-2 seconds whether they can proceed."
+      },
+      {
+        type: "order-steps",
+        question: "Order the redemption flow from the holder's perspective:",
+        steps: [
+          "Holder opens tokn.app/t/CODE in their browser",
+          "Page checks if token is valid (GET /status)",
+          "Holder enters their nickname",
+          "Page submits redemption (POST /redeem)",
+          "Holder JWT stored in sessionStorage, redirected to chat"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "The flow is linear: open URL, validate token, enter nickname, submit, get session. Each step depends on the previous one succeeding. If validation fails (step 2), steps 3-5 never happen — the holder sees an error state instead."
+      }
+    ]);
+  </script>
+</body>
+</html>

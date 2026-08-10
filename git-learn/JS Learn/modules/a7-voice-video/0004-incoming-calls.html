@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Incoming Calls (Android + iOS) — A7.4</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A7 — Voice &amp; Video</a>
+      <span class="sep">›</span>
+      <span class="current">Incoming Calls (Android + iOS)</span>
+    </nav>
+
+    <h1>Incoming Calls (Android + iOS)</h1>
+    <div class="lesson-meta">
+      <span>A7 — Lesson 4 of 5</span>
+      <span>~60 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>The app isn't always in the foreground. When a call comes in and the app is closed or in the background, the phone must ring — just like a regular phone call. iOS requires CallKit (the native call UI) and VoIP push notifications. Android requires a foreground service with a full-screen notification. Without these platform-specific integrations, incoming calls only work when the app is open — useless for a real communication tool.</p>
+    </div>
+
+    <h2>The problem: app is not running</h2>
+
+    <p>When user A calls user B, and B's app is in the background:</p>
+    <ul>
+      <li>The WebSocket is disconnected (OS killed it after ~30 seconds background)</li>
+      <li>No way to deliver <code>call:incoming</code> via WebSocket</li>
+      <li>Need an alternative wake-up mechanism: <strong>push notifications</strong></li>
+    </ul>
+
+    <h2>iOS: CallKit + VoIP Push</h2>
+
+    <h3>How it works</h3>
+
+    <pre><code>Caller → Your Server → APNs (VoIP push) → iOS → CallKit → Native call UI
+
+// iOS shows the SAME full-screen UI as a real phone call
+// Even on the lock screen, even when the phone is asleep</code></pre>
+
+    <h3>Why CallKit is mandatory</h3>
+
+    <p>Apple requires CallKit for any app that makes VoIP calls. Without it:</p>
+    <ul>
+      <li>Your app can't show the native call screen</li>
+      <li>Calls won't work on the lock screen</li>
+      <li>The app will be rejected from the App Store</li>
+    </ul>
+
+    <h3>react-native-callkeep</h3>
+
+    <pre><code>npx expo install react-native-callkeep</code></pre>
+
+    <pre><code>// app/src/calls/callkeep.ts
+import RNCallKeep from 'react-native-callkeep';
+import { Platform } from 'react-native';
+
+export function setupCallKeep() {
+  const options = {
+    ios: {
+      appName: 'Token',
+      supportsVideo: true,
+    },
+    android: {
+      alertTitle: 'Permissions required',
+      alertDescription: 'Token needs phone account access for incoming calls',
+      selfManaged: true,
+    },
+  };
+
+  RNCallKeep.setup(options);
+
+  // Listen for CallKit events
+  RNCallKeep.addEventListener('answerCall', ({ callUUID }) =&gt; {
+    // User tapped "Accept" on the native call UI
+    navigateToCallScreen(callUUID);
+  });
+
+  RNCallKeep.addEventListener('endCall', ({ callUUID }) =&gt; {
+    // User tapped "Decline" or hung up from native UI
+    sendRejectOrHangup(callUUID);
+  });
+}
+
+// Report an incoming call to the system
+export function reportIncomingCall(callId: string, callerName: string, hasVideo: boolean) {
+  RNCallKeep.displayIncomingCall(
+    callId,           // unique UUID
+    callerName,       // displayed on the call screen
+    callerName,       // localizedCallerName
+    'generic',        // handleType
+    hasVideo,         // video call?
+  );
+}
+
+// End a call from your app
+export function endCallFromApp(callId: string) {
+  RNCallKeep.endCall(callId);
+}</code></pre>
+
+    <h3>VoIP Push Notification (iOS)</h3>
+
+    <pre><code>// Server side: send a VoIP push when a call is initiated
+// This is different from a regular push — it wakes the app immediately
+
+// Using node-apn or a push service:
+const notification = {
+  topic: 'com.tokn.app.voip',  // must end in .voip
+  payload: {
+    callId: 'abc-123',
+    callerId: 5,
+    callerName: 'Amazon Delivery',
+    type: 'video',
+  },
+  pushType: 'voip',
+  priority: 10,  // immediate delivery
+};
+
+// The app handles it in the VoIP push handler:
+// → calls reportIncomingCall() → iOS shows native call UI</code></pre>
+
+    <h2>Android: Foreground Service + Full-Screen Notification</h2>
+
+    <h3>How it works</h3>
+
+    <pre><code>Caller → Your Server → FCM (high priority) → Android → Foreground Service → Full-screen notification
+
+// Android shows a full-screen ringing UI
+// Works on lock screen with full-screen intent</code></pre>
+
+    <h3>The notification channel</h3>
+
+    <pre><code>// Create a high-priority notification channel for calls
+import * as Notifications from 'expo-notifications';
+
+async function setupCallChannel() {
+  if (Platform.OS === 'android') {
+    await Notifications.setNotificationChannelAsync('calls', {
+      name: 'Incoming Calls',
+      importance: Notifications.AndroidImportance.MAX,
+      vibrationPattern: [0, 500, 200, 500],
+      sound: 'ringtone.wav',
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+    });
+  }
+}</code></pre>
+
+    <h3>Full-screen intent</h3>
+
+    <pre><code>// Android: a full-screen intent launches your IncomingCall screen
+// even when the phone is locked
+
+// In AndroidManifest.xml (via app.config.js plugin):
+// &lt;uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" /&gt;
+
+// The FCM handler:
+import messaging from '@react-native-firebase/messaging';
+
+messaging().setBackgroundMessageHandler(async (remoteMessage) =&gt; {
+  if (remoteMessage.data?.type === 'incoming_call') {
+    // Show full-screen notification
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: 'Incoming Call',
+        body: remoteMessage.data.callerName,
+        categoryIdentifier: 'call',
+        sound: 'ringtone.wav',
+      },
+      trigger: null,  // immediate
+    });
+  }
+});</code></pre>
+
+    <h2>The IncomingCall screen</h2>
+
+    <pre><code>// app/src/screens/IncomingCall.tsx
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import InCallManager from 'react-native-incall-manager';
+import { useEffect } from 'react';
+
+export function IncomingCallScreen({ route, navigation }) {
+  const { callId, callerName, type } = route.params;
+
+  useEffect(() =&gt; {
+    // Play ringtone + vibrate
+    InCallManager.startRingtone('_DEFAULT_');
+    return () =&gt; InCallManager.stopRingtone();
+  }, []);
+
+  function handleAccept() {
+    InCallManager.stopRingtone();
+    const screen = type === 'video' ? 'VideoCall' : 'VoiceCall';
+    navigation.replace(screen, {
+      callId,
+      conversationId: route.params.conversationId,
+      isCaller: false,
+      tokenLabel: callerName,
+    });
+  }
+
+  function handleReject() {
+    InCallManager.stopRingtone();
+    send('call:reject', { callId });
+    navigation.goBack();
+  }
+
+  return (
+    &lt;View style={styles.container}&gt;
+      &lt;Text style={styles.callerName}&gt;{callerName}&lt;/Text&gt;
+      &lt;Text style={styles.callType}&gt;
+        Incoming {type} call
+      &lt;/Text&gt;
+
+      &lt;View style={styles.actions}&gt;
+        &lt;TouchableOpacity style={styles.rejectBtn} onPress={handleReject}&gt;
+          &lt;Text style={styles.btnText}&gt;Decline&lt;/Text&gt;
+        &lt;/TouchableOpacity&gt;
+        &lt;TouchableOpacity style={styles.acceptBtn} onPress={handleAccept}&gt;
+          &lt;Text style={styles.btnText}&gt;Accept&lt;/Text&gt;
+        &lt;/TouchableOpacity&gt;
+      &lt;/View&gt;
+    &lt;/View&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#1e293b', justifyContent: 'center', alignItems: 'center' },
+  callerName: { fontSize: 28, fontWeight: '600', color: '#fff', marginBottom: 8 },
+  callType: { fontSize: 16, color: '#94a3b8', marginBottom: 60 },
+  actions: { flexDirection: 'row', gap: 48 },
+  rejectBtn: { width: 72, height: 72, borderRadius: 36, backgroundColor: '#ef4444', justifyContent: 'center', alignItems: 'center' },
+  acceptBtn: { width: 72, height: 72, borderRadius: 36, backgroundColor: '#22c55e', justifyContent: 'center', alignItems: 'center' },
+  btnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+});</code></pre>
+
+    <h2>Server-side: triggering the push</h2>
+
+    <pre><code>// api/src/ws/handlers/call.ts — in handleCallInitiate:
+// If callee is OFFLINE (no WebSocket), send a push notification
+
+import { sendPushNotification } from '../../push/sender';
+
+if (!calleeSockets || calleeSockets.size === 0) {
+  // Callee offline — wake them via push
+  await sendPushNotification(calleeId, {
+    type: 'incoming_call',
+    callId,
+    callerId: ws.userId,
+    callerName: await getCallerName(ws.userId, conversationId),
+    callType: type,
+  });
+
+  // Don't endCall — give them 30 seconds to wake up and connect
+  // The ring timeout (30s) will clean up if they don't answer
+}</code></pre>
+
+    <h2>Platform comparison</h2>
+
+    <table>
+      <thead>
+        <tr><th>Feature</th><th>iOS (CallKit)</th><th>Android (Foreground Service)</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Wake mechanism</td><td>VoIP push (APNs)</td><td>FCM high priority</td></tr>
+        <tr><td>Call UI</td><td>Native (system call screen)</td><td>Custom (your IncomingCall screen)</td></tr>
+        <tr><td>Lock screen</td><td>Native slide-to-answer</td><td>Full-screen intent</td></tr>
+        <tr><td>Required</td><td>Mandatory (App Store policy)</td><td>Not mandatory but essential for UX</td></tr>
+        <tr><td>Library</td><td>react-native-callkeep</td><td>react-native-callkeep + FCM</td></tr>
+        <tr><td>Apple/Google dependency</td><td>APNs + Apple Developer ($99/yr)</td><td>FCM (free)</td></tr>
+      </tbody>
+    </table>
+
+    <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0003-video-call.html">← Previous: 1:1 Video Call</a>
+      <a href="./0005-relay-only-privacy.html">Next: Relay-Only Mode &amp; IP Privacy →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// Compare the two platform approaches
+const platforms = {
+  iOS: {
+    push: 'APNs VoIP push',
+    ui: 'Native CallKit (system call screen)',
+    lockScreen: 'Slide to answer (native)',
+    requirement: 'MANDATORY for App Store',
+    library: 'react-native-callkeep',
+  },
+  Android: {
+    push: 'FCM high-priority',
+    ui: 'Custom full-screen notification',
+    lockScreen: 'Full-screen intent',
+    requirement: 'Not mandatory but essential',
+    library: 'react-native-callkeep + @react-native-firebase/messaging',
+  },
+};
+
+for (const [platform, info] of Object.entries(platforms)) {
+  console.log('=== ' + platform + ' ===');
+  for (const [key, value] of Object.entries(info)) {
+    console.log('  ' + key + ': ' + value);
+  }
+  console.log('');
+}`);
+
+    createSolution("exercise-1", {
+      exercise: "Implement incoming call handling for both platforms:\n\n1. Set up react-native-callkeep: configure for iOS (CallKit) and Android (selfManaged). Listen for answerCall and endCall events.\n\n2. Create `reportIncomingCall(callId, callerName, hasVideo)`: reports to the native call system so the OS shows the call UI.\n\n3. Create `IncomingCallScreen`: shows caller name, call type, ringtone/vibration, accept (green) and decline (red) buttons.\n\n4. Server side: when callee is offline during call:initiate, send a push notification (VoIP for iOS, FCM high-priority for Android).\n\n5. Handle the wake-up flow: push arrives → app wakes → reportIncomingCall → user accepts → navigate to VoiceCall/VideoCall screen.\n\n6. Test: close the app on device B, call from device A, verify the phone rings and the call UI appears.",
+      hints: [
+        "iOS VoIP pushes must use the .voip topic suffix and pushType: 'voip'. Regular pushes won't wake the app for calls.",
+        "Android needs USE_FULL_SCREEN_INTENT permission and a MAX importance notification channel.",
+        "InCallManager.startRingtone('_DEFAULT_') plays the system ringtone. Always stopRingtone() on accept or reject.",
+        "The 30-second ring timeout on the server still applies — if no answer, both parties get call:timeout."
+      ],
+      solution: `// See the lesson code above for full implementations.
+// Architecture:
+
+// iOS flow:
+// APNs VoIP push → app wakes → VoIP push handler →
+// RNCallKeep.displayIncomingCall() → native call UI shown →
+// user accepts → answerCall event → navigate to call screen
+
+// Android flow:
+// FCM high-priority → background handler →
+// full-screen notification (MAX importance) →
+// user taps accept → IncomingCall screen → navigate to call screen
+
+// Server decision tree in handleCallInitiate:
+// if (callee has WebSocket) → send call:incoming via WS
+// else → send push notification, keep call state, wait 30s timeout
+
+// Both platforms use react-native-callkeep for unified API
+// CallKit is mandatory on iOS; Android uses selfManaged mode`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "What happens if you DON'T use CallKit on iOS for VoIP calls?",
+        code: "// App makes VoIP calls without CallKit integration\n// Result: ???",
+        answer: "App Store rejection. Apple mandates CallKit for all VoIP apps.",
+        explanation: "Apple requires CallKit integration for any app that handles voice/video calls. Without it: no native call UI, no lock screen answer, no integration with Do Not Disturb, and most importantly — your app will be rejected during App Store review. This isn't optional."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this incoming call flow?",
+        code: "// In handleCallInitiate on the server:\nif (!calleeSockets || calleeSockets.size === 0) {\n  endCall(callId);\n  sendTo(ws, 'call:unavailable', { reason: 'User offline' });\n}",
+        options: [
+          "Ending the call immediately when offline — should send a push notification and wait for the callee to wake up (30s timeout)",
+          "endCall() doesn't exist",
+          "The response type should be 'call:busy' not 'call:unavailable'",
+          "sendTo should use deliverToUser"
+        ],
+        correct: 0,
+        explanation: "If the callee is offline but has push notifications enabled, they can still receive the call — it just takes 1-3 seconds for the push to wake the app. The server should send a push, keep the call state active, and wait up to 30 seconds. Only give up if the timeout expires without the callee connecting."
+      },
+      {
+        type: "which-breaks",
+        question: "Which push notification type wakes an iOS app for an incoming call?",
+        variants: [
+          "Regular APNs alert notification (shows banner)",
+          "APNs VoIP push notification (wakes app + CallKit)",
+          "Silent push notification (content-available)",
+          "FCM data message"
+        ],
+        correct: 1,
+        explanation: "VoIP pushes are special on iOS: they wake the app immediately (even if terminated), have higher priority than regular pushes, and trigger the VoIP push handler where you call CallKit. Regular alerts just show a banner. Silent pushes have throttling. FCM is Android."
+      },
+      {
+        type: "fill-blank",
+        question: "Show the native call UI on iOS via CallKit:",
+        code: "import RNCallKeep from 'react-native-callkeep';\n\nRNCallKeep.___(callId, callerName, callerName, 'generic', hasVideo);",
+        answer: "displayIncomingCall",
+        explanation: "displayIncomingCall tells CallKit to show the system's incoming call UI. On the lock screen, this looks identical to a regular phone call — slide to answer, tap to decline. The parameters are: UUID, handle, localizedCallerName, handleType, hasVideo."
+      },
+      {
+        type: "order-steps",
+        question: "Put the iOS incoming call flow in order (app is closed):",
+        steps: [
+          "Server sends APNs VoIP push notification",
+          "iOS wakes the app process and delivers the push to the VoIP handler",
+          "Handler calls RNCallKeep.displayIncomingCall() — native call UI appears",
+          "User slides to answer on the lock screen",
+          "answerCall event fires — app navigates to VoiceCall/VideoCall screen"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "The VoIP push is the wake-up trigger. iOS guarantees the app process launches (or resumes) to handle it. The handler reports to CallKit, which shows the native UI. User interaction on the native UI fires JavaScript events. The app then sets up WebRTC as normal."
+      }
+    ]);
+  </script>
+</body>
+</html>

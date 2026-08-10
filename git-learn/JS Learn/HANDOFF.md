@@ -1,283 +1,211 @@
-# HANDOFF — JS Learn Project
+# HANDOFF — JS Learn / Token Course
 
-## 1. What we are building and why
+## 1. What this project is
 
-A structured, self-contained HTML/JavaScript learning course for **Ashish** — a complete JavaScript beginner with basic HTML/CSS knowledge. The goal is to learn enough JavaScript and React Native to build and publish a **full WhatsApp clone mobile app** to both **Android (Play Store) and iOS (App Store)** within ~2 months.
+A two-track HTML course teaching one student (Ashish) to build **Token** — a
+privacy-first mobile app for the Indian market. Users issue revocable
+capability tokens instead of sharing phone numbers or emails.
+Deny-by-default: nobody contacts the user unless they issued a token.
 
-The course lives entirely in this folder as plain HTML files — no server, no framework, no login. Open any lesson file in a browser to read it. Each lesson has a working quiz powered by `assets/quiz.js`.
+The course lives as plain HTML files opened in a browser. No server, no
+framework. The Token product itself has its own repo with four folders:
+`app/`, `web/`, `api/`, `shared/`.
 
----
-
-## 2. Every decision made and reasoning
-
-### Tech stack for the app being built
-- **React Native + Expo** — chosen over bare RN for beginner friendliness; EAS Build handles native modules
-- **Firebase** — auth (sign up/login), Firestore (real-time messages), Storage (images)
-- **WebRTC via `react-native-webrtc`** — chosen over Agora/Twilio because Ashish explicitly wanted the same technology WhatsApp uses; no third-party SDK, free forever
-- **Firebase Firestore as signaling server** — already in the stack, no extra service needed
-- **Google STUN + self-hosted `coturn`** — free, open source TURN fallback
-- **EAS Build** — required for `react-native-webrtc` (native C++/Obj-C code); plain Expo Go cannot run it
-- **Both Android AND iOS** — Ashish explicitly requested both platforms (not just Android)
-
-### iOS call specifics
-- iOS incoming calls require **CallKit + VoIP push (APNs)** — mandatory for App Store approval
-- Android incoming calls require **FCM push + foreground service**
-- iOS publishing requires Apple Developer account ($99/year)
-- EAS Build handles iOS builds without needing a Mac
-
-### Course structure decision
-- Organised into `modules/` folder (not the original flat `lessons/` folder)
-- 6 modules total, matching the app-building journey end to end
-- Lessons are built one module at a time, as Ashish progresses
-- Each lesson has: explanation → code examples tied to WhatsApp → full runnable example → 5-question interactive quiz
-
-### Folder reorganisation
-- Original `lessons/` folder still exists (safe to delete once confirmed working)
-- All lesson files were copied to `modules/01-javascript-fundamentals/`
-- Links were updated: `../lessons/` → `./`, `../assets/` → `../../assets/`, `../reference/` → `../../reference/`
-- `index.html` created at root as course home page
-- Each module folder has a `README.html` as the module index
+**The project pivoted from a WhatsApp clone to Token.** Firebase was dropped
+entirely. The backend is now built from scratch (Node + Postgres). See
+`TOKEN-BRIEF.md` for the full product brief and `TOKEN-TRACK.md` for the
+two-track lesson plan.
 
 ---
 
-## 3. Files created or modified
+## 2. Current state
 
-### Root
-- `index.html` — **CREATED** — course home page with all 6 modules in a table, links to everything
-- `MISSION.md` — **MODIFIED** — updated to reflect both iOS+Android, WebRTC instead of Agora, EAS Build requirement
-- `NOTES.md` — **MODIFIED** — added WebRTC stack details, iOS/Android call differences, publishing requirements
-- `HANDOFF.md` — **CREATED** — this file
+### Existing modules (written during the WhatsApp era)
 
-### Module 1 — JavaScript Fundamentals (`modules/01-javascript-fundamentals/`)
-All 12 files copied from `lessons/` with links updated:
-- `0001-what-is-javascript.html` through `0009-promises-and-async-await.html` — pre-existing, links updated
-- `0010-arrays-and-objects.html` — **CREATED** — arrays, objects, arrays of objects, spread/copy
-- `0011-modern-javascript-es6.html` — **CREATED** — arrow functions, destructuring, spread, template literals, optional chaining `?.`, nullish coalescing `??`, import/export
-- `0012-error-handling.html` — **CREATED** — try/catch/finally, throwing errors, async error handling, Firebase error codes, input validation
-- `README.html` — **CREATED** — module index with all 12 lessons linked
+| Module | Lessons | Status |
+|--------|---------|--------|
+| 01 — JavaScript Fundamentals | 12 | Complete, still valid |
+| 02 — React Native | 14 | Complete, still valid |
+| 03 — Firebase Backend | 5 | SUPERSEDED — replaced by Track B |
+| 04 — WhatsApp Features | 6 | Partially salvageable |
+| 05 — Audio & Video Calls | 8 | Theory transfers, signalling rewritten |
+| 06 — Polish & Publish | 6 | Keep for reference |
+| 07 — Store Compliance & Safety | 6 | Partially relevant |
+| 08 — Production at Scale | 8 | Partially relevant (no Firebase parts) |
+| 09 — Advanced Features | 6 | Deep linking rewritten for Token |
 
-### Module 2 — React Native (`modules/02-react-native/`)
-- `README.html` — **CREATED then UPDATED** — module index; updated as each lesson was built to add links
-- `0001-expo-setup-and-eas-build.html` — **CREATED** — Node.js, Expo CLI, Expo Go, create-expo-app, QR scan, EAS Build setup, project structure
-- `0002-core-components.html` — **CREATED** — View, Text, Image, ScrollView, Pressable, JSX, HTML→RN comparison, ChatRow example
-- `0003-styling-and-flexbox.html` — **CREATED** — StyleSheet, CSS vs RN differences, flexDirection, justifyContent, alignItems, flex, margin/padding, position:absolute, WhatsApp message bubble layout, colour reference
-- `0004-textinput-and-keyboard.html` — **CREATED** — TextInput props, keyboardType, secureTextEntry, multiline, useRef, KeyboardAvoidingView, Platform.OS, platform shadows, keyboardDismissMode, full chat input bar
-- `0005-usestate.html` — **CREATED** — why plain variables fail, useState syntax, updating arrays/objects, functional updater, derived values, WhatsApp state patterns, full chat screen with ticks and unread count
-- `0006-useeffect.html` — **CREATED** — side effects, three forms (no array/empty array/with values), async inner function pattern, cleanup/unsubscribe, Firebase listener pattern, 5 common patterns, chat list with search
-- `0007-flatlist.html` — **CREATED** — ScrollView vs FlatList, required props, keyExtractor, ItemSeparatorComponent, ListEmptyComponent, pull-to-refresh, inverted for message threads, onEndReached pagination, performance tips, production chat list
-- `0008-navigation.html` — **CREATED** — NavigationContainer, Stack Navigator, navigate/goBack/push/replace, route params, header customisation, headerShown:false, Bottom Tab Navigator, nested navigators, full WhatsApp navigation shell (4 tabs + stack)
+Total: 71 lessons across 9 modules.
 
-### Modules 3–6 (placeholders only)
-- `modules/03-firebase-backend/README.html` — **CREATED** — planned lessons listed
-- `modules/04-whatsapp-features/README.html` — **CREATED** — planned lessons listed
-- `modules/05-audio-video-calls/README.html` — **CREATED** — full WebRTC stack details, Android vs iOS table, 8 planned lessons
-- `modules/06-polish-and-publish/README.html` — **CREATED** — Android + iOS publishing details, 6 planned lessons
+### Two-track plan — written and reviewed
 
-### Memory files (outside project)
-- `C:\Users\aspawar\.claude\memory\user-profile.md` — **CREATED** — global user profile: JS beginner, HTML/CSS basics, wants both Android+iOS
-- `C:\Users\aspawar\.claude\memory\MEMORY.md` — **CREATED** — global memory index
-- `C:\Users\aspawar\.claude\projects\C--Users-aspawar-Desktop-Digital-Ashish-App-JS-Learn\memory\project-context.md` — **CREATED** — full project context: tech stack, WebRTC details, module status, file structure
-- `C:\Users\aspawar\.claude\projects\C--Users-aspawar-Desktop-Digital-Ashish-App-JS-Learn\memory\MEMORY.md` — **CREATED** — project memory index
+- `TOKEN-TRACK.md` — full table of both tracks with sequencing
+- `TOKEN-BRIEF.md` — product brief (supersedes old WhatsApp sections)
+- `CLAUDE.md` — rewritten for Token context
 
-### Legacy (not deleted, safe to remove)
-- `lessons/` folder — original flat lesson files, now superseded by `modules/01-javascript-fundamentals/`
+### Course tooling upgrade — COMPLETE
 
----
+All six features from `TOKEN-ASSETS-TASK.md` are built and working in `assets/`:
 
-## 4. What is done
+1. Extended `createQuiz()` with 5 new question types
+2. Runnable JS playground (`playground.js`)
+3. Progress tracking (`progress.js`, localStorage)
+4. Collapsible solution component (`solution.js`)
+5. Copy buttons on code blocks (`copy-code.js`)
+6. Client-side search (`search.js` + `search-index.json`)
 
-### Module 1 — JavaScript Fundamentals ✅ COMPLETE
-All 12 lessons written and linked:
-1. What is JavaScript
-2. Data Types
-3. Functions
-4. Conditionals
-5. Loops
-6. Scope & Closures
-7. DOM & Browser APIs
-8. Events
-9. Promises & Async/Await
-10. Arrays & Objects
-11. Modern JavaScript (ES6+)
-12. Error Handling
+### New lessons written
 
-### Module 2 — React Native ✅ COMPLETE (14/14 done)
-1. Expo Setup & EAS Build ✅
-2. Core Components (View, Text, Image, ScrollView, Pressable) ✅
-3. Styling & Flexbox ✅
-4. TextInput & Keyboard ✅
-5. useState ✅
-6. useEffect ✅
-7. FlatList ✅
-8. React Navigation (Stack + Bottom Tabs) ✅
-9. Passing Data Between Screens ✅
-10. Forms — Login & Register screens ✅
-11. Images & ImagePicker ✅
-12. Loading states & error states ✅
-13. Build the chat list screen (capstone) ✅
-14. Build the message thread screen (capstone) ✅
+| Module | Lessons | Status |
+|--------|---------|--------|
+| X1 — Git & Dev Environment | 3 | Complete |
+| A2 — TypeScript | 3 | Complete |
+| X2 — Debugging | 2 | Complete |
+| B1 — SQL Fundamentals | 4 | Complete |
+| B2 — Schema Design | 3 | Complete |
+| B3 — Node & HTTP Server | 4 | Complete |
+| B4 — Auth (Server) | 3 | Complete |
+| A3 — API Consumption | 4 | Complete |
+| A4 — Auth on the Client | 3 | Complete |
+| A5 — Core Token Features | 5 | Complete |
+| B5 — WebSocket Server | 3 | Complete |
+| A6 — Chat & Real-time | 3 | Complete |
+| B6 — WebRTC Signalling | 2 | Complete |
+| A7 — Voice & Video | 5 | Complete |
+| A8 — Redemption Web Page | 4 | Complete |
+| A9 — Deep Linking & Routing | 2 | Complete |
+| B7 — Token Engine | 3 | Complete |
+| B8 — Push Notifications | 1 | Complete |
+| A10 — Device Security & Storage | 2 | Complete |
+| B9 — Docker & Deployment | 3 | Complete |
+| B10 — Security & Compliance | 2 | Complete |
+| A11 — Polish & Publish | 5 | Complete |
 
-### Module 3 — Firebase Backend ✅ COMPLETE (5/5 done)
-1. Firebase Project Setup & Connecting to Expo ✅
-2. Authentication — Sign Up, Log In, Log Out ✅
-3. Firestore — Real-Time Chat List ✅
-4. Firestore — Real-Time Messages ✅
-5. Firebase Storage — Image Sending ✅
-
-### Module 4 — WhatsApp Features ✅ COMPLETE (6/6 done)
-1. User Profiles & Contacts ✅
-2. Group Chats ✅
-3. Message Features (reply, delete, reactions) ✅
-4. Voice Messages ✅
-5. Status (Stories) ✅
-6. Push Notifications ✅
-
-### Module 5 — Audio & Video Calls ✅ COMPLETE (8/8 done)
-1. How WebRTC Works ✅
-2. EAS Build Setup ✅
-3. react-native-webrtc Setup ✅
-4. Signaling with Firebase ✅
-5. 1:1 Voice Call ✅
-6. 1:1 Video Call ✅
-7. Incoming Calls on Android ✅
-8. Incoming Calls on iOS ✅
-
-### Module 6 — Polish & Publish ✅ COMPLETE (6/6 done)
-1. UI Polish ✅
-2. App Icon & Splash Screen ✅
-3. Performance ✅
-4. Privacy Policy & Permissions ✅
-5. Build & Publish to Android ✅
-6. Build & Publish to iOS ✅
-
-### Module 7 — Store Compliance & Safety ✅ COMPLETE (6/6 done)
-1. Block & Report Users ✅
-2. Content Moderation System ✅
-3. Forgot Password & Account Security ✅
-4. Age Gate & Consent Flows ✅
-5. Data Export & Terms of Service ✅
-6. Pre-Submission Checklist & Demo Accounts ✅
-
-### Module 8 — Production at Scale ✅ COMPLETE (8/8 done)
-1. Firestore Security Rules ✅
-2. Pagination & Data Limits ✅
-3. Offline Support & Network Handling ✅
-4. Cloud Functions — Server-Side Logic ✅
-5. Error Recovery & Retry Logic ✅
-6. Monitoring & Crash Reporting ✅
-7. Testing Your App ✅
-8. Media Compression & Storage Optimization ✅
-
-### Module 9 — Advanced Features ✅ COMPLETE (6/6 done)
-1. End-to-End Encryption ✅
-2. CI/CD Pipeline ✅
-3. Deep Linking & OTA Updates ✅
-4. Internationalization (i18n) ✅
-5. Accessibility ✅
-6. Feature Flags & Staged Rollout ✅
+**All phases complete. Course finished.**
 
 ---
 
-## 5. What is next, in order
+## 3. Architecture — fixed decisions
 
-### Immediate — Module 7: Store Compliance & Safety
-Build lessons for Module 7, one per session when Ashish says "proceed with next lesson":
+**Mobile app:** React Native + Expo, EAS Build, TypeScript, SQLite cache
+**Redemption web page:** Vite + React (NOT RN Web), same Coolify VPS
+**Backend:** Node.js + TypeScript, PostgreSQL, Redis (optional v1), raw SQL then Drizzle
+**Communication:** WebSocket (chat), WebRTC (voice/video), own signalling server
+**Push:** FCM + APNs via Expo Notifications (only third-party dep)
+**Deployment:** Coolify on VPS, `api/` and `web/` as containers, auto TLS
 
-**Lesson 1 — Block & Report Users**
-- Block user (hide messages, prevent contact initiation)
-- Report user/message (flag to Firestore `reports` collection)
-- Block list UI in Settings, unblock flow
-- Required by Apple Guideline 1.2 and Google UGC policy
-
-**Lesson 2 — Content Moderation System**
-- Firestore `reports` collection schema and admin review workflow
-- Auto-hide content after N reports
-- Policy document for store reviewers
-
-**Lesson 3 — Forgot Password & Account Security**
-- Firebase `sendPasswordResetEmail()`, reset flow UI
-- Login attempt limiting (lock after 5 failures)
-- Re-authentication before sensitive actions
-
-**Lesson 4 — Age Gate & Consent Flows**
-- Date-of-birth at signup, block under-13
-- iOS ATT prompt (`expo-tracking-transparency`)
-- GDPR consent toggle, conditional analytics init
-
-**Lesson 5 — Data Export & Terms of Service**
-- "Download My Data" (Firestore → JSON → share sheet)
-- Minimal Terms of Service, hosting, store linking
-
-**Lesson 6 — Pre-Submission Checklist & Demo Accounts**
-- Two demo accounts with chat history
-- Apple reviewer notes
-- IPv6 STUN/TURN verification
-- Final walkthrough
-
-### After Module 7 — Module 8 (Production at Scale)
-1. Firestore Security Rules (complete field validation + rate limits)
-2. Pagination & Data Limits
-3. Offline Support & Network Handling
-4. Cloud Functions — Server-Side Logic
-5. Error Recovery & Retry Logic
-6. Monitoring & Crash Reporting
-7. Testing Your App
-8. Media Compression & Storage Optimization
-
-### After Module 8 — Module 9 (Advanced Features, optional)
-1. End-to-End Encryption
-2. CI/CD Pipeline
-3. Deep Linking & OTA Updates
-4. Internationalization (i18n)
-5. Accessibility
-6. Feature Flags & Staged Rollout
+**Explicitly out of scope:** Firebase, PSTN voice, email, payment gateway,
+third-party comms SDKs (Agora/Twilio/etc), Prisma.
 
 ---
 
-## 6. Gotchas, failed approaches, and things not to retry
+## 4. File structure
 
-### Lesson format
-- Every lesson MUST have a `callout` div explaining "Why this matters for your WhatsApp clone" at the top — Ashish is motivated by the end goal, not abstract concepts
-- Every lesson MUST have a full working `App.js` replacement example the student can run on their phone
-- Every lesson MUST have exactly 5 quiz questions using `createQuiz()` — the quiz widget ID must be unique (e.g. `rn-lesson-0001-quiz`)
-- All lesson nav links must point to the NEXT lesson file that will be created — use the planned filename even before it exists
+```
+index.html                          ← course home page (still WhatsApp-branded, update pending)
+modules/
+  01-javascript-fundamentals/       ← 12 lessons
+  02-react-native/                  ← 14 lessons
+  03-firebase-backend/              ← 5 lessons (superseded)
+  04-whatsapp-features/             ← 6 lessons
+  05-audio-video-calls/             ← 8 lessons
+  06-polish-and-publish/            ← 6 lessons
+  07-store-compliance-and-safety/   ← 6 lessons
+  08-production-at-scale/           ← 8 lessons
+  09-advanced-features/             ← 6 lessons
+assets/
+  styles.css                        ← shared stylesheet
+  quiz.js                           ← createQuiz() widget (multiple-choice only, upgrade pending)
+reference/
+  js-basics-cheatsheet.html
+TOKEN-BRIEF.md                      ← product brief
+TOKEN-TRACK.md                      ← two-track plan with sequencing
+TOKEN-ASSETS-TASK.md                ← course tooling upgrade spec
+CLAUDE.md                           ← Claude orientation (current project instructions)
+HANDOFF.md                          ← this file
+```
 
-### Link paths in modules/02-react-native/
-- CSS: `../../assets/styles.css`
-- Quiz JS: `../../assets/quiz.js`
-- Reference cheatsheet: `../../reference/js-basics-cheatsheet.html`
-- Back to module: `./README.html`
-- Between lessons: `./0002-core-components.html` etc (same folder, no path prefix)
+---
 
-### WebRTC / Agora
-- Ashish explicitly rejected Agora and any third-party SDK — do NOT suggest them again
-- Use `react-native-webrtc` only
-- Always mention EAS Build is required (not Expo Go) when discussing calls
+## 5. Planned tooling files (after assets task)
 
-### Platform differences to always cover in lessons
-- iOS vs Android keyboard behaviour (KeyboardAvoidingView behavior prop)
-- iOS vs Android shadows (shadowColor vs elevation)
-- iOS multiline TextInput padding quirk (paddingTop needed)
-- Always show `Platform.OS === 'ios' ? ... : ...` pattern when behaviour differs
+```
+assets/
+  quiz.js             ← extended with 5 new question types (backward-compatible)
+  playground.js       ← embeddable JS editor + sandboxed runner
+  progress.js         ← localStorage progress tracking
+  solution.js         ← collapsible exercise/hint/solution component
+  copy-code.js        ← auto-attaches copy buttons to all <pre> blocks
+  search.js           ← client-side lesson search
+  search-index.json   ← static lesson index (no build step)
+```
 
-### Navigation shell
-- The full nav shell was built in Lesson 8 — future lessons slot INTO this structure
-- The shell uses `headerShown: false` on the ChatsStack — custom green headers are built in the screen components themselves
-- Login/Register screens go in a ROOT stack OUTSIDE the tab navigator (no tab bar on auth screens)
-- `navigation.replace('Main')` is used after login so the user can't press back to the login screen
+---
 
-### State management
-- No Redux, no Context API, no Zustand — plain useState only for now
-- This is intentional — keep it simple for a beginner; introduce Context only if needed for auth state in Module 3
-- Derived values pattern is important — unread counts, filtered lists are computed from state, not stored separately
+## 6. Lesson format going forward
 
-### Memory system
-- Project memory is at `C:\Users\aspawar\.claude\projects\C--Users-aspawar-Desktop-Digital-Ashish-App-JS-Learn\memory\`
-- Global user memory is at `C:\Users\aspawar\.claude\memory\`
-- Both MEMORY.md index files exist and are loaded automatically
-- Update project-context.md as modules progress (update "Current state" section)
+### Flow per lesson
+```
+"Why this matters for Token" callout
+  → Concept explanation with code
+  → Exercise statement ("build this")
+  → Student attempts it
+  → Collapsible solution revealed
+  → 5 quiz questions (mixed types)
+  → Lesson nav (prev/next)
+```
 
-### The old lessons/ folder
-- `lessons/` still exists with the original 9 lessons (pre-session)
-- It is safe to delete — everything is in `modules/01-javascript-fundamentals/`
-- Do NOT delete it without Ashish's confirmation — he may have bookmarks to it
+### Quiz question types
+- `multiple-choice` — existing, unchanged
+- `predict-output` — code snippet, ask what it prints
+- `spot-the-bug` — code with a defect, identify it
+- `fill-blank` — code with one line/expression removed
+- `which-breaks` — several variations, one fails
+- `order-steps` — put operations in correct sequence
+
+### Track B (backend) difference
+Point 4 of the lesson format becomes: a full runnable server file or
+migration (`.sql` for SQL lessons, `.js`/`.ts` for Node lessons).
+
+---
+
+## 7. Gotchas and things not to retry
+
+- **No Firebase** — do not suggest or reference it anywhere
+- **No third-party comms SDKs** — WebRTC only, self-hosted signalling
+- **No Prisma** — raw SQL or Drizzle
+- **Redemption web page is Vite + React, NOT React Native Web**
+- **Both iOS and Android** — never Android-only shortcuts
+- **Token sharing rule** — a token must never travel over a channel that
+  already identifies the user. The app warns if the user tries.
+- **Exercise before solution** — never hand over complete code up front
+- **No gamification** — no badges, streaks, XP, points, mascots
+
+---
+
+## 8. What is next
+
+1. ~~**Build course tooling** (`TOKEN-ASSETS-TASK.md`)~~ — DONE
+2. ~~**Update `index.html`** — rebrand from WhatsApp to Token~~ — DONE
+3. ~~**Write X1 — Git & Dev Environment** (3 lessons)~~ — DONE
+4. ~~**Write A2 — TypeScript** (3 lessons)~~ — DONE
+5. ~~**Write X2 — Debugging** (2 lessons)~~ — DONE
+6. ~~**Write B1 — SQL Fundamentals** (4 lessons)~~ — DONE
+7. ~~**Write B2 — Schema Design** (3 lessons)~~ — DONE
+8. ~~**Write B3 — Node & HTTP Server** (4 lessons)~~ — DONE
+9. ~~**Write B4 — Auth Server** (3 lessons)~~ — DONE
+10. ~~**Write A3 — API Consumption** (4 lessons)~~ — DONE
+11. ~~**Write A4 — Auth on the Client** (3 lessons)~~ — DONE
+12. ~~**Write A5 — Core Token Features** (5 lessons)~~ — DONE
+13. ~~**Write B5 — WebSocket Server** (3 lessons)~~ — DONE
+14. ~~**Write A6 — Chat & Real-time** (3 lessons)~~ — DONE
+15. ~~**Write B6 — WebRTC Signalling** (2 lessons)~~ — DONE
+16. ~~**Write A7 — Voice & Video** (5 lessons)~~ — DONE
+17. ~~**Write A8 — Redemption Web Page** (4 lessons)~~ — DONE
+18. ~~**Write A9 — Deep Linking & Routing** (2 lessons)~~ — DONE
+19. ~~**Write B7 — Token Engine** (3 lessons)~~ — DONE
+20. ~~**Write B8 — Push Notifications** (1 lesson)~~ — DONE
+21. ~~**Write A10 — Device Security & Storage** (2 lessons)~~ — DONE
+22. ~~**Write B9 — Docker & Deployment** (3 lessons)~~ — DONE
+23. ~~**Write B10 — Security & Compliance** (2 lessons)~~ — DONE
+24. ~~**Write A11 — Polish & Publish** (5 lessons)~~ — DONE
+25. ~~Phase 7 completes the course.~~ — COURSE COMPLETE

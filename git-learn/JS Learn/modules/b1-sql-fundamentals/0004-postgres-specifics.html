@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Postgres Specifics — B1.4</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">B1 — SQL Fundamentals</a>
+      <span class="sep">›</span>
+      <span class="current">Postgres Specifics</span>
+    </nav>
+
+    <h1>Postgres Specifics</h1>
+    <div class="lesson-meta">
+      <span>B1 — Lesson 4 of 4</span>
+      <span>~45 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>Token's access rules are flexible — different time windows, call limits, category restrictions. A rigid relational schema can't easily handle "any combination of rules." JSONB solves this: store the rule payload as structured JSON inside a Postgres column, with the ability to query and index it. LISTEN/NOTIFY lets your WebSocket server react instantly when a token is revoked.</p>
+    </div>
+
+    <h2>JSONB — flexible structured data</h2>
+
+    <p>Postgres has a <code>JSONB</code> type that stores JSON documents inside a column. You can query into it, index it, and validate it:</p>
+
+    <pre><code>-- Access rules with a JSONB payload
+CREATE TABLE access_rules (
+  id        SERIAL PRIMARY KEY,
+  token_id  INTEGER NOT NULL REFERENCES tokens(id),
+  rule_type TEXT NOT NULL,
+  payload   JSONB NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- Insert a time-window rule
+INSERT INTO access_rules (token_id, rule_type, payload) VALUES
+(1, 'time_window', '{"start_hour": 9, "end_hour": 18, "timezone": "Asia/Kolkata"}');
+
+-- Insert a call-limit rule
+INSERT INTO access_rules (token_id, rule_type, payload) VALUES
+(1, 'call_limit', '{"max_per_day": 2, "max_per_week": 10}');
+
+-- Insert a category restriction
+INSERT INTO access_rules (token_id, rule_type, payload) VALUES
+(1, 'categories', '{"allowed": ["delivery", "support"], "blocked": ["marketing"]}');</code></pre>
+
+    <h3>Querying JSONB</h3>
+
+    <pre><code>-- Get the start_hour from a time_window rule
+SELECT payload->>'start_hour' AS start_hour
+FROM access_rules
+WHERE token_id = 1 AND rule_type = 'time_window';
+
+-- -> returns JSON (still a JSON object/array)
+-- ->> returns TEXT (the value as a string)
+
+-- Filter on a JSONB field
+SELECT * FROM access_rules
+WHERE payload->>'timezone' = 'Asia/Kolkata';
+
+-- Check if a JSONB array contains a value
+SELECT * FROM access_rules
+WHERE payload->'allowed' ? 'delivery';
+
+-- Cast to number for comparison
+SELECT * FROM access_rules
+WHERE (payload->>'max_per_day')::integer > 1;</code></pre>
+
+    <h3>Indexing JSONB</h3>
+
+    <pre><code>-- GIN index lets you query ANY key in the JSONB efficiently
+CREATE INDEX idx_rules_payload ON access_rules USING GIN (payload);
+
+-- Now queries like payload @> '{"timezone": "Asia/Kolkata"}' use the index
+SELECT * FROM access_rules WHERE payload @> '{"timezone": "Asia/Kolkata"}';</code></pre>
+
+    <h3>When to use JSONB vs columns</h3>
+
+    <ul>
+      <li><strong>Use columns</strong> when the shape is fixed and you query/sort by it often (status, code, user_id)</li>
+      <li><strong>Use JSONB</strong> when the shape varies between rows (different rule types have different fields) or when the structure might change without a migration</li>
+    </ul>
+
+    <p>Token uses both: rigid columns for the core data (tokens, users) and JSONB for the flexible rule payloads.</p>
+
+    <h2>Arrays</h2>
+
+    <p>Postgres supports array columns — useful when a field naturally holds multiple values:</p>
+
+    <pre><code>-- Categories as a text array
+ALTER TABLE tokens ADD COLUMN tags TEXT[] DEFAULT '{}';
+
+-- Insert with array values
+UPDATE tokens SET tags = ARRAY['delivery', 'commerce']
+WHERE code = 'MERC-8GH2-LP4X';
+
+-- Check if array contains a value
+SELECT * FROM tokens WHERE 'delivery' = ANY(tags);
+
+-- Array length
+SELECT code, array_length(tags, 1) AS tag_count FROM tokens;</code></pre>
+
+    <h2>LISTEN/NOTIFY — real-time events from the database</h2>
+
+    <p>Postgres can broadcast events to connected clients. This is how Token's WebSocket server knows instantly when a token is revoked — without polling:</p>
+
+    <pre><code>-- Any connection can listen on a channel:
+LISTEN token_events;
+
+-- Another connection (or a trigger) sends a notification:
+NOTIFY token_events, '{"action": "revoked", "code": "MERC-8GH2-LP4X"}';
+
+-- The listening connection receives it instantly.</code></pre>
+
+    <h3>Trigger + NOTIFY = automatic alerts</h3>
+
+    <pre><code>-- A trigger function that fires when a token is revoked
+CREATE OR REPLACE FUNCTION notify_token_revoked()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.status = 'revoked' AND OLD.status != 'revoked' THEN
+    PERFORM pg_notify('token_events',
+      json_build_object(
+        'action', 'revoked',
+        'code', NEW.code,
+        'user_id', NEW.user_id
+      )::text
+    );
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Attach it to the tokens table
+CREATE TRIGGER token_revoked_trigger
+AFTER UPDATE ON tokens
+FOR EACH ROW
+EXECUTE FUNCTION notify_token_revoked();</code></pre>
+
+    <p>Now whenever a token is revoked (by any means — your API, a cron job, a manual query), the WebSocket server is notified and can immediately disconnect active sessions using that token.</p>
+
+    <h2>Postgres vs SQLite — dialect differences</h2>
+
+    <p>Token uses Postgres on the server and SQLite on the mobile app (local cache). Most SQL is the same, but key differences:</p>
+
+    <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
+      <tr style="border-bottom:2px solid var(--gray-200);">
+        <td style="padding:0.5rem;font-weight:600;">Feature</td>
+        <td style="padding:0.5rem;font-weight:600;">Postgres</td>
+        <td style="padding:0.5rem;font-weight:600;">SQLite</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;">Auto-increment</td>
+        <td style="padding:0.5rem;"><code>SERIAL</code> or <code>GENERATED ALWAYS AS IDENTITY</code></td>
+        <td style="padding:0.5rem;"><code>INTEGER PRIMARY KEY</code> (auto)</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;">JSON</td>
+        <td style="padding:0.5rem;"><code>JSONB</code> (indexed, queryable)</td>
+        <td style="padding:0.5rem;">TEXT (store as string, parse in app)</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;">Arrays</td>
+        <td style="padding:0.5rem;">Native <code>TEXT[]</code>, <code>INTEGER[]</code></td>
+        <td style="padding:0.5rem;">Not supported (use JSON or junction table)</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;">LISTEN/NOTIFY</td>
+        <td style="padding:0.5rem;">Built-in real-time events</td>
+        <td style="padding:0.5rem;">Not available</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;">Timestamp</td>
+        <td style="padding:0.5rem;"><code>TIMESTAMP</code>, <code>TIMESTAMPTZ</code></td>
+        <td style="padding:0.5rem;">TEXT or INTEGER (store as ISO string or unix epoch)</td>
+      </tr>
+      <tr>
+        <td style="padding:0.5rem;">Concurrency</td>
+        <td style="padding:0.5rem;">Full MVCC, multiple writers</td>
+        <td style="padding:0.5rem;">Single writer (OK for local cache)</td>
+      </tr>
+    </table>
+
+    <p>The rule: write your server queries for Postgres. On the mobile app, SQLite is just a cache — simpler queries, no JOINs with the server data, no LISTEN/NOTIFY.</p>
+
+    <h2>RETURNING — get data back from INSERT/UPDATE</h2>
+
+    <pre><code>-- Insert a token and get the generated id back in one query
+INSERT INTO tokens (code, user_id, issued_to, max_uses)
+VALUES ('NEW1-ABCD-EFGH', 1, 'New Service', 5)
+RETURNING id, code, created_at;
+
+-- Update and get the new state
+UPDATE tokens
+SET status = 'revoked', revoked_at = NOW()
+WHERE code = 'MERC-8GH2-LP4X'
+RETURNING *;</code></pre>
+
+    <p>This avoids a second SELECT after every write — important for performance and for keeping your Node.js code simple.</p>
+
+    <h2>UPSERT — insert or update</h2>
+
+    <pre><code>-- If a rule already exists for this token + type, update it.
+-- Otherwise, insert a new one.
+INSERT INTO access_rules (token_id, rule_type, payload)
+VALUES (1, 'time_window', '{"start_hour": 10, "end_hour": 20}')
+ON CONFLICT (token_id, rule_type)
+DO UPDATE SET payload = EXCLUDED.payload;</code></pre>
+
+    <p>Requires a UNIQUE constraint on <code>(token_id, rule_type)</code> for the conflict detection.</p>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0003-indexes-transactions-constraints.html">← Previous: Indexes, Transactions, Constraints</a>
+      <span class="disabled">Next module: B2 Schema Design →</span>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createSolution("exercise-1", {
+      exercise: "Build Token's access rules system: (1) Create the access_rules table with a JSONB payload column, (2) Insert three different rule types (time_window, call_limit, categories) for a token, (3) Write a query that finds all rules for a given token where the time window starts after 8 AM, (4) Create a trigger that fires NOTIFY when a token's status changes to 'revoked', (5) Write an UPSERT that updates a rule if it already exists for that token+type.",
+      hints: [
+        "Use payload->>'start_hour' to extract the value, then cast to integer for comparison: (payload->>'start_hour')::integer > 8",
+        "The trigger function uses pg_notify() and checks NEW.status vs OLD.status.",
+        "For UPSERT, you need a UNIQUE constraint on (token_id, rule_type) first."
+      ],
+      solution: `-- 1. Create access_rules table
+CREATE TABLE access_rules (
+  id          SERIAL PRIMARY KEY,
+  token_id    INTEGER NOT NULL REFERENCES tokens(id),
+  rule_type   TEXT NOT NULL,
+  payload     JSONB NOT NULL,
+  created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+  UNIQUE(token_id, rule_type)  -- needed for UPSERT
+);
+
+CREATE INDEX idx_rules_token_id ON access_rules(token_id);
+CREATE INDEX idx_rules_payload ON access_rules USING GIN (payload);
+
+-- 2. Insert different rule types
+INSERT INTO access_rules (token_id, rule_type, payload) VALUES
+(1, 'time_window', '{"start_hour": 9, "end_hour": 18, "timezone": "Asia/Kolkata"}'),
+(1, 'call_limit', '{"max_per_day": 2, "max_per_week": 10}'),
+(1, 'categories', '{"allowed": ["delivery", "support"], "blocked": ["marketing"]}');
+
+-- 3. Find rules with time window starting after 8 AM
+SELECT token_id, rule_type, payload
+FROM access_rules
+WHERE token_id = 1
+  AND rule_type = 'time_window'
+  AND (payload->>'start_hour')::integer > 8;
+
+-- 4. Trigger for token revocation notifications
+CREATE OR REPLACE FUNCTION notify_token_revoked()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.status = 'revoked' AND OLD.status != 'revoked' THEN
+    PERFORM pg_notify('token_events',
+      json_build_object(
+        'action', 'revoked',
+        'code', NEW.code,
+        'user_id', NEW.user_id
+      )::text
+    );
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER token_revoked_trigger
+AFTER UPDATE ON tokens
+FOR EACH ROW
+EXECUTE FUNCTION notify_token_revoked();
+
+-- 5. UPSERT: update rule if it exists, insert if not
+INSERT INTO access_rules (token_id, rule_type, payload)
+VALUES (1, 'time_window', '{"start_hour": 10, "end_hour": 20, "timezone": "Asia/Kolkata"}')
+ON CONFLICT (token_id, rule_type)
+DO UPDATE SET payload = EXCLUDED.payload;`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "fill-blank",
+        question: "Extract the 'timezone' field from a JSONB column as text:",
+        code: "SELECT payload___'timezone' FROM access_rules;",
+        answer: "->>",
+        explanation: "The ->> operator extracts a JSONB field as TEXT. The -> operator extracts it as JSON (useful for nested objects). For comparing or displaying values, you almost always want ->> (text)."
+      },
+      {
+        type: "predict-output",
+        question: "A trigger fires NOTIFY when a token is revoked. What happens if the UPDATE is inside a transaction that later ROLLBACKs?",
+        code: "BEGIN;\nUPDATE tokens SET status = 'revoked' WHERE code = 'XYZ';\n-- trigger fires NOTIFY\nROLLBACK;",
+        answer: "The NOTIFY is NOT delivered — it's rolled back with the transaction",
+        explanation: "NOTIFY is transactional in Postgres. If the transaction rolls back, the notification is never sent. This is critical for correctness — you'd never want to notify 'token revoked' if the revocation didn't actually persist."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with storing access rules this way in SQLite (the mobile cache)?",
+        code: "CREATE TABLE rules (\n  id INTEGER PRIMARY KEY,\n  token_id INTEGER,\n  payload JSONB NOT NULL\n);",
+        options: [
+          "INTEGER PRIMARY KEY doesn't auto-increment in SQLite",
+          "SQLite doesn't have a JSONB type — use TEXT and parse in app code",
+          "token_id should be TEXT in SQLite",
+          "NOT NULL doesn't work in SQLite"
+        ],
+        correct: 1,
+        explanation: "SQLite has no JSONB type. Store JSON as TEXT and parse it in your app code (JSON.parse in JavaScript). Postgres-specific features like JSONB, arrays, and LISTEN/NOTIFY don't exist in SQLite."
+      },
+      {
+        question: "When would you use RETURNING in Token's API?",
+        options: [
+          "Only for debugging — remove in production",
+          "After INSERT/UPDATE when you need the generated values (id, created_at) without a second query",
+          "Only when using transactions",
+          "Only with DELETE statements"
+        ],
+        correct: 1,
+        explanation: "RETURNING gives you the inserted/updated row in the same query. When your API creates a token, it needs the generated id and created_at to send back to the client — RETURNING avoids a separate SELECT."
+      },
+      {
+        type: "which-breaks",
+        question: "Which JSONB query has a type error?",
+        variants: [
+          "WHERE payload->>'max_per_day' = '2'",
+          "WHERE (payload->>'max_per_day')::integer > 1",
+          "WHERE payload->>'max_per_day' > 1"
+        ],
+        correct: 2,
+        explanation: "The ->> operator returns TEXT. Comparing TEXT > 1 (integer) works in some databases but is unreliable — '9' > 1 but '10' < '9' in text comparison! Always cast to integer explicitly: (payload->>'field')::integer > 1."
+      }
+    ]);
+  </script>
+</body>
+</html>

@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rate Limiting — B4.3</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">B4 — Auth (Server)</a>
+      <span class="sep">›</span>
+      <span class="current">Rate Limiting</span>
+    </nav>
+
+    <h1>Rate Limiting</h1>
+    <div class="lesson-meta">
+      <span>B4 — Lesson 3 of 3</span>
+      <span>~40 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>Without rate limiting, an attacker can try millions of passwords per hour against your login endpoint (brute-force). They can also flood your server with requests to make it unresponsive (DoS). Rate limiting caps how many requests a single IP or account can make in a time window. Auth endpoints are the #1 attack surface — they need the strictest limits.</p>
+    </div>
+
+    <h2>What rate limiting prevents</h2>
+
+    <ul>
+      <li><strong>Brute-force attacks</strong> — trying thousands of passwords against one account</li>
+      <li><strong>Credential stuffing</strong> — testing leaked email/password pairs from other breaches</li>
+      <li><strong>Account enumeration</strong> — checking which emails are registered</li>
+      <li><strong>API abuse</strong> — a buggy or malicious client sending thousands of requests per second</li>
+      <li><strong>Denial of service</strong> — overwhelming the server so legitimate users can't connect</li>
+    </ul>
+
+    <h2>Token's rate limiting strategy</h2>
+
+    <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
+      <tr style="border-bottom:2px solid var(--gray-200);">
+        <td style="padding:0.5rem;font-weight:600;">Endpoint</td>
+        <td style="padding:0.5rem;font-weight:600;">Limit</td>
+        <td style="padding:0.5rem;font-weight:600;">Window</td>
+        <td style="padding:0.5rem;font-weight:600;">Key</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;">POST /auth/login</td>
+        <td style="padding:0.5rem;">5 attempts</td>
+        <td style="padding:0.5rem;">15 minutes</td>
+        <td style="padding:0.5rem;">IP + email</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;">POST /auth/register</td>
+        <td style="padding:0.5rem;">3 accounts</td>
+        <td style="padding:0.5rem;">1 hour</td>
+        <td style="padding:0.5rem;">IP</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;">POST /auth/refresh</td>
+        <td style="padding:0.5rem;">10 requests</td>
+        <td style="padding:0.5rem;">15 minutes</td>
+        <td style="padding:0.5rem;">IP</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;">General API</td>
+        <td style="padding:0.5rem;">100 requests</td>
+        <td style="padding:0.5rem;">1 minute</td>
+        <td style="padding:0.5rem;">User ID or IP</td>
+      </tr>
+      <tr>
+        <td style="padding:0.5rem;">POST /redeem/:code</td>
+        <td style="padding:0.5rem;">10 attempts</td>
+        <td style="padding:0.5rem;">1 hour</td>
+        <td style="padding:0.5rem;">IP</td>
+      </tr>
+    </table>
+
+    <h2>Implementation with express-rate-limit</h2>
+
+    <pre><code>npm install express-rate-limit</code></pre>
+
+    <pre><code>// api/src/middleware/rate-limit.ts
+import rateLimit from 'express-rate-limit';
+
+// Strict limiter for auth endpoints
+export const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,  // 15 minutes
+  max: 5,                      // 5 attempts per window
+  message: {
+    error: 'Too many attempts. Please try again in 15 minutes.',
+    success: false,
+  },
+  standardHeaders: true,       // Return rate limit info in headers
+  legacyHeaders: false,
+  keyGenerator: (req) =&gt; {
+    // Key by IP + email to prevent targeting one account from many IPs
+    return `${req.ip}:${req.body?.email || 'unknown'}`;
+  },
+});
+
+// Registration limiter
+export const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,   // 1 hour
+  max: 3,                       // 3 registrations per IP per hour
+  message: {
+    error: 'Too many registrations. Please try again later.',
+    success: false,
+  },
+});
+
+// General API limiter
+export const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,         // 1 minute
+  max: 100,                     // 100 requests per minute
+  message: {
+    error: 'Rate limit exceeded. Please slow down.',
+    success: false,
+  },
+});</code></pre>
+
+    <h2>Applying rate limiters</h2>
+
+    <pre><code>// api/src/server.ts
+import { authLimiter, registerLimiter, apiLimiter } from './middleware/rate-limit.js';
+
+// General limit on all API routes
+app.use('/api', apiLimiter);
+
+// Strict limits on auth
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/register', registerLimiter);
+
+// Routes
+app.use('/api/auth', authRoutes);
+app.use('/api/tokens', requireAuth, tokenRoutes);</code></pre>
+
+    <h2>Rate limit response headers</h2>
+
+    <p>When <code>standardHeaders: true</code>, the response includes:</p>
+
+    <pre><code>RateLimit-Limit: 5          // max requests allowed
+RateLimit-Remaining: 3      // requests left in this window
+RateLimit-Reset: 1700001234 // when the window resets (Unix timestamp)</code></pre>
+
+    <p>The mobile app reads these headers to show "try again in X minutes" without guessing.</p>
+
+    <h2>Account lockout</h2>
+
+    <p>Beyond rate limiting, lock accounts after repeated failures:</p>
+
+    <pre><code>// In the login handler, track failures per account:
+const MAX_FAILURES = 10;
+const LOCKOUT_MINUTES = 30;
+
+router.post('/login', authLimiter, async (req, res, next) =&gt; {
+  try {
+    const { email, password } = loginSchema.parse(req.body);
+
+    const { rows } = await pool.query(
+      'SELECT * FROM users WHERE email = $1', [email]
+    );
+    const user = rows[0];
+    if (!user) throw ApiError.unauthorized('Invalid email or password');
+
+    // Check if account is locked
+    if (user.locked_until && new Date(user.locked_until) &gt; new Date()) {
+      throw ApiError.unauthorized(
+        `Account locked. Try again after ${new Date(user.locked_until).toLocaleTimeString()}`
+      );
+    }
+
+    const valid = await argon2.verify(user.password_hash, password);
+
+    if (!valid) {
+      // Increment failure count
+      const newCount = (user.failed_login_attempts || 0) + 1;
+      const lockUntil = newCount &gt;= MAX_FAILURES
+        ? new Date(Date.now() + LOCKOUT_MINUTES * 60 * 1000)
+        : null;
+
+      await pool.query(
+        `UPDATE users SET failed_login_attempts = $1, locked_until = $2 WHERE id = $3`,
+        [newCount, lockUntil, user.id]
+      );
+
+      throw ApiError.unauthorized('Invalid email or password');
+    }
+
+    // Success — reset failure count
+    await pool.query(
+      'UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = $1',
+      [user.id]
+    );
+
+    // Issue tokens...
+  } catch (err) { next(err); }
+});</code></pre>
+
+    <h2>Migration for lockout fields</h2>
+
+    <pre><code>-- 006_add_lockout_fields.sql
+BEGIN;
+ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN locked_until TIMESTAMPTZ;
+COMMIT;</code></pre>
+
+    <h2>Production considerations</h2>
+
+    <ul>
+      <li><strong>Redis store</strong> — in production with multiple server instances, use Redis instead of the default in-memory store so rate limits are shared across all servers.</li>
+      <li><strong>IP behind proxy</strong> — if behind Nginx/Cloudflare, set <code>app.set('trust proxy', 1)</code> so Express reads the real IP from <code>X-Forwarded-For</code>.</li>
+      <li><strong>Distributed attacks</strong> — IP-based limiting doesn't stop botnets (thousands of IPs). Account-based limiting (per email) is the second defense layer.</li>
+    </ul>
+
+    <pre><code>// Trust proxy (required behind Nginx/Coolify)
+app.set('trust proxy', 1);
+
+// For production with multiple instances:
+// npm install rate-limit-redis ioredis
+// import RedisStore from 'rate-limit-redis';
+// import Redis from 'ioredis';
+// const redis = new Redis(process.env.REDIS_URL);
+// const store = new RedisStore({ sendCommand: (...args) => redis.call(...args) });</code></pre>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0002-jwt-refresh-rotation.html">← Previous: JWT &amp; Refresh Rotation</a>
+      <span class="disabled">Next phase: A3 API Consumption →</span>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createSolution("exercise-1", {
+      exercise: "Add rate limiting and account lockout to Token's auth: (1) Install express-rate-limit, (2) Create rate limiters for login (5/15min), register (3/hour), and general API (100/min), (3) Apply them to the correct routes, (4) Add account lockout after 10 failed login attempts (30 min lockout), (5) Write the migration adding lockout fields, (6) Test by sending 6 login attempts with wrong password — the 6th should be rate limited.",
+      hints: [
+        "The keyGenerator for login should combine IP + email to prevent targeting one account from multiple IPs AND prevent one IP from trying many accounts.",
+        "Make sure trust proxy is set if testing behind any proxy (including Docker).",
+        "Test: for i in {1..6}; do curl -X POST -H 'Content-Type: application/json' -d '{\"email\":\"test@example.com\",\"password\":\"wrong\"}' localhost:3000/api/auth/login; done"
+      ],
+      solution: `// 1. Install
+// npm install express-rate-limit
+
+// 2. api/src/middleware/rate-limit.ts
+import rateLimit from 'express-rate-limit';
+
+export const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: { error: 'Too many login attempts. Try again in 15 minutes.', success: false },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => \`\${req.ip}:\${req.body?.email || 'unknown'}\`,
+});
+
+export const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 3,
+  message: { error: 'Too many registrations. Try again later.', success: false },
+});
+
+export const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 100,
+  message: { error: 'Rate limit exceeded.', success: false },
+});
+
+// 3. Apply in server.ts:
+app.set('trust proxy', 1);
+app.use('/api', apiLimiter);
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/register', registerLimiter);
+
+// 4. Account lockout in login handler (see lesson code above)
+
+// 5. Migration:
+// BEGIN;
+// ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER NOT NULL DEFAULT 0;
+// ALTER TABLE users ADD COLUMN locked_until TIMESTAMPTZ;
+// COMMIT;
+
+// 6. Test:
+// for i in {1..6}; do
+//   curl -s -X POST -H "Content-Type: application/json" \\
+//     -d '{"email":"test@example.com","password":"wrong"}' \\
+//     http://localhost:3000/api/auth/login | jq .error
+// done
+// First 5: "Invalid email or password"
+// 6th: "Too many login attempts. Try again in 15 minutes."`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "A user sends 6 login requests in 15 minutes (all with wrong passwords). What happens?",
+        code: "// Rate limit: 5 per 15 minutes\n// Request 1-5: processed (return 401)\n// Request 6: ???",
+        answer: "HTTP 429 Too Many Requests with the rate limit error message (request never reaches the login handler)",
+        explanation: "The rate limiter middleware blocks the request BEFORE it reaches your login code. The response includes RateLimit-Reset telling the client when they can try again. This prevents brute-force even if your password hashing is somehow compromised."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this rate limiter key?",
+        code: "keyGenerator: (req) => req.ip",
+        options: [
+          "req.ip doesn't exist in Express",
+          "Only keying by IP lets an attacker try 5 passwords on EACH account — should include the email",
+          "IP-based limiting is illegal under GDPR",
+          "The key should be a number, not a string"
+        ],
+        correct: 1,
+        explanation: "With only IP as the key, an attacker gets 5 attempts per 15 minutes across ALL accounts. They could try 5 passwords on account A, then 5 on account B, etc. Keying by IP + email means 5 attempts per account per IP."
+      },
+      {
+        type: "fill-blank",
+        question: "Tell Express to read the real client IP from X-Forwarded-For (behind Nginx):",
+        code: "app.set('___ ___', 1);",
+        answer: "trust proxy",
+        explanation: "Behind a reverse proxy (Nginx, Coolify, Cloudflare), req.ip would show the proxy's IP (127.0.0.1), not the real client. 'trust proxy' makes Express read X-Forwarded-For to get the actual client IP for rate limiting."
+      },
+      {
+        question: "Why lock accounts after 10 failures in addition to rate limiting?",
+        options: [
+          "Rate limiting alone is sufficient — lockout is redundant",
+          "A botnet with thousands of IPs bypasses IP-based rate limiting. Account lockout limits attempts per account regardless of source IP.",
+          "Account lockout is faster than rate limiting",
+          "Express-rate-limit doesn't actually work"
+        ],
+        correct: 1,
+        explanation: "A sophisticated attacker uses a different IP for each attempt (botnet, rotating proxies). IP-based rate limiting sees each as a first request. Account lockout says 'this ACCOUNT has had 10 failures total, regardless of where they came from' — a defense against distributed attacks."
+      },
+      {
+        type: "order-steps",
+        question: "Put Token's auth security layers in order from first to last check:",
+        steps: ["Rate limiter (block excessive requests)", "Input validation (reject malformed data)", "Account lockout check (is this account locked?)", "Password verification (argon2.verify)"],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "Rate limiting is cheapest — reject without any processing. Validation is next (no DB queries yet). Lockout requires one DB read. Password verification is the most expensive (deliberately slow argon2). Order from cheapest to most expensive."
+      }
+    ]);
+  </script>
+</body>
+</html>

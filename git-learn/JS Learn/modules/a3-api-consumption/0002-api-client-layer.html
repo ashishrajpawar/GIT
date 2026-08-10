@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>API Client Layer — A3.2</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A3 — API Consumption</a>
+      <span class="sep">›</span>
+      <span class="current">API Client Layer</span>
+    </nav>
+
+    <h1>API Client Layer</h1>
+    <div class="lesson-meta">
+      <span>A3 — Lesson 2 of 4</span>
+      <span>~50 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>Both the mobile app and the redemption web page call the same API. Instead of writing raw fetch calls in every component, you build a typed API client in <code>shared/</code> that both clients import. One change to the client layer propagates everywhere. Types from your Zod schemas flow through — if the API changes, TypeScript flags every call site that needs updating.</p>
+    </div>
+
+    <h2>The problem with raw fetch everywhere</h2>
+
+    <pre><code>// Bad: duplicated fetch logic across 30 components
+// TokenListScreen.tsx
+const res = await fetch(API_URL + '/tokens', {
+  headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+});
+
+// TokenDetailScreen.tsx
+const res = await fetch(API_URL + '/tokens/' + code, {
+  headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+});
+
+// Every component repeats: base URL, headers, error handling, JSON parsing</code></pre>
+
+    <h2>Building the API client</h2>
+
+    <pre><code>// shared/api-client.ts
+import type { ApiResponse, Paginated } from './api-types';
+
+type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE';
+
+interface ApiClientConfig {
+  baseUrl: string;
+  getAccessToken: () =&gt; string | null;
+  onUnauthorized: () =&gt; void;  // trigger refresh or logout
+}
+
+export function createApiClient(config: ApiClientConfig) {
+  async function request&lt;T&gt;(
+    method: HttpMethod,
+    path: string,
+    body?: unknown
+  ): Promise&lt;T&gt; {
+    const headers: Record&lt;string, string&gt; = {
+      'Accept': 'application/json',
+    };
+
+    const token = config.getAccessToken();
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    if (body) {
+      headers['Content-Type'] = 'application/json';
+    }
+
+    const response = await fetch(config.baseUrl + path, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+    if (response.status === 401) {
+      config.onUnauthorized();
+      throw new ApiError(401, 'Authentication required');
+    }
+
+    if (response.status === 204) {
+      return null as T;
+    }
+
+    const json = await response.json();
+
+    if (!response.ok) {
+      throw new ApiError(response.status, json.error || 'Request failed');
+    }
+
+    return json as T;
+  }
+
+  return {
+    get: &lt;T&gt;(path: string) =&gt; request&lt;T&gt;('GET', path),
+    post: &lt;T&gt;(path: string, body?: unknown) =&gt; request&lt;T&gt;('POST', path, body),
+    patch: &lt;T&gt;(path: string, body?: unknown) =&gt; request&lt;T&gt;('PATCH', path, body),
+    delete: (path: string) =&gt; request&lt;null&gt;('DELETE', path),
+  };
+}
+
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}</code></pre>
+
+    <h2>Typed endpoint functions</h2>
+
+    <p>Build a layer on top of the generic client with Token-specific functions:</p>
+
+    <pre><code>// shared/api.ts
+import { createApiClient } from './api-client';
+import type {
+  ApiResponse, Paginated, Token, CreateTokenInput,
+  UpdateTokenInput, TokenListItem, Conversation, Message
+} from './api-types';
+
+export function createTokenApi(client: ReturnType&lt;typeof createApiClient&gt;) {
+  return {
+    // Tokens
+    listTokens(cursor?: string) {
+      const params = cursor ? `?cursor=${cursor}` : '';
+      return client.get&lt;ApiResponse&lt;Paginated&lt;TokenListItem&gt;&gt;&gt;(`/tokens${params}`);
+    },
+
+    getToken(code: string) {
+      return client.get&lt;ApiResponse&lt;Token&gt;&gt;(`/tokens/${code}`);
+    },
+
+    createToken(input: CreateTokenInput) {
+      return client.post&lt;ApiResponse&lt;Token&gt;&gt;('/tokens', input);
+    },
+
+    updateToken(code: string, input: UpdateTokenInput) {
+      return client.patch&lt;ApiResponse&lt;Token&gt;&gt;(`/tokens/${code}`, input);
+    },
+
+    revokeToken(code: string) {
+      return client.delete(`/tokens/${code}`);
+    },
+
+    pauseToken(code: string) {
+      return client.post&lt;ApiResponse&lt;Token&gt;&gt;(`/tokens/${code}/pause`);
+    },
+
+    resumeToken(code: string) {
+      return client.post&lt;ApiResponse&lt;Token&gt;&gt;(`/tokens/${code}/resume`);
+    },
+
+    // Conversations
+    listConversations(cursor?: string) {
+      const params = cursor ? `?cursor=${cursor}` : '';
+      return client.get&lt;ApiResponse&lt;Paginated&lt;Conversation&gt;&gt;&gt;(`/conversations${params}`);
+    },
+
+    getMessages(conversationId: number, cursor?: string) {
+      const params = cursor ? `?cursor=${cursor}` : '';
+      return client.get&lt;ApiResponse&lt;Paginated&lt;Message&gt;&gt;&gt;(
+        `/conversations/${conversationId}${params}`
+      );
+    },
+
+    markRead(conversationId: number) {
+      return client.post(`/conversations/${conversationId}/read`);
+    },
+  };
+}</code></pre>
+
+    <h2>Using the client in the mobile app</h2>
+
+    <pre><code>// app/src/api/index.ts
+import { createApiClient, createTokenApi } from '@token/shared/api';
+import { getAccessToken } from '../auth/store';
+
+const client = createApiClient({
+  baseUrl: __DEV__ ? 'http://localhost:3000/api' : 'https://api.tokn.app/api',
+  getAccessToken,
+  onUnauthorized: () =&gt; {
+    // Trigger token refresh or navigate to login
+  },
+});
+
+export const api = createTokenApi(client);</code></pre>
+
+    <pre><code>// Using it in a component:
+import { api } from '../api';
+
+function TokenListScreen() {
+  const [tokens, setTokens] = useState&lt;TokenListItem[]&gt;([]);
+
+  useEffect(() =&gt; {
+    api.listTokens().then(res =&gt; {
+      setTokens(res.data.items);
+    });
+  }, []);
+
+  const handleRevoke = async (code: string) =&gt; {
+    await api.revokeToken(code);
+    setTokens(prev =&gt; prev.filter(t =&gt; t.code !== code));
+  };
+}</code></pre>
+
+    <h2>The same client in the web page</h2>
+
+    <pre><code>// web/src/api/index.ts
+import { createApiClient } from '@token/shared/api-client';
+
+const client = createApiClient({
+  baseUrl: '/api',  // same origin, proxied by Vite in dev
+  getAccessToken: () =&gt; sessionStorage.getItem('accessToken'),
+  onUnauthorized: () =&gt; { window.location.href = '/login'; },
+});
+
+export { client };</code></pre>
+
+    <p>Same <code>createApiClient</code>, different config. The web page uses session storage (short-lived) and redirects on auth failure. The mobile app uses secure storage and triggers a refresh flow.</p>
+
+    <h2>Error handling in the client</h2>
+
+    <pre><code>import { ApiError } from '@token/shared/api-client';
+
+async function handleCreateToken() {
+  try {
+    const result = await api.createToken({ label: inputValue, maxUses: 0 });
+    navigation.navigate('TokenDetail', { tokenCode: result.data.code });
+  } catch (err) {
+    if (err instanceof ApiError) {
+      if (err.status === 400) {
+        // Validation error — show to user
+        setError(err.message);
+      } else if (err.status === 409) {
+        // Conflict — token code collision (retry)
+        setError('Please try again');
+      } else {
+        setError('Something went wrong');
+      }
+    }
+  }
+}</code></pre>
+
+    <h2>Why this architecture works</h2>
+
+    <ul>
+      <li><strong>Types flow end-to-end</strong> — Zod schema → TypeScript type → API client → component. Change in one place, compiler shows all affected code.</li>
+      <li><strong>One place to add auth headers</strong> — the client handles it; components don't know about tokens.</li>
+      <li><strong>Shared between app and web</strong> — <code>shared/api-client.ts</code> works in both, only config differs.</li>
+      <li><strong>Testable</strong> — mock the client in tests, not fetch globally.</li>
+    </ul>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0001-fetch-http-fundamentals.html">← Previous: fetch &amp; HTTP Fundamentals</a>
+      <a href="./0003-loading-empty-error-states.html">Next: Loading, Empty &amp; Error States →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createSolution("exercise-1", {
+      exercise: "Build Token's complete shared API client: (1) Create shared/api-client.ts with the generic typed request function, (2) Create shared/api.ts with Token-specific endpoint functions (listTokens, getToken, createToken, updateToken, revokeToken, listConversations, getMessages), (3) Create app/src/api/index.ts that configures the client for the mobile app, (4) Use it in a component to list tokens and display them.",
+      hints: [
+        "The generic request<T> function returns Promise<T> — TypeScript infers the exact return type at each call site.",
+        "The onUnauthorized callback is where you'll trigger the refresh token flow (implemented in module A4).",
+        "For the mobile app config, use __DEV__ to switch between localhost and production URL."
+      ],
+      solution: `// shared/api-client.ts — as shown in the lesson
+
+// shared/api-types.ts
+export interface ApiResponse<T> {
+  data: T;
+  success: boolean;
+  error?: string;
+}
+
+export interface Paginated<T> {
+  items: T[];
+  cursor: string | null;
+  hasMore: boolean;
+}
+
+export interface TokenListItem {
+  code: string;
+  label: string;
+  status: 'active' | 'paused' | 'revoked';
+  useCount: number;
+  maxUses: number;
+  createdAt: string;
+}
+
+export interface Token extends TokenListItem {
+  expiresAt: string | null;
+  revokedAt: string | null;
+  rules: AccessRule[];
+}
+
+// shared/api.ts — as shown in the lesson
+
+// app/src/api/index.ts
+import { createApiClient } from '@token/shared/api-client';
+import { createTokenApi } from '@token/shared/api';
+import * as SecureStore from 'expo-secure-store';
+
+const client = createApiClient({
+  baseUrl: __DEV__ ? 'http://localhost:3000/api' : 'https://api.tokn.app/api',
+  getAccessToken: () => SecureStore.getItem('accessToken'),
+  onUnauthorized: () => {
+    // Will trigger refresh flow (A4 module)
+    console.log('Token expired — need refresh');
+  },
+});
+
+export const api = createTokenApi(client);
+
+// app/src/screens/TokenListScreen.tsx
+import { useState, useEffect } from 'react';
+import { FlatList, Text, View } from 'react-native';
+import { api } from '../api';
+import type { TokenListItem } from '@token/shared/api-types';
+
+export function TokenListScreen() {
+  const [tokens, setTokens] = useState<TokenListItem[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.listTokens()
+      .then(res => setTokens(res.data.items))
+      .catch(err => console.error(err))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return <Text>Loading...</Text>;
+
+  return (
+    <FlatList
+      data={tokens}
+      keyExtractor={item => item.code}
+      renderItem={({ item }) => (
+        <View style={{ padding: 16 }}>
+          <Text style={{ fontWeight: '600' }}>{item.code}</Text>
+          <Text>{item.label} — {item.status}</Text>
+        </View>
+      )}
+    />
+  );
+}`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "fill-blank",
+        question: "Make the listTokens function return the correct TypeScript type:",
+        code: "listTokens() {\n  return client.get<ApiResponse<___<TokenListItem>>>('/tokens');\n}",
+        answer: "Paginated",
+        explanation: "The token list endpoint returns a paginated response: { data: { items: TokenListItem[], cursor, hasMore }, success: true }. The full type is ApiResponse<Paginated<TokenListItem>> — generics compose naturally."
+      },
+      {
+        type: "predict-output",
+        question: "The access token expires. What happens when the app calls api.listTokens()?",
+        code: "// Server returns 401\n// createApiClient has: onUnauthorized: () => triggerRefresh()",
+        answer: "The request function catches the 401, calls onUnauthorized(), and throws an ApiError(401, 'Authentication required')",
+        explanation: "The client detects 401, calls the onUnauthorized callback (which triggers the refresh token flow), and throws so the calling component can show an appropriate state. The component doesn't need to know about auth — the client layer handles it."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this approach?",
+        code: "// In every component:\nconst token = await SecureStore.getItemAsync('accessToken');\nconst res = await fetch(API_URL + '/tokens', {\n  headers: { Authorization: 'Bearer ' + token }\n});",
+        options: [
+          "SecureStore is async and needs await",
+          "Every component directly accesses SecureStore and builds headers — no central auth handling, no single point for refresh logic",
+          "fetch doesn't accept string concatenation for URLs",
+          "You can't use await in React components"
+        ],
+        correct: 1,
+        explanation: "Without a central client layer, every component independently reads the token, builds headers, and handles auth errors. If you change how auth works (e.g., add refresh), you'd modify 30 components. The API client centralizes this into one getAccessToken callback."
+      },
+      {
+        question: "Why put the API client in shared/ instead of app/?",
+        options: [
+          "React Native can't import from app/ subfolders",
+          "Both the mobile app (app/) and redemption web page (web/) call the same API — shared/ lets them reuse the same typed client",
+          "TypeScript only compiles files in shared/",
+          "Express requires the client to be in a specific folder"
+        ],
+        correct: 1,
+        explanation: "Token has two clients: the React Native app and the Vite+React web page. Both talk to the same API with the same types. Putting the client in shared/ means one definition serves both — with only the config (base URL, token storage) differing per client."
+      },
+      {
+        type: "which-breaks",
+        question: "Which API client usage will cause a TypeScript error?",
+        variants: [
+          "const res = await api.listTokens(); console.log(res.data.items[0].code);",
+          "const res = await api.getToken('ABC'); console.log(res.data.status);",
+          "const res = await api.revokeToken('ABC'); console.log(res.data.code);"
+        ],
+        correct: 2,
+        explanation: "revokeToken calls client.delete() which returns Promise<null> (DELETE returns 204 No Content). Trying to access res.data.code on null causes a TypeScript error — the type system prevents you from reading properties on a null response."
+      }
+    ]);
+  </script>
+</body>
+</html>

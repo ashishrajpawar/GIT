@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>B10 — Security Hardening</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Security &amp; Compliance</a> &rsaquo;
+        <span>Security Hardening</span>
+    </nav>
+
+    <h1>Security Hardening</h1>
+    <p class="lesson-meta">B10 &mdash; Lesson 1 of 2 &nbsp;|&nbsp; ~55 min</p>
+
+    <div class="callout">
+        <strong>Why this matters for Token:</strong> Token's core promise is privacy. If your server
+        is compromised, every user's contact graph, messages, and tokens are exposed. A single SQL
+        injection or leaked secret undoes everything the product stands for. This lesson covers the
+        defences that prevent that from happening.
+    </div>
+
+    <h2>The OWASP Top 10 &mdash; What Matters for Token</h2>
+    <p>The <a href="https://owasp.org/www-project-top-ten/">OWASP Top 10</a> is the standard list of
+    web application security risks. Here's what's relevant to Token:</p>
+
+    <table>
+        <tr><th>#</th><th>Risk</th><th>Token relevance</th></tr>
+        <tr><td>A03</td><td>Injection</td><td>SQL injection in token/message queries</td></tr>
+        <tr><td>A01</td><td>Broken Access Control</td><td>User A reading User B's tokens</td></tr>
+        <tr><td>A02</td><td>Cryptographic Failures</td><td>Weak JWT secrets, plaintext storage</td></tr>
+        <tr><td>A07</td><td>Security Misconfiguration</td><td>Missing CORS, exposed headers, default creds</td></tr>
+        <tr><td>A05</td><td>SSRF</td><td>If you ever fetch user-supplied URLs</td></tr>
+    </table>
+
+    <h2>SQL Injection &mdash; The #1 Rule</h2>
+    <p><strong>Never concatenate user input into SQL strings.</strong> Always use parameterised queries.</p>
+
+    <pre><code>// ❌ VULNERABLE — string concatenation
+async function getToken(code: string) {
+  // An attacker sends: code = "'; DROP TABLE tokens; --"
+  const result = await db.query(
+    `SELECT * FROM tokens WHERE code = '${code}'`
+  );
+  return result.rows[0];
+}
+
+// ✓ SAFE — parameterised query
+async function getToken(code: string) {
+  // The $1 placeholder is never interpreted as SQL
+  const result = await db.query(
+    'SELECT * FROM tokens WHERE code = $1',
+    [code]
+  );
+  return result.rows[0];
+}</code></pre>
+
+    <h3>Why Parameterised Queries Are Safe</h3>
+    <p>The database driver sends the query template and values separately. The database compiles the
+    template first, then binds the values as <em>data</em> &mdash; never as SQL syntax. Even if
+    the value contains <code>'; DROP TABLE</code>, it's treated as a literal string, not a command.</p>
+
+    <pre><code>// What the database sees with parameterised queries:
+// Template: "SELECT * FROM tokens WHERE code = $1"
+// Values:   ["'; DROP TABLE tokens; --"]
+// Result:   looks for a token with code literally "'; DROP TABLE tokens; --"
+//           (finds nothing, attacks nothing)</code></pre>
+
+    <h3>Auditing Your Codebase</h3>
+    <pre><code>// Search for potential injection vulnerabilities:
+// grep for template literals or string concatenation in .query() calls
+
+// Red flags:
+db.query(`SELECT * FROM ${table} WHERE id = ${id}`)     // ❌
+db.query("SELECT * FROM " + table + " WHERE id = " + id) // ❌
+db.query(\`UPDATE tokens SET name = '\${name}'\`)          // ❌
+
+// Safe patterns:
+db.query('SELECT * FROM tokens WHERE id = $1', [id])     // ✓
+db.query('SELECT * FROM tokens WHERE code = $1 AND user_id = $2', [code, userId]) // ✓</code></pre>
+
+    <h2>Secrets Management</h2>
+
+    <h3>What Counts as a Secret</h3>
+    <ul>
+        <li><code>JWT_SECRET</code> and <code>JWT_REFRESH_SECRET</code></li>
+        <li><code>DATABASE_URL</code> (contains password)</li>
+        <li>Expo push notification tokens</li>
+        <li>Any API key for external services</li>
+    </ul>
+
+    <h3>Rules</h3>
+    <pre><code>// 1. NEVER commit secrets to git
+//    Use .env files locally (add to .gitignore)
+//    Use Coolify's encrypted environment variables in production
+
+// .gitignore — these must be here
+.env
+.env.local
+.env.production
+*.pem
+*.key
+
+// 2. NEVER log secrets
+logger.info({ dbUrl: process.env.DATABASE_URL }); // ❌ NEVER
+logger.info({ dbHost: 'postgres-internal' });      // ✓ OK to log host, not credentials
+
+// 3. Use strong random values (64+ hex chars)
+// node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+
+// 4. Different secrets per environment
+// Dev JWT_SECRET ≠ Staging JWT_SECRET ≠ Production JWT_SECRET</code></pre>
+
+    <h3>Secret Rotation</h3>
+    <pre><code>// If a secret is compromised, you need to rotate it without downtime.
+// Strategy: support TWO secrets simultaneously during rotation.
+
+// api/src/auth/verifyToken.ts
+import jwt from 'jsonwebtoken';
+
+const JWT_SECRETS = [
+  process.env.JWT_SECRET,           // Current secret
+  process.env.JWT_SECRET_PREVIOUS,  // Previous secret (during rotation)
+].filter(Boolean) as string[];
+
+export function verifyAccessToken(token: string): JwtPayload | null {
+  for (const secret of JWT_SECRETS) {
+    try {
+      return jwt.verify(token, secret) as JwtPayload;
+    } catch {
+      continue; // Try next secret
+    }
+  }
+  return null; // None worked — token is invalid
+}
+
+// Rotation process:
+// 1. Generate new secret
+// 2. Set JWT_SECRET = new, JWT_SECRET_PREVIOUS = old
+// 3. Deploy — new tokens signed with new secret, old tokens still verify
+// 4. Wait for all old tokens to expire (access tokens: 15 min)
+// 5. Remove JWT_SECRET_PREVIOUS</code></pre>
+
+    <h2>CORS &mdash; Cross-Origin Resource Sharing</h2>
+    <p>CORS controls which websites can make requests to your API. Without it, any website could
+    make requests to <code>api.tokn.app</code> using a logged-in user's cookies/credentials.</p>
+
+    <pre><code>// api/src/middleware/cors.ts
+import cors from 'cors';
+
+const ALLOWED_ORIGINS = [
+  'https://tokn.app',              // Production web client
+  'http://localhost:5173',         // Local Vite dev server
+  'http://localhost:19006',        // Expo web (development only)
+];
+
+export const corsMiddleware = cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, server-to-server)
+    if (!origin) return callback(null, true);
+
+    if (ALLOWED_ORIGINS.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error(`Origin ${origin} not allowed by CORS`));
+    }
+  },
+  credentials: true, // Allow cookies/auth headers
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],
+  maxAge: 86400, // Cache preflight for 24 hours
+});</code></pre>
+
+    <h3>Why Mobile Apps Don't Need CORS</h3>
+    <p>CORS is a <em>browser</em> security mechanism. React Native apps make HTTP requests directly
+    (like a server would) &mdash; they don't send an <code>Origin</code> header. That's why we allow
+    requests with no origin.</p>
+
+    <h2>Security Headers</h2>
+    <p>HTTP headers that instruct browsers to enable security features:</p>
+
+    <pre><code># Install helmet (sets security headers automatically)
+npm install helmet</code></pre>
+
+    <pre><code>// api/src/app.ts
+import helmet from 'helmet';
+
+app.use(helmet({
+  // Content Security Policy — controls what resources the page can load
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],  // Needed for some UI frameworks
+      imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: ["'self'", "wss://api.tokn.app"],
+    },
+  },
+  // Strict Transport Security — force HTTPS for 1 year
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true,
+  },
+  // Prevent clickjacking (embedding in iframes)
+  frameguard: { action: 'deny' },
+  // Don't reveal server software
+  hidePoweredBy: true,
+  // Prevent MIME type sniffing
+  noSniff: true,
+  // Referrer Policy — don't leak URLs to third parties
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+}));</code></pre>
+
+    <h3>What Each Header Does</h3>
+    <table>
+        <tr><th>Header</th><th>Threat it prevents</th></tr>
+        <tr><td><code>Strict-Transport-Security</code></td><td>Downgrade attacks (forcing HTTP instead of HTTPS)</td></tr>
+        <tr><td><code>Content-Security-Policy</code></td><td>XSS (injecting malicious scripts)</td></tr>
+        <tr><td><code>X-Frame-Options: DENY</code></td><td>Clickjacking (embedding your page in a hidden iframe)</td></tr>
+        <tr><td><code>X-Content-Type-Options: nosniff</code></td><td>MIME confusion attacks</td></tr>
+        <tr><td><code>Referrer-Policy</code></td><td>Leaking sensitive URLs to third-party sites</td></tr>
+    </table>
+
+    <h2>Input Validation at the Boundary</h2>
+    <p>You already use zod for validation (from B3). Here's the security perspective &mdash;
+    validate <em>everything</em> at the API boundary, even if the client already validated it:</p>
+
+    <pre><code>// api/src/routes/tokens.ts
+import { z } from 'zod';
+
+const createTokenSchema = z.object({
+  label: z.string()
+    .min(1)
+    .max(100)
+    .trim(),
+  rules: z.object({
+    maxRedemptions: z.number().int().positive().max(1000).optional(),
+    expiresAt: z.string().datetime().optional(),
+    allowedCategories: z.array(z.string().max(50)).max(20).optional(),
+  }).optional(),
+});
+
+// In the route handler:
+export async function createToken(req: Request, res: Response) {
+  const parsed = createTokenSchema.safeParse(req.body);
+
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: 'validation_error',
+      details: parsed.error.flatten(),
+    });
+  }
+
+  // parsed.data is now typed AND validated — safe to use
+  const { label, rules } = parsed.data;
+  // ...
+}</code></pre>
+
+    <h3>Output Encoding</h3>
+    <p>When storing user-generated content (token labels, messages), encode it before rendering in
+    HTML contexts to prevent stored XSS:</p>
+
+    <pre><code>// The redemption web page displays the token holder's name.
+// If that name contains &lt;script&gt;alert('xss')&lt;/script&gt;, you have a problem.
+
+// React handles this automatically for JSX content:
+// &lt;p&gt;{holderName}&lt;/p&gt;  ← React escapes this by default ✓
+
+// BUT: dangerouslySetInnerHTML bypasses it:
+// &lt;div dangerouslySetInnerHTML={{ __html: holderName }} /&gt; ← ❌ NEVER with user data
+
+// On the server side, if you ever generate HTML:
+import { encode } from 'html-entities';
+const safeName = encode(holderName); // "&lt;script&gt;" becomes "&amp;lt;script&amp;gt;"</code></pre>
+
+    <h2>Broken Access Control</h2>
+    <p>The most critical check: <strong>does this user own this resource?</strong></p>
+
+    <pre><code>// ❌ VULNERABLE — no ownership check
+router.get('/tokens/:id', async (req, res) => {
+  const token = await db.query('SELECT * FROM tokens WHERE id = $1', [req.params.id]);
+  res.json(token.rows[0]); // Any logged-in user can read ANY token
+});
+
+// ✓ SAFE — ownership enforced
+router.get('/tokens/:id', authenticateJWT, async (req, res) => {
+  const token = await db.query(
+    'SELECT * FROM tokens WHERE id = $1 AND user_id = $2',
+    [req.params.id, req.user.id]  // Only returns if user owns it
+  );
+
+  if (!token.rows[0]) {
+    return res.status(404).json({ error: 'not found' });
+  }
+
+  res.json(token.rows[0]);
+});</code></pre>
+
+    <h3>The Pattern: Always Include user_id in Queries</h3>
+    <pre><code>// Every query that reads or modifies user data should include the ownership clause:
+
+// Read user's tokens
+'SELECT * FROM tokens WHERE user_id = $1'
+
+// Update a specific token (owned by user)
+'UPDATE tokens SET label = $2 WHERE id = $1 AND user_id = $3'
+
+// Delete (revoke) a token (owned by user)
+'UPDATE tokens SET revoked_at = NOW() WHERE id = $1 AND user_id = $2'
+
+// Read messages in a conversation the user participates in
+'SELECT m.* FROM messages m JOIN participants p ON p.conversation_id = m.conversation_id WHERE m.conversation_id = $1 AND p.user_id = $2'</code></pre>
+
+    <h2>Preventing Common Attacks</h2>
+
+    <h3>Timing Attacks on Token Lookup</h3>
+    <pre><code>// When checking if a token code is valid, use constant-time comparison
+// to prevent attackers from guessing codes character by character.
+
+import { timingSafeEqual } from 'crypto';
+
+function safeCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
+// For database lookups, this is less relevant (the DB handles comparison),
+// but for API key validation or HMAC verification, always use timingSafeEqual.</code></pre>
+
+    <h3>Request Size Limits</h3>
+    <pre><code>// Prevent denial of service via oversized payloads
+import express from 'express';
+
+app.use(express.json({ limit: '1mb' }));  // Reject bodies > 1MB
+app.use(express.urlencoded({ limit: '1mb', extended: true }));
+
+// For file uploads (if you ever add them), use streaming with size limits
+// Never buffer an entire upload in memory</code></pre>
+
+    <h3>Dependency Security</h3>
+    <pre><code># Check for known vulnerabilities in your dependencies
+npm audit
+
+# Fix automatically where possible
+npm audit fix
+
+# Run this in CI — fail the build on high/critical vulnerabilities
+npm audit --audit-level=high
+
+# Keep dependencies updated (check monthly)
+npm outdated</code></pre>
+
+    <h2>Security Checklist for Token</h2>
+    <pre><code>// Before every deploy, verify:
+//
+// ✓ No SQL string concatenation (parameterised queries only)
+// ✓ No secrets in git (check: git log --all -p | grep -i "secret\|password\|key")
+// ✓ CORS restricted to known origins
+// ✓ helmet middleware active (security headers)
+// ✓ All routes behind authenticateJWT (except /health, /auth/*)
+// ✓ Ownership checks on every data query (user_id in WHERE clause)
+// ✓ Input validated with zod at every endpoint
+// ✓ npm audit shows no high/critical vulnerabilities
+// ✓ Rate limiting on auth endpoints (from B4)
+// ✓ Request body size limited
+// ✓ Logs don't contain secrets or passwords</code></pre>
+
+    <h2>Playground: Spot the Vulnerability</h2>
+    <div id="playground-1"></div>
+
+    <h2>Exercise: Harden the Token API</h2>
+    <div id="exercise-1"></div>
+
+    <h2>Quiz</h2>
+    <div id="lesson-quiz"></div>
+
+    <div class="lesson-nav">
+        <a href="./README.html">&larr; Module Overview</a>
+        <a href="./0002-dpdp-act.html">Next: India's DPDP Act &rarr;</a>
+    </div>
+
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+    <script>
+        createPlayground("playground-1", `// Security audit: find vulnerabilities in these code snippets
+
+function auditCode(label, code, vulnerability) {
+  console.log("--- " + label + " ---");
+  console.log("Code: " + code);
+  console.log("Vulnerability: " + vulnerability);
+  console.log("");
+}
+
+auditCode(
+  "Token lookup",
+  "db.query('SELECT * FROM tokens WHERE code = \\'' + req.params.code + '\\'')",
+  "SQL INJECTION — user input concatenated into query string"
+);
+
+auditCode(
+  "User profile endpoint",
+  "router.get('/users/:id', (req, res) => { db.query('SELECT * FROM users WHERE id = $1', [req.params.id]) })",
+  "BROKEN ACCESS CONTROL — any authenticated user can read any user's profile (no ownership check)"
+);
+
+auditCode(
+  "Error handler",
+  "app.use((err, req, res, next) => { res.status(500).json({ error: err.message, stack: err.stack }) })",
+  "INFORMATION DISCLOSURE — stack traces reveal file paths, library versions, and internal structure"
+);
+
+auditCode(
+  "CORS config",
+  "app.use(cors())",
+  "SECURITY MISCONFIGURATION — allows ALL origins (any website can make authenticated requests)"
+);
+
+auditCode(
+  "Token label display",
+  "element.innerHTML = token.label",
+  "XSS — if label contains <script> tags, they execute in the viewer's browser"
+);
+
+console.log("=== Fix Pattern ===");
+console.log("1. Parameterised queries: db.query('...WHERE x = $1', [value])");
+console.log("2. Ownership check: AND user_id = $2");
+console.log("3. Never expose internals: { error: 'internal error' }");
+console.log("4. Restrict CORS: cors({ origin: ['https://tokn.app'] })");
+console.log("5. Use textContent or React JSX (auto-escapes)");`);
+
+        createSolution("exercise-1", {
+            exercise: "Perform a security hardening pass on the Token API:\n\n1. Write a CORS middleware that allows only your known origins (production web, local dev) and mobile apps (no origin).\n2. Configure helmet with appropriate CSP directives for the Token API (API only serves JSON, no HTML pages).\n3. Write a middleware that sanitises all string fields in request bodies (trim whitespace, limit length).\n4. Write an ownership-checking helper function that you can reuse across all route handlers.\n5. Add a pre-commit hook script that checks for potential secrets in staged files.",
+            hints: [
+                "For the API's CSP, you can use a restrictive policy since it only serves JSON — no scripts, no styles, no images needed.",
+                "The sanitisation middleware should recurse into nested objects but have a depth limit to prevent prototype pollution.",
+                "The ownership helper should throw a 404 (not 403) when the resource exists but belongs to another user — don't reveal that it exists.",
+                "For the pre-commit hook, grep staged files for patterns like 'password=', 'secret=', API key formats, etc."
+            ],
+            solution: `// api/src/middleware/cors.ts
+import cors from 'cors';
+
+const ALLOWED_ORIGINS = [
+  'https://tokn.app',
+  'http://localhost:5173',
+  'http://localhost:19006',
+];
+
+export const corsMiddleware = cors({
+  origin: (origin, callback) => {
+    // Mobile apps and server-to-server: no origin header
+    if (!origin) return callback(null, true);
+    if (ALLOWED_ORIGINS.includes(origin)) {
+      return callback(null, true);
+    }
+    callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],
+  maxAge: 86400,
+});
+
+// ---
+
+// api/src/middleware/security.ts
+import helmet from 'helmet';
+
+export const securityHeaders = helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'none'"],   // API serves JSON only — block everything
+      frameAncestors: ["'none'"],
+    },
+  },
+  hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
+  frameguard: { action: 'deny' },
+  hidePoweredBy: true,
+  noSniff: true,
+  referrerPolicy: { policy: 'no-referrer' },
+});
+
+// ---
+
+// api/src/middleware/sanitise.ts
+export function sanitiseBody(maxDepth = 5) {
+  return (req: any, res: any, next: any) => {
+    if (req.body && typeof req.body === 'object') {
+      req.body = sanitiseObject(req.body, 0, maxDepth);
+    }
+    next();
+  };
+}
+
+function sanitiseObject(obj: any, depth: number, maxDepth: number): any {
+  if (depth > maxDepth) return {};
+  if (Array.isArray(obj)) {
+    return obj.slice(0, 100).map(item => sanitiseValue(item, depth, maxDepth));
+  }
+  const result: any = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
+    result[key] = sanitiseValue(value, depth, maxDepth);
+  }
+  return result;
+}
+
+function sanitiseValue(value: any, depth: number, maxDepth: number): any {
+  if (typeof value === 'string') return value.trim().slice(0, 10000);
+  if (typeof value === 'object' && value !== null) return sanitiseObject(value, depth + 1, maxDepth);
+  return value;
+}
+
+// ---
+
+// api/src/helpers/ownership.ts
+import { db } from '../db';
+
+export async function findOwned<T>(
+  table: string,
+  id: string,
+  userId: string,
+  columns = '*'
+): Promise<T | null> {
+  const result = await db.query(
+    \`SELECT \${columns} FROM \${table} WHERE id = $1 AND user_id = $2\`,
+    [id, userId]
+  );
+  return result.rows[0] || null;
+  // Returns null for both "doesn't exist" and "belongs to someone else"
+  // The caller returns 404 in both cases — never reveals existence
+}
+
+// Usage:
+// const token = await findOwned<Token>('tokens', req.params.id, req.user.id);
+// if (!token) return res.status(404).json({ error: 'not found' });
+
+// ---
+
+// scripts/check-secrets.sh (pre-commit hook)
+// #!/bin/bash
+// PATTERNS="password=|secret=|api_key=|PRIVATE_KEY|BEGIN RSA|sk_live_|ExponentPushToken"
+// FILES=$(git diff --cached --name-only --diff-filter=ACM)
+//
+// for file in $FILES; do
+//   if echo "$file" | grep -qE '\\.(env|pem|key)$'; then
+//     echo "ERROR: Potentially sensitive file staged: $file"
+//     exit 1
+//   fi
+//   if git diff --cached "$file" | grep -iE "$PATTERNS" > /dev/null; then
+//     echo "WARNING: Possible secret in $file"
+//     echo "  $(git diff --cached "$file" | grep -iE "$PATTERNS" | head -3)"
+//     exit 1
+//   fi
+// done`
+        });
+
+        createQuiz("lesson-quiz", [
+            {
+                type: "spot-the-bug",
+                code: "router.delete('/tokens/:id', auth, async (req, res) => {\n  await db.query('DELETE FROM tokens WHERE id = $1', [req.params.id]);\n  res.json({ deleted: true });\n});",
+                bugLine: 2,
+                options: [
+                    "Line 2 — missing user_id check (any user can delete any token)",
+                    "Line 2 — DELETE should be UPDATE with revoked_at",
+                    "Line 1 — should use PUT method for deletion"
+                ],
+                correct: 0,
+                explanation: "The query deletes by id alone — any authenticated user can delete any other user's token. Add 'AND user_id = $2' with req.user.id to enforce ownership."
+            },
+            {
+                type: "predict-output",
+                code: "const input = \"'; DROP TABLE tokens; --\";\nconst query = 'SELECT * FROM tokens WHERE code = $1';\nconst params = [input];\nconsole.log('Query sent to DB: template + value');\nconsole.log('Value treated as: literal string data');",
+                answer: "Query sent to DB: template + value\nValue treated as: literal string data",
+                explanation: "With parameterised queries, the database receives the template and values separately. The value is ALWAYS treated as data, never as SQL syntax — no matter what characters it contains."
+            },
+            {
+                type: "which-breaks",
+                question: "Which CORS configuration is insecure for a production API?",
+                variants: [
+                    "cors({ origin: ['https://tokn.app'] })",
+                    "cors({ origin: true })",
+                    "cors({ origin: (origin, cb) => { if (!origin) cb(null, true); else cb(new Error('blocked')); } })"
+                ],
+                correct: 1,
+                explanation: "origin: true reflects the requesting origin back — effectively allowing ALL origins. Any malicious website could make authenticated requests to your API on behalf of your users."
+            },
+            {
+                type: "fill-blank",
+                code: "// Return 404 (not 403) when a resource belongs to another user\nconst token = await db.query(\n  'SELECT * FROM tokens WHERE id = $1 AND ___ = $2',\n  [tokenId, req.user.id]\n);",
+                answer: "user_id",
+                explanation: "Including user_id in the WHERE clause means the query returns nothing if the resource belongs to another user. Returning 404 (not 403) prevents attackers from discovering that the resource exists."
+            },
+            {
+                type: "order-steps",
+                question: "Order the secret rotation steps for JWT_SECRET:",
+                steps: [
+                    "Generate a new random secret",
+                    "Set JWT_SECRET = new, JWT_SECRET_PREVIOUS = old",
+                    "Deploy — new tokens signed with new secret",
+                    "Wait for all old access tokens to expire (15 min)",
+                    "Remove JWT_SECRET_PREVIOUS from environment",
+                    "Deploy again (now only one secret)"
+                ],
+                correctOrder: [0, 1, 2, 3, 4, 5],
+                explanation: "The dual-secret window ensures no user is logged out during rotation. Old tokens still verify against PREVIOUS while new tokens use the current secret. After old tokens expire naturally, you can remove the previous secret."
+            }
+        ]);
+    </script>
+</body>
+</html>

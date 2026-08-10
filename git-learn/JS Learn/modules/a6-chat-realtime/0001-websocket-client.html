@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebSocket Basics on the Client — A6.1</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A6 — Chat &amp; Real-time</a>
+      <span class="sep">›</span>
+      <span class="current">WebSocket Basics on the Client</span>
+    </nav>
+
+    <h1>WebSocket Basics on the Client</h1>
+    <div class="lesson-meta">
+      <span>A6 — Lesson 1 of 3</span>
+      <span>~50 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>The WebSocket server is built (B5). Now the app needs to connect to it — and stay connected. Mobile connections drop constantly: tunnels, elevators, switching between WiFi and cellular. The client must reconnect automatically, re-authenticate, and pick up where it left off. This lesson builds the connection layer that every real-time feature in the app depends on.</p>
+    </div>
+
+    <h2>The browser WebSocket API</h2>
+
+    <p>React Native uses the same WebSocket API as browsers. No extra library needed:</p>
+
+    <pre><code>const ws = new WebSocket('wss://api.tokn.app/ws?token=YOUR_JWT');
+
+ws.onopen = () =&gt; { /* connected */ };
+ws.onmessage = (event) =&gt; { /* event.data is the message */ };
+ws.onclose = (event) =&gt; { /* event.code, event.reason */ };
+ws.onerror = (error) =&gt; { /* connection error */ };
+
+// Send a message
+ws.send(JSON.stringify({ type: 'chat:send', payload: { ... } }));</code></pre>
+
+    <p><strong>Key difference from HTTP:</strong> you create the connection once and keep it open. You don't create a new WebSocket for each message.</p>
+
+    <h2>Connection singleton</h2>
+
+    <p>The app needs exactly ONE WebSocket connection. Every screen that needs real-time data shares the same connection. We build a singleton:</p>
+
+    <pre><code>// app/src/ws/connection.ts
+import { getAccessToken } from '../api/client';
+
+const WS_URL = __DEV__
+  ? 'ws://localhost:3000/ws'
+  : 'wss://api.tokn.app/ws';
+
+type MessageHandler = (type: string, payload: any) =&gt; void;
+
+let ws: WebSocket | null = null;
+let reconnectAttempts = 0;
+let reconnectTimer: ReturnType&lt;typeof setTimeout&gt; | null = null;
+let intentionalClose = false;
+const listeners = new Set&lt;MessageHandler&gt;();
+
+export function connect() {
+  if (ws?.readyState === WebSocket.OPEN || ws?.readyState === WebSocket.CONNECTING) {
+    return;
+  }
+
+  const token = getAccessToken();
+  if (!token) return;
+
+  intentionalClose = false;
+  ws = new WebSocket(`${WS_URL}?token=${token}`);
+
+  ws.onopen = () =&gt; {
+    console.log('WS connected');
+    reconnectAttempts = 0;
+  };
+
+  ws.onmessage = (event) =&gt; {
+    try {
+      const { type, payload } = JSON.parse(event.data);
+      for (const handler of listeners) {
+        handler(type, payload);
+      }
+    } catch {
+      console.warn('WS: invalid message received');
+    }
+  };
+
+  ws.onclose = (event) =&gt; {
+    console.log(`WS closed: ${event.code} ${event.reason}`);
+    ws = null;
+
+    if (!intentionalClose) {
+      scheduleReconnect();
+    }
+  };
+
+  ws.onerror = () =&gt; {
+    // onclose will fire after onerror — reconnect happens there
+  };
+}
+
+export function disconnect() {
+  intentionalClose = true;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  ws?.close(1000, 'User logged out');
+  ws = null;
+}
+
+export function send(type: string, payload: unknown) {
+  if (ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type, payload }));
+  } else {
+    console.warn('WS: cannot send — not connected');
+  }
+}
+
+export function subscribe(handler: MessageHandler): () =&gt; void {
+  listeners.add(handler);
+  return () =&gt; listeners.delete(handler);
+}
+
+export function getConnectionState(): 'connected' | 'connecting' | 'disconnected' {
+  if (!ws) return 'disconnected';
+  if (ws.readyState === WebSocket.OPEN) return 'connected';
+  if (ws.readyState === WebSocket.CONNECTING) return 'connecting';
+  return 'disconnected';
+}</code></pre>
+
+    <h2>Exponential backoff reconnection</h2>
+
+    <p>When the connection drops, don't reconnect immediately in a tight loop. Use exponential backoff — each attempt waits longer than the last:</p>
+
+    <pre><code>function scheduleReconnect() {
+  // Exponential backoff: 1s, 2s, 4s, 8s, 16s, max 30s
+  const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+  reconnectAttempts++;
+
+  console.log(`WS: reconnecting in ${delay}ms (attempt ${reconnectAttempts})`);
+
+  reconnectTimer = setTimeout(() =&gt; {
+    reconnectTimer = null;
+    connect();
+  }, delay);
+}</code></pre>
+
+    <table>
+      <thead>
+        <tr><th>Attempt</th><th>Delay</th><th>Total wait</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>1</td><td>1s</td><td>1s</td></tr>
+        <tr><td>2</td><td>2s</td><td>3s</td></tr>
+        <tr><td>3</td><td>4s</td><td>7s</td></tr>
+        <tr><td>4</td><td>8s</td><td>15s</td></tr>
+        <tr><td>5</td><td>16s</td><td>31s</td></tr>
+        <tr><td>6+</td><td>30s (cap)</td><td>...</td></tr>
+      </tbody>
+    </table>
+
+    <p><strong>Why backoff?</strong> If the server is down and 10,000 clients all try to reconnect every second, the server gets hammered the moment it comes back up. Backoff spreads out reconnection attempts and gives the server time to recover.</p>
+
+    <h3>Adding jitter</h3>
+
+    <p>Even with backoff, if all clients disconnect at the same time (server restart), they all reconnect at the same intervals. Add random jitter to desynchronize:</p>
+
+    <pre><code>function scheduleReconnect() {
+  const baseDelay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+  // Add ±25% random jitter
+  const jitter = baseDelay * 0.25 * (Math.random() * 2 - 1);
+  const delay = Math.round(baseDelay + jitter);
+
+  reconnectAttempts++;
+  reconnectTimer = setTimeout(() =&gt; connect(), delay);
+}</code></pre>
+
+    <h2>React hook for WebSocket</h2>
+
+    <p>Components need to know the connection state and react to incoming messages. A custom hook:</p>
+
+    <pre><code>// app/src/ws/useWebSocket.ts
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { AppState, AppStateStatus } from 'react-native';
+import { connect, disconnect, subscribe, send, getConnectionState } from './connection';
+
+export function useWebSocket() {
+  const [connectionState, setConnectionState] = useState(getConnectionState());
+
+  useEffect(() =&gt; {
+    connect();
+
+    const unsub = subscribe((type, payload) =&gt; {
+      // Update connection state on any message (confirms we're alive)
+      setConnectionState('connected');
+    });
+
+    // Reconnect when app comes back to foreground
+    const handleAppState = (state: AppStateStatus) =&gt; {
+      if (state === 'active') {
+        connect();
+      }
+    };
+    const sub = AppState.addEventListener('change', handleAppState);
+
+    return () =&gt; {
+      unsub();
+      sub.remove();
+    };
+  }, []);
+
+  return { connectionState, send };
+}
+
+// Hook for listening to specific message types
+export function useWsMessage(type: string, handler: (payload: any) =&gt; void) {
+  const handlerRef = useRef(handler);
+  handlerRef.current = handler;
+
+  useEffect(() =&gt; {
+    return subscribe((msgType, payload) =&gt; {
+      if (msgType === type) {
+        handlerRef.current(payload);
+      }
+    });
+  }, [type]);
+}</code></pre>
+
+    <h2>AppState — reconnecting on foreground</h2>
+
+    <p>When the user switches to another app, the OS may kill the WebSocket connection after a few minutes (especially on iOS). When they return, reconnect immediately:</p>
+
+    <pre><code>import { AppState } from 'react-native';
+
+AppState.addEventListener('change', (state) =&gt; {
+  if (state === 'active') {
+    // App is back in foreground — ensure WS is connected
+    connect();
+  }
+});</code></pre>
+
+    <p><strong>iOS behaviour:</strong> WebSocket connections are suspended when the app goes to background. After ~30 seconds, iOS may close the TCP connection entirely. On return to foreground, the onclose event fires and reconnection triggers.</p>
+
+    <p><strong>Android behaviour:</strong> More lenient — connections can survive background for minutes. But battery optimization (Doze mode) will eventually kill them.</p>
+
+    <h2>Connecting on login, disconnecting on logout</h2>
+
+    <pre><code>// app/src/auth/AuthContext.tsx — integrate WS lifecycle
+import { connect as wsConnect, disconnect as wsDisconnect } from '../ws/connection';
+
+export function AuthProvider({ children }) {
+  // ... existing auth state ...
+
+  useEffect(() =&gt; {
+    if (user) {
+      // Authenticated — connect WebSocket
+      wsConnect();
+    } else {
+      // Logged out — disconnect
+      wsDisconnect();
+    }
+  }, [user]);
+
+  // ... rest of provider
+}</code></pre>
+
+    <h2>Handling token refresh mid-connection</h2>
+
+    <p>The access token sent during WebSocket connect expires after 15 minutes. But the WebSocket stays open longer. Two strategies:</p>
+
+    <h3>Strategy A: Reconnect with fresh token</h3>
+
+    <pre><code>// When access token refreshes, close and reconnect with new token
+// Simple but causes a brief disconnection blip
+function onTokenRefreshed() {
+  ws?.close(4001, 'Token refreshed');  // custom close code
+  connect();  // reconnects with new token immediately
+}</code></pre>
+
+    <h3>Strategy B: Re-auth over the WebSocket (better UX)</h3>
+
+    <pre><code>// Send a re-auth message over the existing connection
+// Server verifies and updates the socket's auth state
+// No disconnection — seamless
+
+send('auth:refresh', { token: getAccessToken() });
+
+// Server handler:
+// registerHandler('auth:refresh', async (ws, payload) => {
+//   const userId = jwt.verify(payload.token, SECRET).sub;
+//   ws.userId = userId;  // update auth state
+//   sendTo(ws, 'auth:refreshed', {});
+// });</code></pre>
+
+    <p>For Token v1, Strategy A is simpler and the reconnection is fast enough that the user won't notice.</p>
+
+    <h2>Connection state UI</h2>
+
+    <p>Show the user when they're disconnected — a small banner at the top:</p>
+
+    <pre><code>// app/src/components/ConnectionBanner.tsx
+import { View, Text, StyleSheet } from 'react-native';
+import { useWebSocket } from '../ws/useWebSocket';
+
+export function ConnectionBanner() {
+  const { connectionState } = useWebSocket();
+
+  if (connectionState === 'connected') return null;
+
+  return (
+    &lt;View style={styles.banner}&gt;
+      &lt;Text style={styles.text}&gt;
+        {connectionState === 'connecting' ? 'Connecting...' : 'Offline — messages will send when connected'}
+      &lt;/Text&gt;
+    &lt;/View&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  banner: {
+    backgroundColor: '#fef3c7',
+    paddingVertical: 6,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+  },
+  text: {
+    fontSize: 13,
+    color: '#92400e',
+  },
+});</code></pre>
+
+    <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./README.html">← Module overview</a>
+      <a href="./0002-message-thread-ui.html">Next: Message Thread UI →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// Simulate exponential backoff with jitter
+function calculateDelay(attempt) {
+  const baseDelay = Math.min(1000 * Math.pow(2, attempt), 30000);
+  const jitter = baseDelay * 0.25 * (Math.random() * 2 - 1);
+  return Math.round(baseDelay + jitter);
+}
+
+console.log('Reconnection delays (with jitter):');
+console.log('─────────────────────────────────');
+
+let totalWait = 0;
+for (let i = 0; i < 8; i++) {
+  const delay = calculateDelay(i);
+  totalWait += delay;
+  console.log(
+    'Attempt ' + (i + 1) + ': ~' + delay + 'ms ' +
+    '(total: ' + (totalWait / 1000).toFixed(1) + 's)'
+  );
+}
+
+console.log('\\nAfter attempt 5, delay caps at ~30s');
+console.log('Jitter prevents thundering herd on server restart');`);
+
+    createSolution("exercise-1", {
+      exercise: "Build the complete WebSocket client layer:\n\n1. Create `app/src/ws/connection.ts`: a singleton that connects, reconnects with exponential backoff + jitter, sends messages, and dispatches incoming messages to subscribers.\n\n2. Create `app/src/ws/useWebSocket.ts`: a React hook that returns connection state and triggers reconnect on AppState change (foreground).\n\n3. Create `useWsMessage(type, handler)` hook: subscribes to a specific message type and cleans up on unmount.\n\n4. Integrate with AuthContext: connect on login, disconnect on logout.\n\n5. Create `ConnectionBanner` component that shows 'Connecting...' or 'Offline' when disconnected.\n\n6. Test: start the server, open the app, verify connection. Kill the server, verify reconnection attempts with increasing delays. Restart the server, verify auto-reconnect succeeds.",
+      hints: [
+        "Use a Set<MessageHandler> for listeners — easy add/delete, and iterating to dispatch is fast.",
+        "Always check ws.readyState === WebSocket.OPEN before sending. Queue or warn otherwise.",
+        "The intentionalClose flag prevents reconnection after logout (ws.close() triggers onclose, but we don't want to reconnect).",
+        "useRef for the handler in useWsMessage prevents stale closures — the ref always points to the latest handler."
+      ],
+      solution: `// See the full implementation in the lesson code above.
+// Architecture summary:
+
+// connection.ts (singleton):
+// - connect(): creates WebSocket, sets up onopen/onmessage/onclose/onerror
+// - disconnect(): intentionalClose=true, close(1000), cleanup
+// - send(type, payload): JSON.stringify and send if OPEN
+// - subscribe(handler): add to listeners Set, return unsubscribe fn
+// - scheduleReconnect(): exponential backoff with jitter, capped at 30s
+// - getConnectionState(): maps readyState to 'connected'|'connecting'|'disconnected'
+
+// useWebSocket.ts (hook):
+// - Calls connect() on mount
+// - Subscribes for connection state updates
+// - Listens to AppState changes — reconnects on 'active'
+// - Returns { connectionState, send }
+
+// useWsMessage(type, handler) (hook):
+// - Subscribes with a filter on message type
+// - Uses useRef to avoid stale handler closures
+// - Cleans up on unmount
+
+// Integration:
+// AuthContext: useEffect watching user → connect/disconnect
+// ConnectionBanner: renders when state !== 'connected'`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "What are the first 4 reconnection delays (no jitter)?",
+        code: "for (let i = 0; i < 4; i++) {\n  const delay = Math.min(1000 * Math.pow(2, i), 30000);\n  console.log(delay + 'ms');\n}",
+        answer: "1000ms\n2000ms\n4000ms\n8000ms",
+        explanation: "2^0=1, 2^1=2, 2^2=4, 2^3=8 — each attempt doubles the delay. The cap (30000ms) kicks in at attempt 5 (2^5=32 > 30). This prevents the client from waiting forever while still spreading out reconnection attempts."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this WebSocket send function?",
+        code: "export function send(type, payload) {\n  ws.send(JSON.stringify({ type, payload }));\n}",
+        options: [
+          "No readyState check — ws might be null, CONNECTING, CLOSING, or CLOSED, causing a crash or silent failure",
+          "JSON.stringify can't handle the payload object",
+          "ws.send is async and needs await",
+          "The type field should be a number, not a string"
+        ],
+        correct: 0,
+        explanation: "If ws is null (disconnected) you get a TypeError. If readyState is not OPEN, the send either throws or silently fails depending on the implementation. Always guard: if (ws?.readyState === WebSocket.OPEN) { ws.send(...) }. Optionally queue messages for retry on reconnect."
+      },
+      {
+        type: "which-breaks",
+        question: "When should the WebSocket disconnect?",
+        variants: [
+          "When the user navigates to a different screen",
+          "When the user logs out",
+          "When the app goes to background",
+          "When a single API call fails with 401"
+        ],
+        correct: 1,
+        explanation: "Logout = session over = disconnect. Screen navigation doesn't affect the WS (it's app-wide). Background: the OS may kill it, but we don't proactively close — it might survive, and we reconnect on foreground anyway. A single 401: the WS was authenticated on connect; a REST 401 triggers token refresh, not WS disconnect."
+      },
+      {
+        type: "fill-blank",
+        question: "Reconnect when the app returns to foreground:",
+        code: "import { AppState } from 'react-native';\n\nAppState.addEventListener('change', (state) => {\n  if (state === '___') {\n    connect();\n  }\n});",
+        answer: "active",
+        explanation: "AppState has three values: 'active' (foreground), 'background', and 'inactive' (iOS transitioning). When state becomes 'active', the app is visible and interactive — the right time to ensure the WebSocket is connected. iOS likely killed the connection during background."
+      },
+      {
+        type: "order-steps",
+        question: "Put the WebSocket client lifecycle in order:",
+        steps: [
+          "User logs in — AuthContext sets user state",
+          "useEffect detects user is set — calls connect()",
+          "WebSocket opens with JWT in query parameter",
+          "Server verifies JWT, completes upgrade, connection is live",
+          "App goes to background → OS eventually kills socket → onclose fires → reconnect scheduled"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "The lifecycle is auth-driven: login triggers connect, the server authenticates during upgrade, and the connection lives until the OS or logout kills it. Reconnection is automatic and invisible to the user."
+      }
+    ]);
+  </script>
+</body>
+</html>

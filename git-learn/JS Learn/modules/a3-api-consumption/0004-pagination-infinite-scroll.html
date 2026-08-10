@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pagination &amp; Infinite Scroll — A3.4</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A3 — API Consumption</a>
+      <span class="sep">›</span>
+      <span class="current">Pagination &amp; Infinite Scroll</span>
+    </nav>
+
+    <h1>Pagination &amp; Infinite Scroll</h1>
+    <div class="lesson-meta">
+      <span>A3 — Lesson 4 of 4</span>
+      <span>~45 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>A user with 200 tokens shouldn't wait for all of them to load before seeing anything. Pagination loads 20 at a time, and infinite scroll fetches the next 20 when they reach the bottom. The same pattern applies to message history — you load the most recent messages first, then older ones on scroll up. This is how every professional chat and list app works.</p>
+    </div>
+
+    <h2>How cursor pagination works</h2>
+
+    <p>The API returns a <code>cursor</code> — an opaque string that points to the last item. Pass it back to get the next page:</p>
+
+    <pre><code>// First request — no cursor
+GET /api/tokens?limit=20
+Response: { items: [...20 tokens], cursor: "eyJpZCI6MjB9", hasMore: true }
+
+// Next page — include the cursor
+GET /api/tokens?limit=20&cursor=eyJpZCI6MjB9
+Response: { items: [...20 more tokens], cursor: "eyJpZCI6NDB9", hasMore: true }
+
+// Last page
+GET /api/tokens?limit=20&cursor=eyJpZCI6NDB9
+Response: { items: [...8 remaining tokens], cursor: null, hasMore: false }</code></pre>
+
+    <h2>FlatList with onEndReached</h2>
+
+    <p>React Native's FlatList has built-in infinite scroll support:</p>
+
+    <pre><code>import { FlatList, ActivityIndicator } from 'react-native';
+
+function TokenListScreen() {
+  const [tokens, setTokens] = useState&lt;TokenListItem[]&gt;([]);
+  const [cursor, setCursor] = useState&lt;string | null&gt;(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  // Initial load
+  useEffect(() =&gt; {
+    loadTokens();
+  }, []);
+
+  async function loadTokens(nextCursor?: string) {
+    if (!nextCursor) setLoading(true);
+    else setLoadingMore(true);
+
+    try {
+      const res = await api.listTokens(nextCursor);
+      const { items, cursor: newCursor, hasMore: more } = res.data;
+
+      setTokens(prev =&gt; nextCursor ? [...prev, ...items] : items);
+      setCursor(newCursor);
+      setHasMore(more);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
+  }
+
+  function handleEndReached() {
+    if (!loadingMore && hasMore && cursor) {
+      loadTokens(cursor);
+    }
+  }
+
+  return (
+    &lt;FlatList
+      data={tokens}
+      keyExtractor={item =&gt; item.code}
+      renderItem={({ item }) =&gt; &lt;TokenCard token={item} /&gt;}
+      onEndReached={handleEndReached}
+      onEndReachedThreshold={0.5}
+      ListFooterComponent={
+        loadingMore ? &lt;ActivityIndicator style={{ padding: 16 }} /&gt; : null
+      }
+    /&gt;
+  );
+}</code></pre>
+
+    <h3>Key props explained</h3>
+
+    <ul>
+      <li><strong>onEndReached</strong> — fires when the user scrolls near the bottom</li>
+      <li><strong>onEndReachedThreshold</strong> — how close to the bottom (0.5 = halfway through the last screen-height) before triggering</li>
+      <li><strong>ListFooterComponent</strong> — shows a spinner below the list while loading more</li>
+    </ul>
+
+    <h2>Pull-to-refresh</h2>
+
+    <pre><code>&lt;FlatList
+  data={tokens}
+  onRefresh={() =&gt; loadTokens()}    // reload from first page
+  refreshing={loading}              // show pull-to-refresh spinner
+  onEndReached={handleEndReached}
+  ...
+/&gt;</code></pre>
+
+    <p>Pull-to-refresh resets the list (loads page 1 fresh). Infinite scroll appends new pages to the existing list.</p>
+
+    <h2>Preventing duplicate fetches</h2>
+
+    <p>Without guards, <code>onEndReached</code> can fire multiple times rapidly:</p>
+
+    <pre><code>function handleEndReached() {
+  // Guard: don't fetch if already loading or no more pages
+  if (loadingMore || !hasMore || !cursor) return;
+  loadTokens(cursor);
+}</code></pre>
+
+    <h2>Message history — reverse pagination</h2>
+
+    <p>Chat messages load newest-first (what you see on screen) and paginate upward (older messages on scroll up):</p>
+
+    <pre><code>function MessageThread({ conversationId }: Props) {
+  const [messages, setMessages] = useState&lt;Message[]&gt;([]);
+  const [cursor, setCursor] = useState&lt;string | null&gt;(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  useEffect(() =&gt; {
+    loadMessages();
+  }, [conversationId]);
+
+  async function loadMessages(nextCursor?: string) {
+    setLoadingMore(true);
+    const res = await api.getMessages(conversationId, nextCursor);
+    const { items, cursor: newCursor, hasMore: more } = res.data;
+
+    // Prepend older messages (they go above current ones)
+    setMessages(prev =&gt; nextCursor ? [...items, ...prev] : items);
+    setCursor(newCursor);
+    setHasMore(more);
+    setLoadingMore(false);
+  }
+
+  return (
+    &lt;FlatList
+      data={messages}
+      inverted            // newest at bottom (chat convention)
+      keyExtractor={item =&gt; String(item.id)}
+      renderItem={({ item }) =&gt; &lt;MessageBubble message={item} /&gt;}
+      onEndReached={() =&gt; {
+        if (!loadingMore && hasMore && cursor) loadMessages(cursor);
+      }}
+      onEndReachedThreshold={0.3}
+      ListFooterComponent={
+        loadingMore ? &lt;ActivityIndicator /&gt; : null
+      }
+    /&gt;
+  );
+}</code></pre>
+
+    <p><code>inverted</code> flips the FlatList — newest messages at the bottom, scrolling up loads older ones. <code>onEndReached</code> fires when reaching the "top" (which is the visual bottom in an inverted list).</p>
+
+    <h2>Custom hook: usePaginatedApi</h2>
+
+    <pre><code>// app/src/hooks/usePaginatedApi.ts
+export function usePaginatedApi&lt;T&gt;(
+  fetcher: (cursor?: string) =&gt; Promise&lt;{ items: T[]; cursor: string | null; hasMore: boolean }&gt;
+) {
+  const [items, setItems] = useState&lt;T[]&gt;([]);
+  const [cursor, setCursor] = useState&lt;string | null&gt;(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState&lt;string | null&gt;(null);
+
+  const load = useCallback(async (nextCursor?: string) =&gt; {
+    if (nextCursor) setLoadingMore(true);
+    else setLoading(true);
+
+    try {
+      const result = await fetcher(nextCursor);
+      setItems(prev =&gt; nextCursor ? [...prev, ...result.items] : result.items);
+      setCursor(result.cursor);
+      setHasMore(result.hasMore);
+      setError(null);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
+  }, []);
+
+  useEffect(() =&gt; { load(); }, []);
+
+  const loadMore = () =&gt; {
+    if (!loadingMore && hasMore && cursor) load(cursor);
+  };
+
+  const refresh = () =&gt; load();
+
+  return { items, loading, loadingMore, error, hasMore, loadMore, refresh };
+}
+
+// Usage:
+const { items: tokens, loading, loadingMore, loadMore, refresh } = usePaginatedApi(
+  (cursor) =&gt; api.listTokens(cursor).then(r =&gt; r.data)
+);</code></pre>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0003-loading-empty-error-states.html">← Previous: Loading, Empty &amp; Error States</a>
+      <span class="disabled">Next module: A4 Auth on the Client →</span>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createSolution("exercise-1", {
+      exercise: "Build the full paginated token list screen: (1) Create the usePaginatedApi hook, (2) Build TokenListScreen using it with FlatList's onEndReached and onRefresh, (3) Show a loading footer while fetching more items, (4) Handle the edge case where the user pulls to refresh while a load-more is in progress, (5) Build a MessageThread screen with inverted FlatList for chat-style pagination (newest at bottom, older on scroll up).",
+      hints: [
+        "onEndReachedThreshold of 0.5 means 'fire when 50% of the remaining content is visible' — good balance between eagerness and not over-fetching.",
+        "When pull-to-refresh fires, reset everything: setItems([]), setCursor(null), setHasMore(true), then load from scratch.",
+        "For inverted FlatList: the data array has newest messages first. FlatList renders them bottom-up. onEndReached fires when scrolling toward older messages."
+      ],
+      solution: `// app/src/hooks/usePaginatedApi.ts — as shown in lesson
+
+// app/src/screens/TokenListScreen.tsx
+import { FlatList, ActivityIndicator, View } from 'react-native';
+import { usePaginatedApi } from '../hooks/usePaginatedApi';
+import { api } from '../api';
+import { TokenCard } from '../components/TokenCard';
+import { LoadingSpinner } from '../components/LoadingSpinner';
+import { ErrorMessage } from '../components/ErrorMessage';
+import { EmptyTokenList } from '../components/EmptyTokenList';
+
+export function TokenListScreen({ navigation }) {
+  const {
+    items: tokens, loading, loadingMore, error, loadMore, refresh
+  } = usePaginatedApi(
+    (cursor) => api.listTokens(cursor).then(r => r.data)
+  );
+
+  if (loading) return <LoadingSpinner />;
+  if (error) return <ErrorMessage message={error} onRetry={refresh} />;
+  if (tokens.length === 0) {
+    return <EmptyTokenList onCreateFirst={() => navigation.navigate('CreateToken')} />;
+  }
+
+  return (
+    <FlatList
+      data={tokens}
+      keyExtractor={item => item.code}
+      renderItem={({ item }) => (
+        <TokenCard
+          token={item}
+          onPress={() => navigation.navigate('TokenDetail', { tokenCode: item.code })}
+        />
+      )}
+      onEndReached={loadMore}
+      onEndReachedThreshold={0.5}
+      onRefresh={refresh}
+      refreshing={loading}
+      ListFooterComponent={
+        loadingMore ? (
+          <View style={{ padding: 16, alignItems: 'center' }}>
+            <ActivityIndicator />
+          </View>
+        ) : null
+      }
+    />
+  );
+}
+
+// app/src/screens/MessageThread.tsx
+export function MessageThread({ route }) {
+  const { conversationId } = route.params;
+
+  const {
+    items: messages, loadingMore, loadMore
+  } = usePaginatedApi(
+    (cursor) => api.getMessages(conversationId, cursor).then(r => r.data)
+  );
+
+  return (
+    <FlatList
+      data={messages}
+      inverted
+      keyExtractor={item => String(item.id)}
+      renderItem={({ item }) => <MessageBubble message={item} />}
+      onEndReached={loadMore}
+      onEndReachedThreshold={0.3}
+      ListFooterComponent={
+        loadingMore ? <ActivityIndicator style={{ padding: 12 }} /> : null
+      }
+    />
+  );
+}`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "The API returns { items: [...20], cursor: null, hasMore: false }. What happens when the user scrolls to the bottom?",
+        code: "function handleEndReached() {\n  if (!loadingMore && hasMore && cursor) loadMore();\n}",
+        answer: "Nothing — hasMore is false, so the guard prevents another fetch",
+        explanation: "The guard checks three conditions: not already loading, more pages exist, and a cursor is available. With hasMore = false, the condition fails and no request is made. The user sees all their tokens with no loading spinner — correct behavior for the last page."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this infinite scroll implementation?",
+        code: "onEndReached={() => {\n  loadTokens(cursor);\n}}",
+        options: [
+          "Arrow functions can't be used in JSX props",
+          "No guard against multiple rapid calls — this will fire repeatedly and duplicate requests",
+          "cursor should be passed differently",
+          "onEndReached doesn't accept functions"
+        ],
+        correct: 1,
+        explanation: "onEndReached can fire multiple times as the user scrolls. Without checking loadingMore and hasMore, you'd send 5-10 duplicate requests for the same page. Always guard: if (!loadingMore && hasMore && cursor) loadTokens(cursor)."
+      },
+      {
+        type: "fill-blank",
+        question: "Make FlatList render newest messages at the bottom (chat-style):",
+        code: "<FlatList\n  data={messages}\n  ___\n  renderItem={...}\n/>",
+        answer: "inverted",
+        explanation: "The inverted prop flips the FlatList vertically. Data renders bottom-to-top, so messages[0] (newest) appears at the bottom — exactly like every chat app. Scrolling up (toward the 'end' in inverted mode) loads older messages."
+      },
+      {
+        question: "Why use cursor-based pagination for the message list instead of offset/limit?",
+        options: [
+          "Cursors are faster for the database",
+          "New messages arrive in real-time — offset would skip or duplicate messages as the list shifts",
+          "FlatList requires cursors",
+          "Offset pagination doesn't work with PostgreSQL"
+        ],
+        correct: 1,
+        explanation: "In a chat, new messages arrive constantly. With offset pagination (page 2 = items 21-40), a new message shifts everything — you'd see message 20 twice or skip message 21. Cursor pagination says 'get messages older than this specific ID' — stable regardless of new arrivals."
+      },
+      {
+        type: "which-breaks",
+        question: "Which FlatList configuration has a problem?",
+        variants: [
+          "onEndReached={loadMore} onEndReachedThreshold={0.5}",
+          "onRefresh={refresh} refreshing={loading}",
+          "onEndReached={loadMore} onEndReachedThreshold={5}"
+        ],
+        correct: 2,
+        explanation: "onEndReachedThreshold is a ratio (0 to 1), not a pixel count. A value of 5 means 'fire when 5x the visible height of content remains' — it would fire immediately on every render, sending requests non-stop. Use 0.3-0.7 for sensible preloading."
+      }
+    ]);
+  </script>
+</body>
+</html>

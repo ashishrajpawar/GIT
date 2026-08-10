@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Indexes, Transactions, Constraints — B1.3</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">B1 — SQL Fundamentals</a>
+      <span class="sep">›</span>
+      <span class="current">Indexes, Transactions, Constraints</span>
+    </nav>
+
+    <h1>Indexes, Transactions, Constraints</h1>
+    <div class="lesson-meta">
+      <span>B1 — Lesson 3 of 4</span>
+      <span>~50 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>When someone redeems a token, the database must do three things atomically: validate the token, record the redemption event, and decrement the remaining uses. If any step fails, none of them should happen — otherwise you'd have an invalid state (redemption recorded but token still shows old count). Transactions guarantee this. Indexes make the lookup fast. Constraints make invalid states impossible.</p>
+    </div>
+
+    <h2>Indexes — making queries fast</h2>
+
+    <p>Without an index, Postgres reads every row in the table to find your data (a "sequential scan"). With an index, it jumps straight to the matching rows — like a book's index vs reading every page.</p>
+
+    <pre><code>-- This query scans ALL tokens to find the matching code:
+SELECT * FROM tokens WHERE code = 'MERC-8GH2-LP4X';
+-- With 100,000 tokens, this is slow.
+
+-- Create an index on the code column:
+CREATE INDEX idx_tokens_code ON tokens(code);
+-- Now the same query uses the index — nearly instant regardless of table size.</code></pre>
+
+    <h3>When to create indexes</h3>
+
+    <ul>
+      <li><strong>Always index</strong>: columns you filter on frequently (WHERE), columns you join on, columns you sort by (ORDER BY)</li>
+      <li><strong>Already indexed</strong>: PRIMARY KEY and UNIQUE columns get automatic indexes</li>
+      <li><strong>Don't over-index</strong>: each index slows down INSERT/UPDATE (it must update the index too). Only index what you query.</li>
+    </ul>
+
+    <p>For Token, these indexes matter on day one:</p>
+
+    <pre><code>-- Token lookup by code (the redemption path — must be fast)
+CREATE INDEX idx_tokens_code ON tokens(code);
+-- Already covered by UNIQUE constraint — no need!
+
+-- Tokens by user (the token list screen)
+CREATE INDEX idx_tokens_user_id ON tokens(user_id);
+
+-- Messages by token (loading a conversation)
+CREATE INDEX idx_messages_token_id ON messages(token_id);
+
+-- Redemption events by token
+CREATE INDEX idx_redemptions_token_id ON redemption_events(token_id);</code></pre>
+
+    <h3>Checking if an index is used</h3>
+
+    <pre><code>-- EXPLAIN shows the query plan (how Postgres will execute it)
+EXPLAIN SELECT * FROM tokens WHERE code = 'MERC-8GH2-LP4X';
+
+-- EXPLAIN ANALYZE actually runs it and shows timing
+EXPLAIN ANALYZE SELECT * FROM tokens WHERE user_id = 1;</code></pre>
+
+    <p>Look for "Index Scan" (good) vs "Seq Scan" (bad on large tables).</p>
+
+    <h2>Transactions — all or nothing</h2>
+
+    <p>A transaction groups multiple SQL statements into one atomic operation. Either ALL succeed or ALL are rolled back — no partial state.</p>
+
+    <pre><code>-- Token redemption: three things must happen together
+BEGIN;
+
+-- 1. Verify the token is active
+SELECT id, status, max_uses FROM tokens
+WHERE code = 'MERC-8GH2-LP4X' AND status = 'active'
+FOR UPDATE;  -- lock this row so no other connection changes it
+
+-- 2. Record the redemption event
+INSERT INTO redemption_events (token_id, holder_name, holder_ip)
+VALUES (1, 'Delivery Person', '192.168.1.1');
+
+-- 3. If max_uses reached, auto-revoke
+UPDATE tokens
+SET status = 'revoked', revoked_at = NOW()
+WHERE code = 'MERC-8GH2-LP4X'
+AND (SELECT COUNT(*) FROM redemption_events WHERE token_id = 1) >= max_uses
+AND max_uses > 0;
+
+COMMIT;  -- all three succeed together</code></pre>
+
+    <p>If any statement fails (or you call ROLLBACK), everything since BEGIN is undone:</p>
+
+    <pre><code>BEGIN;
+UPDATE tokens SET status = 'revoked' WHERE code = 'MERC-8GH2-LP4X';
+-- Oops, wrong token!
+ROLLBACK;  -- undoes the UPDATE — nothing happened</code></pre>
+
+    <h3>FOR UPDATE — row locking</h3>
+
+    <p><code>SELECT ... FOR UPDATE</code> locks the selected rows until the transaction ends. This prevents two people from redeeming the same token simultaneously and both succeeding when max_uses = 1.</p>
+
+    <div class="callout success">
+      <div class="callout-title">Real-world scenario</div>
+      <p>Two delivery people scan your QR code at the same time. Without FOR UPDATE, both SELECT the token, both see it's active, both INSERT a redemption event — even though max_uses was 1. With FOR UPDATE, the second connection waits for the first to finish, then sees the updated state.</p>
+    </div>
+
+    <h2>Constraints — the database as guardian</h2>
+
+    <p>You've seen NOT NULL, UNIQUE, and CHECK. Here's the full picture:</p>
+
+    <h3>NOT NULL — field must have a value</h3>
+    <pre><code>-- A token must always have an issued_to — who is it for?
+issued_to TEXT NOT NULL</code></pre>
+
+    <h3>UNIQUE — no duplicates</h3>
+    <pre><code>-- Two tokens can't have the same code
+code TEXT NOT NULL UNIQUE
+
+-- Composite unique: one user can't have two tokens with the same issued_to
+ALTER TABLE tokens ADD CONSTRAINT unique_user_issued
+UNIQUE (user_id, issued_to);</code></pre>
+
+    <h3>CHECK — custom validation rules</h3>
+    <pre><code>-- Status must be one of three values
+CHECK (status IN ('active', 'paused', 'revoked'))
+
+-- max_uses must be non-negative
+CHECK (max_uses >= 0)
+
+-- allowed hours must be valid
+CHECK (allowed_start >= 0 AND allowed_start <= 23)
+CHECK (allowed_end >= 0 AND allowed_end <= 23)</code></pre>
+
+    <h3>FOREIGN KEY — referential integrity</h3>
+    <pre><code>-- Every token must belong to a real user
+user_id INTEGER NOT NULL REFERENCES users(id)
+
+-- What happens if you delete a user? Options:
+-- RESTRICT (default): block the delete if tokens exist
+-- CASCADE: delete all their tokens too
+-- SET NULL: set token.user_id to NULL
+
+user_id INTEGER REFERENCES users(id) ON DELETE CASCADE</code></pre>
+
+    <p>For Token, use <code>RESTRICT</code> (the default) — you'd never want to silently delete a user's tokens. Force an explicit cleanup first.</p>
+
+    <h3>DEFAULT — automatic values</h3>
+    <pre><code>status TEXT NOT NULL DEFAULT 'active'
+created_at TIMESTAMP NOT NULL DEFAULT NOW()
+max_uses INTEGER NOT NULL DEFAULT 0</code></pre>
+
+    <h2>Putting it together — Token's safety net</h2>
+
+    <pre><code>-- The database enforces these rules regardless of application bugs:
+-- 1. Every token has an owner (FOREIGN KEY)
+-- 2. Token codes are unique (UNIQUE)
+-- 3. Status is always valid (CHECK)
+-- 4. Required fields are never empty (NOT NULL)
+-- 5. Redemption is atomic (TRANSACTION)
+-- 6. Concurrent access is safe (FOR UPDATE)
+
+-- Even if your Node.js code has a bug, these constraints
+-- prevent invalid data from ever reaching the database.</code></pre>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0002-joins-relationships.html">← Previous: Joins &amp; Relationships</a>
+      <a href="./0004-postgres-specifics.html">Next: Postgres Specifics →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createSolution("exercise-1", {
+      exercise: "Write a complete token redemption transaction. It should: (1) BEGIN the transaction, (2) SELECT the token by code with FOR UPDATE to lock it, (3) Check that the token is active (if not, ROLLBACK), (4) INSERT a redemption_event, (5) If the redemption count now equals max_uses and max_uses > 0, UPDATE the token to 'revoked', (6) COMMIT. Also: create the indexes Token needs for its most common queries.",
+      hints: [
+        "FOR UPDATE goes at the end of the SELECT statement.",
+        "In real code (Node.js), you'd check the SELECT result in JavaScript and decide whether to ROLLBACK or continue. In pure SQL, you can use a conditional with DO blocks, but a simple linear script showing the concept is fine.",
+        "Key indexes: tokens(user_id), tokens(code) is already UNIQUE, redemption_events(token_id), messages(token_id)."
+      ],
+      solution: `-- Indexes for Token's common queries
+CREATE INDEX idx_tokens_user_id ON tokens(user_id);
+CREATE INDEX idx_tokens_status ON tokens(status);
+CREATE INDEX idx_redemptions_token_id ON redemption_events(token_id);
+CREATE INDEX idx_redemptions_redeemed_at ON redemption_events(redeemed_at);
+
+-- Token redemption transaction
+BEGIN;
+
+-- Step 1: Lock the token row
+SELECT id, status, max_uses
+FROM tokens
+WHERE code = 'MERC-8GH2-LP4X'
+FOR UPDATE;
+
+-- (In Node.js: check if result.rows[0] exists and status === 'active')
+-- If not active: ROLLBACK and return error to client
+
+-- Step 2: Record the redemption
+INSERT INTO redemption_events (token_id, holder_name, holder_ip)
+VALUES (
+  (SELECT id FROM tokens WHERE code = 'MERC-8GH2-LP4X'),
+  'Delivery Agent',
+  '103.42.55.12'
+);
+
+-- Step 3: Check if max_uses is reached, auto-revoke if so
+UPDATE tokens
+SET status = 'revoked', revoked_at = NOW()
+WHERE code = 'MERC-8GH2-LP4X'
+  AND max_uses > 0
+  AND (
+    SELECT COUNT(*)
+    FROM redemption_events
+    WHERE token_id = (SELECT id FROM tokens WHERE code = 'MERC-8GH2-LP4X')
+  ) >= max_uses;
+
+COMMIT;`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "What happens if you INSERT a token with user_id = 999 and no user with id 999 exists?",
+        code: "INSERT INTO tokens (code, user_id, issued_to)\nVALUES ('TEST-1234', 999, 'Nobody');",
+        answer: "ERROR: insert or update on table \"tokens\" violates foreign key constraint",
+        explanation: "The REFERENCES users(id) constraint prevents orphaned tokens. Postgres rejects the insert because user 999 doesn't exist. This is referential integrity — the database guarantees every token points to a real user."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's the concurrency problem here?",
+        code: "-- Connection A:\nSELECT status FROM tokens WHERE code = 'XYZ';\n-- sees 'active'\nINSERT INTO redemption_events ...;\n\n-- Connection B (same moment):\nSELECT status FROM tokens WHERE code = 'XYZ';\n-- also sees 'active'\nINSERT INTO redemption_events ...;",
+        options: [
+          "The SELECT syntax is wrong",
+          "Both connections see 'active' and both redeem — violating max_uses",
+          "INSERT can't run after SELECT",
+          "You can't have two connections to the same database"
+        ],
+        correct: 1,
+        explanation: "Without FOR UPDATE, both connections read the token as 'active' simultaneously and both insert a redemption event. If max_uses is 1, the token is redeemed twice. FOR UPDATE makes the second connection wait for the first to finish."
+      },
+      {
+        type: "fill-blank",
+        question: "Make the SELECT lock the row for the duration of the transaction:",
+        code: "SELECT id, status FROM tokens WHERE code = 'XYZ' ___;",
+        answer: "FOR UPDATE",
+        explanation: "FOR UPDATE acquires a row-level lock. Other transactions that try to SELECT FOR UPDATE or UPDATE the same row will wait until this transaction commits or rolls back."
+      },
+      {
+        question: "When should you NOT add an index?",
+        options: [
+          "On a column you filter with WHERE in every query",
+          "On a column that's almost never queried but frequently inserted/updated",
+          "On a foreign key column used in JOINs",
+          "On a column used in ORDER BY on a large table"
+        ],
+        correct: 1,
+        explanation: "Indexes speed up reads but slow down writes — every INSERT/UPDATE must also update all relevant indexes. If a column is rarely queried but written to constantly, the index cost isn't worth it."
+      },
+      {
+        type: "order-steps",
+        question: "Put the transaction steps in correct order for a safe token redemption:",
+        steps: ["BEGIN", "SELECT ... FOR UPDATE (lock the row)", "INSERT redemption_event", "COMMIT"],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "BEGIN starts the transaction. FOR UPDATE locks the row so no concurrent access can interfere. The INSERT records the event. COMMIT makes everything permanent. If anything fails between BEGIN and COMMIT, you ROLLBACK and nothing happened."
+      }
+    ]);
+  </script>
+</body>
+</html>

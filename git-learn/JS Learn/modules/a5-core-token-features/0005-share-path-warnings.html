@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Share-Path Warnings — A5.5</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A5 — Core Token Features</a>
+      <span class="sep">›</span>
+      <span class="current">Share-Path Warnings</span>
+    </nav>
+
+    <h1>Share-Path Warnings</h1>
+    <div class="lesson-meta">
+      <span>A5 — Lesson 5 of 5</span>
+      <span>~40 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>Token's entire privacy promise rests on one rule: <strong>a token must never travel over a channel that already identifies the user.</strong> If you send a token via WhatsApp, the recipient now has both the token AND your phone number — defeating the purpose. The app must actively protect users from accidentally breaking their own privacy. This isn't a nice-to-have; it's the product's immune system.</p>
+    </div>
+
+    <h2>The product rule — valid vs. dangerous sharing paths</h2>
+
+    <h3>Safe paths (token doesn't leak identity)</h3>
+
+    <table>
+      <thead>
+        <tr><th>Method</th><th>Why it's safe</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>QR code (show screen)</td><td>Physical proximity — no digital trail linking to identity</td></tr>
+        <tr><td>Typed into a form field</td><td>Pasted where a site asks for contact info — no phone/email needed</td></tr>
+        <tr><td>Spoken aloud / read from screen</td><td>Verbal exchange — no digital record</td></tr>
+        <tr><td>Printed on card / listing</td><td>Physical medium — no electronic identity attached</td></tr>
+        <tr><td>Request-a-token (reverse flow)</td><td>Business publishes a link; user's app generates from inside the system</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Dangerous paths (token + identity leak together)</h3>
+
+    <table>
+      <thead>
+        <tr><th>Method</th><th>Why it's dangerous</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>WhatsApp / SMS</td><td>Recipient sees your phone number in the chat</td></tr>
+        <tr><td>Email</td><td>Recipient sees your email address in the From field</td></tr>
+        <tr><td>Instagram / Facebook DM</td><td>Recipient sees your social profile</td></tr>
+        <tr><td>Telegram (if username visible)</td><td>Username can often be linked back to identity</td></tr>
+        <tr><td>AirDrop / Nearby Share</td><td>Device name often contains the user's real name</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Detecting the share intent</h2>
+
+    <p>When a user taps "Share" or "Copy" on a token, we can't always detect <em>where</em> they'll paste it. But we can detect when they use the system share sheet — which reveals the target app:</p>
+
+    <pre><code>import * as Sharing from 'expo-sharing';
+import * as Clipboard from 'expo-clipboard';
+
+// Copy is always safe — we don't know where they'll paste
+async function handleCopyCode(code: string) {
+  await Clipboard.setStringAsync(code);
+  // No warning needed — clipboard is neutral
+}
+
+// Share sheet — we CAN detect the target app (on some platforms)
+async function handleShare(code: string) {
+  // Show warning BEFORE opening share sheet
+  showShareWarning(() =&gt; {
+    Sharing.shareAsync(/* ... */);
+  });
+}</code></pre>
+
+    <h3>The limitation</h3>
+
+    <p>On iOS and Android, the system share sheet doesn't reliably report <em>which app</em> the user selected before the share completes. So we can't conditionally warn based on target. Instead, we warn preemptively:</p>
+
+    <ul>
+      <li><strong>Copy to clipboard</strong> — no warning (could be pasted anywhere)</li>
+      <li><strong>QR display</strong> — no warning (physical, safe)</li>
+      <li><strong>System share sheet</strong> — always show warning before opening</li>
+    </ul>
+
+    <h2>The ShareWarning component</h2>
+
+    <pre><code>// app/src/components/ShareWarning.tsx
+import { View, Text, TouchableOpacity, Modal, StyleSheet } from 'react-native';
+
+interface ShareWarningProps {
+  visible: boolean;
+  onProceed: () =&gt; void;
+  onCancel: () =&gt; void;
+}
+
+export function ShareWarning({ visible, onProceed, onCancel }: ShareWarningProps) {
+  return (
+    &lt;Modal visible={visible} transparent animationType="fade"&gt;
+      &lt;View style={styles.backdrop}&gt;
+        &lt;View style={styles.card}&gt;
+          &lt;Text style={styles.title}&gt;Privacy Check&lt;/Text&gt;
+
+          &lt;Text style={styles.body}&gt;
+            If you share this token via WhatsApp, SMS, email, or social media,
+            the recipient will see both your token AND your phone number or profile.
+          &lt;/Text&gt;
+
+          &lt;Text style={styles.body}&gt;
+            This defeats the purpose of Token — they can contact you
+            without the token using the identity they now have.
+          &lt;/Text&gt;
+
+          &lt;View style={styles.safeSection}&gt;
+            &lt;Text style={styles.safeTitle}&gt;Safe alternatives:&lt;/Text&gt;
+            &lt;Text style={styles.safeItem}&gt;• Show QR code in person&lt;/Text&gt;
+            &lt;Text style={styles.safeItem}&gt;• Read the code aloud&lt;/Text&gt;
+            &lt;Text style={styles.safeItem}&gt;• Type it into a form field&lt;/Text&gt;
+            &lt;Text style={styles.safeItem}&gt;• Print it on a card&lt;/Text&gt;
+          &lt;/View&gt;
+
+          &lt;TouchableOpacity style={styles.cancelButton} onPress={onCancel}&gt;
+            &lt;Text style={styles.cancelText}&gt;Go Back (Recommended)&lt;/Text&gt;
+          &lt;/TouchableOpacity&gt;
+
+          &lt;TouchableOpacity style={styles.proceedButton} onPress={onProceed}&gt;
+            &lt;Text style={styles.proceedText}&gt;I understand, share anyway&lt;/Text&gt;
+          &lt;/TouchableOpacity&gt;
+        &lt;/View&gt;
+      &lt;/View&gt;
+    &lt;/Modal&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  card: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 24,
+    width: '100%',
+    maxWidth: 360,
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: '700',
+    marginBottom: 12,
+    color: '#1e293b',
+  },
+  body: {
+    fontSize: 15,
+    color: '#475569',
+    marginBottom: 12,
+    lineHeight: 22,
+  },
+  safeSection: {
+    backgroundColor: '#f0fdf4',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 20,
+  },
+  safeTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#166534',
+    marginBottom: 6,
+  },
+  safeItem: {
+    fontSize: 14,
+    color: '#166534',
+    marginBottom: 2,
+  },
+  cancelButton: {
+    backgroundColor: '#2563eb',
+    paddingVertical: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  cancelText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  proceedButton: {
+    paddingVertical: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  proceedText: {
+    color: '#94a3b8',
+    fontSize: 14,
+  },
+});</code></pre>
+
+    <h2>Design decisions in the warning</h2>
+
+    <ol>
+      <li><strong>"Go Back" is primary (blue, prominent)</strong> — the safe choice is the easy choice. You want friction on the dangerous path, not the safe one.</li>
+      <li><strong>"I understand, share anyway" is secondary (muted, small)</strong> — the user CAN proceed, but it takes deliberate effort. We're not blocking, just informing.</li>
+      <li><strong>Explain WHY, not just what</strong> — "the recipient will see your phone number" is more compelling than "this is not recommended".</li>
+      <li><strong>Offer alternatives</strong> — don't just say "no", show the better path.</li>
+      <li><strong>No "don't show again" checkbox</strong> — this warning should appear every time. Privacy fatigue is real, but this is the product's core promise.</li>
+    </ol>
+
+    <h2>Integrating the warning into the share flow</h2>
+
+    <pre><code>// app/src/screens/TokenDetail.tsx — share section
+import { useState } from 'react';
+import * as Clipboard from 'expo-clipboard';
+import * as Sharing from 'expo-sharing';
+import { Alert } from 'react-native';
+import { ShareWarning } from '../components/ShareWarning';
+
+function TokenDetailScreen({ route }) {
+  const { token } = route.params;
+  const [showWarning, setShowWarning] = useState(false);
+
+  async function handleCopy() {
+    await Clipboard.setStringAsync(token.code);
+    Alert.alert('Copied', 'Token code copied to clipboard.');
+  }
+
+  function handleSharePress() {
+    // Always show warning before system share sheet
+    setShowWarning(true);
+  }
+
+  async function handleProceedShare() {
+    setShowWarning(false);
+    const url = `https://tokn.app/t/${token.code.replace(/-/g, '')}`;
+    if (await Sharing.isAvailableAsync()) {
+      await Sharing.shareAsync(url, {
+        dialogTitle: 'Share Token',
+      });
+    }
+  }
+
+  return (
+    &lt;View&gt;
+      {/* ... token display, QR, etc ... */}
+
+      &lt;View style={styles.shareRow}&gt;
+        &lt;TouchableOpacity style={styles.copyButton} onPress={handleCopy}&gt;
+          &lt;Text&gt;Copy Code&lt;/Text&gt;
+        &lt;/TouchableOpacity&gt;
+
+        &lt;TouchableOpacity style={styles.shareButton} onPress={handleSharePress}&gt;
+          &lt;Text&gt;Share...&lt;/Text&gt;
+        &lt;/TouchableOpacity&gt;
+      &lt;/View&gt;
+
+      &lt;ShareWarning
+        visible={showWarning}
+        onCancel={() =&gt; setShowWarning(false)}
+        onProceed={handleProceedShare}
+      /&gt;
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <h2>Onboarding — teaching the rule</h2>
+
+    <p>The share warning alone isn't enough. Users need to understand the rule <em>before</em> they first try to share. During onboarding (first app launch after registration), show a single screen:</p>
+
+    <pre><code>// app/src/screens/onboarding/ShareRuleScreen.tsx
+export function ShareRuleScreen({ navigation }) {
+  return (
+    &lt;View style={styles.container}&gt;
+      &lt;Text style={styles.heading}&gt;The One Rule&lt;/Text&gt;
+
+      &lt;Text style={styles.body}&gt;
+        Token keeps your identity hidden. But if you send a token
+        via WhatsApp, the recipient gets your phone number too —
+        defeating the purpose.
+      &lt;/Text&gt;
+
+      &lt;View style={styles.doSection}&gt;
+        &lt;Text style={styles.doTitle}&gt;Do:&lt;/Text&gt;
+        &lt;Text style={styles.doItem}&gt;Show the QR code&lt;/Text&gt;
+        &lt;Text style={styles.doItem}&gt;Read the code aloud&lt;/Text&gt;
+        &lt;Text style={styles.doItem}&gt;Type it into a form&lt;/Text&gt;
+        &lt;Text style={styles.doItem}&gt;Print it on a card&lt;/Text&gt;
+      &lt;/View&gt;
+
+      &lt;View style={styles.dontSection}&gt;
+        &lt;Text style={styles.dontTitle}&gt;Don't:&lt;/Text&gt;
+        &lt;Text style={styles.dontItem}&gt;Send via WhatsApp&lt;/Text&gt;
+        &lt;Text style={styles.dontItem}&gt;Send via SMS or email&lt;/Text&gt;
+        &lt;Text style={styles.dontItem}&gt;Post on social media DMs&lt;/Text&gt;
+      &lt;/View&gt;
+
+      &lt;TouchableOpacity style={styles.nextButton} onPress={() =&gt; navigation.navigate('Main')}&gt;
+        &lt;Text style={styles.nextText}&gt;Got it&lt;/Text&gt;
+      &lt;/TouchableOpacity&gt;
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <h2>The "Request a Token" reverse flow</h2>
+
+    <p>There's one digital sharing path that IS safe: the reverse flow. Instead of the user sending their token to a business, the business publishes a "Request Token" link. The user clicks it, their app opens, and the app generates + delivers the token <em>through the Token system itself</em> — no identity ever leaves the device.</p>
+
+    <pre><code>// Flow:
+// 1. Business has a button: "Request customer's Token"
+// 2. Button links to: https://tokn.app/request?from=businessName
+// 3. User's app opens (deep link) with a prompt:
+//    "NoBroker wants you to issue them a token. Create one?"
+// 4. User taps "Create" → app generates token + sends code through the API
+// 5. Business receives the code server-side — never sees user's phone/email
+
+// This is covered in detail in A8 (Redemption Web Page) and A9 (Deep Linking).
+// For now, just know this path exists and is the ONLY safe digital sharing method.</code></pre>
+
+    <h2>Edge cases</h2>
+
+    <h3>User copies code, then opens WhatsApp manually</h3>
+
+    <p>We can't detect this — clipboard is a neutral medium. The warning only triggers on the system share sheet. This is acceptable: the user made a deliberate multi-step choice. The onboarding screen educated them.</p>
+
+    <h3>User screenshots the QR and sends the screenshot</h3>
+
+    <p>Can't prevent this either. The token code in the screenshot is just text/image — it doesn't carry identity on its own. The danger is only if the screenshot is sent via an identifying channel. But the QR image alone doesn't contain the user's phone number, so it's less dangerous than sending the code in a WhatsApp message.</p>
+
+    <h3>User shares via AirDrop/Nearby Share</h3>
+
+    <p>These reveal the device name (often "Ashish's iPhone"). This soft-identifies the user. The system share sheet warning covers this case — AirDrop and Nearby Share appear in the share sheet.</p>
+
+    <h2>Respecting user agency</h2>
+
+    <p>The warning is <em>not</em> a block. The user can always proceed. Token is a privacy tool, not a prison. Some valid reasons to share via an identifying channel:</p>
+
+    <ul>
+      <li>The recipient already has your identity (friend, family member)</li>
+      <li>You're testing the app with yourself</li>
+      <li>You're deliberately creating a token for a known contact as a convenience feature (separate from privacy)</li>
+    </ul>
+
+    <p>The warning says "I understand, share anyway" — not "This is blocked." Informed consent, not paternalism.</p>
+
+    <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0004-access-rules-ui.html">← Previous: Access Rules UI</a>
+      <a href="../b5-websocket-server/0001-ws-connection-lifecycle.html">Next module: B5 WebSocket Server →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// Classify sharing methods as safe or dangerous
+const SHARE_PATHS = [
+  { method: 'QR code shown in person', type: 'safe' },
+  { method: 'WhatsApp message', type: 'dangerous' },
+  { method: 'Typed into a form', type: 'safe' },
+  { method: 'SMS', type: 'dangerous' },
+  { method: 'Read aloud', type: 'safe' },
+  { method: 'Email', type: 'dangerous' },
+  { method: 'Printed on card', type: 'safe' },
+  { method: 'Instagram DM', type: 'dangerous' },
+  { method: 'AirDrop', type: 'dangerous' },
+  { method: 'Request-a-token flow', type: 'safe' },
+];
+
+// The rule: does the channel reveal your identity to the recipient?
+console.log('SAFE paths (no identity leaked):');
+SHARE_PATHS.filter(p => p.type === 'safe').forEach(p => console.log('  ✓ ' + p.method));
+
+console.log('\\nDANGEROUS paths (identity + token together):');
+SHARE_PATHS.filter(p => p.type === 'dangerous').forEach(p => console.log('  ✗ ' + p.method));
+
+console.log('\\nThe one rule: a token must NEVER travel over');
+console.log('a channel that already identifies the user.');`);
+
+    createSolution("exercise-1", {
+      exercise: "Build the complete share-path warning system:\n\n1. Create the `ShareWarning` modal component with: explanation of why it's dangerous, list of safe alternatives, a primary 'Go Back' button, and a secondary 'Share anyway' button.\n\n2. Integrate the warning into TokenDetail: 'Copy' has no warning, 'Share' always shows the warning modal before opening the system share sheet.\n\n3. Create an onboarding screen that teaches the sharing rule on first launch (Do/Don't lists).\n\n4. Ensure the design makes the safe choice (Go Back) primary/prominent and the dangerous choice (Share anyway) secondary/muted.\n\n5. Test: tap Share on a token detail screen, verify the warning appears, verify 'Go Back' dismisses it, verify 'Share anyway' opens the system share sheet.",
+      hints: [
+        "The modal uses transparent background + backdrop for the overlay effect.",
+        "Make 'Go Back' the blue/primary button — it should be the obvious tap target. Make 'Share anyway' small and gray.",
+        "Don't add a 'Don't show again' option — this warning is critical to the product's promise.",
+        "expo-sharing's shareAsync() opens the native share sheet. Call it only after the user confirms."
+      ],
+      solution: `// === app/src/components/ShareWarning.tsx ===
+// See the full component in the lesson above.
+// Key design choices:
+// - 'Go Back' is blue, full-width, 16px font — the obvious action
+// - 'Share anyway' is muted gray, smaller text — requires deliberate choice
+// - Explains WHY (recipient sees your phone number) not just WHAT (don't do this)
+// - Lists safe alternatives so the user knows what to do instead
+// - No "don't show again" — this appears every time
+
+// === Integration in TokenDetail ===
+const [showWarning, setShowWarning] = useState(false);
+
+// Copy = no warning (clipboard is neutral)
+async function handleCopy() {
+  await Clipboard.setStringAsync(token.code);
+  Alert.alert('Copied', 'Token code copied to clipboard.');
+}
+
+// Share = always warn first
+function handleSharePress() {
+  setShowWarning(true);  // shows modal
+}
+
+async function handleProceedShare() {
+  setShowWarning(false);
+  const url = \`https://tokn.app/t/\${token.code.replace(/-/g, '')}\`;
+  if (await Sharing.isAvailableAsync()) {
+    await Sharing.shareAsync(url);
+  }
+}
+
+// === Onboarding screen ===
+// Show once after registration (track with AsyncStorage 'onboarding_complete')
+// Single screen with Do/Don't lists
+// "Got it" button navigates to Main`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "which-breaks",
+        question: "Which sharing method VIOLATES Token's privacy rule?",
+        variants: [
+          "Showing the QR code on your phone screen for someone to scan",
+          "Typing the code into a website's 'contact token' field",
+          "Sending the code in a WhatsApp message to the recipient",
+          "Reading the code aloud to someone in person"
+        ],
+        correct: 2,
+        explanation: "WhatsApp messages reveal your phone number to the recipient. Now they have BOTH your identity AND your token — defeating the entire purpose of Token. The other three methods don't attach your phone number, email, or profile to the token."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this share warning UX design?",
+        code: "// Button layout in ShareWarning:\n<TouchableOpacity style={primaryButton} onPress={onProceed}>\n  <Text>Share Anyway</Text>\n</TouchableOpacity>\n\n<TouchableOpacity style={secondaryButton} onPress={onCancel}>\n  <Text>Go Back</Text>\n</TouchableOpacity>\n\n<CheckBox label=\"Don't show this again\" />",
+        options: [
+          "The dangerous action (Share Anyway) is the primary/prominent button — it should be secondary. And 'Don't show again' lets users disable a critical privacy warning.",
+          "Modal should use Alert.alert() instead of a custom component",
+          "TouchableOpacity can't be used inside a Modal",
+          "The checkbox state isn't stored in useState"
+        ],
+        correct: 0,
+        explanation: "Two UX failures: (1) Making 'Share Anyway' primary and prominent means the dangerous action is the easy/obvious choice — it should be the OTHER way around. (2) 'Don't show again' lets users silence the warning permanently, which defeats the product's core privacy protection. The warning should appear every time."
+      },
+      {
+        type: "predict-output",
+        question: "Can the app detect that the user pasted the token code into WhatsApp after copying it?",
+        code: "await Clipboard.setStringAsync(token.code);\n// User switches to WhatsApp and pastes...\n// Can we detect this?",
+        answer: "No",
+        explanation: "Once text is on the clipboard, the app has no visibility into where it's pasted. The clipboard is a neutral medium — the app can't monitor what other apps do with it. This is by design (OS-level privacy). The warning only triggers on the system share sheet, not on copy. The onboarding screen educates users about the rule."
+      },
+      {
+        type: "fill-blank",
+        question: "Show the warning modal before opening the share sheet:",
+        code: "function handleSharePress() {\n  ___(true);  // show warning modal\n}\n\nasync function handleProceedShare() {\n  ___(false); // hide warning modal\n  await Sharing.shareAsync(url);\n}",
+        answer: "setShowWarning",
+        explanation: "A boolean state variable controls the modal's visibility. handleSharePress shows it (true), and handleProceedShare hides it (false) before opening the native share sheet. The onCancel handler also calls setShowWarning(false) to dismiss without sharing."
+      },
+      {
+        type: "order-steps",
+        question: "Put the privacy-safe share flow in order:",
+        steps: [
+          "User taps 'Share' button on TokenDetail",
+          "ShareWarning modal appears explaining the risk",
+          "User reads the warning and taps 'Go Back'",
+          "Modal dismisses — user sees the QR code on screen instead",
+          "User shows QR code to the recipient in person"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "The ideal flow: user tries the dangerous path, the warning redirects them to the safe path (QR display), and they share without leaking identity. The warning succeeded — not by blocking, but by educating and offering a better alternative."
+      }
+    ]);
+  </script>
+</body>
+</html>

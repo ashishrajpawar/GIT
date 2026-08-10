@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Loading, Empty &amp; Error States — A3.3</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A3 — API Consumption</a>
+      <span class="sep">›</span>
+      <span class="current">Loading, Empty &amp; Error States</span>
+    </nav>
+
+    <h1>Loading, Empty &amp; Error States</h1>
+    <div class="lesson-meta">
+      <span>A3 — Lesson 3 of 4</span>
+      <span>~45 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>A user opens the app. The token list takes 800ms to load. Without a loading state, they see a blank screen and think the app is broken. The API returns an error — without an error state, the app crashes. They have no tokens yet — without an empty state, there's no guidance to create their first one. Every data-fetching screen needs all three states handled explicitly.</p>
+    </div>
+
+    <h2>The three states every screen has</h2>
+
+    <pre><code>// Every screen that fetches data exists in one of these states:
+type ScreenState =
+  | { status: 'loading' }                    // waiting for data
+  | { status: 'error'; message: string }     // something went wrong
+  | { status: 'empty' }                      // success but no data
+  | { status: 'success'; data: T }           // success with data</code></pre>
+
+    <h2>Basic pattern</h2>
+
+    <pre><code>function TokenListScreen() {
+  const [tokens, setTokens] = useState&lt;TokenListItem[]&gt;([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState&lt;string | null&gt;(null);
+
+  useEffect(() =&gt; {
+    api.listTokens()
+      .then(res =&gt; setTokens(res.data.items))
+      .catch(err =&gt; setError(err.message))
+      .finally(() =&gt; setLoading(false));
+  }, []);
+
+  if (loading) return &lt;LoadingSpinner /&gt;;
+  if (error) return &lt;ErrorMessage message={error} onRetry={() =&gt; { ... }} /&gt;;
+  if (tokens.length === 0) return &lt;EmptyState /&gt;;
+
+  return &lt;FlatList data={tokens} ... /&gt;;
+}</code></pre>
+
+    <h2>Reusable loading component</h2>
+
+    <pre><code>// app/src/components/LoadingSpinner.tsx
+import { View, ActivityIndicator, Text } from 'react-native';
+
+interface Props {
+  message?: string;
+}
+
+export function LoadingSpinner({ message = 'Loading...' }: Props) {
+  return (
+    &lt;View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}&gt;
+      &lt;ActivityIndicator size="large" color="#2563EB" /&gt;
+      &lt;Text style={{ marginTop: 12, color: '#6B7280' }}&gt;{message}&lt;/Text&gt;
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <h2>Error state with retry</h2>
+
+    <pre><code>// app/src/components/ErrorMessage.tsx
+import { View, Text, Pressable } from 'react-native';
+
+interface Props {
+  message: string;
+  onRetry?: () =&gt; void;
+}
+
+export function ErrorMessage({ message, onRetry }: Props) {
+  return (
+    &lt;View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 }}&gt;
+      &lt;Text style={{ fontSize: 18, fontWeight: '600', marginBottom: 8 }}&gt;
+        Something went wrong
+      &lt;/Text&gt;
+      &lt;Text style={{ color: '#6B7280', textAlign: 'center', marginBottom: 16 }}&gt;
+        {message}
+      &lt;/Text&gt;
+      {onRetry && (
+        &lt;Pressable
+          onPress={onRetry}
+          style={{ paddingHorizontal: 20, paddingVertical: 10, backgroundColor: '#2563EB', borderRadius: 8 }}
+        &gt;
+          &lt;Text style={{ color: '#fff', fontWeight: '600' }}&gt;Try Again&lt;/Text&gt;
+        &lt;/Pressable&gt;
+      )}
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <h2>Empty state — guide the user</h2>
+
+    <pre><code>// app/src/components/EmptyTokenList.tsx
+export function EmptyTokenList({ onCreateFirst }: { onCreateFirst: () =&gt; void }) {
+  return (
+    &lt;View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32 }}&gt;
+      &lt;Text style={{ fontSize: 20, fontWeight: '600', marginBottom: 8 }}&gt;
+        No tokens yet
+      &lt;/Text&gt;
+      &lt;Text style={{ color: '#6B7280', textAlign: 'center', marginBottom: 20 }}&gt;
+        Create your first token to give someone a way to reach you without sharing your phone number.
+      &lt;/Text&gt;
+      &lt;Pressable onPress={onCreateFirst} style={{ ... }}&gt;
+        &lt;Text&gt;Create Your First Token&lt;/Text&gt;
+      &lt;/Pressable&gt;
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <h2>Request cancellation with AbortController</h2>
+
+    <p>When a user navigates away from a screen before the request finishes, cancel it to avoid state updates on unmounted components:</p>
+
+    <pre><code>function TokenDetailScreen({ route }: Props) {
+  const [token, setToken] = useState&lt;Token | null&gt;(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() =&gt; {
+    const controller = new AbortController();
+
+    fetch(`${API_URL}/tokens/${route.params.code}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: controller.signal,  // link the abort signal
+    })
+      .then(r =&gt; r.json())
+      .then(json =&gt; setToken(json.data))
+      .catch(err =&gt; {
+        if (err.name !== 'AbortError') {
+          setError(err.message);
+        }
+      })
+      .finally(() =&gt; setLoading(false));
+
+    // Cleanup: cancel on unmount
+    return () =&gt; controller.abort();
+  }, [route.params.code]);
+}</code></pre>
+
+    <h2>Retry with exponential backoff</h2>
+
+    <pre><code>async function fetchWithRetry&lt;T&gt;(
+  fn: () =&gt; Promise&lt;T&gt;,
+  maxRetries = 3
+): Promise&lt;T&gt; {
+  for (let attempt = 0; attempt &lt;= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt === maxRetries) throw err;
+
+      // Don't retry client errors (4xx) — only server/network errors
+      if (err instanceof ApiError && err.status &lt; 500) throw err;
+
+      // Wait longer each retry: 1s, 2s, 4s
+      const delay = Math.pow(2, attempt) * 1000;
+      await new Promise(resolve =&gt; setTimeout(resolve, delay));
+    }
+  }
+  throw new Error('Max retries exceeded');
+}
+
+// Usage:
+const tokens = await fetchWithRetry(() =&gt; api.listTokens());</code></pre>
+
+    <h2>Custom hook: useApi</h2>
+
+    <pre><code>// app/src/hooks/useApi.ts
+import { useState, useEffect, useCallback } from 'react';
+
+interface UseApiResult&lt;T&gt; {
+  data: T | null;
+  loading: boolean;
+  error: string | null;
+  refetch: () =&gt; void;
+}
+
+export function useApi&lt;T&gt;(fetcher: () =&gt; Promise&lt;T&gt;, deps: any[] = []): UseApiResult&lt;T&gt; {
+  const [data, setData] = useState&lt;T | null&gt;(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState&lt;string | null&gt;(null);
+
+  const load = useCallback(async () =&gt; {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await fetcher();
+      setData(result);
+    } catch (err: any) {
+      setError(err.message || 'Something went wrong');
+    } finally {
+      setLoading(false);
+    }
+  }, deps);
+
+  useEffect(() =&gt; { load(); }, [load]);
+
+  return { data, loading, error, refetch: load };
+}
+
+// Usage in a component:
+function TokenListScreen() {
+  const { data, loading, error, refetch } = useApi(
+    () =&gt; api.listTokens().then(r =&gt; r.data.items),
+    []
+  );
+
+  if (loading) return &lt;LoadingSpinner /&gt;;
+  if (error) return &lt;ErrorMessage message={error} onRetry={refetch} /&gt;;
+  if (!data || data.length === 0) return &lt;EmptyTokenList ... /&gt;;
+
+  return &lt;FlatList data={data} ... /&gt;;
+}</code></pre>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0002-api-client-layer.html">← Previous: API Client Layer</a>
+      <a href="./0004-pagination-infinite-scroll.html">Next: Pagination &amp; Infinite Scroll →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createSolution("exercise-1", {
+      exercise: "Build the complete data-fetching pattern for Token's app: (1) Create the useApi hook, (2) Create LoadingSpinner, ErrorMessage, and EmptyTokenList components, (3) Refactor TokenListScreen to use useApi with all three states, (4) Add request cancellation on unmount, (5) Add a retry button on the error state that calls refetch.",
+      hints: [
+        "The useApi hook's deps array is like useEffect deps — pass values that should trigger a refetch when they change.",
+        "Don't forget to check AbortError in catch blocks — it's not a real error, just a cancelled request.",
+        "The EmptyTokenList should have a clear call-to-action — 'Create Your First Token' button that navigates to CreateToken screen."
+      ],
+      solution: `// app/src/hooks/useApi.ts — as shown in lesson
+
+// app/src/components/LoadingSpinner.tsx — as shown in lesson
+// app/src/components/ErrorMessage.tsx — as shown in lesson
+
+// app/src/components/EmptyTokenList.tsx
+import { View, Text, Pressable, StyleSheet } from 'react-native';
+
+export function EmptyTokenList({ onCreateFirst }: { onCreateFirst: () => void }) {
+  return (
+    <View style={styles.container}>
+      <Text style={styles.title}>No tokens yet</Text>
+      <Text style={styles.subtitle}>
+        Create your first token to give someone a way to reach you
+        without sharing your phone number.
+      </Text>
+      <Pressable onPress={onCreateFirst} style={styles.button}>
+        <Text style={styles.buttonText}>Create Your First Token</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+// app/src/screens/TokenListScreen.tsx
+import { FlatList } from 'react-native';
+import { useApi } from '../hooks/useApi';
+import { api } from '../api';
+import { LoadingSpinner } from '../components/LoadingSpinner';
+import { ErrorMessage } from '../components/ErrorMessage';
+import { EmptyTokenList } from '../components/EmptyTokenList';
+import type { TokenListItem } from '@token/shared/api-types';
+
+export function TokenListScreen({ navigation }) {
+  const { data: tokens, loading, error, refetch } = useApi(
+    () => api.listTokens().then(r => r.data.items),
+    []
+  );
+
+  if (loading) return <LoadingSpinner message="Loading tokens..." />;
+  if (error) return <ErrorMessage message={error} onRetry={refetch} />;
+  if (!tokens || tokens.length === 0) {
+    return <EmptyTokenList onCreateFirst={() => navigation.navigate('CreateToken')} />;
+  }
+
+  return (
+    <FlatList
+      data={tokens}
+      keyExtractor={item => item.code}
+      renderItem={({ item }) => <TokenCard token={item} />}
+      onRefresh={refetch}
+      refreshing={loading}
+    />
+  );
+}`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "order-steps",
+        question: "Put the screen rendering states in priority order (check first to last):",
+        steps: ["Check if loading → show spinner", "Check if error → show error + retry", "Check if data is empty → show empty state", "Render the data list"],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "Loading first (don't show error/empty while still loading). Error next (if data fetch failed, don't show empty). Empty check (successful fetch but no items). Finally render the data. This order prevents showing wrong states."
+      },
+      {
+        type: "predict-output",
+        question: "The user navigates away from TokenDetail while the API is still loading. What happens?",
+        code: "useEffect(() => {\n  const controller = new AbortController();\n  fetch(url, { signal: controller.signal })\n    .then(r => r.json())\n    .then(d => setToken(d));\n  return () => controller.abort();\n}, []);",
+        answer: "The fetch is cancelled (AbortError). The .then callbacks don't run. No state update on the unmounted component.",
+        explanation: "The cleanup function (return () => controller.abort()) runs when the component unmounts. The fetch is aborted, the promise rejects with an AbortError, and since we're not in .then anymore, setToken never runs. Without this, React warns about state updates on unmounted components."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this retry logic?",
+        code: "async function fetchWithRetry(fn, retries = 3) {\n  for (let i = 0; i <= retries; i++) {\n    try {\n      return await fn();\n    } catch (err) {\n      await new Promise(r => setTimeout(r, 1000));\n    }\n  }\n}",
+        options: [
+          "setTimeout doesn't work in async functions",
+          "It retries 4xx errors (client errors) which will always fail — should only retry 5xx/network errors",
+          "The for loop condition is wrong",
+          "You can't use await in a for loop"
+        ],
+        correct: 1,
+        explanation: "A 400 (bad input) or 404 (not found) will never succeed on retry — the input hasn't changed. Retrying wastes time and rate limit quota. Only retry 5xx (server errors) and network failures. Check err.status < 500 and throw immediately for client errors."
+      },
+      {
+        type: "fill-blank",
+        question: "Cancel a fetch request when the component unmounts:",
+        code: "const controller = new ___();\nfetch(url, { signal: controller.signal });\nreturn () => controller.___();",
+        answer: "AbortController",
+        explanation: "AbortController creates a signal you pass to fetch. When you call controller.abort(), the fetch is cancelled immediately. The cleanup function in useEffect runs on unmount, triggering the abort."
+      },
+      {
+        type: "which-breaks",
+        question: "Which empty state handling is bad UX?",
+        variants: [
+          "<Text>No tokens yet. Create your first one!</Text> with a create button",
+          "<FlatList data={[]} /> (renders nothing — blank screen)",
+          "<Text>You haven't issued any tokens. Tap + to create one for a delivery service.</Text>"
+        ],
+        correct: 1,
+        explanation: "An empty FlatList renders absolutely nothing — the user sees a blank screen with no explanation and no guidance. Empty states should explain what would be here, why it's empty, and what action to take. Option A and C both do this."
+      }
+    ]);
+  </script>
+</body>
+</html>

@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>REST API Design — B3.3</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">B3 — Node &amp; HTTP Server</a>
+      <span class="sep">›</span>
+      <span class="current">REST API Design</span>
+    </nav>
+
+    <h1>REST API Design</h1>
+    <div class="lesson-meta">
+      <span>B3 — Lesson 3 of 4</span>
+      <span>~45 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>Token's API serves two clients — the mobile app and the redemption web page. Both need a predictable, consistent interface. REST conventions mean your app developer (you) always knows what URL to call, what method to use, what the response looks like, and what status code to expect. No guesswork, no documentation lookups mid-coding.</p>
+    </div>
+
+    <h2>REST fundamentals</h2>
+
+    <p>REST maps <strong>resources</strong> (nouns) to <strong>URLs</strong> and <strong>HTTP methods</strong> (verbs):</p>
+
+    <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
+      <tr style="border-bottom:2px solid var(--gray-200);">
+        <td style="padding:0.5rem;font-weight:600;">Action</td>
+        <td style="padding:0.5rem;font-weight:600;">Method</td>
+        <td style="padding:0.5rem;font-weight:600;">URL</td>
+        <td style="padding:0.5rem;font-weight:600;">Body</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;">List tokens</td>
+        <td style="padding:0.5rem;"><code>GET</code></td>
+        <td style="padding:0.5rem;"><code>/api/tokens</code></td>
+        <td style="padding:0.5rem;">—</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;">Get one token</td>
+        <td style="padding:0.5rem;"><code>GET</code></td>
+        <td style="padding:0.5rem;"><code>/api/tokens/:code</code></td>
+        <td style="padding:0.5rem;">—</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;">Create token</td>
+        <td style="padding:0.5rem;"><code>POST</code></td>
+        <td style="padding:0.5rem;"><code>/api/tokens</code></td>
+        <td style="padding:0.5rem;">JSON</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;">Update token</td>
+        <td style="padding:0.5rem;"><code>PATCH</code></td>
+        <td style="padding:0.5rem;"><code>/api/tokens/:code</code></td>
+        <td style="padding:0.5rem;">JSON (partial)</td>
+      </tr>
+      <tr>
+        <td style="padding:0.5rem;">Revoke token</td>
+        <td style="padding:0.5rem;"><code>DELETE</code></td>
+        <td style="padding:0.5rem;"><code>/api/tokens/:code</code></td>
+        <td style="padding:0.5rem;">—</td>
+      </tr>
+    </table>
+
+    <h2>Status codes — what they mean</h2>
+
+    <pre><code>// Success
+200 OK              — request succeeded, here's the data
+201 Created         — resource created (POST)
+204 No Content     — success but no body to return (DELETE)
+
+// Client errors
+400 Bad Request    — invalid input (missing field, wrong format)
+401 Unauthorized   — no auth or expired token
+403 Forbidden      — authenticated but not allowed (not your token)
+404 Not Found      — resource doesn't exist
+409 Conflict       — duplicate (e.g. token code already exists)
+422 Unprocessable  — input is well-formed JSON but fails validation
+429 Too Many Requests — rate limited
+
+// Server errors
+500 Internal Server Error — something broke on our end</code></pre>
+
+    <h2>Token API — full endpoint design</h2>
+
+    <h3>Tokens (authenticated — requires JWT)</h3>
+
+    <pre><code>GET    /api/tokens              — list user's tokens (paginated)
+GET    /api/tokens/:code        — get token details + rules
+POST   /api/tokens              — create a new token
+PATCH  /api/tokens/:code        — update label, max_uses, rules
+DELETE /api/tokens/:code        — revoke a token
+POST   /api/tokens/:code/pause  — pause a token
+POST   /api/tokens/:code/resume — resume a paused token</code></pre>
+
+    <h3>Redemption (public — no auth required)</h3>
+
+    <pre><code>POST   /api/redeem/:code        — redeem a token (holder side)
+GET    /api/redeem/:code/status — check if a code is valid (before redeeming)</code></pre>
+
+    <h3>Messages (authenticated)</h3>
+
+    <pre><code>GET    /api/conversations            — list conversations (inbox)
+GET    /api/conversations/:id        — get messages (paginated)
+POST   /api/conversations/:id/read   — mark as read</code></pre>
+
+    <h2>Response envelope</h2>
+
+    <p>All responses follow the same shape — your TypeScript <code>ApiResponse&lt;T&gt;</code> from the shared types:</p>
+
+    <pre><code>// Success
+{
+  "data": { ... },       // the actual result
+  "success": true
+}
+
+// Error
+{
+  "error": "Token not found",
+  "success": false
+}
+
+// List with pagination
+{
+  "data": {
+    "items": [...],
+    "cursor": "eyJpZCI6NDJ9",
+    "hasMore": true
+  },
+  "success": true
+}</code></pre>
+
+    <h2>Pagination — cursor-based</h2>
+
+    <p>Token uses cursor-based pagination (not page numbers). Why: page numbers break when items are added/removed between requests. Cursors always point to a stable position.</p>
+
+    <pre><code>// Client request:
+GET /api/tokens?limit=20
+GET /api/tokens?limit=20&cursor=eyJpZCI6NDJ9  // next page
+
+// Server implementation:
+router.get('/', async (req, res, next) =&gt; {
+  try {
+    const limit = Math.min(parseInt(req.query.limit || '20', 10), 100);
+    const cursor = req.query.cursor
+      ? JSON.parse(Buffer.from(req.query.cursor, 'base64url').toString())
+      : null;
+
+    let query = 'SELECT * FROM tokens WHERE user_id = $1';
+    const params = [req.user.id];
+
+    if (cursor) {
+      query += ' AND id < $2';
+      params.push(cursor.id);
+    }
+
+    query += ' ORDER BY id DESC LIMIT $' + (params.length + 1);
+    params.push(limit + 1);  // fetch one extra to know if there's more
+
+    const { rows } = await pool.query(query, params);
+    const hasMore = rows.length > limit;
+    const items = hasMore ? rows.slice(0, -1) : rows;
+    const nextCursor = hasMore
+      ? Buffer.from(JSON.stringify({ id: items[items.length - 1].id })).toString('base64url')
+      : null;
+
+    res.json({
+      data: { items, cursor: nextCursor, hasMore },
+      success: true,
+    });
+  } catch (err) { next(err); }
+});</code></pre>
+
+    <h2>Consistent error responses</h2>
+
+    <pre><code>// api/src/utils/api-error.ts
+export class ApiError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+
+  static badRequest(msg: string) { return new ApiError(400, msg); }
+  static unauthorized(msg = 'Authentication required') { return new ApiError(401, msg); }
+  static forbidden(msg = 'Access denied') { return new ApiError(403, msg); }
+  static notFound(msg = 'Not found') { return new ApiError(404, msg); }
+  static conflict(msg: string) { return new ApiError(409, msg); }
+}
+
+// Usage in routes:
+import { ApiError } from '../utils/api-error.js';
+
+router.get('/:code', async (req, res, next) =&gt; {
+  try {
+    const token = await getTokenByCode(req.params.code);
+    if (!token) throw ApiError.notFound('Token not found');
+    if (token.user_id !== req.user.id) throw ApiError.forbidden();
+    res.json({ data: token, success: true });
+  } catch (err) { next(err); }
+});</code></pre>
+
+    <h2>API versioning</h2>
+
+    <p>For Token v1, prefix all routes with <code>/api</code>. If you ever need breaking changes, add a version: <code>/api/v2/tokens</code>. The v1 routes keep working for existing clients.</p>
+
+    <p>Don't over-plan versioning. Start with <code>/api/</code> and version only when you need to break compatibility.</p>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0002-express-fastify-setup.html">← Previous: Express/Fastify Setup</a>
+      <a href="./0004-input-validation-error-handling.html">Next: Input Validation &amp; Error Handling →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createSolution("exercise-1", {
+      exercise: "Implement the full tokens CRUD router with real database queries: (1) GET /api/tokens — list user's tokens with cursor pagination, (2) GET /api/tokens/:code — get one token (verify ownership), (3) POST /api/tokens — create a token with a generated code, (4) PATCH /api/tokens/:code — update label or maxUses, (5) DELETE /api/tokens/:code — revoke (set status to 'revoked'). Use the ApiError class for all error responses.",
+      hints: [
+        "For code generation, use crypto.randomBytes to generate a secure random code in the format XXXX-XXXX-XXXX.",
+        "All routes except redeem need req.user (from auth middleware). For now, hardcode req.user = { id: 1 } as a temporary middleware.",
+        "Use RETURNING * on INSERT and UPDATE to get the created/updated row back without a second query."
+      ],
+      solution: `// api/src/routes/tokens.ts
+import { Router } from 'express';
+import { randomBytes } from 'crypto';
+import { pool } from '../db/pool.js';
+import { ApiError } from '../utils/api-error.js';
+
+const router = Router();
+
+function generateCode(): string {
+  const bytes = randomBytes(9);
+  const code = bytes.toString('base64url').slice(0, 12).toUpperCase();
+  return \`\${code.slice(0, 4)}-\${code.slice(4, 8)}-\${code.slice(8, 12)}\`;
+}
+
+// GET /api/tokens — list with cursor pagination
+router.get('/', async (req, res, next) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit as string || '20', 10), 100);
+    const cursor = req.query.cursor
+      ? JSON.parse(Buffer.from(req.query.cursor as string, 'base64url').toString())
+      : null;
+
+    const params: any[] = [req.user.id];
+    let query = 'SELECT * FROM tokens WHERE user_id = $1';
+
+    if (cursor) {
+      query += ' AND id < $2';
+      params.push(cursor.id);
+    }
+
+    query += \` ORDER BY id DESC LIMIT $\${params.length + 1}\`;
+    params.push(limit + 1);
+
+    const { rows } = await pool.query(query, params);
+    const hasMore = rows.length > limit;
+    const items = hasMore ? rows.slice(0, -1) : rows;
+    const nextCursor = hasMore
+      ? Buffer.from(JSON.stringify({ id: items.at(-1).id })).toString('base64url')
+      : null;
+
+    res.json({ data: { items, cursor: nextCursor, hasMore }, success: true });
+  } catch (err) { next(err); }
+});
+
+// GET /api/tokens/:code
+router.get('/:code', async (req, res, next) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM tokens WHERE code = $1', [req.params.code]);
+    if (!rows[0]) throw ApiError.notFound('Token not found');
+    if (rows[0].user_id !== req.user.id) throw ApiError.forbidden();
+    res.json({ data: rows[0], success: true });
+  } catch (err) { next(err); }
+});
+
+// POST /api/tokens
+router.post('/', async (req, res, next) => {
+  try {
+    const { label, maxUses = 0 } = req.body;
+    if (!label) throw ApiError.badRequest('label is required');
+    const code = generateCode();
+    const { rows } = await pool.query(
+      'INSERT INTO tokens (code, user_id, label, max_uses) VALUES ($1, $2, $3, $4) RETURNING *',
+      [code, req.user.id, label, maxUses]
+    );
+    res.status(201).json({ data: rows[0], success: true });
+  } catch (err) { next(err); }
+});
+
+// PATCH /api/tokens/:code
+router.patch('/:code', async (req, res, next) => {
+  try {
+    const { label, maxUses } = req.body;
+    const { rows: [token] } = await pool.query('SELECT * FROM tokens WHERE code = $1', [req.params.code]);
+    if (!token) throw ApiError.notFound('Token not found');
+    if (token.user_id !== req.user.id) throw ApiError.forbidden();
+
+    const { rows } = await pool.query(
+      'UPDATE tokens SET label = COALESCE($1, label), max_uses = COALESCE($2, max_uses) WHERE code = $3 RETURNING *',
+      [label || null, maxUses ?? null, req.params.code]
+    );
+    res.json({ data: rows[0], success: true });
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/tokens/:code (revoke)
+router.delete('/:code', async (req, res, next) => {
+  try {
+    const { rows: [token] } = await pool.query('SELECT * FROM tokens WHERE code = $1', [req.params.code]);
+    if (!token) throw ApiError.notFound('Token not found');
+    if (token.user_id !== req.user.id) throw ApiError.forbidden();
+    if (token.status === 'revoked') throw ApiError.badRequest('Token already revoked');
+
+    await pool.query(
+      "UPDATE tokens SET status = 'revoked', revoked_at = NOW() WHERE code = $1",
+      [req.params.code]
+    );
+    res.status(204).end();
+  } catch (err) { next(err); }
+});
+
+export default router;`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "What status code should POST /api/tokens return on success?",
+        code: "router.post('/', async (req, res) => {\n  const token = await createToken(req.body);\n  res.status(???).json({ data: token, success: true });\n});",
+        answer: "201",
+        explanation: "201 Created is the correct status for successful resource creation (POST). 200 OK is for reads and updates. Using the right codes means your client always knows what happened without parsing the body."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's the authorization flaw?",
+        code: "router.delete('/:code', async (req, res) => {\n  await pool.query(\n    \"UPDATE tokens SET status = 'revoked' WHERE code = $1\",\n    [req.params.code]\n  );\n  res.status(204).end();\n});",
+        options: [
+          "DELETE should actually delete the row, not update it",
+          "No ownership check — any authenticated user can revoke anyone's token",
+          "204 is the wrong status code",
+          "You can't use async with router.delete"
+        ],
+        correct: 1,
+        explanation: "The route doesn't check that the token belongs to req.user. Any authenticated user could revoke any other user's tokens by guessing the code. Always verify: token.user_id === req.user.id before modifying."
+      },
+      {
+        type: "fill-blank",
+        question: "Return a 404 error using the ApiError class:",
+        code: "if (!token) throw ApiError.___(\"Token not found\");",
+        answer: "notFound",
+        explanation: "ApiError.notFound() creates an error with status 404. The global error handler catches it and returns { error: 'Token not found', success: false } with HTTP status 404."
+      },
+      {
+        question: "Why use cursor-based pagination instead of page numbers?",
+        options: [
+          "Cursor pagination is faster for the database",
+          "Page numbers break when items are added/removed between requests (you skip or duplicate items)",
+          "Cursors are required by REST",
+          "Page numbers don't work with PostgreSQL"
+        ],
+        correct: 1,
+        explanation: "With page numbers: you request page 2 (items 21-40). Between page 1 and page 2, a new token is created. Now item 20 has shifted to position 21 — you see it again on page 2. Cursors avoid this by anchoring to a specific row ID."
+      },
+      {
+        type: "which-breaks",
+        question: "Which endpoint design violates REST conventions?",
+        variants: [
+          "DELETE /api/tokens/MERC-8GH2",
+          "POST /api/tokens/MERC-8GH2/pause",
+          "GET /api/deleteToken?code=MERC-8GH2"
+        ],
+        correct: 2,
+        explanation: "Using GET for a destructive action violates REST. GET must be safe (no side effects) — browsers prefetch GET links, crawlers follow them. If deleting was a GET, a search engine could accidentally revoke your tokens. Use DELETE or POST for actions that change state."
+      }
+    ]);
+  </script>
+</body>
+</html>

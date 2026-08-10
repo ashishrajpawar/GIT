@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>B9 — Logs, Backups &amp; Monitoring</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Docker &amp; Deployment</a> &rsaquo;
+        <span>Logs, Backups &amp; Monitoring</span>
+    </nav>
+
+    <h1>Logs, Backups &amp; Monitoring</h1>
+    <p class="lesson-meta">B9 &mdash; Lesson 3 of 3 &nbsp;|&nbsp; ~45 min</p>
+
+    <div class="callout">
+        <strong>Why this matters for Token:</strong> Your app is live. Users are issuing tokens,
+        redeeming them, and chatting through your WebSocket server. When something breaks at 2 AM,
+        you need three things: logs that tell you <em>what</em> went wrong, backups so you don't lose
+        data, and alerts so you know it happened without users telling you. This lesson sets up all three.
+    </div>
+
+    <h2>Structured Logging</h2>
+    <p>Console.log is for development. In production, you need structured logs &mdash; JSON objects
+    with consistent fields that can be searched, filtered, and aggregated.</p>
+
+    <h3>Why JSON Logs?</h3>
+    <pre><code>// ❌ Unstructured — hard to parse, impossible to filter
+console.log("User 42 redeemed token MERC-8GH2 at 2024-03-15T10:30:00Z");
+
+// ✓ Structured — machine-readable, searchable
+{
+  "level": "info",
+  "msg": "token redeemed",
+  "userId": 42,
+  "tokenCode": "MERC-8GH2",
+  "timestamp": "2024-03-15T10:30:00.123Z",
+  "requestId": "req-abc-123",
+  "duration_ms": 45
+}</code></pre>
+
+    <h3>Building a Logger with pino</h3>
+    <p><a href="https://github.com/pinojs/pino">pino</a> is the fastest Node.js JSON logger &mdash;
+    10x faster than winston because it writes JSON directly without formatting overhead.</p>
+
+    <pre><code># Install
+npm install pino pino-http</code></pre>
+
+    <pre><code>// api/src/logger.ts
+import pino from 'pino';
+
+export const logger = pino({
+  level: process.env.LOG_LEVEL || 'info',
+  // In production, output raw JSON (for log aggregators)
+  // In development, use pino-pretty for readable output
+  transport: process.env.NODE_ENV !== 'production'
+    ? { target: 'pino-pretty', options: { colorize: true } }
+    : undefined,
+  // Base fields included in every log line
+  base: {
+    service: 'token-api',
+    version: process.env.npm_package_version,
+  },
+});
+
+// Child loggers inherit parent fields and add their own
+export function createChildLogger(context: Record&lt;string, unknown&gt;) {
+  return logger.child(context);
+}</code></pre>
+
+    <h3>Request Logging with Correlation IDs</h3>
+    <p>Every HTTP request gets a unique ID. All log lines during that request include it &mdash;
+    so you can trace a single request across your entire system.</p>
+
+    <pre><code>// api/src/middleware/requestLogger.ts
+import { randomUUID } from 'crypto';
+import pinoHttp from 'pino-http';
+import { logger } from '../logger';
+
+export const requestLogger = pinoHttp({
+  logger,
+  genReqId: (req) => {
+    // Use client-provided ID if present, otherwise generate one
+    return (req.headers['x-request-id'] as string) || randomUUID();
+  },
+  customProps: (req) => ({
+    requestId: req.id,
+  }),
+  // Don't log health check spam
+  autoLogging: {
+    ignore: (req) => req.url === '/health',
+  },
+  // What to include in the request log
+  serializers: {
+    req: (req) => ({
+      method: req.method,
+      url: req.url,
+      // Don't log authorization header (contains JWT)
+      headers: { 'user-agent': req.headers['user-agent'] },
+    }),
+    res: (res) => ({
+      statusCode: res.statusCode,
+    }),
+  },
+});
+
+// Usage in Express
+// app.use(requestLogger);
+// Now every request logs: method, url, statusCode, duration, requestId</code></pre>
+
+    <h3>Application-Level Logging</h3>
+    <pre><code>// In your route handlers, use the request's logger
+// (it already has requestId attached)
+
+import { Request, Response } from 'express';
+
+export async function redeemToken(req: Request, res: Response) {
+  const { code } = req.params;
+
+  // req.log is added by pino-http — it includes requestId automatically
+  req.log.info({ tokenCode: code }, 'token redemption attempt');
+
+  try {
+    const token = await findTokenByCode(code);
+
+    if (!token) {
+      req.log.warn({ tokenCode: code }, 'token not found');
+      return res.status(404).json({ error: 'token not found' });
+    }
+
+    if (token.revoked_at) {
+      req.log.warn({ tokenCode: code, revokedAt: token.revoked_at }, 'revoked token redemption attempt');
+      return res.status(410).json({ error: 'token revoked' });
+    }
+
+    const event = await createRedemptionEvent(token.id, req.ip);
+    req.log.info({ tokenId: token.id, eventId: event.id }, 'token redeemed successfully');
+
+    res.json({ success: true, conversationId: event.conversation_id });
+  } catch (err) {
+    req.log.error({ err, tokenCode: code }, 'token redemption failed');
+    res.status(500).json({ error: 'internal error' });
+  }
+}</code></pre>
+
+    <h3>Log Levels</h3>
+    <table>
+        <tr><th>Level</th><th>When to use</th><th>Token example</th></tr>
+        <tr><td><code>fatal</code></td><td>App is crashing, cannot continue</td><td>Database connection lost permanently</td></tr>
+        <tr><td><code>error</code></td><td>Something failed that shouldn't</td><td>Failed to send push notification after retries</td></tr>
+        <tr><td><code>warn</code></td><td>Unusual but handled</td><td>Revoked token redemption attempt</td></tr>
+        <tr><td><code>info</code></td><td>Normal business events</td><td>Token issued, token redeemed, user registered</td></tr>
+        <tr><td><code>debug</code></td><td>Detailed flow for troubleshooting</td><td>WebSocket message routing details</td></tr>
+        <tr><td><code>trace</code></td><td>Everything (noisy, dev only)</td><td>Every SQL query, every function entry</td></tr>
+    </table>
+
+    <p>In production, set <code>LOG_LEVEL=info</code>. Switch to <code>debug</code> when investigating
+    an issue. Never run <code>trace</code> in production &mdash; the volume will fill your disk.</p>
+
+    <h2>Viewing Logs</h2>
+    <p>Coolify shows container logs in its dashboard. You can also SSH in and use Docker directly:</p>
+    <pre><code># View live logs (follow mode)
+docker logs -f token-api --since 1h
+
+# Search logs for a specific request
+docker logs token-api 2>&1 | grep "req-abc-123"
+
+# View logs with timestamps
+docker logs -t token-api --since "2024-03-15T10:00:00"
+
+# Pipe through pino-pretty for readability (install globally on server)
+docker logs token-api | npx pino-pretty</code></pre>
+
+    <h2>Database Backups</h2>
+    <p>Your users' tokens, messages, and access rules live in Postgres. If the database is lost,
+    <em>everything</em> is lost. Automated backups are non-negotiable.</p>
+
+    <h3>pg_dump &mdash; The Standard Backup Tool</h3>
+    <pre><code># Full database dump (custom compressed format)
+pg_dump -U token -d token_prod -Fc > backup_2024-03-15.dump
+
+# Restore from backup
+pg_restore -U token -d token_prod --clean backup_2024-03-15.dump
+
+# SQL-format dump (readable, larger)
+pg_dump -U token -d token_prod > backup_2024-03-15.sql</code></pre>
+
+    <h3>Automated Backup Script</h3>
+    <pre><code>#!/bin/bash
+# api/scripts/backup.sh
+# Runs daily via cron — dumps Postgres and keeps 7 days of backups
+
+set -euo pipefail
+
+BACKUP_DIR="/backups/postgres"
+RETENTION_DAYS=7
+TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
+FILENAME="token_prod_${TIMESTAMP}.dump"
+
+# Create backup directory if it doesn't exist
+mkdir -p "$BACKUP_DIR"
+
+# Dump the database (using Docker exec into the Postgres container)
+docker exec token-postgres pg_dump \
+  -U token \
+  -d token_prod \
+  -Fc \
+  > "${BACKUP_DIR}/${FILENAME}"
+
+# Verify the backup is non-empty
+if [ ! -s "${BACKUP_DIR}/${FILENAME}" ]; then
+  echo "ERROR: Backup file is empty!" >&2
+  exit 1
+fi
+
+# Report size
+BACKUP_SIZE=$(du -h "${BACKUP_DIR}/${FILENAME}" | cut -f1)
+echo "Backup created: ${FILENAME} (${BACKUP_SIZE})"
+
+# Delete backups older than retention period
+find "$BACKUP_DIR" -name "*.dump" -mtime +${RETENTION_DAYS} -delete
+echo "Cleaned up backups older than ${RETENTION_DAYS} days"</code></pre>
+
+    <h3>Scheduling with cron</h3>
+    <pre><code># SSH into your VPS, then:
+crontab -e
+
+# Add this line — runs backup at 3:00 AM daily
+0 3 * * * /opt/token/scripts/backup.sh >> /var/log/token-backup.log 2>&1
+
+# Verify it's scheduled
+crontab -l</code></pre>
+
+    <h3>Off-Site Backups</h3>
+    <p>A backup on the same server as the database doesn't protect against disk failure or a
+    compromised server. Copy backups off-site:</p>
+    <pre><code># Option 1: rsync to a second VPS or NAS
+rsync -az /backups/postgres/ backup-user@other-server:/backups/token/
+
+# Option 2: Upload to S3-compatible storage (Backblaze B2, ~$0.005/GB)
+# Install rclone, configure a remote, then:
+rclone copy /backups/postgres/ b2:token-backups/postgres/
+
+# Option 3: Coolify's built-in backup feature (if using managed Postgres)
+# Configure in Coolify → Database → Backups → Enable S3</code></pre>
+
+    <h3>Testing Restores</h3>
+    <p><strong>A backup you've never restored from is not a backup.</strong> Test quarterly:</p>
+    <pre><code># Restore to a temporary database (not production!)
+createdb -U token token_restore_test
+pg_restore -U token -d token_restore_test /backups/postgres/latest.dump
+
+# Verify data is intact
+psql -U token -d token_restore_test -c "SELECT COUNT(*) FROM users;"
+psql -U token -d token_restore_test -c "SELECT COUNT(*) FROM tokens;"
+
+# Clean up
+dropdb -U token token_restore_test</code></pre>
+
+    <h2>Health Checks &amp; Uptime Monitoring</h2>
+    <p>You need to know when your app is down before your users tell you.</p>
+
+    <h3>Internal Health Checks</h3>
+    <p>You already wrote <code>/health</code> in the previous lesson. Extend it to check all
+    dependencies:</p>
+
+    <pre><code>// api/src/routes/health.ts
+import { Router } from 'express';
+import { db } from '../db';
+import { redisClient } from '../redis';
+
+const router = Router();
+
+// Simple liveness check — is the process running?
+router.get('/health/live', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
+// Readiness check — can the app serve traffic?
+router.get('/health/ready', async (req, res) => {
+  const checks: Record&lt;string, 'ok' | 'fail'&gt; = {};
+
+  try {
+    await db.query('SELECT 1');
+    checks.database = 'ok';
+  } catch {
+    checks.database = 'fail';
+  }
+
+  try {
+    await redisClient.ping();
+    checks.redis = 'ok';
+  } catch {
+    checks.redis = 'fail';
+  }
+
+  const allOk = Object.values(checks).every(v => v === 'ok');
+  const statusCode = allOk ? 200 : 503;
+
+  res.status(statusCode).json({
+    status: allOk ? 'healthy' : 'degraded',
+    checks,
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+  });
+});
+
+export default router;</code></pre>
+
+    <h3>External Uptime Monitoring</h3>
+    <p>An external service pings your health endpoint every minute. If it fails, you get an alert.
+    Free options:</p>
+    <ul>
+        <li><strong>UptimeRobot</strong> &mdash; 50 free monitors, 5-min intervals, email/SMS/Slack alerts</li>
+        <li><strong>Uptime Kuma</strong> &mdash; self-hosted (run it on your VPS), 1-min intervals</li>
+        <li><strong>Betterstack (formerly Better Uptime)</strong> &mdash; free tier with status pages</li>
+    </ul>
+
+    <p>Configure two monitors:</p>
+    <ol>
+        <li><code>https://api.tokn.app/health/ready</code> &mdash; full health (DB + Redis)</li>
+        <li><code>https://tokn.app/health</code> &mdash; web page is serving (nginx responds)</li>
+    </ol>
+
+    <h3>Setting Up Uptime Kuma (Self-Hosted)</h3>
+    <pre><code># Add to your Coolify deployment (or docker-compose):
+# It's just another container
+
+# In Coolify: Resources → New → Docker Image
+# Image: louislam/uptime-kuma:1
+# Port: 3001
+# Volume: /app/data (persistent)
+# Domain: status.tokn.app (optional — for a public status page)</code></pre>
+
+    <h2>Basic Alerting Pattern</h2>
+    <p>For a solo developer, the simplest alerting is a webhook that sends to your phone:</p>
+
+    <pre><code>// api/src/services/alerting.ts
+import { logger } from '../logger';
+
+const ALERT_WEBHOOK = process.env.ALERT_WEBHOOK_URL; // Slack, Discord, or Telegram
+
+interface Alert {
+  severity: 'warning' | 'critical';
+  title: string;
+  detail: string;
+}
+
+export async function sendAlert(alert: Alert): Promise&lt;void&gt; {
+  if (!ALERT_WEBHOOK) {
+    logger.warn(alert, 'alert triggered but no webhook configured');
+    return;
+  }
+
+  try {
+    await fetch(ALERT_WEBHOOK, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: `[${alert.severity.toUpperCase()}] ${alert.title}\n${alert.detail}`,
+      }),
+    });
+  } catch (err) {
+    // Don't throw — alerting failure shouldn't crash the app
+    logger.error({ err, alert }, 'failed to send alert');
+  }
+}
+
+// Usage examples:
+// sendAlert({ severity: 'critical', title: 'Database unreachable', detail: 'SELECT 1 timed out after 5s' });
+// sendAlert({ severity: 'warning', title: 'High memory usage', detail: 'RSS: 450MB / 512MB limit' });</code></pre>
+
+    <h2>Monitoring Key Metrics</h2>
+    <p>Even without a full monitoring stack (Prometheus/Grafana), you can track essential metrics
+    in your logs:</p>
+
+    <pre><code>// api/src/middleware/metrics.ts
+import { logger } from '../logger';
+
+// Log slow requests
+export function slowRequestLogger(thresholdMs = 1000) {
+  return (req: any, res: any, next: any) => {
+    const start = Date.now();
+
+    res.on('finish', () => {
+      const duration = Date.now() - start;
+      if (duration > thresholdMs) {
+        req.log.warn({
+          duration_ms: duration,
+          threshold_ms: thresholdMs,
+          method: req.method,
+          url: req.url,
+        }, 'slow request detected');
+      }
+    });
+
+    next();
+  };
+}
+
+// Periodic health report (every 5 minutes)
+setInterval(async () => {
+  const memUsage = process.memoryUsage();
+  logger.info({
+    memory: {
+      rss_mb: Math.round(memUsage.rss / 1024 / 1024),
+      heap_used_mb: Math.round(memUsage.heapUsed / 1024 / 1024),
+      heap_total_mb: Math.round(memUsage.heapTotal / 1024 / 1024),
+    },
+    uptime_hours: Math.round(process.uptime() / 3600 * 10) / 10,
+  }, 'periodic health report');
+}, 5 * 60 * 1000);</code></pre>
+
+    <h2>Docker Log Rotation</h2>
+    <p>Without rotation, container logs grow forever and fill your disk. Configure Docker's log
+    driver to auto-rotate:</p>
+
+    <pre><code>// /etc/docker/daemon.json (on your VPS)
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "50m",
+    "max-file": "5"
+  }
+}
+
+// Each container keeps at most 5 log files of 50MB each = 250MB max per container
+// Restart Docker after changing: sudo systemctl restart docker</code></pre>
+
+    <h2>Putting It All Together</h2>
+    <pre><code>// Production checklist for Token:
+//
+// ✓ Structured JSON logging (pino)
+// ✓ Request correlation IDs (every log line traceable)
+// ✓ Health check endpoints (liveness + readiness)
+// ✓ Automated daily Postgres backups (pg_dump + cron)
+// ✓ 7-day backup retention + off-site copy
+// ✓ External uptime monitoring (UptimeRobot or Uptime Kuma)
+// ✓ Alerting webhook (Slack/Discord/Telegram)
+// ✓ Slow request logging (&gt;1s)
+// ✓ Docker log rotation (prevent disk fill)
+// ✓ Tested restore procedure</code></pre>
+
+    <h2>Playground: Log Analysis</h2>
+    <div id="playground-1"></div>
+
+    <h2>Exercise: Build the Ops Stack</h2>
+    <div id="exercise-1"></div>
+
+    <h2>Quiz</h2>
+    <div id="lesson-quiz"></div>
+
+    <div class="lesson-nav">
+        <a href="./0002-coolify-setup.html">&larr; Previous: Coolify Setup</a>
+        <a href="../b10-security-compliance/README.html">Next: B10 Security &amp; Compliance &rarr;</a>
+    </div>
+
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+    <script>
+        createPlayground("playground-1", `// Simulate analyzing structured logs
+const logs = [
+  { level: "info", msg: "token redeemed", tokenCode: "MERC-8GH2", requestId: "req-001", duration_ms: 45 },
+  { level: "warn", msg: "revoked token attempt", tokenCode: "XPRD-4KL9", requestId: "req-002", duration_ms: 12 },
+  { level: "info", msg: "token redeemed", tokenCode: "CAFE-2BN7", requestId: "req-003", duration_ms: 1250 },
+  { level: "error", msg: "database timeout", requestId: "req-004", duration_ms: 5000 },
+  { level: "info", msg: "token issued", tokenCode: "NEWT-6HJ3", requestId: "req-005", duration_ms: 89 },
+  { level: "info", msg: "token redeemed", tokenCode: "DOCK-1AB2", requestId: "req-006", duration_ms: 52 },
+  { level: "warn", msg: "slow request detected", requestId: "req-003", duration_ms: 1250 },
+];
+
+// Analysis 1: Count by level
+const levelCounts = {};
+logs.forEach(log => {
+  levelCounts[log.level] = (levelCounts[log.level] || 0) + 1;
+});
+console.log("=== Log Level Distribution ===");
+Object.entries(levelCounts).forEach(([level, count]) => {
+  console.log("  " + level + ": " + count);
+});
+
+// Analysis 2: Find slow requests (>1000ms)
+console.log("\\n=== Slow Requests (>1s) ===");
+logs
+  .filter(l => l.duration_ms > 1000)
+  .forEach(l => console.log("  " + l.requestId + ": " + l.duration_ms + "ms — " + l.msg));
+
+// Analysis 3: Error rate
+const totalRequests = logs.filter(l => l.requestId).length;
+const errors = logs.filter(l => l.level === "error").length;
+console.log("\\n=== Error Rate ===");
+console.log("  " + errors + "/" + totalRequests + " = " + (errors/totalRequests*100).toFixed(1) + "%");
+
+// Analysis 4: Trace a request by ID
+console.log("\\n=== Trace req-003 ===");
+logs
+  .filter(l => l.requestId === "req-003")
+  .forEach(l => console.log("  [" + l.level + "] " + l.msg + " (" + l.duration_ms + "ms)"));`);
+
+        createSolution("exercise-1", {
+            exercise: "Build the complete ops infrastructure for Token:\n\n1. Create a pino logger configuration with child loggers for different services (api, websocket, push).\n2. Write a request logging middleware that assigns correlation IDs and skips health check logging.\n3. Write a backup script that dumps Postgres, verifies the dump is non-empty, and deletes backups older than 7 days.\n4. Write a readiness health check that verifies both Postgres and Redis are reachable.\n5. Add a slow-request detector that logs warnings for requests exceeding 1 second.",
+            hints: [
+                "pino's child() method creates a new logger that inherits all parent fields plus the ones you add.",
+                "Use the 'finish' event on the response object to calculate total request duration.",
+                "For the backup script, use 'set -euo pipefail' at the top so any failure aborts the script.",
+                "The readiness check should return 503 (not 500) when dependencies are down — 503 means 'temporarily unavailable'."
+            ],
+            solution: `// api/src/logger.ts
+import pino from 'pino';
+
+export const logger = pino({
+  level: process.env.LOG_LEVEL || 'info',
+  transport: process.env.NODE_ENV !== 'production'
+    ? { target: 'pino-pretty', options: { colorize: true } }
+    : undefined,
+  base: { service: 'token-api', version: process.env.npm_package_version },
+});
+
+// Service-specific child loggers
+export const wsLogger = logger.child({ component: 'websocket' });
+export const pushLogger = logger.child({ component: 'push-notifications' });
+export const dbLogger = logger.child({ component: 'database' });
+
+// ---
+
+// api/src/middleware/requestLogger.ts
+import { randomUUID } from 'crypto';
+import pinoHttp from 'pino-http';
+import { logger } from '../logger';
+
+export const requestLogger = pinoHttp({
+  logger,
+  genReqId: (req) => (req.headers['x-request-id'] as string) || randomUUID(),
+  autoLogging: {
+    ignore: (req) => req.url === '/health/live' || req.url === '/health/ready',
+  },
+  serializers: {
+    req: (req) => ({
+      method: req.method,
+      url: req.url,
+      headers: { 'user-agent': req.headers['user-agent'] },
+    }),
+    res: (res) => ({ statusCode: res.statusCode }),
+  },
+});
+
+// ---
+
+// api/src/middleware/slowRequestLogger.ts
+export function slowRequestLogger(thresholdMs = 1000) {
+  return (req: any, res: any, next: any) => {
+    const start = Date.now();
+    res.on('finish', () => {
+      const duration = Date.now() - start;
+      if (duration > thresholdMs) {
+        req.log.warn({ duration_ms: duration, method: req.method, url: req.url }, 'slow request');
+      }
+    });
+    next();
+  };
+}
+
+// ---
+
+// api/src/routes/health.ts
+import { Router } from 'express';
+import { db } from '../db';
+import { redisClient } from '../redis';
+
+const router = Router();
+
+router.get('/health/live', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
+router.get('/health/ready', async (req, res) => {
+  const checks: Record<string, 'ok' | 'fail'> = {};
+
+  try {
+    await db.query('SELECT 1');
+    checks.database = 'ok';
+  } catch {
+    checks.database = 'fail';
+  }
+
+  try {
+    await redisClient.ping();
+    checks.redis = 'ok';
+  } catch {
+    checks.redis = 'fail';
+  }
+
+  const allOk = Object.values(checks).every(v => v === 'ok');
+  res.status(allOk ? 200 : 503).json({
+    status: allOk ? 'healthy' : 'degraded',
+    checks,
+    timestamp: new Date().toISOString(),
+    uptime_s: Math.round(process.uptime()),
+  });
+});
+
+export default router;
+
+// ---
+
+// scripts/backup.sh
+// #!/bin/bash
+// set -euo pipefail
+//
+// BACKUP_DIR="/backups/postgres"
+// RETENTION_DAYS=7
+// TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
+// FILENAME="token_prod_\${TIMESTAMP}.dump"
+//
+// mkdir -p "$BACKUP_DIR"
+//
+// docker exec token-postgres pg_dump -U token -d token_prod -Fc \\
+//   > "\${BACKUP_DIR}/\${FILENAME}"
+//
+// if [ ! -s "\${BACKUP_DIR}/\${FILENAME}" ]; then
+//   echo "ERROR: Backup is empty!" >&2
+//   exit 1
+// fi
+//
+// echo "Backup: \${FILENAME} ($(du -h "\${BACKUP_DIR}/\${FILENAME}" | cut -f1))"
+// find "$BACKUP_DIR" -name "*.dump" -mtime +\${RETENTION_DAYS} -delete
+// echo "Cleaned backups older than \${RETENTION_DAYS} days"`
+        });
+
+        createQuiz("lesson-quiz", [
+            {
+                type: "predict-output",
+                code: "const log = { level: 'info', msg: 'token redeemed', requestId: 'req-42', duration_ms: 850 };\nconsole.log(log.duration_ms > 1000 ? 'SLOW' : 'OK');",
+                answer: "OK",
+                explanation: "850ms is under the 1000ms threshold, so this request wouldn't trigger the slow request warning. It's fast enough to serve without concern."
+            },
+            {
+                type: "spot-the-bug",
+                code: "#!/bin/bash\nBACKUP_DIR=\"/backups\"\npg_dump -U token token_prod > $BACKUP_DIR/backup.dump\nfind $BACKUP_DIR -mtime +7 -delete",
+                bugLine: 3,
+                options: [
+                    "Line 3 — overwrites the same file every time (no timestamp)",
+                    "Line 2 — backup directory should be /var/backups",
+                    "Line 4 — find needs -name pattern to avoid deleting non-backup files"
+                ],
+                correct: 0,
+                explanation: "Using a fixed filename means every backup overwrites the previous one. If today's backup is corrupted, yesterday's is already gone. Use a timestamp in the filename to keep multiple days of backups."
+            },
+            {
+                type: "fill-blank",
+                code: "router.get('/health/ready', async (req, res) => {\n  // ...\n  res.status(allOk ? 200 : ___).json({ status: ... });\n});",
+                answer: "503",
+                explanation: "HTTP 503 Service Unavailable tells the load balancer (Traefik/Coolify) that this container can't serve traffic right now. Coolify won't route new requests to it until it returns 200."
+            },
+            {
+                type: "which-breaks",
+                question: "Which logging approach will cause issues in production?",
+                variants: [
+                    "logger.info({ userId: 42, action: 'login' }, 'user logged in')",
+                    "logger.info({ password: req.body.password }, 'login attempt')",
+                    "logger.error({ err, requestId: req.id }, 'handler failed')"
+                ],
+                correct: 1,
+                explanation: "Logging passwords (or any secrets — tokens, API keys, credit card numbers) is a security violation. If logs are compromised, all those credentials are exposed. Log the event, never the secret."
+            },
+            {
+                type: "order-steps",
+                question: "Order the incident response when an alert fires at 2 AM:",
+                steps: [
+                    "Check the alert message (which service, what failed)",
+                    "Open Coolify dashboard or SSH into the VPS",
+                    "Read container logs filtered to the error timeframe",
+                    "Identify root cause from logs and health check status",
+                    "Apply fix (restart container, rollback deploy, or scale resources)",
+                    "Verify health check returns 200 again"
+                ],
+                correctOrder: [0, 1, 2, 3, 4, 5],
+                explanation: "Structured logs with correlation IDs make step 3-4 fast. Without them, you'd be searching through megabytes of unstructured text. The health check at the end confirms the fix worked."
+            }
+        ]);
+    </script>
+</body>
+</html>

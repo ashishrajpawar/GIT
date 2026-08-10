@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Handling 401s &amp; Logout — A4.3</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A4 — Auth on the Client</a>
+      <span class="sep">›</span>
+      <span class="current">Handling 401s &amp; Logout</span>
+    </nav>
+
+    <h1>Handling 401s &amp; Logout</h1>
+    <div class="lesson-meta">
+      <span>A4 — Lesson 3 of 3</span>
+      <span>~45 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>The access token expires every 15 minutes. When it does, the next API call returns 401. The app must silently refresh the token and retry the original request — without the user noticing. If the refresh also fails (token revoked, logged out elsewhere), the app must redirect to login. This is the invisible plumbing that makes auth feel seamless.</p>
+    </div>
+
+    <h2>The silent refresh flow</h2>
+
+    <ol>
+      <li>User is browsing the token list — access token expired 30 seconds ago</li>
+      <li>App calls <code>GET /api/tokens</code> → server returns 401</li>
+      <li>API client intercepts the 401 before the component sees it</li>
+      <li>Client calls <code>POST /api/auth/refresh</code> with the stored refresh token</li>
+      <li>Server returns a new access token (+ rotated refresh token)</li>
+      <li>Client stores new tokens and <strong>retries the original request</strong></li>
+      <li>User sees their token list — they never knew the token expired</li>
+    </ol>
+
+    <h2>Implementing the refresh interceptor</h2>
+
+    <pre><code>// app/src/api/client.ts
+import { createApiClient } from '@token/shared/api-client';
+import {
+  getAccessToken, setAccessToken, getRefreshToken, setRefreshToken, clearTokens
+} from '../auth/store';
+
+let refreshPromise: Promise&lt;boolean&gt; | null = null;
+
+async function attemptRefresh(): Promise&lt;boolean&gt; {
+  const refreshToken = await getRefreshToken();
+  if (!refreshToken) return false;
+
+  try {
+    const res = await fetch('http://localhost:3000/api/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken }),
+    });
+
+    if (!res.ok) {
+      await clearTokens();
+      return false;
+    }
+
+    const json = await res.json();
+    setAccessToken(json.data.accessToken);
+    await setRefreshToken(json.data.refreshToken);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Deduplicate concurrent refresh attempts
+function refresh(): Promise&lt;boolean&gt; {
+  if (!refreshPromise) {
+    refreshPromise = attemptRefresh().finally(() =&gt; {
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise;
+}
+
+let onForceLogout: (() =&gt; void) | null = null;
+export function setForceLogoutHandler(fn: () =&gt; void) {
+  onForceLogout = fn;
+}
+
+export const client = createApiClient({
+  baseUrl: __DEV__ ? 'http://localhost:3000/api' : 'https://api.tokn.app/api',
+  getAccessToken,
+  onUnauthorized: async () =&gt; {
+    const success = await refresh();
+    if (!success && onForceLogout) {
+      onForceLogout();
+    }
+  },
+});</code></pre>
+
+    <h2>Retry after refresh</h2>
+
+    <p>The <code>onUnauthorized</code> callback alone isn't enough — we need the original request to retry. Enhance the API client:</p>
+
+    <pre><code>// Enhanced createApiClient with retry-on-401
+export function createApiClientWithRefresh(config: ApiClientConfig & { refresh: () =&gt; Promise&lt;boolean&gt; }) {
+  async function request&lt;T&gt;(method: HttpMethod, path: string, body?: unknown): Promise&lt;T&gt; {
+    let response = await rawFetch(method, path, body, config.getAccessToken());
+
+    if (response.status === 401) {
+      // Attempt silent refresh
+      const refreshed = await config.refresh();
+
+      if (refreshed) {
+        // Retry with new access token
+        response = await rawFetch(method, path, body, config.getAccessToken());
+      } else {
+        // Refresh failed — force logout
+        config.onUnauthorized();
+        throw new ApiError(401, 'Session expired. Please log in again.');
+      }
+    }
+
+    if (response.status === 204) return null as T;
+
+    const json = await response.json();
+    if (!response.ok) throw new ApiError(response.status, json.error);
+    return json as T;
+  }
+
+  // ... return { get, post, patch, delete }
+}
+
+async function rawFetch(method: string, path: string, body: unknown, token: string | null) {
+  const headers: Record&lt;string, string&gt; = { 'Accept': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (body) headers['Content-Type'] = 'application/json';
+
+  return fetch(path, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+}</code></pre>
+
+    <h2>Preventing duplicate refresh calls</h2>
+
+    <p>If 5 API calls return 401 simultaneously, you don't want 5 refresh requests. The deduplication pattern:</p>
+
+    <pre><code>let refreshPromise: Promise&lt;boolean&gt; | null = null;
+
+function refresh(): Promise&lt;boolean&gt; {
+  if (!refreshPromise) {
+    // First caller creates the promise
+    refreshPromise = attemptRefresh().finally(() =&gt; {
+      refreshPromise = null;  // reset for next time
+    });
+  }
+  // All callers await the same promise
+  return refreshPromise;
+}</code></pre>
+
+    <p>The first request that gets 401 triggers the refresh. All subsequent 401s in that window share the same promise and wait for the same result. Once refreshed, all retry with the new token.</p>
+
+    <h2>Connecting to AuthContext</h2>
+
+    <pre><code>// app/src/auth/AuthContext.tsx — add the force-logout handler
+import { setForceLogoutHandler } from '../api/client';
+
+export function AuthProvider({ children }) {
+  // ... existing state and functions
+
+  useEffect(() =&gt; {
+    // When the API client can't refresh, force logout
+    setForceLogoutHandler(() =&gt; {
+      clearTokens();
+      setUser(null);
+    });
+  }, []);
+
+  // ... rest of provider
+}</code></pre>
+
+    <h2>Logout — what to clean up</h2>
+
+    <pre><code>async function logout() {
+  // 1. Tell the server (best-effort — don't block on failure)
+  try {
+    await client.post('/auth/logout');
+  } catch {}
+
+  // 2. Clear all local state
+  await clearTokens();            // SecureStore + in-memory
+  setUser(null);                  // triggers navigation to Login
+
+  // 3. The conditional navigator swaps to auth screens automatically
+}</code></pre>
+
+    <h2>Edge cases to handle</h2>
+
+    <h3>Logged out on another device</h3>
+    <p>If the user logs out on their tablet, the server revokes all refresh tokens. The phone's next API call gets 401, tries to refresh, refresh returns 401, force-logout triggers. The user sees the login screen.</p>
+
+    <h3>Token revoked by server (admin action)</h3>
+    <p>Same flow — any 401 that can't be fixed by refresh leads to logout.</p>
+
+    <h3>Network offline during refresh</h3>
+    <pre><code>// In attemptRefresh:
+} catch (err) {
+  // Network error — don't clear tokens!
+  // The refresh token might still be valid
+  // Show offline UI instead of logging out
+  return false;
+}</code></pre>
+
+    <p>Important: don't clear tokens on network errors. The user might just be in a tunnel. Only clear on a definitive 401 from the refresh endpoint (server explicitly rejected the token).</p>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0002-auth-context-protected-routes.html">← Previous: Auth Context &amp; Protected Routes</a>
+      <a href="../a5-core-token-features/0001-token-generation-display.html">Next module: A5 Core Token Features →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createSolution("exercise-1", {
+      exercise: "Implement the full silent refresh flow: (1) Create the refresh interceptor with deduplication, (2) Enhance the API client to retry failed requests after refresh, (3) Connect the force-logout handler to AuthContext, (4) Handle the edge case where network is offline during refresh (don't clear tokens), (5) Test by: setting access token expiry to 10 seconds, making API calls, waiting for expiry, and verifying the app silently refreshes without the user seeing a login screen.",
+      hints: [
+        "The refreshPromise singleton ensures only one refresh happens even if multiple 401s arrive simultaneously.",
+        "After successful refresh, the ORIGINAL request must retry with the NEW access token — not the old one.",
+        "To test: temporarily set ACCESS_EXPIRY to '10s' in the server config, then use the app normally for 15 seconds."
+      ],
+      solution: `// app/src/api/client.ts — full implementation
+
+import * as SecureStore from 'expo-secure-store';
+
+const API_URL = __DEV__ ? 'http://localhost:3000/api' : 'https://api.tokn.app/api';
+
+let accessToken: string | null = null;
+let refreshPromise: Promise<boolean> | null = null;
+let forceLogout: (() => void) | null = null;
+
+export function setAccessToken(token: string | null) { accessToken = token; }
+export function getAccessToken() { return accessToken; }
+export function setForceLogoutHandler(fn: () => void) { forceLogout = fn; }
+
+async function attemptRefresh(): Promise<boolean> {
+  const refreshToken = await SecureStore.getItemAsync('refreshToken');
+  if (!refreshToken) return false;
+
+  try {
+    const res = await fetch(API_URL + '/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken }),
+    });
+
+    if (!res.ok) {
+      // Server rejected — token is revoked/expired
+      await SecureStore.deleteItemAsync('refreshToken');
+      accessToken = null;
+      return false;
+    }
+
+    const json = await res.json();
+    accessToken = json.data.accessToken;
+    await SecureStore.setItemAsync('refreshToken', json.data.refreshToken);
+    return true;
+  } catch {
+    // Network error — don't clear tokens
+    return false;
+  }
+}
+
+function refresh(): Promise<boolean> {
+  if (!refreshPromise) {
+    refreshPromise = attemptRefresh().finally(() => { refreshPromise = null; });
+  }
+  return refreshPromise;
+}
+
+export async function apiRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
+  let res = await doFetch(method, path, body);
+
+  if (res.status === 401) {
+    const refreshed = await refresh();
+    if (refreshed) {
+      res = await doFetch(method, path, body);  // retry with new token
+    } else {
+      if (forceLogout) forceLogout();
+      throw new Error('Session expired');
+    }
+  }
+
+  if (res.status === 204) return null as T;
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.error || 'Request failed');
+  return json as T;
+}
+
+function doFetch(method: string, path: string, body?: unknown) {
+  const headers: Record<string, string> = { 'Accept': 'application/json' };
+  if (accessToken) headers['Authorization'] = \`Bearer \${accessToken}\`;
+  if (body) headers['Content-Type'] = 'application/json';
+  return fetch(API_URL + path, {
+    method, headers, body: body ? JSON.stringify(body) : undefined,
+  });
+}
+
+// Connect in AuthContext.tsx:
+// useEffect(() => { setForceLogoutHandler(() => { clearTokens(); setUser(null); }); }, []);`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "order-steps",
+        question: "Put the silent refresh flow in order:",
+        steps: ["API call returns 401", "Check if refresh already in progress (deduplicate)", "Send refresh token to /auth/refresh", "Store new tokens", "Retry the original request with new access token"],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "401 triggers the flow. Deduplication prevents parallel refresh calls. The refresh endpoint returns new tokens. Store them. Then the original request retries with the fresh access token — the user never sees a login screen."
+      },
+      {
+        type: "predict-output",
+        question: "Three API calls return 401 at the same time. How many refresh requests are sent to the server?",
+        code: "// Call A → 401 → refresh()\n// Call B → 401 → refresh()\n// Call C → 401 → refresh()\n// refreshPromise is shared...",
+        answer: "1",
+        explanation: "The refreshPromise singleton means the first 401 creates one refresh request. Calls B and C await the same promise. When it resolves, all three retry with the new token. Without deduplication, you'd waste 3 refresh tokens (rotation means only the last one is valid)."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this refresh error handling?",
+        code: "async function attemptRefresh() {\n  try {\n    const res = await fetch('/auth/refresh', { ... });\n    if (!res.ok) { return false; }\n    // store new tokens...\n    return true;\n  } catch {\n    await clearTokens();  // network error\n    return false;\n  }\n}",
+        options: [
+          "The try/catch structure is wrong",
+          "Clearing tokens on network error — the refresh token might still be valid, user just lost connection temporarily",
+          "return false should be return null",
+          "fetch doesn't throw on network errors"
+        ],
+        correct: 1,
+        explanation: "A network error (offline, timeout) doesn't mean the refresh token is invalid. Clearing it forces re-login when connectivity returns. Only clear on a definitive server rejection (res.ok === false from the refresh endpoint). Network errors should leave tokens intact."
+      },
+      {
+        type: "fill-blank",
+        question: "After a successful refresh, retry the original request:",
+        code: "if (res.status === 401) {\n  const refreshed = await refresh();\n  if (refreshed) {\n    res = await ___(method, path, body);  // retry\n  }\n}",
+        answer: "doFetch",
+        explanation: "After refresh succeeds, the access token variable has been updated. Calling doFetch again with the same method/path/body automatically picks up the new token from getAccessToken(). The retry is transparent to the calling code."
+      },
+      {
+        type: "which-breaks",
+        question: "Which scenario correctly triggers force-logout?",
+        variants: [
+          "API call → 401 → refresh succeeds → retry succeeds",
+          "API call → 401 → refresh returns 401 (token revoked) → force logout",
+          "API call → 401 → refresh → network timeout → force logout"
+        ],
+        correct: 1,
+        explanation: "Only option B is correct: the server explicitly rejected the refresh token (401 response from the refresh endpoint). Option A is a normal silent refresh. Option C is a network error — don't force logout, the token might still be valid when connectivity returns."
+      }
+    ]);
+  </script>
+</body>
+</html>

@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QR Generation &amp; Scanning — A5.2</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A5 — Core Token Features</a>
+      <span class="sep">›</span>
+      <span class="current">QR Generation &amp; Scanning</span>
+    </nav>
+
+    <h1>QR Generation &amp; Scanning</h1>
+    <div class="lesson-meta">
+      <span>A5 — Lesson 2 of 5</span>
+      <span>~50 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>A QR code is the primary sharing path that preserves privacy. The user shows their screen, the holder scans it — no phone number, email, or name ever travels over a network. The QR encodes a redemption URL (<code>tokn.app/t/MERC8GH2LP4X</code>) that works whether or not the holder has the app installed. This is the interaction that makes Token feel like magic: scan → connected, with zero personal data exchanged.</p>
+    </div>
+
+    <h2>What the QR encodes</h2>
+
+    <p>The QR code contains a single URL:</p>
+
+    <pre><code>https://tokn.app/t/MERC8GH2LP4X</code></pre>
+
+    <p>Design decisions:</p>
+
+    <table>
+      <thead>
+        <tr><th>Decision</th><th>Reason</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Full URL, not just the code</td><td>Holders without the app can open it in a browser → redemption web page</td></tr>
+        <tr><td>No dashes in the URL path</td><td>Shorter URL, fewer characters in the QR → smaller/denser QR = easier to scan</td></tr>
+        <tr><td><code>/t/</code> prefix</td><td>Short, leaves room for other URL paths later (<code>/u/</code>, <code>/about</code>)</td></tr>
+        <tr><td>HTTPS</td><td>Required for Universal Links / App Links (deep linking, covered in A9)</td></tr>
+      </tbody>
+    </table>
+
+    <p>The code in the URL has no dashes — <code>MERC8GH2LP4X</code> not <code>MERC-8GH2-LP4X</code>. The dashes are display-only formatting. Use <code>stripDashes()</code> from <code>shared/src/token.ts</code> when building the URL.</p>
+
+    <h2>Generating QR codes</h2>
+
+    <h3>The library: react-native-qrcode-svg</h3>
+
+    <p>This is the best open-source QR generator for React Native. It renders as SVG (sharp at any size), supports custom colors, and works on both iOS and Android with no native module linking.</p>
+
+    <pre><code>npx expo install react-native-qrcode-svg react-native-svg</code></pre>
+
+    <p><code>react-native-svg</code> is a peer dependency — it provides the SVG rendering primitives.</p>
+
+    <h3>Basic usage</h3>
+
+    <pre><code>import QRCode from 'react-native-qrcode-svg';
+
+function TokenQR({ code }: { code: string }) {
+  const url = `https://tokn.app/t/${code.replace(/-/g, '')}`;
+
+  return (
+    &lt;QRCode
+      value={url}
+      size={220}
+      backgroundColor="#ffffff"
+      color="#000000"
+    /&gt;
+  );
+}</code></pre>
+
+    <h3>Adding a logo in the center</h3>
+
+    <p>QR codes have built-in error correction — up to 30% of the code can be obscured and it still scans. This means you can place a small logo in the center:</p>
+
+    <pre><code>import QRCode from 'react-native-qrcode-svg';
+
+const logo = require('../../assets/token-logo.png');
+
+function TokenQR({ code }: { code: string }) {
+  const url = `https://tokn.app/t/${code.replace(/-/g, '')}`;
+
+  return (
+    &lt;QRCode
+      value={url}
+      size={220}
+      backgroundColor="#ffffff"
+      color="#1e293b"
+      logo={logo}
+      logoSize={44}
+      logoBackgroundColor="#ffffff"
+      logoMargin={4}
+      logoBorderRadius={8}
+      ecl="H"   // highest error correction level
+    /&gt;
+  );
+}</code></pre>
+
+    <p><strong><code>ecl="H"</code></strong> sets the error correction level to High (30% recovery). This is essential when using a logo — without it, the logo might obscure critical data modules and break scanning. The tradeoff: H-level codes are denser (more modules), so they need to be displayed larger.</p>
+
+    <h3>Error correction levels</h3>
+
+    <table>
+      <thead>
+        <tr><th>Level</th><th>Recovery</th><th>Use case</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>L (Low)</td><td>~7%</td><td>Maximum data density, no logo</td></tr>
+        <tr><td>M (Medium)</td><td>~15%</td><td>Default — good balance</td></tr>
+        <tr><td>Q (Quartile)</td><td>~25%</td><td>Printed codes that might get dirty</td></tr>
+        <tr><td>H (High)</td><td>~30%</td><td>Codes with logos or heavy styling</td></tr>
+      </tbody>
+    </table>
+
+    <h2>The QRCode component</h2>
+
+    <p>Wrap the library in a reusable component with Token-specific defaults:</p>
+
+    <pre><code>// app/src/components/QRCode.tsx
+import { View, StyleSheet } from 'react-native';
+import QRCodeSVG from 'react-native-qrcode-svg';
+import { stripDashes } from '@token/shared/token';
+
+interface TokenQRCodeProps {
+  code: string;
+  size?: number;
+}
+
+export function TokenQRCode({ code, size = 220 }: TokenQRCodeProps) {
+  const url = `https://tokn.app/t/${stripDashes(code)}`;
+
+  return (
+    &lt;View style={styles.container}&gt;
+      &lt;QRCodeSVG
+        value={url}
+        size={size}
+        backgroundColor="#ffffff"
+        color="#1e293b"
+        ecl="M"
+      /&gt;
+    &lt;/View&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    padding: 16,
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    alignItems: 'center',
+    // Subtle shadow for the card feel
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,  // Android shadow
+  },
+});</code></pre>
+
+    <h2>Scanning QR codes</h2>
+
+    <h3>The library: expo-camera</h3>
+
+    <p><code>expo-camera</code> includes a built-in barcode scanner. No separate barcode library needed.</p>
+
+    <pre><code>npx expo install expo-camera</code></pre>
+
+    <h3>Permissions</h3>
+
+    <p>Camera access requires explicit user permission on both platforms:</p>
+
+    <pre><code>import { Camera } from 'expo-camera';
+
+const [permission, requestPermission] = Camera.useCameraPermissions();
+
+if (!permission) {
+  // Still loading
+  return null;
+}
+
+if (!permission.granted) {
+  // Show a "Grant camera access" button
+  return (
+    &lt;View&gt;
+      &lt;Text&gt;Camera access is needed to scan QR codes.&lt;/Text&gt;
+      &lt;TouchableOpacity onPress={requestPermission}&gt;
+        &lt;Text&gt;Allow Camera&lt;/Text&gt;
+      &lt;/TouchableOpacity&gt;
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <p><strong>Platform behaviour:</strong></p>
+    <ul>
+      <li><strong>iOS:</strong> Shows a system dialog. If denied, you can't re-ask — direct user to Settings.</li>
+      <li><strong>Android:</strong> Shows a system dialog. After two denials, Android won't show it again — same as iOS, direct to Settings.</li>
+    </ul>
+
+    <h3>The scanner component</h3>
+
+    <pre><code>// app/src/components/QRScanner.tsx
+import { useState } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import { CameraView, Camera } from 'expo-camera';
+
+interface QRScannerProps {
+  onScan: (code: string) => void;
+  onClose: () => void;
+}
+
+export function QRScanner({ onScan, onClose }: QRScannerProps) {
+  const [permission, requestPermission] = Camera.useCameraPermissions();
+  const [scanned, setScanned] = useState(false);
+
+  if (!permission) return null;
+
+  if (!permission.granted) {
+    return (
+      &lt;View style={styles.permissionContainer}&gt;
+        &lt;Text style={styles.permissionText}&gt;
+          Camera access is needed to scan Token QR codes.
+        &lt;/Text&gt;
+        &lt;TouchableOpacity style={styles.allowButton} onPress={requestPermission}&gt;
+          &lt;Text style={styles.allowButtonText}&gt;Allow Camera&lt;/Text&gt;
+        &lt;/TouchableOpacity&gt;
+        &lt;TouchableOpacity onPress={onClose}&gt;
+          &lt;Text style={styles.cancelText}&gt;Cancel&lt;/Text&gt;
+        &lt;/TouchableOpacity&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  function handleBarCodeScanned({ data }: { data: string }) {
+    if (scanned) return;  // prevent multiple fires
+
+    // Validate it's a Token URL
+    const match = data.match(/^https?:\/\/tokn\.app\/t\/([23456789ABCDEFGHJKMNPQRSTUVWXYZ]{12})$/);
+    if (!match) {
+      Alert.alert('Not a Token', 'This QR code is not a valid Token code.');
+      return;
+    }
+
+    setScanned(true);
+    onScan(match[1]);  // pass the 12-char code (no dashes)
+  }
+
+  return (
+    &lt;View style={styles.scannerContainer}&gt;
+      &lt;CameraView
+        style={styles.camera}
+        facing="back"
+        barcodeScannerSettings={{
+          barcodeTypes: ['qr'],
+        }}
+        onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
+      /&gt;
+      &lt;View style={styles.overlay}&gt;
+        &lt;View style={styles.scanArea} /&gt;
+        &lt;Text style={styles.hint}&gt;Point at a Token QR code&lt;/Text&gt;
+      &lt;/View&gt;
+      &lt;TouchableOpacity style={styles.closeButton} onPress={onClose}&gt;
+        &lt;Text style={styles.closeText}&gt;Close&lt;/Text&gt;
+      &lt;/TouchableOpacity&gt;
+    &lt;/View&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  scannerContainer: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  camera: {
+    flex: 1,
+  },
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  scanArea: {
+    width: 250,
+    height: 250,
+    borderWidth: 2,
+    borderColor: '#fff',
+    borderRadius: 16,
+    backgroundColor: 'transparent',
+  },
+  hint: {
+    color: '#fff',
+    fontSize: 16,
+    marginTop: 20,
+  },
+  closeButton: {
+    position: 'absolute',
+    top: 60,
+    right: 20,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  closeText: {
+    color: '#fff',
+    fontSize: 16,
+  },
+  permissionContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  permissionText: {
+    fontSize: 16,
+    textAlign: 'center',
+    marginBottom: 20,
+    color: '#333',
+  },
+  allowButton: {
+    backgroundColor: '#2563eb',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+    marginBottom: 12,
+  },
+  allowButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  cancelText: {
+    fontSize: 16,
+    color: '#666',
+  },
+});</code></pre>
+
+    <h2>Preventing double scans</h2>
+
+    <p>The barcode scanner fires continuously while a QR code is visible — multiple times per second. Without the <code>scanned</code> flag, you'd process the same code 10+ times. The pattern:</p>
+
+    <pre><code>const [scanned, setScanned] = useState(false);
+
+// In the handler:
+if (scanned) return;
+setScanned(true);
+onScan(code);
+
+// To scan again (e.g. "Scan another" button):
+setScanned(false);</code></pre>
+
+    <p>Setting <code>onBarcodeScanned</code> to <code>undefined</code> when <code>scanned</code> is true also tells the camera to stop processing frames — better for battery.</p>
+
+    <h2>Validating scanned data</h2>
+
+    <p>Not every QR code is a Token. Someone could scan a random URL, a vCard, or WiFi credentials. Always validate before acting:</p>
+
+    <pre><code>function extractTokenCode(qrData: string): string | null {
+  // Must be a tokn.app URL with a valid 12-char code
+  const match = qrData.match(
+    /^https?:\/\/tokn\.app\/t\/([23456789ABCDEFGHJKMNPQRSTUVWXYZ]{12})$/
+  );
+  return match ? match[1] : null;
+}</code></pre>
+
+    <p>If validation fails, show a user-friendly message — not a crash. The user might have accidentally scanned a different QR code on the same page.</p>
+
+    <h2>The full flow: show → scan → redeem</h2>
+
+    <h3>Showing (issuer side)</h3>
+
+    <p>On the TokenDetail screen, the QR is always visible below the code text:</p>
+
+    <pre><code>// app/src/screens/TokenDetail.tsx (relevant section)
+import { TokenQRCode } from '../components/QRCode';
+
+function TokenDetailScreen({ route }) {
+  const { token } = route.params;
+
+  return (
+    &lt;ScrollView style={styles.container}&gt;
+      &lt;Text style={styles.label}&gt;{token.label}&lt;/Text&gt;
+      &lt;Text style={styles.code}&gt;{token.code}&lt;/Text&gt;
+
+      &lt;TokenQRCode code={token.code} /&gt;
+
+      &lt;Text style={styles.instruction}&gt;
+        Show this QR code to the person who needs to reach you.
+        They scan it — no phone number or email exchanged.
+      &lt;/Text&gt;
+
+      {/* ... status, rules, revoke button ... */}
+    &lt;/ScrollView&gt;
+  );
+}</code></pre>
+
+    <h3>Scanning (holder side)</h3>
+
+    <p>The holder either:</p>
+    <ol>
+      <li>Has the Token app → scans QR → app opens TokenRedeem screen</li>
+      <li>Doesn't have the app → opens URL in browser → redemption web page</li>
+    </ol>
+
+    <p>For now, we build the in-app scanner. Deep linking (option 2) is covered in A9.</p>
+
+    <pre><code>// app/src/screens/ScanToken.tsx
+import { useState } from 'react';
+import { View } from 'react-native';
+import { QRScanner } from '../components/QRScanner';
+import { formatTokenCode } from '@token/shared/token';
+
+export function ScanTokenScreen({ navigation }) {
+  function handleScan(rawCode: string) {
+    // rawCode is 12 chars without dashes
+    const formatted = formatTokenCode(rawCode);
+    // Navigate to the redemption flow
+    navigation.replace('RedeemToken', { code: formatted });
+  }
+
+  return (
+    &lt;QRScanner
+      onScan={handleScan}
+      onClose={() =&gt; navigation.goBack()}
+    /&gt;
+  );
+}</code></pre>
+
+    <h2>Brightness boost while showing QR</h2>
+
+    <p>When the user shows their QR to be scanned, the screen should be at maximum brightness — dim screens in sunlight are hard to scan. Use <code>expo-brightness</code>:</p>
+
+    <pre><code>import * as Brightness from 'expo-brightness';
+import { useEffect, useRef } from 'react';
+
+function useMaxBrightness() {
+  const originalBrightness = useRef&lt;number&gt;(0);
+
+  useEffect(() =&gt; {
+    async function boost() {
+      originalBrightness.current = await Brightness.getBrightnessAsync();
+      await Brightness.setBrightnessAsync(1);  // max
+    }
+    boost();
+
+    return () =&gt; {
+      // Restore original brightness when leaving the screen
+      Brightness.setBrightnessAsync(originalBrightness.current);
+    };
+  }, []);
+}</code></pre>
+
+    <p>Call <code>useMaxBrightness()</code> in the TokenDetail screen (or specifically when the QR tab is active). The cleanup function in <code>useEffect</code> restores the original brightness when the user navigates away.</p>
+
+    <pre><code>npx expo install expo-brightness</code></pre>
+
+    <p><strong>Permissions:</strong> On Android, <code>expo-brightness</code> needs the <code>WRITE_SETTINGS</code> permission for system brightness. App brightness (within your app only) doesn't need a permission. Use <code>setBrightnessAsync</code> (app-level) rather than <code>setSystemBrightnessAsync</code> to avoid the permission prompt.</p>
+
+    <h2>Saving QR as image (share to print)</h2>
+
+    <p>Users might want to save the QR code as an image — to print on a business card, paste in a listing, or send to a print shop. Use <code>react-native-view-shot</code> to capture the QR component as a PNG:</p>
+
+    <pre><code>npx expo install react-native-view-shot expo-sharing</code></pre>
+
+    <pre><code>import { useRef } from 'react';
+import ViewShot from 'react-native-view-shot';
+import * as Sharing from 'expo-sharing';
+
+function TokenDetailScreen({ route }) {
+  const qrRef = useRef&lt;ViewShot&gt;(null);
+
+  async function handleSaveQR() {
+    const uri = await qrRef.current?.capture();
+    if (uri) {
+      await Sharing.shareAsync(uri, {
+        mimeType: 'image/png',
+        dialogTitle: 'Save or share your Token QR code',
+      });
+    }
+  }
+
+  return (
+    &lt;ScrollView&gt;
+      {/* ... */}
+      &lt;ViewShot ref={qrRef} options={{ format: 'png', quality: 1 }}&gt;
+        &lt;TokenQRCode code={token.code} size={300} /&gt;
+      &lt;/ViewShot&gt;
+      &lt;TouchableOpacity onPress={handleSaveQR}&gt;
+        &lt;Text&gt;Save QR Image&lt;/Text&gt;
+      &lt;/TouchableOpacity&gt;
+    &lt;/ScrollView&gt;
+  );
+}</code></pre>
+
+    <p><strong>Privacy note:</strong> Saving the QR as an image is safe — it only contains the redemption URL, not the user's identity. This is one of the valid sharing paths from the product rules (printed/displayed QR).</p>
+
+    <h2>Platform differences</h2>
+
+    <table>
+      <thead>
+        <tr><th>Feature</th><th>iOS</th><th>Android</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Camera permission</td><td>System dialog, one chance, then Settings</td><td>System dialog, two chances, then Settings</td></tr>
+        <tr><td>Barcode speed</td><td>Very fast (AVFoundation)</td><td>Fast (ML Kit)</td></tr>
+        <tr><td>Brightness control</td><td>App-level always works</td><td>App-level works; system-level needs WRITE_SETTINGS</td></tr>
+        <tr><td>Share sheet</td><td>UIActivityViewController</td><td>Intent.ACTION_SEND</td></tr>
+      </tbody>
+    </table>
+
+    <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0001-token-generation-display.html">← Previous: Token Generation &amp; Display</a>
+      <a href="./0003-token-list-management.html">Next: Token List &amp; Management →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// Build a Token redemption URL from a formatted code
+function buildRedemptionUrl(code) {
+  // Remove dashes, build the URL
+  const stripped = code.replace(/-/g, '');
+  return 'https://tokn.app/t/' + stripped;
+}
+
+// Test with a sample code
+const code = 'MERC-8GH2-LP4X';
+const url = buildRedemptionUrl(code);
+console.log('Code:', code);
+console.log('URL:', url);
+console.log('URL length:', url.length);
+
+// Validate a scanned URL
+function extractTokenCode(qrData) {
+  const match = qrData.match(/^https?:\\/\\/tokn\\.app\\/t\\/([23456789ABCDEFGHJKMNPQRSTUVWXYZ]{12})$/);
+  return match ? match[1] : null;
+}
+
+console.log('\\nValid:', extractTokenCode(url));
+console.log('Invalid:', extractTokenCode('https://google.com'));
+console.log('Invalid:', extractTokenCode('https://tokn.app/t/short'));`);
+
+    createSolution("exercise-1", {
+      exercise: "Build the complete QR generation and scanning flow:\n\n1. Create `app/src/components/QRCode.tsx` — a reusable component that takes a token code and renders a QR encoding the redemption URL. Use error correction level M.\n\n2. Create `app/src/components/QRScanner.tsx` — a camera-based scanner that: requests permission, validates scanned data is a tokn.app URL, extracts the code, and calls onScan. Prevent double-fires.\n\n3. Add QR display to the TokenDetail screen with a brightness boost hook.\n\n4. Add a 'Save QR' button that captures the QR as PNG and opens the share sheet.\n\n5. Test: create a token, screenshot the QR, and verify it decodes to the correct tokn.app URL using any QR reader.",
+      hints: [
+        "react-native-qrcode-svg takes a `value` prop (the URL string) and renders SVG — no base64 or image generation needed.",
+        "Use Camera.useCameraPermissions() hook — it returns [permission, requestPermission]. Check permission.granted before showing the camera.",
+        "The scanned flag + setting onBarcodeScanned to undefined prevents the callback from firing repeatedly.",
+        "ViewShot's capture() returns a file URI. Pass it to Sharing.shareAsync() for the system share sheet."
+      ],
+      solution: `// === app/src/components/QRCode.tsx ===
+
+import { View, StyleSheet } from 'react-native';
+import QRCodeSVG from 'react-native-qrcode-svg';
+import { stripDashes } from '@token/shared/token';
+
+interface TokenQRCodeProps {
+  code: string;
+  size?: number;
+}
+
+export function TokenQRCode({ code, size = 220 }: TokenQRCodeProps) {
+  const url = \`https://tokn.app/t/\${stripDashes(code)}\`;
+
+  return (
+    <View style={styles.container}>
+      <QRCodeSVG
+        value={url}
+        size={size}
+        backgroundColor="#ffffff"
+        color="#1e293b"
+        ecl="M"
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    padding: 16,
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+});
+
+
+// === app/src/components/QRScanner.tsx ===
+
+import { useState } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import { CameraView, Camera } from 'expo-camera';
+
+interface QRScannerProps {
+  onScan: (code: string) => void;
+  onClose: () => void;
+}
+
+export function QRScanner({ onScan, onClose }: QRScannerProps) {
+  const [permission, requestPermission] = Camera.useCameraPermissions();
+  const [scanned, setScanned] = useState(false);
+
+  if (!permission) return null;
+
+  if (!permission.granted) {
+    return (
+      <View style={styles.permissionContainer}>
+        <Text style={styles.permissionText}>
+          Camera access is needed to scan Token QR codes.
+        </Text>
+        <TouchableOpacity style={styles.allowBtn} onPress={requestPermission}>
+          <Text style={styles.allowBtnText}>Allow Camera</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={onClose}>
+          <Text style={styles.cancelText}>Cancel</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  function handleBarCodeScanned({ data }: { data: string }) {
+    if (scanned) return;
+    const match = data.match(/^https?:\\/\\/tokn\\.app\\/t\\/([23456789ABCDEFGHJKMNPQRSTUVWXYZ]{12})$/);
+    if (!match) {
+      Alert.alert('Not a Token', 'This QR code is not a valid Token code.');
+      return;
+    }
+    setScanned(true);
+    onScan(match[1]);
+  }
+
+  return (
+    <View style={styles.scannerContainer}>
+      <CameraView
+        style={styles.camera}
+        facing="back"
+        barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+        onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
+      />
+      <View style={styles.overlay}>
+        <View style={styles.scanArea} />
+        <Text style={styles.hint}>Point at a Token QR code</Text>
+      </View>
+      <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
+        <Text style={styles.closeText}>Close</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  scannerContainer: { flex: 1, backgroundColor: '#000' },
+  camera: { flex: 1 },
+  overlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center' },
+  scanArea: { width: 250, height: 250, borderWidth: 2, borderColor: '#fff', borderRadius: 16 },
+  hint: { color: '#fff', fontSize: 16, marginTop: 20 },
+  closeBtn: { position: 'absolute', top: 60, right: 20, backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8 },
+  closeText: { color: '#fff', fontSize: 16 },
+  permissionContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
+  permissionText: { fontSize: 16, textAlign: 'center', marginBottom: 20, color: '#333' },
+  allowBtn: { backgroundColor: '#2563eb', paddingVertical: 12, paddingHorizontal: 24, borderRadius: 8, marginBottom: 12 },
+  allowBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  cancelText: { fontSize: 16, color: '#666' },
+});
+
+
+// === app/src/hooks/useMaxBrightness.ts ===
+
+import { useEffect, useRef } from 'react';
+import * as Brightness from 'expo-brightness';
+
+export function useMaxBrightness() {
+  const original = useRef<number>(0);
+
+  useEffect(() => {
+    async function boost() {
+      original.current = await Brightness.getBrightnessAsync();
+      await Brightness.setBrightnessAsync(1);
+    }
+    boost();
+    return () => { Brightness.setBrightnessAsync(original.current); };
+  }, []);
+}
+
+
+// === In TokenDetail screen — add QR + save ===
+
+import { useRef } from 'react';
+import { ScrollView, TouchableOpacity, Text } from 'react-native';
+import ViewShot from 'react-native-view-shot';
+import * as Sharing from 'expo-sharing';
+import { TokenQRCode } from '../components/QRCode';
+import { useMaxBrightness } from '../hooks/useMaxBrightness';
+
+function TokenDetailScreen({ route }) {
+  const { token } = route.params;
+  const qrRef = useRef(null);
+  useMaxBrightness();
+
+  async function handleSaveQR() {
+    const uri = await qrRef.current?.capture();
+    if (uri) {
+      await Sharing.shareAsync(uri, { mimeType: 'image/png' });
+    }
+  }
+
+  return (
+    <ScrollView style={{ flex: 1, padding: 24, backgroundColor: '#fff' }}>
+      <Text style={{ fontSize: 20, fontWeight: '600' }}>{token.label}</Text>
+      <Text style={{ fontSize: 28, fontFamily: 'monospace', marginVertical: 16 }}>{token.code}</Text>
+
+      <ViewShot ref={qrRef} options={{ format: 'png', quality: 1 }}>
+        <TokenQRCode code={token.code} size={280} />
+      </ViewShot>
+
+      <TouchableOpacity
+        style={{ marginTop: 16, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#ddd', alignItems: 'center' }}
+        onPress={handleSaveQR}
+      >
+        <Text style={{ fontSize: 16, color: '#333' }}>Save QR Image</Text>
+      </TouchableOpacity>
+    </ScrollView>
+  );
+}`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "What URL does the QR code contain?",
+        code: "const code = 'MERC-8GH2-LP4X';\nconst stripped = code.replace(/-/g, '');\nconst url = `https://tokn.app/t/${stripped}`;\nconsole.log(url);",
+        answer: "https://tokn.app/t/MERC8GH2LP4X",
+        explanation: "The dashes are stripped for the URL — they're display-only formatting. The URL path uses the raw 12 characters. This makes the QR code smaller (fewer characters = fewer modules = easier to scan)."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this QR scanner handler?",
+        code: "function handleBarCodeScanned({ data }) {\n  const match = data.match(/tokn\\.app\\/t\\/(\\w{12})/);\n  if (match) {\n    onScan(match[1]);\n  }\n}",
+        options: [
+          "The regex uses \\w which includes underscore and lowercase — valid Token codes only use uppercase and digits from a restricted alphabet",
+          "match[1] should be match[0]",
+          "The function should be async",
+          "data is always undefined in barcode callbacks"
+        ],
+        correct: 0,
+        explanation: "\\w matches [A-Za-z0-9_] — way too broad. A Token code uses only '23456789ABCDEFGHJKMNPQRSTUVWXYZ'. Using \\w would accept codes with 0, O, 1, I, L, or lowercase letters, which are invalid. Also missing: the scanned flag to prevent double fires, and protocol/full URL validation."
+      },
+      {
+        type: "which-breaks",
+        question: "Which error correction level should you use when placing a logo in the center of the QR code?",
+        variants: [
+          "ecl=\"L\" — Low (7% recovery)",
+          "ecl=\"M\" — Medium (15% recovery)",
+          "ecl=\"H\" — High (30% recovery)",
+          "No ecl prop needed — the library auto-adjusts"
+        ],
+        correct: 2,
+        explanation: "A center logo obscures data modules. With Low correction, even a small logo might prevent scanning. High (H) allows 30% recovery — enough for a reasonably-sized logo. The tradeoff is a denser QR that needs to be displayed at a larger size."
+      },
+      {
+        type: "fill-blank",
+        question: "Prevent the barcode scanner from firing multiple times:",
+        code: "const [scanned, setScanned] = useState(false);\n\n<CameraView\n  onBarcodeScanned={scanned ? ___ : handleBarCodeScanned}\n/>",
+        answer: "undefined",
+        explanation: "Setting onBarcodeScanned to undefined tells the CameraView to stop processing barcode frames entirely. This is better than just ignoring in the handler — it saves battery because the ML model stops running. When you want to scan again, set scanned back to false."
+      },
+      {
+        type: "order-steps",
+        question: "Put the QR scanning flow in order (holder's perspective):",
+        steps: [
+          "Open scanner screen — camera permission is requested",
+          "Point camera at the QR code on issuer's screen",
+          "expo-camera detects QR and fires onBarcodeScanned",
+          "Handler validates URL matches tokn.app/t/ pattern and extracts code",
+          "Navigate to RedeemToken screen with the extracted code"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Permission first (only on first use), then camera viewfinder, then detection (handled by the ML model inside expo-camera), then validation (never trust scanned data blindly), then navigation to the redemption flow."
+      }
+    ]);
+  </script>
+</body>
+</html>

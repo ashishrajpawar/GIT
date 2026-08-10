@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Presence &amp; Typing — B5.3</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">B5 — WebSocket Server</a>
+      <span class="sep">›</span>
+      <span class="current">Presence &amp; Typing</span>
+    </nav>
+
+    <h1>Presence &amp; Typing</h1>
+    <div class="lesson-meta">
+      <span>B5 — Lesson 3 of 3</span>
+      <span>~50 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>Presence ("online" / "offline" dots) and typing indicators ("typing...") are ephemeral — they don't need to be stored in the database. They're real-time signals that make a chat feel alive. Without them, you're sending messages into a void. With them, you know the other person is there and about to reply. These are the cheapest features with the highest UX impact.</p>
+    </div>
+
+    <h2>Ephemeral vs. durable state</h2>
+
+    <table>
+      <thead>
+        <tr><th>State</th><th>Type</th><th>Storage</th><th>Survives restart?</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Messages</td><td>Durable</td><td>PostgreSQL</td><td>Yes</td></tr>
+        <tr><td>Delivery receipts</td><td>Durable</td><td>PostgreSQL</td><td>Yes</td></tr>
+        <tr><td>Online/offline</td><td>Ephemeral</td><td>In-memory (or Redis)</td><td>No</td></tr>
+        <tr><td>Typing indicator</td><td>Ephemeral</td><td>Not stored anywhere</td><td>No</td></tr>
+        <tr><td>"Last seen" time</td><td>Semi-durable</td><td>PostgreSQL (update on disconnect)</td><td>Yes</td></tr>
+      </tbody>
+    </table>
+
+    <p>Ephemeral state is fire-and-forget. If the server restarts, all presence resets (everyone appears offline until they reconnect). This is fine — clients reconnect within seconds, and presence rebuilds automatically.</p>
+
+    <h2>Presence tracking</h2>
+
+    <h3>When is a user "online"?</h3>
+
+    <p>A user is online if they have at least one active WebSocket connection. Simple rule:</p>
+
+    <pre><code>// User comes online: when their FIRST socket connects
+// User goes offline: when their LAST socket disconnects
+
+function isOnline(userId: number): boolean {
+  const sockets = clients.get(userId);
+  return sockets !== undefined && sockets.size > 0;
+}</code></pre>
+
+    <h3>Broadcasting presence changes</h3>
+
+    <pre><code>// api/src/ws/presence.ts
+import { getClients } from './server';
+import { sendTo } from './router';
+import { db } from '../db';
+
+export async function handleUserConnected(userId: number) {
+  const sockets = getClients().get(userId);
+
+  // Only broadcast if this is their FIRST connection (was offline, now online)
+  if (sockets && sockets.size === 1) {
+    await broadcastPresence(userId, 'online');
+  }
+}
+
+export async function handleUserDisconnected(userId: number) {
+  const sockets = getClients().get(userId);
+
+  // Only broadcast if this was their LAST connection (now truly offline)
+  if (!sockets || sockets.size === 0) {
+    await broadcastPresence(userId, 'offline');
+
+    // Update "last seen" in the database
+    await db.query(
+      'UPDATE users SET last_seen_at = NOW() WHERE id = $1',
+      [userId]
+    );
+  }
+}
+
+async function broadcastPresence(userId: number, status: 'online' | 'offline') {
+  // Find all users who have conversations with this user
+  const result = await db.query(
+    `SELECT DISTINCT
+       CASE WHEN issuer_id = $1 THEN holder_id ELSE issuer_id END AS other_user_id
+     FROM conversations
+     WHERE issuer_id = $1 OR holder_id = $1`,
+    [userId]
+  );
+
+  // Notify each conversation partner who is currently online
+  for (const row of result.rows) {
+    const partnerSockets = getClients().get(row.other_user_id);
+    if (partnerSockets) {
+      for (const sock of partnerSockets) {
+        sendTo(sock, 'presence:update', { userId, status });
+      }
+    }
+  }
+}</code></pre>
+
+    <h3>Wiring into the connection lifecycle</h3>
+
+    <pre><code>// In api/src/ws/server.ts — update the connection/close handlers:
+
+wss.on('connection', (ws: AuthenticatedSocket) =&gt; {
+  // ... existing tracking code ...
+
+  // Broadcast presence after adding to clients Map
+  handleUserConnected(ws.userId);
+});
+
+ws.on('close', () =&gt; {
+  clients.get(ws.userId)?.delete(ws);
+  if (clients.get(ws.userId)?.size === 0) {
+    clients.delete(ws.userId);
+  }
+
+  // Broadcast presence after removing from clients Map
+  handleUserDisconnected(ws.userId);
+});</code></pre>
+
+    <h2>Who should receive presence updates?</h2>
+
+    <p>Not everyone in the system — only people who have an active conversation with this user. The query above finds all "conversation partners". This is important for Token's privacy model:</p>
+
+    <ul>
+      <li>A token holder should see when the issuer is online (so they know if they'll get a quick reply)</li>
+      <li>The issuer should see when holders are online</li>
+      <li>Random users who have no conversation should NOT see each other's presence</li>
+    </ul>
+
+    <h2>Typing indicators</h2>
+
+    <p>Typing indicators are the simplest real-time feature: forward a "user X is typing in conversation Y" event to the other participant. No database, no persistence.</p>
+
+    <pre><code>// api/src/ws/handlers/typing.ts
+import { getClients } from '../server';
+import { sendTo } from '../router';
+import { db } from '../../db';
+import { WebSocket } from 'ws';
+
+interface AuthenticatedSocket extends WebSocket {
+  userId: number;
+  isAlive: boolean;
+}
+
+interface TypingPayload {
+  conversationId: number;
+}
+
+export async function handleTypingStart(ws: AuthenticatedSocket, payload: TypingPayload) {
+  await forwardTypingEvent(ws, payload.conversationId, true);
+}
+
+export async function handleTypingStop(ws: AuthenticatedSocket, payload: TypingPayload) {
+  await forwardTypingEvent(ws, payload.conversationId, false);
+}
+
+async function forwardTypingEvent(
+  ws: AuthenticatedSocket,
+  conversationId: number,
+  isTyping: boolean
+) {
+  // Find the other participant
+  const conv = await db.query(
+    'SELECT issuer_id, holder_id FROM conversations WHERE id = $1',
+    [conversationId]
+  );
+
+  if (conv.rows.length === 0) return;
+
+  const { issuer_id, holder_id } = conv.rows[0];
+  if (ws.userId !== issuer_id && ws.userId !== holder_id) return;
+
+  const recipientId = ws.userId === issuer_id ? holder_id : issuer_id;
+  const recipientSockets = getClients().get(recipientId);
+
+  if (recipientSockets) {
+    for (const sock of recipientSockets) {
+      sendTo(sock, 'typing:update', {
+        conversationId,
+        userId: ws.userId,
+        isTyping,
+      });
+    }
+  }
+}</code></pre>
+
+    <h2>Client-side typing debounce</h2>
+
+    <p>You don't want to send a WebSocket message on every keystroke. Debounce:</p>
+
+    <pre><code>// Client-side (preview — covered fully in A6)
+let typingTimeout: ReturnType&lt;typeof setTimeout&gt; | null = null;
+let isCurrentlyTyping = false;
+
+function handleTextChange(text: string) {
+  setText(text);
+
+  if (!isCurrentlyTyping) {
+    isCurrentlyTyping = true;
+    ws.send(JSON.stringify({ type: 'typing:start', payload: { conversationId } }));
+  }
+
+  // Reset the stop timer on every keystroke
+  if (typingTimeout) clearTimeout(typingTimeout);
+  typingTimeout = setTimeout(() =&gt; {
+    isCurrentlyTyping = false;
+    ws.send(JSON.stringify({ type: 'typing:stop', payload: { conversationId } }));
+  }, 3000);  // stop after 3 seconds of no typing
+}</code></pre>
+
+    <p><strong>The pattern:</strong></p>
+    <ol>
+      <li>First keystroke → send <code>typing:start</code></li>
+      <li>Each subsequent keystroke → reset the 3-second timer</li>
+      <li>After 3 seconds of silence → send <code>typing:stop</code></li>
+      <li>Also send <code>typing:stop</code> when the message is sent</li>
+    </ol>
+
+    <h2>Server-side typing timeout (safety net)</h2>
+
+    <p>What if the client crashes without sending <code>typing:stop</code>? The recipient would see "typing..." forever. Add a server-side timeout:</p>
+
+    <pre><code>// api/src/ws/handlers/typing.ts — enhanced
+const typingTimers = new Map&lt;string, ReturnType&lt;typeof setTimeout&gt;&gt;();
+
+export async function handleTypingStart(ws: AuthenticatedSocket, payload: TypingPayload) {
+  const key = `${ws.userId}:${payload.conversationId}`;
+
+  // Clear existing timer
+  if (typingTimers.has(key)) {
+    clearTimeout(typingTimers.get(key)!);
+  }
+
+  // Auto-stop after 5 seconds if no typing:stop received
+  typingTimers.set(key, setTimeout(() =&gt; {
+    forwardTypingEvent(ws, payload.conversationId, false);
+    typingTimers.delete(key);
+  }, 5000));
+
+  await forwardTypingEvent(ws, payload.conversationId, true);
+}
+
+export async function handleTypingStop(ws: AuthenticatedSocket, payload: TypingPayload) {
+  const key = `${ws.userId}:${payload.conversationId}`;
+  if (typingTimers.has(key)) {
+    clearTimeout(typingTimers.get(key)!);
+    typingTimers.delete(key);
+  }
+  await forwardTypingEvent(ws, payload.conversationId, false);
+}</code></pre>
+
+    <h2>Redis pub/sub — scaling beyond one server (optional for v1)</h2>
+
+    <p>Right now, presence and typing work because all connections live on one server process. The <code>clients</code> Map is in-memory. If you had two server instances behind a load balancer, a user connected to server A wouldn't receive typing events from a user connected to server B.</p>
+
+    <p>The solution: Redis pub/sub. Each server publishes events to Redis; all servers subscribe and forward to their local clients.</p>
+
+    <pre><code>// Conceptual — NOT needed for v1 (single server)
+import Redis from 'ioredis';
+
+const pub = new Redis();
+const sub = new Redis();
+
+// When user types on server A:
+pub.publish('typing', JSON.stringify({ conversationId, userId, isTyping: true }));
+
+// All servers (including B) receive:
+sub.subscribe('typing');
+sub.on('message', (channel, message) =&gt; {
+  const data = JSON.parse(message);
+  // Forward to local sockets for users in this conversation
+});</code></pre>
+
+    <p><strong>When to add Redis:</strong> When you need multiple server instances (load > 1 machine can handle, or zero-downtime deploys). For Token v1 on a single VPS, in-memory is correct.</p>
+
+    <h2>Privacy considerations for presence</h2>
+
+    <p>Token is a privacy app. Should the holder see when the issuer is online? Arguments both ways:</p>
+
+    <ul>
+      <li><strong>Show presence:</strong> Holder knows when to expect a reply. Better UX.</li>
+      <li><strong>Hide presence:</strong> Issuer might not want holders knowing their schedule.</li>
+    </ul>
+
+    <p><strong>Decision:</strong> Make it a per-token access rule. By default, presence is shown. The issuer can add a rule to hide it.</p>
+
+    <pre><code>// Potential future rule type:
+{ "rule_type": "hide_presence", "payload": { "hide": true } }
+
+// In broadcastPresence, check if the token has this rule before sending
+// This is a B7 (Token Engine) concern — for now, always show</code></pre>
+
+    <h2>Complete presence + typing integration</h2>
+
+    <pre><code>// api/src/ws/server.ts — final version with presence
+import { WebSocketServer, WebSocket } from 'ws';
+import { Server as HttpServer } from 'http';
+import { verifyWsToken } from './auth';
+import { setupHeartbeat } from './heartbeat';
+import { handleMessage } from './router';
+import { handleUserConnected, handleUserDisconnected } from './presence';
+import { registerAllHandlers } from './handlers';
+
+interface AuthenticatedSocket extends WebSocket {
+  userId: number;
+  isAlive: boolean;
+}
+
+const clients = new Map&lt;number, Set&lt;AuthenticatedSocket&gt;&gt;();
+
+export function createWsServer(httpServer: HttpServer) {
+  const wss = new WebSocketServer({ noServer: true });
+
+  registerAllHandlers();
+
+  httpServer.on('upgrade', async (request, socket, head) =&gt; {
+    try {
+      const userId = await verifyWsToken(request);
+      wss.handleUpgrade(request, socket, head, (ws) =&gt; {
+        const authWs = ws as AuthenticatedSocket;
+        authWs.userId = userId;
+        authWs.isAlive = true;
+        wss.emit('connection', authWs, request);
+      });
+    } catch {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      socket.destroy();
+    }
+  });
+
+  wss.on('connection', (ws: AuthenticatedSocket) =&gt; {
+    if (!clients.has(ws.userId)) clients.set(ws.userId, new Set());
+    clients.get(ws.userId)!.add(ws);
+    handleUserConnected(ws.userId);
+
+    ws.on('message', (data) =&gt; handleMessage(ws, data));
+
+    ws.on('close', () =&gt; {
+      clients.get(ws.userId)?.delete(ws);
+      if (clients.get(ws.userId)?.size === 0) clients.delete(ws.userId);
+      handleUserDisconnected(ws.userId);
+    });
+
+    ws.on('pong', () =&gt; { ws.isAlive = true; });
+  });
+
+  setupHeartbeat(wss);
+  return wss;
+}
+
+export function getClients() { return clients; }</code></pre>
+
+    <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0002-message-routing.html">← Previous: Message Routing</a>
+      <a href="../a6-chat-realtime/0001-websocket-client.html">Next module: A6 Chat &amp; Real-time →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// Simulate typing debounce logic
+let isTyping = false;
+let timeout = null;
+const events = [];
+
+function onKeystroke(char, timestamp) {
+  if (!isTyping) {
+    isTyping = true;
+    events.push(timestamp + 'ms: typing:start');
+  }
+
+  // Reset stop timer
+  if (timeout) clearTimeout(timeout);
+  timeout = setTimeout(() => {
+    isTyping = false;
+    events.push((timestamp + 3000) + 'ms: typing:stop (auto)');
+  }, 3000);
+}
+
+// Simulate: user types "Hi" then stops
+onKeystroke('H', 0);
+onKeystroke('i', 200);
+// ... 3 seconds of silence ...
+
+// Simulate the timeout firing
+setTimeout(() => {
+  console.log('Typing events sent to server:');
+  events.forEach(e => console.log('  ' + e));
+  console.log('\\nOnly 2 WS messages sent (start + stop)');
+  console.log('Not one per keystroke!');
+}, 0);
+
+// Force the pending timeout for demo
+isTyping = false;
+events.push('3200ms: typing:stop (auto)');
+console.log('Typing events sent to server:');
+events.forEach(e => console.log('  ' + e));
+console.log('\\nOnly 2 WS messages for 2 keystrokes — debounce works.');`);
+
+    createSolution("exercise-1", {
+      exercise: "Build the complete presence and typing system:\n\n1. Create `api/src/ws/presence.ts`: track online/offline, broadcast to conversation partners only, update last_seen_at in the DB on disconnect.\n\n2. Create `api/src/ws/handlers/typing.ts`: forward typing:start and typing:stop to the other participant in the conversation. Add a server-side 5-second timeout safety net.\n\n3. Wire presence into the connection lifecycle: call handleUserConnected on connect, handleUserDisconnected on close.\n\n4. Only broadcast 'went online' when the FIRST socket connects, and 'went offline' when the LAST socket disconnects (multi-device aware).\n\n5. Only send presence updates to users who have an active conversation with this user (privacy — strangers don't see your status).\n\n6. Test: connect two users via wscat, verify one sees the other's presence change. Send typing:start and verify it arrives on the other side.",
+      hints: [
+        "A user is online if clients.get(userId)?.size > 0. Check BEFORE and AFTER modifying the Set to detect transitions.",
+        "The broadcastPresence query: find all users who share a conversation with this user (SELECT DISTINCT other_user_id).",
+        "For the typing timeout: use a Map<'userId:conversationId', setTimeout> to track timers per user per conversation.",
+        "Add an 'add column' migration: ALTER TABLE users ADD COLUMN last_seen_at TIMESTAMPTZ;"
+      ],
+      solution: `// === api/src/ws/presence.ts ===
+// See full implementation in lesson above.
+// Key design:
+// - broadcastPresence finds conversation partners via SQL
+// - Only broadcasts on FIRST connect / LAST disconnect
+// - Updates last_seen_at on disconnect
+
+// === api/src/ws/handlers/typing.ts ===
+// See full implementation with timeout safety net above.
+// Key design:
+// - typingTimers Map tracks auto-stop per user/conversation
+// - 5-second server timeout catches client crashes
+// - Only forwards to the other participant (1:1 conversations)
+
+// === Integration in server.ts ===
+// On connection: handleUserConnected(ws.userId)
+// On close: handleUserDisconnected(ws.userId)
+// Multi-device: check Set size for transition detection
+
+// === Database migration ===
+// ALTER TABLE users ADD COLUMN last_seen_at TIMESTAMPTZ;`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "User 5 connects from phone, then tablet. When does 'online' broadcast?",
+        code: "// Connect phone: clients.get(5).size goes from 0 → 1\n// Connect tablet: clients.get(5).size goes from 1 → 2\n\n// When does broadcastPresence(5, 'online') fire?",
+        answer: "Only on phone connect (first device)",
+        explanation: "The presence broadcast only fires when size goes from 0 to 1 (first connection). The tablet connecting (1 → 2) doesn't broadcast again — the user was already online. Similarly, 'offline' only broadcasts when size goes from 1 to 0 (last disconnection)."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this typing timeout implementation?",
+        code: "const typingTimers = new Map();\n\nexport async function handleTypingStart(ws, payload) {\n  const key = `${ws.userId}:${payload.conversationId}`;\n  typingTimers.set(key, setTimeout(() => {\n    forwardTypingEvent(ws, payload.conversationId, false);\n  }, 5000));\n  await forwardTypingEvent(ws, payload.conversationId, true);\n}",
+        options: [
+          "Multiple typing:start calls create multiple timers without clearing the previous one — memory leak and multiple typing:stop events",
+          "setTimeout can't be stored in a Map",
+          "The timeout should be 30 seconds, not 5",
+          "forwardTypingEvent shouldn't be awaited"
+        ],
+        correct: 0,
+        explanation: "If the client sends typing:start twice (which happens — debounce resets on the client), the server creates two timers. Both will fire typing:stop later. Fix: clearTimeout the existing timer before setting a new one. `if (typingTimers.has(key)) clearTimeout(typingTimers.get(key)!);`"
+      },
+      {
+        type: "which-breaks",
+        question: "Who should receive a user's presence updates in Token?",
+        variants: [
+          "All connected users in the system",
+          "Only users who have an active conversation with them",
+          "Only users who share a mutual token",
+          "Nobody — presence should be disabled for privacy"
+        ],
+        correct: 1,
+        explanation: "Broadcasting to all users leaks information (strangers know your schedule). Showing no presence makes the chat feel dead. The correct scope: only conversation partners — people who already have a legitimate reason to communicate with you via an active token. This aligns with Token's privacy model."
+      },
+      {
+        type: "fill-blank",
+        question: "Update the user's 'last seen' time when they go offline:",
+        code: "export async function handleUserDisconnected(userId: number) {\n  const sockets = getClients().get(userId);\n  if (!sockets || sockets.size === 0) {\n    await broadcastPresence(userId, 'offline');\n    await db.query(\n      'UPDATE users SET ___ = NOW() WHERE id = $1',\n      [userId]\n    );\n  }\n}",
+        answer: "last_seen_at",
+        explanation: "last_seen_at records when the user was last online. It's updated when their last socket disconnects (truly offline). This is semi-durable — stored in PostgreSQL so it survives server restarts. Clients can show 'last seen 5 min ago' in the conversation view."
+      },
+      {
+        type: "order-steps",
+        question: "Put the typing indicator flow in order:",
+        steps: [
+          "User starts typing — client sends typing:start",
+          "Server forwards typing:update (isTyping: true) to the other participant",
+          "Recipient's UI shows 'typing...' indicator",
+          "User stops typing for 3 seconds — client sends typing:stop",
+          "Server forwards typing:update (isTyping: false) — indicator disappears"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "The client debounces (start on first keystroke, stop after 3s silence). The server just forwards — no logic beyond the safety timeout. The recipient renders based on the isTyping boolean. The whole round-trip is typically <50ms on good connections."
+      }
+    ]);
+  </script>
+</body>
+</html>

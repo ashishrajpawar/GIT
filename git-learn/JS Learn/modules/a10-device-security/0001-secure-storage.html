@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>A10 — Secure Storage</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Device Security &amp; Storage</a> &rsaquo;
+        <span>Secure Storage</span>
+    </nav>
+
+    <h1>Secure Storage</h1>
+    <p class="lesson-meta">A10 &mdash; Lesson 1 of 2 &nbsp;|&nbsp; ~35 min</p>
+
+    <div class="callout">
+        <strong>Why this matters for Token:</strong> AsyncStorage writes data as plaintext files on
+        the device filesystem. If someone gets physical access to a rooted/jailbroken phone (or even
+        a locked phone with USB debugging enabled), they can read the JWT, refresh token, and any
+        encryption keys you stored there. Token is a <em>privacy app</em> &mdash; its credibility
+        depends on actually protecting secrets. <code>expo-secure-store</code> uses iOS Keychain and
+        Android Keystore hardware-backed encryption so that even a rooted device cannot trivially
+        extract these values.
+    </div>
+
+    <h2>AsyncStorage vs SecureStore</h2>
+    <table>
+        <thead>
+            <tr>
+                <th></th>
+                <th>AsyncStorage</th>
+                <th>SecureStore</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><strong>Encryption</strong></td>
+                <td>None (plaintext JSON file)</td>
+                <td>Hardware-backed (Keychain/Keystore)</td>
+            </tr>
+            <tr>
+                <td><strong>Size limit</strong></td>
+                <td>6 MB (Android default)</td>
+                <td>2048 bytes per item (iOS)</td>
+            </tr>
+            <tr>
+                <td><strong>Use for</strong></td>
+                <td>Preferences, cache, non-sensitive data</td>
+                <td>JWT, refresh token, encryption keys</td>
+            </tr>
+            <tr>
+                <td><strong>Availability</strong></td>
+                <td>Always available</td>
+                <td>May fail after device wipe or restore</td>
+            </tr>
+            <tr>
+                <td><strong>Speed</strong></td>
+                <td>Fast (file I/O)</td>
+                <td>Slightly slower (crypto operations)</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <p>The rule is simple: <strong>if the value is a secret, use SecureStore. If it is a preference or cached UI state, use AsyncStorage.</strong></p>
+
+    <h2>Installing expo-secure-store</h2>
+    <pre><code># In your app/ directory
+npx expo install expo-secure-store</code></pre>
+
+    <p>No additional native configuration needed with Expo managed workflow. The package uses iOS Keychain Services and Android EncryptedSharedPreferences (API 23+) or Keystore (API 18+).</p>
+
+    <h2>Basic SecureStore API</h2>
+    <pre><code>import * as SecureStore from 'expo-secure-store';
+
+// Store a value (must be a string, max 2048 bytes on iOS)
+await SecureStore.setItemAsync('auth_token', jwtToken);
+
+// Retrieve a value (returns null if not found)
+const token = await SecureStore.getItemAsync('auth_token');
+
+// Delete a value
+await SecureStore.deleteItemAsync('auth_token');
+
+// Options: control when the item is accessible
+await SecureStore.setItemAsync('refresh_token', refreshToken, {
+  // WHEN_UNLOCKED — accessible only when device is unlocked (default)
+  // AFTER_FIRST_UNLOCK — accessible after first unlock since boot
+  // ALWAYS — accessible even when locked (least secure)
+  keychainAccessible: SecureStore.WHEN_UNLOCKED,
+});</code></pre>
+
+    <h2>What to Store Where</h2>
+    <pre><code>// SECURE STORE — secrets that grant access
+const SECURE_KEYS = {
+  AUTH_TOKEN: 'token_auth_jwt',
+  REFRESH_TOKEN: 'token_refresh_jwt',
+  ENCRYPTION_KEY: 'token_e2e_key',
+  BIOMETRIC_SECRET: 'token_bio_secret',
+};
+
+// ASYNC STORAGE — non-sensitive preferences and cache
+const STORAGE_KEYS = {
+  THEME: '@token/theme',                // 'light' | 'dark'
+  LAST_SYNC: '@token/last_sync',        // ISO timestamp
+  ONBOARDING_DONE: '@token/onboarded',  // 'true'
+  DRAFT_MESSAGE: '@token/draft',        // unsent message text
+  NOTIFICATION_PREFS: '@token/notif',   // JSON of notification settings
+};</code></pre>
+
+    <h2>Building a Secure Storage Wrapper</h2>
+    <pre><code>// app/src/services/secureStorage.ts
+import * as SecureStore from 'expo-secure-store';
+
+export class SecureStorageError extends Error {
+  constructor(message: string, public readonly key: string) {
+    super(message);
+    this.name = 'SecureStorageError';
+  }
+}
+
+/**
+ * Wrapper around expo-secure-store with error handling
+ * and JSON serialization for objects.
+ */
+export const secureStorage = {
+  async set(key: string, value: string): Promise&lt;void&gt; {
+    try {
+      if (value.length > 2048) {
+        throw new SecureStorageError(
+          `Value exceeds 2048 byte iOS limit (${value.length} bytes)`,
+          key
+        );
+      }
+      await SecureStore.setItemAsync(key, value);
+    } catch (err) {
+      if (err instanceof SecureStorageError) throw err;
+      throw new SecureStorageError(
+        `Failed to store key "${key}": ${(err as Error).message}`,
+        key
+      );
+    }
+  },
+
+  async get(key: string): Promise&lt;string | null&gt; {
+    try {
+      return await SecureStore.getItemAsync(key);
+    } catch (err) {
+      // Keychain may be unavailable after device restore
+      console.error(`SecureStore read failed for "${key}":`, err);
+      return null;
+    }
+  },
+
+  async remove(key: string): Promise&lt;void&gt; {
+    try {
+      await SecureStore.deleteItemAsync(key);
+    } catch (err) {
+      console.error(`SecureStore delete failed for "${key}":`, err);
+    }
+  },
+
+  async setJSON(key: string, value: unknown): Promise&lt;void&gt; {
+    const serialized = JSON.stringify(value);
+    await this.set(key, serialized);
+  },
+
+  async getJSON&lt;T&gt;(key: string): Promise&lt;T | null&gt; {
+    const raw = await this.get(key);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as T;
+    } catch {
+      return null;
+    }
+  },
+};</code></pre>
+
+    <h2>Migrating from AsyncStorage to SecureStore</h2>
+    <pre><code>// app/src/services/migrateSensitiveData.ts
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { secureStorage } from './secureStorage';
+
+const MIGRATION_FLAG = '@token/secure_migration_v1';
+
+/**
+ * One-time migration: moves sensitive keys from AsyncStorage
+ * to SecureStore. Safe to call multiple times — checks a flag.
+ */
+export async function migrateSensitiveData(): Promise&lt;void&gt; {
+  const alreadyMigrated = await AsyncStorage.getItem(MIGRATION_FLAG);
+  if (alreadyMigrated === 'done') return;
+
+  const keysToMigrate = [
+    { asyncKey: '@token/jwt', secureKey: 'token_auth_jwt' },
+    { asyncKey: '@token/refresh', secureKey: 'token_refresh_jwt' },
+    { asyncKey: '@token/e2e_key', secureKey: 'token_e2e_key' },
+  ];
+
+  for (const { asyncKey, secureKey } of keysToMigrate) {
+    const value = await AsyncStorage.getItem(asyncKey);
+    if (value) {
+      await secureStorage.set(secureKey, value);
+      await AsyncStorage.removeItem(asyncKey); // Delete plaintext copy
+    }
+  }
+
+  await AsyncStorage.setItem(MIGRATION_FLAG, 'done');
+  console.log('Sensitive data migration complete');
+}</code></pre>
+
+    <h2>Using SecureStore in Your Auth Context</h2>
+    <pre><code>// app/src/context/AuthContext.tsx (updated)
+import { secureStorage } from '../services/secureStorage';
+
+const KEYS = {
+  AUTH: 'token_auth_jwt',
+  REFRESH: 'token_refresh_jwt',
+};
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [user, setUser] = useState&lt;User | null&gt;(null);
+  const [loading, setLoading] = useState(true);
+
+  // On app start: try to restore session from SecureStore
+  useEffect(() => {
+    async function restoreSession() {
+      const jwt = await secureStorage.get(KEYS.AUTH);
+      if (jwt) {
+        try {
+          const userData = await apiClient.get('/api/me', jwt);
+          setUser(userData);
+        } catch {
+          // Token expired — try refresh
+          const refreshToken = await secureStorage.get(KEYS.REFRESH);
+          if (refreshToken) {
+            const newTokens = await apiClient.post('/api/refresh', { refreshToken });
+            await secureStorage.set(KEYS.AUTH, newTokens.accessToken);
+            await secureStorage.set(KEYS.REFRESH, newTokens.refreshToken);
+            setUser(newTokens.user);
+          }
+        }
+      }
+      setLoading(false);
+    }
+    restoreSession();
+  }, []);
+
+  async function login(email: string, password: string) {
+    const response = await apiClient.post('/api/login', { email, password });
+    await secureStorage.set(KEYS.AUTH, response.accessToken);
+    await secureStorage.set(KEYS.REFRESH, response.refreshToken);
+    setUser(response.user);
+  }
+
+  async function logout() {
+    await secureStorage.remove(KEYS.AUTH);
+    await secureStorage.remove(KEYS.REFRESH);
+    setUser(null);
+  }
+
+  return (
+    &lt;AuthContext.Provider value={{ user, loading, login, logout }}&gt;
+      {children}
+    &lt;/AuthContext.Provider&gt;
+  );
+}</code></pre>
+
+    <h2>Error Handling: When the Keychain is Unavailable</h2>
+    <pre><code>// After a device restore or factory reset, the Keychain may reject reads.
+// Your app must handle this gracefully — force re-login.
+
+async function safeGetToken(): Promise&lt;string | null&gt; {
+  try {
+    return await SecureStore.getItemAsync('token_auth_jwt');
+  } catch (err) {
+    // Keychain corrupted or inaccessible
+    console.error('Keychain unavailable:', err);
+    // Clear all secure data and force re-authentication
+    await clearAllSecureData();
+    return null;
+  }
+}
+
+async function clearAllSecureData(): Promise&lt;void&gt; {
+  const keys = ['token_auth_jwt', 'token_refresh_jwt', 'token_e2e_key'];
+  for (const key of keys) {
+    try {
+      await SecureStore.deleteItemAsync(key);
+    } catch {
+      // Already inaccessible — that's fine
+    }
+  }
+}</code></pre>
+
+    <h2>Playground: SecureStore Decision Helper</h2>
+    <div id="playground-1"></div>
+
+    <h2>Exercise: Build the Secure Storage Layer</h2>
+    <div id="exercise-1"></div>
+
+    <h2>Quiz</h2>
+    <div id="lesson-quiz"></div>
+
+    <div class="lesson-nav">
+        <a href="./README.html">&larr; Module Overview</a>
+        <a href="./0002-biometric-app-lock.html">Next: Biometric App Lock &rarr;</a>
+    </div>
+
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+    <script>
+        createPlayground("playground-1", `// Decide: SecureStore or AsyncStorage?
+function whereToStore(key, description) {
+  const sensitivePatterns = [
+    'token', 'jwt', 'key', 'secret', 'password', 'credential', 'refresh'
+  ];
+
+  const isSensitive = sensitivePatterns.some(
+    pattern => key.toLowerCase().includes(pattern) ||
+               description.toLowerCase().includes(pattern)
+  );
+
+  const recommendation = isSensitive ? 'SecureStore' : 'AsyncStorage';
+  const reason = isSensitive
+    ? 'Contains secrets — must be hardware-encrypted'
+    : 'Non-sensitive data — plaintext storage is fine';
+
+  console.log(key + ": " + recommendation);
+  console.log("  Reason: " + reason);
+  console.log("");
+}
+
+// Test with Token app data
+whereToStore('@token/jwt', 'Access token for API calls');
+whereToStore('@token/theme', 'UI theme preference light/dark');
+whereToStore('@token/e2e_key', 'End-to-end encryption key');
+whereToStore('@token/last_sync', 'Timestamp of last data sync');
+whereToStore('@token/refresh', 'Refresh token for session renewal');
+whereToStore('@token/onboarded', 'Whether user completed onboarding');`);
+
+        createSolution("exercise-1", {
+            exercise: "Build a complete secure storage service for the Token app:\n\n1. Create a `SecureTokenStore` class that handles storing and retrieving auth credentials (access token, refresh token) using expo-secure-store.\n2. Include a `migrate()` method that moves any existing tokens from AsyncStorage to SecureStore (one-time operation).\n3. Add a `isAvailable()` check that verifies the keychain is accessible, returning false if it isn't (e.g., after device restore).\n4. Ensure all values respect the 2048-byte limit — if a JWT is too long, split it across two keys.",
+            hints: [
+                "Use a try/catch around SecureStore.getItemAsync with a known test key to verify availability.",
+                "For the split logic: store the length in a metadata key, then chunk the value into 2048-byte segments.",
+                "The migration should be idempotent — check a flag in AsyncStorage before running."
+            ],
+            solution: `// app/src/services/SecureTokenStore.ts
+import * as SecureStore from 'expo-secure-store';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const MAX_ITEM_SIZE = 2048;
+const MIGRATION_KEY = '@token/secure_migrated_v1';
+const AVAILABILITY_TEST_KEY = '__secure_store_test__';
+
+interface StoredCredentials {
+  accessToken: string;
+  refreshToken: string;
+}
+
+export class SecureTokenStore {
+  private available: boolean | null = null;
+
+  /**
+   * Check if SecureStore is functional on this device.
+   * Cache the result — it won't change during a session.
+   */
+  async isAvailable(): Promise<boolean> {
+    if (this.available !== null) return this.available;
+
+    try {
+      await SecureStore.setItemAsync(AVAILABILITY_TEST_KEY, 'test');
+      await SecureStore.deleteItemAsync(AVAILABILITY_TEST_KEY);
+      this.available = true;
+    } catch {
+      this.available = false;
+    }
+    return this.available;
+  }
+
+  /**
+   * Store a value, splitting across keys if it exceeds 2048 bytes.
+   */
+  async set(key: string, value: string): Promise<void> {
+    if (!(await this.isAvailable())) {
+      throw new Error('SecureStore is not available on this device');
+    }
+
+    if (value.length <= MAX_ITEM_SIZE) {
+      await SecureStore.setItemAsync(key, value);
+      // Clean up any previous chunks
+      await this.removeChunks(key);
+    } else {
+      // Split into chunks
+      const chunks = Math.ceil(value.length / MAX_ITEM_SIZE);
+      await SecureStore.setItemAsync(key + '__meta', JSON.stringify({ chunks }));
+      for (let i = 0; i < chunks; i++) {
+        const chunk = value.slice(i * MAX_ITEM_SIZE, (i + 1) * MAX_ITEM_SIZE);
+        await SecureStore.setItemAsync(key + '__chunk_' + i, chunk);
+      }
+    }
+  }
+
+  /**
+   * Retrieve a value, reassembling chunks if necessary.
+   */
+  async get(key: string): Promise<string | null> {
+    if (!(await this.isAvailable())) return null;
+
+    // Check for chunked storage first
+    const metaRaw = await SecureStore.getItemAsync(key + '__meta');
+    if (metaRaw) {
+      const { chunks } = JSON.parse(metaRaw);
+      let value = '';
+      for (let i = 0; i < chunks; i++) {
+        const chunk = await SecureStore.getItemAsync(key + '__chunk_' + i);
+        if (!chunk) return null; // Corrupted
+        value += chunk;
+      }
+      return value;
+    }
+
+    return await SecureStore.getItemAsync(key);
+  }
+
+  async remove(key: string): Promise<void> {
+    if (!(await this.isAvailable())) return;
+    await SecureStore.deleteItemAsync(key);
+    await this.removeChunks(key);
+  }
+
+  private async removeChunks(key: string): Promise<void> {
+    const metaRaw = await SecureStore.getItemAsync(key + '__meta');
+    if (metaRaw) {
+      const { chunks } = JSON.parse(metaRaw);
+      for (let i = 0; i < chunks; i++) {
+        await SecureStore.deleteItemAsync(key + '__chunk_' + i);
+      }
+      await SecureStore.deleteItemAsync(key + '__meta');
+    }
+  }
+
+  // --- High-level credential methods ---
+
+  async saveCredentials(creds: StoredCredentials): Promise<void> {
+    await this.set('token_auth_jwt', creds.accessToken);
+    await this.set('token_refresh_jwt', creds.refreshToken);
+  }
+
+  async getCredentials(): Promise<StoredCredentials | null> {
+    const accessToken = await this.get('token_auth_jwt');
+    const refreshToken = await this.get('token_refresh_jwt');
+    if (!accessToken || !refreshToken) return null;
+    return { accessToken, refreshToken };
+  }
+
+  async clearCredentials(): Promise<void> {
+    await this.remove('token_auth_jwt');
+    await this.remove('token_refresh_jwt');
+  }
+
+  // --- Migration ---
+
+  async migrate(): Promise<void> {
+    const alreadyDone = await AsyncStorage.getItem(MIGRATION_KEY);
+    if (alreadyDone === 'done') return;
+
+    if (!(await this.isAvailable())) {
+      console.warn('SecureStore unavailable — skipping migration');
+      return;
+    }
+
+    const migrations = [
+      { from: '@token/jwt', to: 'token_auth_jwt' },
+      { from: '@token/refresh', to: 'token_refresh_jwt' },
+      { from: '@token/e2e_key', to: 'token_e2e_key' },
+    ];
+
+    for (const { from, to } of migrations) {
+      const value = await AsyncStorage.getItem(from);
+      if (value) {
+        await this.set(to, value);
+        await AsyncStorage.removeItem(from);
+      }
+    }
+
+    await AsyncStorage.setItem(MIGRATION_KEY, 'done');
+  }
+}
+
+// Singleton export
+export const secureTokenStore = new SecureTokenStore();`
+        });
+
+        createQuiz("lesson-quiz", [
+            {
+                type: "predict-output",
+                code: "const value = 'a'.repeat(2100);\nconsole.log(value.length > 2048);",
+                answer: "true",
+                explanation: "A string of 2100 characters exceeds the iOS Keychain per-item limit of 2048 bytes. You need to split it across multiple keys or compress it before storing."
+            },
+            {
+                type: "which-breaks",
+                question: "Which of these SecureStore calls will fail at runtime?",
+                variants: [
+                    "await SecureStore.setItemAsync('key', 'hello');",
+                    "await SecureStore.setItemAsync('key', { token: 'abc' });",
+                    "await SecureStore.getItemAsync('nonexistent_key');"
+                ],
+                correct: 1,
+                explanation: "SecureStore only accepts string values. Passing an object without JSON.stringify() will throw a type error. The getItemAsync call for a nonexistent key just returns null — it does not throw."
+            },
+            {
+                question: "After a factory reset, what happens when your app tries to read from SecureStore?",
+                options: [
+                    "It returns the previously stored values from iCloud backup",
+                    "It returns null for all keys — the Keychain was wiped",
+                    "It throws an error because the Keychain is unavailable",
+                    "Either B or C depending on the device and OS version"
+                ],
+                correct: 3,
+                explanation: "Behavior varies: some devices return null (data wiped cleanly), others throw errors if the Keychain service is in a bad state after restore. Your code must handle both cases — which is why we have the isAvailable() check."
+            },
+            {
+                type: "fill-blank",
+                code: "await SecureStore.setItemAsync('token', jwt, {\n  keychainAccessible: SecureStore.___,\n});",
+                answer: "WHEN_UNLOCKED",
+                explanation: "WHEN_UNLOCKED is the most secure option — the item can only be read when the device is unlocked. This is the default, but stating it explicitly documents your security intent."
+            },
+            {
+                type: "spot-the-bug",
+                code: "async function saveToken(jwt) {\n  await AsyncStorage.setItem('auth_token', jwt);\n  console.log('Token saved securely');\n}",
+                bugLine: 2,
+                options: [
+                    "Line 2 — using AsyncStorage for a secret (should be SecureStore)",
+                    "Line 1 — function should not be async",
+                    "Line 3 — logging the word 'securely' doesn't make it secure"
+                ],
+                correct: 0,
+                explanation: "AsyncStorage stores data as plaintext on disk. A JWT is a sensitive credential that should be stored in SecureStore where it gets hardware-backed encryption. The misleading log message on line 3 is bad practice too, but the real bug is the insecure storage mechanism."
+            }
+        ]);
+    </script>
+</body>
+</html>

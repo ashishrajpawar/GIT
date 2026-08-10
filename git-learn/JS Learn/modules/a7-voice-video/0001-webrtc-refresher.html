@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebRTC Refresher + New Signalling — A7.1</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A7 — Voice &amp; Video</a>
+      <span class="sep">›</span>
+      <span class="current">WebRTC Refresher + New Signalling</span>
+    </nav>
+
+    <h1>WebRTC Refresher + New Signalling</h1>
+    <div class="lesson-meta">
+      <span>A7 — Lesson 1 of 5</span>
+      <span>~55 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>Voice and video calls are the highest-value communication channel in Token. A delivery person needs to ask "which floor?" — a text message takes 30 seconds of back-and-forth, a 5-second call resolves it instantly. WebRTC gives you peer-to-peer calls with no third-party SDK, no per-minute billing, and full control over privacy (relay-only mode hides IPs). This lesson wires the client-side WebRTC to your own signalling server from B6.</p>
+    </div>
+
+    <h2>The WebRTC stack (refresher)</h2>
+
+    <pre><code>┌─────────────────────────────────────┐
+│         Your Application            │
+├─────────────────────────────────────┤
+│    RTCPeerConnection API            │
+├─────────────────────────────────────┤
+│  ICE Agent  │  DTLS  │  SRTP       │
+├─────────────┼────────┼─────────────┤
+│         UDP / TCP Transport         │
+└─────────────────────────────────────┘</code></pre>
+
+    <ul>
+      <li><strong>RTCPeerConnection</strong> — the main API. You create one per call.</li>
+      <li><strong>ICE Agent</strong> — finds the best network path between peers</li>
+      <li><strong>DTLS</strong> — encrypts the connection (like TLS but for UDP)</li>
+      <li><strong>SRTP</strong> — encrypts the media (audio/video packets)</li>
+    </ul>
+
+    <p><strong>Key fact:</strong> WebRTC is end-to-end encrypted by default. Not even your TURN server can decrypt the media — it just relays opaque encrypted packets.</p>
+
+    <h2>react-native-webrtc</h2>
+
+    <p>React Native doesn't include WebRTC natively. The <code>react-native-webrtc</code> library provides the same APIs as the browser (RTCPeerConnection, MediaStream, etc.) backed by native C++/Obj-C WebRTC code.</p>
+
+    <pre><code># Install
+npx expo install react-native-webrtc
+
+# This requires EAS Build — Expo Go cannot run native WebRTC code
+# You MUST use a development build from this point on</code></pre>
+
+    <h3>Expo config plugin</h3>
+
+    <pre><code>// app.config.js — add the plugin
+export default {
+  // ...
+  plugins: [
+    // ...
+    [
+      'react-native-webrtc',
+      {
+        cameraPermission: 'Token needs camera access for video calls.',
+        microphonePermission: 'Token needs microphone access for voice and video calls.',
+      },
+    ],
+  ],
+};</code></pre>
+
+    <h2>RTCPeerConnection lifecycle</h2>
+
+    <pre><code>// 1. Create the peer connection
+const pc = new RTCPeerConnection({ iceServers });
+
+// 2. Get local media (microphone, camera)
+const stream = await mediaDevices.getUserMedia({ audio: true, video: false });
+stream.getTracks().forEach(track =&gt; pc.addTrack(track, stream));
+
+// 3. Create offer (caller) or handle incoming offer (callee)
+const offer = await pc.createOffer();
+await pc.setLocalDescription(offer);
+// Send offer.sdp via signalling
+
+// 4. Receive answer (caller) or create answer (callee)
+await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
+
+// 5. Exchange ICE candidates
+pc.onicecandidate = (event) =&gt; {
+  if (event.candidate) {
+    // Send candidate via signalling
+  }
+};
+
+// 6. Receive remote stream
+pc.ontrack = (event) =&gt; {
+  // event.streams[0] is the remote audio/video
+};
+
+// 7. Hang up
+pc.close();</code></pre>
+
+    <h2>The PeerConnection wrapper</h2>
+
+    <p>Wrap the raw API in a class that integrates with your signalling:</p>
+
+    <pre><code>// app/src/webrtc/PeerConnection.ts
+import {
+  RTCPeerConnection,
+  RTCSessionDescription,
+  RTCIceCandidate,
+  mediaDevices,
+  MediaStream,
+} from 'react-native-webrtc';
+import { send, subscribe } from '../ws/connection';
+import { getIceServers } from './config';
+
+interface CallOptions {
+  conversationId: number;
+  callId: string;
+  type: 'voice' | 'video';
+  isCaller: boolean;
+  onRemoteStream: (stream: MediaStream) =&gt; void;
+  onConnectionStateChange: (state: string) =&gt; void;
+  onHangup: () =&gt; void;
+}
+
+export class TokenPeerConnection {
+  private pc: RTCPeerConnection | null = null;
+  private localStream: MediaStream | null = null;
+  private unsubscribe: (() =&gt; void) | null = null;
+  private options: CallOptions;
+
+  constructor(options: CallOptions) {
+    this.options = options;
+  }
+
+  async initialize() {
+    const iceServers = await getIceServers();
+    this.pc = new RTCPeerConnection({ iceServers });
+
+    // ICE candidates → send via signalling
+    this.pc.onicecandidate = (event) =&gt; {
+      if (event.candidate) {
+        send('call:ice', {
+          callId: this.options.callId,
+          candidate: event.candidate.toJSON(),
+        });
+      }
+    };
+
+    // Remote media arrives
+    this.pc.ontrack = (event) =&gt; {
+      if (event.streams[0]) {
+        this.options.onRemoteStream(event.streams[0]);
+      }
+    };
+
+    // Connection state monitoring
+    this.pc.onconnectionstatechange = () =&gt; {
+      const state = this.pc!.connectionState;
+      this.options.onConnectionStateChange(state);
+
+      if (state === 'disconnected' || state === 'failed') {
+        this.options.onHangup();
+      }
+    };
+
+    // Get local media
+    this.localStream = await mediaDevices.getUserMedia({
+      audio: true,
+      video: this.options.type === 'video',
+    });
+
+    // Add tracks to peer connection
+    this.localStream.getTracks().forEach(track =&gt; {
+      this.pc!.addTrack(track, this.localStream!);
+    });
+
+    // Listen for signalling messages
+    this.unsubscribe = subscribe((type, payload) =&gt; {
+      if (payload.callId !== this.options.callId) return;
+
+      switch (type) {
+        case 'call:offer':
+          this.handleRemoteOffer(payload.sdp);
+          break;
+        case 'call:answer':
+          this.handleRemoteAnswer(payload.sdp);
+          break;
+        case 'call:ice':
+          this.handleRemoteIce(payload.candidate);
+          break;
+        case 'call:hangup':
+          this.options.onHangup();
+          break;
+      }
+    });
+
+    return this.localStream;
+  }
+
+  // Caller: create and send offer
+  async createOffer() {
+    const offer = await this.pc!.createOffer({});
+    await this.pc!.setLocalDescription(offer);
+    send('call:offer', {
+      callId: this.options.callId,
+      sdp: offer.sdp,
+    });
+  }
+
+  // Callee: receive offer, create and send answer
+  private async handleRemoteOffer(sdp: string) {
+    await this.pc!.setRemoteDescription(
+      new RTCSessionDescription({ type: 'offer', sdp })
+    );
+    const answer = await this.pc!.createAnswer();
+    await this.pc!.setLocalDescription(answer);
+    send('call:answer', {
+      callId: this.options.callId,
+      sdp: answer.sdp,
+    });
+  }
+
+  // Caller: receive answer
+  private async handleRemoteAnswer(sdp: string) {
+    await this.pc!.setRemoteDescription(
+      new RTCSessionDescription({ type: 'answer', sdp })
+    );
+  }
+
+  // Both: receive ICE candidate
+  private async handleRemoteIce(candidate: any) {
+    await this.pc!.addIceCandidate(new RTCIceCandidate(candidate));
+  }
+
+  // Controls
+  toggleMute(): boolean {
+    const audioTrack = this.localStream?.getAudioTracks()[0];
+    if (audioTrack) {
+      audioTrack.enabled = !audioTrack.enabled;
+      return !audioTrack.enabled; // true = muted
+    }
+    return false;
+  }
+
+  toggleVideo(): boolean {
+    const videoTrack = this.localStream?.getVideoTracks()[0];
+    if (videoTrack) {
+      videoTrack.enabled = !videoTrack.enabled;
+      return !videoTrack.enabled; // true = video off
+    }
+    return false;
+  }
+
+  async switchCamera() {
+    const videoTrack = this.localStream?.getVideoTracks()[0];
+    if (videoTrack && '_switchCamera' in videoTrack) {
+      (videoTrack as any)._switchCamera();
+    }
+  }
+
+  // Cleanup
+  hangup() {
+    send('call:hangup', { callId: this.options.callId });
+    this.cleanup();
+  }
+
+  cleanup() {
+    this.localStream?.getTracks().forEach(t =&gt; t.stop());
+    this.pc?.close();
+    this.pc = null;
+    this.localStream = null;
+    this.unsubscribe?.();
+  }
+
+  getLocalStream() {
+    return this.localStream;
+  }
+}</code></pre>
+
+    <h2>The call flow from the client perspective</h2>
+
+    <h3>Caller side</h3>
+
+    <pre><code>// 1. User taps "Call" button
+send('call:initiate', { conversationId, type: 'voice' });
+
+// 2. Server responds with callId (or busy/unavailable)
+// Listen for 'call:incoming' echoed back or a confirmation
+
+// 3. After callee accepts — create PeerConnection and offer
+const peerConnection = new TokenPeerConnection({
+  conversationId,
+  callId,
+  type: 'voice',
+  isCaller: true,
+  onRemoteStream: (stream) =&gt; setRemoteStream(stream),
+  onConnectionStateChange: (state) =&gt; setCallState(state),
+  onHangup: () =&gt; navigation.goBack(),
+});
+
+const localStream = await peerConnection.initialize();
+await peerConnection.createOffer();</code></pre>
+
+    <h3>Callee side</h3>
+
+    <pre><code>// 1. Receive 'call:incoming' — show ringing UI
+// 2. User taps "Accept"
+const peerConnection = new TokenPeerConnection({
+  conversationId,
+  callId,
+  type: 'voice',
+  isCaller: false,
+  onRemoteStream: (stream) =&gt; setRemoteStream(stream),
+  onConnectionStateChange: (state) =&gt; setCallState(state),
+  onHangup: () =&gt; navigation.goBack(),
+});
+
+const localStream = await peerConnection.initialize();
+// The offer arrives via signalling → handleRemoteOffer runs automatically
+// → creates answer → sends it back → ICE flows → connected!</code></pre>
+
+    <h2>Connection states</h2>
+
+    <pre><code>// RTCPeerConnection.connectionState:
+'new'           // just created
+'connecting'    // ICE + DTLS in progress
+'connected'     // media is flowing!
+'disconnected'  // temporarily lost (might recover)
+'failed'        // ICE failed — call can't connect
+'closed'        // pc.close() was called</code></pre>
+
+    <p>Show appropriate UI for each state: "Connecting..." spinner, "Connected" (start timer), "Reconnecting..." (brief network blip), "Call Failed" (offer retry or give up).</p>
+
+    <h2>Media permissions</h2>
+
+    <pre><code>import { mediaDevices } from 'react-native-webrtc';
+import { PermissionsAndroid, Platform } from 'react-native';
+
+async function requestMediaPermissions(video: boolean): Promise&lt;boolean&gt; {
+  if (Platform.OS === 'android') {
+    const permissions = [PermissionsAndroid.PERMISSIONS.RECORD_AUDIO];
+    if (video) permissions.push(PermissionsAndroid.PERMISSIONS.CAMERA);
+
+    const results = await PermissionsAndroid.requestMultiple(permissions);
+    return Object.values(results).every(r =&gt; r === 'granted');
+  }
+
+  // iOS: permissions are requested automatically by getUserMedia
+  // The config plugin strings are shown in the system dialog
+  return true;
+}</code></pre>
+
+    <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./README.html">← Module overview</a>
+      <a href="./0002-voice-call.html">Next: 1:1 Voice Call →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// RTCPeerConnection state machine
+const STATES = {
+  new: ['connecting'],
+  connecting: ['connected', 'failed'],
+  connected: ['disconnected', 'closed'],
+  disconnected: ['connected', 'failed', 'closed'],
+  failed: ['closed'],
+  closed: [],
+};
+
+console.log('RTCPeerConnection state transitions:');
+console.log('────────────────────────────────────');
+for (const [state, transitions] of Object.entries(STATES)) {
+  if (transitions.length === 0) {
+    console.log(state + ' → (terminal)');
+  } else {
+    console.log(state + ' → ' + transitions.join(' | '));
+  }
+}
+
+console.log('');
+console.log('Happy path: new → connecting → connected → closed');
+console.log('Network blip: connected → disconnected → connected');
+console.log('Failure: connecting → failed → closed');`);
+
+    createSolution("exercise-1", {
+      exercise: "Build the TokenPeerConnection wrapper:\n\n1. Create `app/src/webrtc/PeerConnection.ts`: wraps RTCPeerConnection with signalling integration. Handles initialize (get media, set up ICE/track listeners), createOffer (caller), handleRemoteOffer/Answer (callee), handleRemoteIce (both).\n\n2. Implement controls: toggleMute (audio track enabled), toggleVideo (video track enabled), switchCamera (front/back).\n\n3. Implement hangup: send call:hangup via WS, stop all tracks, close PC.\n\n4. Subscribe to signalling messages (call:offer, call:answer, call:ice, call:hangup) filtered by callId.\n\n5. Monitor connectionState changes and call onHangup when state becomes 'failed' or 'disconnected' for too long.\n\n6. Test: this requires EAS Build. Create a development build, then test with two devices on the same network (simplest ICE scenario).",
+      hints: [
+        "RTCPeerConnection from react-native-webrtc has the same API as the browser version.",
+        "getUserMedia({ audio: true, video: false }) for voice-only. Add video: true for video calls.",
+        "The callee doesn't call createOffer — they wait for call:offer via signalling, then call createAnswer.",
+        "Always call pc.close() and track.stop() on cleanup — otherwise the microphone stays active."
+      ],
+      solution: `// See the full TokenPeerConnection class in the lesson code above.
+// Key architecture:
+
+// Constructor: stores options (callId, type, callbacks)
+// initialize(): creates PC, gets media, adds tracks, subscribes to signalling
+// createOffer(): caller calls this after callee accepts
+// handleRemoteOffer(): auto-called when offer arrives (callee path)
+// handleRemoteAnswer(): auto-called when answer arrives (caller path)
+// handleRemoteIce(): auto-called for each ICE candidate
+
+// Controls:
+// toggleMute(): audioTrack.enabled = !audioTrack.enabled
+// toggleVideo(): videoTrack.enabled = !videoTrack.enabled
+// switchCamera(): videoTrack._switchCamera() (RN-specific)
+
+// Cleanup:
+// hangup(): send WS message + cleanup()
+// cleanup(): stop tracks, close PC, unsubscribe from signalling`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "What happens if you call pc.addTrack() AFTER createOffer()?",
+        code: "const pc = new RTCPeerConnection({ iceServers });\nconst offer = await pc.createOffer();\nawait pc.setLocalDescription(offer);\n// NOW add tracks\nstream.getTracks().forEach(t => pc.addTrack(t, stream));",
+        answer: "The offer SDP doesn't include the media tracks — the remote peer won't know about them.",
+        explanation: "The offer describes what media you'll send. If tracks are added AFTER the offer is created, the SDP doesn't include them. The remote peer won't expect or accept that media. Always add tracks BEFORE createOffer(). If you need to add tracks later, you must renegotiate (create a new offer)."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this ICE candidate handler?",
+        code: "pc.onicecandidate = (event) => {\n  send('call:ice', {\n    callId,\n    candidate: event.candidate,\n  });\n};",
+        options: [
+          "event.candidate can be null (signals ICE gathering complete) — sending null crashes the remote peer's addIceCandidate()",
+          "candidate should be stringified first",
+          "onicecandidate fires only once",
+          "send() can't be called inside an event handler"
+        ],
+        correct: 0,
+        explanation: "When ICE gathering finishes, onicecandidate fires one final time with event.candidate === null. Sending this null to the remote peer and calling addIceCandidate(null) may throw on some implementations. Guard with: if (event.candidate) { send(...) }."
+      },
+      {
+        type: "which-breaks",
+        question: "Why does react-native-webrtc require EAS Build instead of Expo Go?",
+        variants: [
+          "It uses native C++/Obj-C WebRTC code that must be compiled into the app binary",
+          "It requires a paid Expo license",
+          "It only works on Android",
+          "Expo Go has a newer version of WebRTC built in"
+        ],
+        correct: 0,
+        explanation: "react-native-webrtc bridges to Google's native WebRTC library (C++ on both platforms, Obj-C wrapper on iOS). This native code must be compiled and linked into the app binary at build time. Expo Go is a pre-built binary that can't include arbitrary native modules. EAS Build compiles a custom binary with the native WebRTC code included."
+      },
+      {
+        type: "fill-blank",
+        question: "Get the local audio stream for a voice call:",
+        code: "const stream = await mediaDevices.___({\n  audio: true,\n  video: false,\n});",
+        answer: "getUserMedia",
+        explanation: "getUserMedia() requests access to media devices (microphone, camera). Pass { audio: true } for microphone only, add { video: true } for camera. It returns a MediaStream containing the requested tracks. On first call, triggers the OS permission dialog."
+      },
+      {
+        type: "order-steps",
+        question: "Put the caller's WebRTC setup in order:",
+        steps: [
+          "Create RTCPeerConnection with ICE servers",
+          "Get local media stream via getUserMedia",
+          "Add audio/video tracks to the peer connection",
+          "Create SDP offer and set as local description",
+          "Send offer via signalling, wait for answer, set as remote description"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "PC first (you need it to add tracks to). Media second (you need tracks before the offer). Add tracks third (the offer must describe them). Create offer fourth (now it includes the media). Send and wait for answer last (the negotiation completes)."
+      }
+    ]);
+  </script>
+</body>
+</html>

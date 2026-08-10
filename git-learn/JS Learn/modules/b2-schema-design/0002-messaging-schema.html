@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Messaging Schema — B2.2</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">B2 — Schema Design</a>
+      <span class="sep">›</span>
+      <span class="current">Messaging Schema</span>
+    </nav>
+
+    <h1>Messaging Schema</h1>
+    <div class="lesson-meta">
+      <span>B2 — Lesson 2 of 3</span>
+      <span>~50 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>When a holder redeems a token and sends a message, that message must be stored, delivered, and displayed — with read receipts, ordering, and the ability to stop all communication by revoking the token. The messaging schema must handle conversations between a token holder (anonymous) and the token owner, tied to a specific token. This is different from typical chat schemas because the parties aren't "users" — one side is anonymous.</p>
+    </div>
+
+    <h2>Token's messaging model</h2>
+
+    <p>Unlike WhatsApp (user ↔ user), Token's messaging is <strong>token-scoped</strong>:</p>
+
+    <ul>
+      <li>A <strong>conversation</strong> is tied to a specific token + specific holder session</li>
+      <li>The <strong>owner</strong> (the user who issued the token) sees messages in their app</li>
+      <li>The <strong>holder</strong> (whoever redeemed the token) messages through the web page</li>
+      <li>If the token is revoked, the conversation is closed — no more messages</li>
+      <li>One token can have multiple conversations (different people redeeming it)</li>
+    </ul>
+
+    <h2>The conversations table</h2>
+
+    <pre><code>CREATE TABLE conversations (
+  id            SERIAL PRIMARY KEY,
+  token_id      INTEGER NOT NULL REFERENCES tokens(id) ON DELETE RESTRICT,
+  holder_session_id TEXT NOT NULL UNIQUE,
+  holder_name   TEXT,
+  status        TEXT NOT NULL DEFAULT 'open'
+                CHECK (status IN ('open', 'closed', 'blocked')),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_message_at TIMESTAMPTZ
+);</code></pre>
+
+    <p>Design notes:</p>
+    <ul>
+      <li><strong>holder_session_id</strong> — a unique identifier for this holder's session (generated when they redeem). Not a user ID — holders are anonymous.</li>
+      <li><strong>holder_name</strong> — optional. The holder may provide a name ("Delivery Agent") but doesn't have to.</li>
+      <li><strong>status</strong> — 'open' (active), 'closed' (ended normally or token revoked), 'blocked' (user blocked this holder).</li>
+      <li><strong>last_message_at</strong> — denormalized for sorting. The conversation list shows most recent first without joining messages.</li>
+    </ul>
+
+    <h2>The messages table</h2>
+
+    <pre><code>CREATE TABLE messages (
+  id              SERIAL PRIMARY KEY,
+  conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  sender_type     TEXT NOT NULL CHECK (sender_type IN ('owner', 'holder')),
+  content         TEXT NOT NULL,
+  content_type    TEXT NOT NULL DEFAULT 'text'
+                  CHECK (content_type IN ('text', 'image', 'file', 'system')),
+  metadata        JSONB,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  delivered_at    TIMESTAMPTZ,
+  read_at         TIMESTAMPTZ
+);</code></pre>
+
+    <p>Design notes:</p>
+    <ul>
+      <li><strong>sender_type</strong> — 'owner' or 'holder'. Not a user ID for the holder, because holders aren't users in the system.</li>
+      <li><strong>content_type</strong> — supports future expansion (images, files) without schema changes.</li>
+      <li><strong>metadata</strong> — JSONB for type-specific data (image dimensions, file size, etc.).</li>
+      <li><strong>delivered_at / read_at</strong> — timestamps for delivery and read receipts. NULL = not yet delivered/read.</li>
+      <li><strong>ON DELETE CASCADE</strong> — if a conversation is removed, its messages go with it.</li>
+    </ul>
+
+    <h3>System messages</h3>
+
+    <p>The <code>system</code> content_type handles automated messages:</p>
+
+    <pre><code>-- When a token is revoked, insert a system message:
+INSERT INTO messages (conversation_id, sender_type, content, content_type) VALUES
+(42, 'owner', 'This token has been revoked. The conversation is now closed.', 'system');</code></pre>
+
+    <h2>Read receipts</h2>
+
+    <p>Token shows read receipts — the sender knows when their message was seen. The schema handles this with the <code>read_at</code> timestamp:</p>
+
+    <pre><code>-- Mark all messages in a conversation as read by the owner
+UPDATE messages
+SET read_at = NOW()
+WHERE conversation_id = 42
+  AND sender_type = 'holder'
+  AND read_at IS NULL;
+
+-- Mark as delivered (WebSocket confirms receipt)
+UPDATE messages
+SET delivered_at = NOW()
+WHERE id = 123
+  AND delivered_at IS NULL;</code></pre>
+
+    <h2>Querying conversations</h2>
+
+    <pre><code>-- Get all open conversations for a user's tokens (the inbox)
+SELECT
+  c.id,
+  c.holder_name,
+  c.last_message_at,
+  t.code AS token_code,
+  t.label AS token_label
+FROM conversations c
+INNER JOIN tokens t ON c.token_id = t.id
+WHERE t.user_id = 1
+  AND c.status = 'open'
+ORDER BY c.last_message_at DESC NULLS LAST;
+
+-- Get messages for a conversation (paginated)
+SELECT id, sender_type, content, content_type, created_at, read_at
+FROM messages
+WHERE conversation_id = 42
+ORDER BY created_at ASC
+LIMIT 50 OFFSET 0;
+
+-- Unread count per conversation
+SELECT
+  c.id,
+  COUNT(m.id) AS unread_count
+FROM conversations c
+LEFT JOIN messages m ON m.conversation_id = c.id
+  AND m.sender_type = 'holder'
+  AND m.read_at IS NULL
+WHERE c.status = 'open'
+GROUP BY c.id;</code></pre>
+
+    <h2>Closing conversations on revocation</h2>
+
+    <p>When a token is revoked, all its conversations must close. A database trigger handles this automatically:</p>
+
+    <pre><code>CREATE OR REPLACE FUNCTION close_conversations_on_revoke()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.status = 'revoked' AND OLD.status != 'revoked' THEN
+    UPDATE conversations
+    SET status = 'closed', updated_at = NOW()
+    WHERE token_id = NEW.id AND status = 'open';
+
+    -- Insert a system message in each closed conversation
+    INSERT INTO messages (conversation_id, sender_type, content, content_type)
+    SELECT id, 'owner', 'This token has been revoked. The conversation is closed.', 'system'
+    FROM conversations
+    WHERE token_id = NEW.id AND status = 'closed';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER token_revoked_close_conversations
+AFTER UPDATE ON tokens
+FOR EACH ROW
+EXECUTE FUNCTION close_conversations_on_revoke();</code></pre>
+
+    <h2>Indexes for messaging queries</h2>
+
+    <pre><code>-- Conversation list for a token
+CREATE INDEX idx_conversations_token_id ON conversations(token_id);
+
+-- Messages by conversation (the chat view)
+CREATE INDEX idx_messages_conversation_id ON messages(conversation_id);
+
+-- Unread messages (for badge counts)
+CREATE INDEX idx_messages_unread ON messages(conversation_id)
+WHERE sender_type = 'holder' AND read_at IS NULL;
+
+-- Sort conversations by last activity
+CREATE INDEX idx_conversations_last_message ON conversations(last_message_at DESC NULLS LAST);</code></pre>
+
+    <h2>The complete messaging migration</h2>
+
+    <pre><code>-- api/migrations/002_messaging.sql
+
+BEGIN;
+
+CREATE TABLE conversations (
+  id              SERIAL PRIMARY KEY,
+  token_id        INTEGER NOT NULL REFERENCES tokens(id) ON DELETE RESTRICT,
+  holder_session_id TEXT NOT NULL UNIQUE,
+  holder_name     TEXT,
+  status          TEXT NOT NULL DEFAULT 'open'
+                  CHECK (status IN ('open', 'closed', 'blocked')),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_message_at TIMESTAMPTZ
+);
+
+CREATE TABLE messages (
+  id              SERIAL PRIMARY KEY,
+  conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  sender_type     TEXT NOT NULL CHECK (sender_type IN ('owner', 'holder')),
+  content         TEXT NOT NULL,
+  content_type    TEXT NOT NULL DEFAULT 'text'
+                  CHECK (content_type IN ('text', 'image', 'file', 'system')),
+  metadata        JSONB,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  delivered_at    TIMESTAMPTZ,
+  read_at         TIMESTAMPTZ
+);
+
+CREATE INDEX idx_conversations_token_id ON conversations(token_id);
+CREATE INDEX idx_messages_conversation_id ON messages(conversation_id);
+CREATE INDEX idx_messages_unread ON messages(conversation_id)
+  WHERE sender_type = 'holder' AND read_at IS NULL;
+CREATE INDEX idx_conversations_last_message
+  ON conversations(last_message_at DESC NULLS LAST);
+
+CREATE TRIGGER conversations_updated_at BEFORE UPDATE ON conversations
+FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+CREATE OR REPLACE FUNCTION close_conversations_on_revoke()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.status = 'revoked' AND OLD.status != 'revoked' THEN
+    UPDATE conversations SET status = 'closed', updated_at = NOW()
+    WHERE token_id = NEW.id AND status = 'open';
+    INSERT INTO messages (conversation_id, sender_type, content, content_type)
+    SELECT id, 'owner', 'This token has been revoked.', 'system'
+    FROM conversations WHERE token_id = NEW.id AND status = 'closed';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER token_revoked_close_conversations
+AFTER UPDATE ON tokens FOR EACH ROW
+EXECUTE FUNCTION close_conversations_on_revoke();
+
+COMMIT;</code></pre>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0001-token-schema.html">← Previous: Token Schema</a>
+      <a href="./0003-migrations.html">Next: Migrations →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createSolution("exercise-1", {
+      exercise: "Write the messaging migration (002_messaging.sql) and test it: (1) Create the conversations and messages tables, (2) Insert a test conversation (holder redeems token MERC-8GH2-LP4X), (3) Insert 3 messages alternating between owner and holder, (4) Write the query for the inbox view (all open conversations for user 1 with unread counts), (5) Mark all holder messages as read.",
+      hints: [
+        "The conversation needs a holder_session_id — generate any unique string for testing.",
+        "After inserting messages, update the conversation's last_message_at to match the latest message.",
+        "The inbox query joins conversations → tokens (for user_id filtering) and LEFT JOINs messages for unread count."
+      ],
+      solution: `-- Run the migration first (002_messaging.sql from lesson)
+
+-- 2. Test conversation
+INSERT INTO conversations (token_id, holder_session_id, holder_name)
+VALUES (
+  (SELECT id FROM tokens WHERE code = 'MERC-8GH2-LP4X'),
+  'session_abc123',
+  'Delivery Agent'
+);
+
+-- 3. Three messages
+INSERT INTO messages (conversation_id, sender_type, content) VALUES
+(1, 'holder', 'Hi, I have a delivery for you'),
+(1, 'owner', 'Please leave it at the door'),
+(1, 'holder', 'Done! Left it by the entrance');
+
+-- Update last_message_at
+UPDATE conversations SET last_message_at = NOW() WHERE id = 1;
+
+-- 4. Inbox query with unread counts
+SELECT
+  c.id,
+  c.holder_name,
+  c.last_message_at,
+  t.code AS token_code,
+  t.label AS token_label,
+  COUNT(m.id) FILTER (WHERE m.sender_type = 'holder' AND m.read_at IS NULL) AS unread
+FROM conversations c
+INNER JOIN tokens t ON c.token_id = t.id
+LEFT JOIN messages m ON m.conversation_id = c.id
+WHERE t.user_id = 1 AND c.status = 'open'
+GROUP BY c.id, c.holder_name, c.last_message_at, t.code, t.label
+ORDER BY c.last_message_at DESC NULLS LAST;
+
+-- 5. Mark all holder messages as read
+UPDATE messages
+SET read_at = NOW()
+WHERE conversation_id = 1
+  AND sender_type = 'holder'
+  AND read_at IS NULL;`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "A token is revoked. What happens to its open conversations?",
+        code: "UPDATE tokens SET status = 'revoked', revoked_at = NOW()\nWHERE code = 'MERC-8GH2-LP4X';",
+        answer: "The trigger automatically closes all open conversations for that token and inserts a system message in each",
+        explanation: "The close_conversations_on_revoke trigger fires on UPDATE. It sets status = 'closed' on all open conversations for the revoked token and inserts a system message explaining why. The holder sees 'This token has been revoked' and can no longer send messages."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this approach to read receipts?",
+        code: "-- Mark a single message as read\nUPDATE messages SET read_at = NOW() WHERE id = 123;\n\n-- Problem: the owner opens the chat and sees all messages.\n-- But only message 123 is marked read.",
+        options: [
+          "NOW() is wrong — should use a client timestamp",
+          "Should mark ALL unread messages in the conversation as read, not just one",
+          "read_at should be a boolean, not a timestamp",
+          "You can't UPDATE a single row by id"
+        ],
+        correct: 1,
+        explanation: "When the owner opens a conversation, they see all messages — so all should be marked read. The correct query: UPDATE messages SET read_at = NOW() WHERE conversation_id = X AND sender_type = 'holder' AND read_at IS NULL. Marking one at a time would require the client to send 50 separate requests."
+      },
+      {
+        type: "fill-blank",
+        question: "Create a partial index for unread holder messages:",
+        code: "CREATE INDEX idx_unread ON messages(conversation_id)\nWHERE sender_type = 'holder' AND ___ IS NULL;",
+        answer: "read_at",
+        explanation: "This partial index only includes unread messages from holders. The badge count query (how many unread messages?) hits this small, focused index instead of scanning all messages. Once a message is read (read_at gets set), it drops out of the index."
+      },
+      {
+        question: "Why is sender_type ('owner' | 'holder') instead of a user_id foreign key?",
+        options: [
+          "Foreign keys are slow",
+          "Holders are anonymous — they don't have a user record in the system",
+          "It makes the schema simpler",
+          "PostgreSQL doesn't support two foreign keys in one table"
+        ],
+        correct: 1,
+        explanation: "Token's core privacy feature is that holders are anonymous — they don't create accounts. They identify with a session_id on the conversation, not a user_id. Using sender_type = 'holder' lets you store their messages without requiring them to exist in the users table."
+      },
+      {
+        type: "order-steps",
+        question: "Put the token redemption → messaging flow in order:",
+        steps: ["Holder redeems token (redemption_event)", "Conversation created (holder_session_id)", "Holder sends first message", "Owner sees notification and replies", "Owner revokes token → conversations closed"],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Redemption creates the session, which enables creating a conversation. Messages flow both ways until the owner decides to revoke — at which point the trigger closes everything."
+      }
+    ]);
+  </script>
+</body>
+</html>

@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Express/Fastify Setup — B3.2</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">B3 — Node &amp; HTTP Server</a>
+      <span class="sep">›</span>
+      <span class="current">Express/Fastify Setup</span>
+    </nav>
+
+    <h1>Express/Fastify Setup</h1>
+    <div class="lesson-meta">
+      <span>B3 — Lesson 2 of 4</span>
+      <span>~50 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>The raw <code>http</code> module makes you manually parse URLs, read request bodies, handle routing, and format responses. A framework handles all of that so you can focus on Token's logic: issuing tokens, validating rules, routing messages. We'll use <strong>Express</strong> — the most widely-used Node framework — because its ecosystem and documentation are unmatched for learning.</p>
+    </div>
+
+    <h2>Why Express?</h2>
+
+    <p>Express gives you:</p>
+    <ul>
+      <li><strong>Routing</strong> — map URL paths + HTTP methods to handler functions</li>
+      <li><strong>Middleware</strong> — functions that process every request (parsing, logging, auth)</li>
+      <li><strong>Request/Response helpers</strong> — <code>req.params</code>, <code>req.body</code>, <code>res.json()</code></li>
+      <li><strong>Ecosystem</strong> — thousands of middleware packages for common tasks</li>
+    </ul>
+
+    <pre><code>npm install express
+npm install -D @types/express</code></pre>
+
+    <h2>Basic Express server</h2>
+
+    <pre><code>// api/src/server.ts
+import 'dotenv/config';
+import express from 'express';
+
+const app = express();
+const PORT = parseInt(process.env.PORT || '3000', 10);
+
+// Built-in middleware: parse JSON request bodies
+app.use(express.json());
+
+// Health check
+app.get('/health', (req, res) =&gt; {
+  res.json({ status: 'ok' });
+});
+
+// Start the server
+app.listen(PORT, () =&gt; {
+  console.log(`Token API running on http://localhost:${PORT}`);
+});</code></pre>
+
+    <h2>Routing</h2>
+
+    <p>Express routes match a <strong>method</strong> + <strong>path</strong> to a handler function:</p>
+
+    <pre><code>// GET /api/tokens — list tokens
+app.get('/api/tokens', (req, res) =&gt; { ... });
+
+// GET /api/tokens/:code — get one token by code
+app.get('/api/tokens/:code', (req, res) =&gt; {
+  const { code } = req.params;  // URL parameter
+  // ...
+});
+
+// POST /api/tokens — create a new token
+app.post('/api/tokens', (req, res) =&gt; {
+  const { label, maxUses } = req.body;  // JSON body
+  // ...
+});
+
+// PATCH /api/tokens/:code — update a token
+app.patch('/api/tokens/:code', (req, res) =&gt; { ... });
+
+// DELETE /api/tokens/:code — revoke a token
+app.delete('/api/tokens/:code', (req, res) =&gt; { ... });</code></pre>
+
+    <h3>Route parameters</h3>
+
+    <pre><code>// :code becomes req.params.code
+app.get('/api/tokens/:code', (req, res) =&gt; {
+  console.log(req.params.code);  // "MERC-8GH2-LP4X"
+});
+
+// Query parameters: /api/tokens?status=active&limit=10
+app.get('/api/tokens', (req, res) =&gt; {
+  console.log(req.query.status);  // "active"
+  console.log(req.query.limit);   // "10" (always string!)
+});</code></pre>
+
+    <h2>Middleware</h2>
+
+    <p>Middleware are functions that run before your route handler. They can:</p>
+    <ul>
+      <li>Modify the request (add user info after auth)</li>
+      <li>Short-circuit the response (reject unauthorized requests)</li>
+      <li>Pass control to the next middleware/handler with <code>next()</code></li>
+    </ul>
+
+    <pre><code>// Logging middleware — runs on every request
+app.use((req, res, next) =&gt; {
+  console.log(`${req.method} ${req.url}`);
+  next();  // pass to the next handler
+});
+
+// CORS middleware — allow the web client to call the API
+import cors from 'cors';
+app.use(cors({
+  origin: process.env.WEB_URL || 'http://localhost:5173',
+  credentials: true,
+}));
+
+// JSON body parser (built-in)
+app.use(express.json({ limit: '1mb' }));</code></pre>
+
+    <h3>Route-specific middleware</h3>
+
+    <pre><code>// Auth middleware — only applies to routes that need it
+function requireAuth(req, res, next) {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  // verify JWT, attach user to request...
+  req.user = verifiedUser;
+  next();
+}
+
+// Apply to specific routes:
+app.get('/api/tokens', requireAuth, (req, res) =&gt; {
+  // req.user is available here
+});
+
+// Or to a group of routes:
+const apiRouter = express.Router();
+apiRouter.use(requireAuth);
+apiRouter.get('/tokens', ...);
+apiRouter.post('/tokens', ...);
+app.use('/api', apiRouter);</code></pre>
+
+    <h2>Organizing routes with Router</h2>
+
+    <p>For Token's API, split routes into separate files:</p>
+
+    <pre><code>// api/src/routes/tokens.ts
+import { Router } from 'express';
+
+const router = Router();
+
+router.get('/', async (req, res) =&gt; {
+  // List user's tokens
+});
+
+router.get('/:code', async (req, res) =&gt; {
+  // Get single token
+});
+
+router.post('/', async (req, res) =&gt; {
+  // Create token
+});
+
+router.patch('/:code', async (req, res) =&gt; {
+  // Update token
+});
+
+router.delete('/:code', async (req, res) =&gt; {
+  // Revoke token
+});
+
+export default router;</code></pre>
+
+    <pre><code>// api/src/server.ts
+import tokenRoutes from './routes/tokens.js';
+import messageRoutes from './routes/messages.js';
+
+app.use('/api/tokens', tokenRoutes);
+app.use('/api/messages', messageRoutes);</code></pre>
+
+    <h2>Error handling</h2>
+
+    <p>Express has a special 4-argument middleware for errors:</p>
+
+    <pre><code>// Error handler — must be LAST app.use()
+app.use((err, req, res, next) =&gt; {
+  console.error(err.stack);
+
+  const status = err.status || 500;
+  const message = err.status ? err.message : 'Internal server error';
+
+  res.status(status).json({
+    error: message,
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
+  });
+});</code></pre>
+
+    <p>Throw errors in route handlers to trigger it:</p>
+
+    <pre><code>router.get('/:code', async (req, res, next) =&gt; {
+  try {
+    const token = await findTokenByCode(req.params.code);
+    if (!token) {
+      const err = new Error('Token not found');
+      err.status = 404;
+      throw err;
+    }
+    res.json(token);
+  } catch (err) {
+    next(err);  // passes to the error handler
+  }
+});</code></pre>
+
+    <h2>Token API folder structure</h2>
+
+    <pre><code>api/
+  src/
+    server.ts           ← app setup, middleware, listen
+    routes/
+      tokens.ts         ← /api/tokens routes
+      messages.ts       ← /api/messages routes
+      redeem.ts         ← /api/redeem (public, no auth)
+    middleware/
+      auth.ts           ← JWT verification
+      error-handler.ts  ← global error handler
+    services/
+      tokens.ts         ← business logic (DB queries)
+      messages.ts
+    db/
+      pool.ts           ← Postgres connection pool
+  migrations/
+  .env
+  package.json
+  tsconfig.json</code></pre>
+
+    <p>Separation of concerns: routes handle HTTP (status codes, parsing), services handle business logic (DB queries, validation). Routes call services — services know nothing about HTTP.</p>
+
+    <h2>Connecting to Postgres</h2>
+
+    <pre><code>// api/src/db/pool.ts
+import pg from 'pg';
+
+export const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 20,  // connection pool size
+});
+
+// Test the connection on startup
+pool.query('SELECT NOW()').then(() =&gt; {
+  console.log('Database connected');
+}).catch(err =&gt; {
+  console.error('Database connection failed:', err.message);
+  process.exit(1);
+});</code></pre>
+
+    <pre><code>// Using it in a service
+import { pool } from '../db/pool.js';
+
+export async function getTokenByCode(code: string) {
+  const { rows } = await pool.query(
+    'SELECT * FROM tokens WHERE code = $1',
+    [code]
+  );
+  return rows[0] || null;
+}</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">Always use parameterized queries</div>
+      <p>Never concatenate user input into SQL strings: <code>`SELECT * FROM tokens WHERE code = '${code}'`</code>. This allows SQL injection — an attacker can delete your entire database. Always use <code>$1</code> parameters.</p>
+    </div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0001-nodejs-fundamentals.html">← Previous: Node.js Fundamentals</a>
+      <a href="./0003-rest-api-design.html">Next: REST API Design →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createSolution("exercise-1", {
+      exercise: "Build Token's Express server with: (1) JSON parsing middleware, (2) CORS for the web client, (3) Request logging, (4) A /health endpoint, (5) A tokens router (api/src/routes/tokens.ts) with GET / (list), GET /:code (detail), POST / (create) — returning placeholder JSON for now, (6) A global error handler, (7) Database connection pool. Test all endpoints with curl.",
+      hints: [
+        "Install: express, cors, pg, dotenv. Dev: @types/express, @types/cors, @types/pg, tsx, typescript.",
+        "Remember to use async handlers with try/catch and next(err) for error handling.",
+        "Test with: curl http://localhost:3000/api/tokens and curl -X POST -H 'Content-Type: application/json' -d '{\"label\":\"Test\"}' http://localhost:3000/api/tokens"
+      ],
+      solution: `// api/src/server.ts
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import tokenRoutes from './routes/tokens.js';
+
+const app = express();
+const PORT = parseInt(process.env.PORT || '3000', 10);
+
+// Middleware
+app.use(cors({ origin: process.env.WEB_URL || 'http://localhost:5173' }));
+app.use(express.json());
+app.use((req, res, next) => {
+  console.log(\`\${req.method} \${req.url}\`);
+  next();
+});
+
+// Routes
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
+app.use('/api/tokens', tokenRoutes);
+
+// Error handler (must be last)
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(err.status || 500).json({
+    error: err.message || 'Internal server error',
+  });
+});
+
+app.listen(PORT, () => console.log(\`API on http://localhost:\${PORT}\`));
+
+// --- api/src/routes/tokens.ts ---
+import { Router } from 'express';
+
+const router = Router();
+
+router.get('/', async (req, res, next) => {
+  try {
+    res.json({ tokens: [], message: 'TODO: fetch from DB' });
+  } catch (err) { next(err); }
+});
+
+router.get('/:code', async (req, res, next) => {
+  try {
+    res.json({ code: req.params.code, message: 'TODO: fetch from DB' });
+  } catch (err) { next(err); }
+});
+
+router.post('/', async (req, res, next) => {
+  try {
+    const { label, maxUses } = req.body;
+    res.status(201).json({ label, maxUses, message: 'TODO: insert into DB' });
+  } catch (err) { next(err); }
+});
+
+export default router;
+
+// --- api/src/db/pool.ts ---
+import pg from 'pg';
+export const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+});`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "order-steps",
+        question: "Put Express's request processing in order:",
+        steps: ["JSON body parser middleware", "CORS middleware", "Auth middleware", "Route handler", "Error handler"],
+        correctOrder: [1, 0, 2, 3, 4],
+        explanation: "CORS runs first (rejects disallowed origins immediately), then body parsing (so req.body is available), then auth (verifies the user), then your route handler, and finally the error handler catches anything that went wrong."
+      },
+      {
+        type: "predict-output",
+        question: "What does req.query contain for this URL: /api/tokens?status=active&limit=10",
+        code: "app.get('/api/tokens', (req, res) => {\n  console.log(req.query);\n});",
+        answer: "{ status: 'active', limit: '10' }",
+        explanation: "Express parses query parameters into req.query as an object. All values are STRINGS — '10' not 10. Always parse numbers: parseInt(req.query.limit, 10)."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's the security vulnerability?",
+        code: "router.get('/:code', async (req, res) => {\n  const result = await pool.query(\n    `SELECT * FROM tokens WHERE code = '${req.params.code}'`\n  );\n  res.json(result.rows[0]);\n});",
+        options: [
+          "async/await doesn't work with Express",
+          "SQL injection — user input is concatenated directly into the query string",
+          "pool.query doesn't accept template literals",
+          "res.json can't handle undefined"
+        ],
+        correct: 1,
+        explanation: "String interpolation in SQL allows injection. An attacker could pass code = \"'; DROP TABLE tokens; --\" and destroy your data. Always use parameterized queries: pool.query('SELECT * FROM tokens WHERE code = $1', [req.params.code])."
+      },
+      {
+        type: "fill-blank",
+        question: "Pass an error to Express's error handler from inside a route:",
+        code: "router.get('/:code', async (req, res, ___) => {\n  try {\n    // ...\n  } catch (err) {\n    ___(err);\n  }\n});",
+        answer: "next",
+        explanation: "The third argument to a route handler is next(). Calling next(err) with an error object skips remaining middleware and routes, jumping straight to the error handler (the 4-argument middleware)."
+      },
+      {
+        type: "which-breaks",
+        question: "Which middleware setup has a problem?",
+        variants: [
+          "app.use(express.json());\napp.use('/api', router);",
+          "app.use('/api', router);\napp.use(express.json());",
+          "app.use(cors());\napp.use(express.json());\napp.use('/api', router);"
+        ],
+        correct: 1,
+        explanation: "Middleware order matters. If the router runs BEFORE express.json(), req.body is undefined in your route handlers — the body hasn't been parsed yet. Always put body-parsing middleware before routes."
+      }
+    ]);
+  </script>
+</body>
+</html>

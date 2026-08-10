@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Auth Context &amp; Protected Routes — A4.2</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A4 — Auth on the Client</a>
+      <span class="sep">›</span>
+      <span class="current">Auth Context &amp; Protected Routes</span>
+    </nav>
+
+    <h1>Auth Context &amp; Protected Routes</h1>
+    <div class="lesson-meta">
+      <span>A4 — Lesson 2 of 3</span>
+      <span>~50 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>Every screen in Token needs to know: is the user logged in? What's their name? What's their ID? Passing this through props would mean threading auth data through 10 layers of components. React Context solves this — define auth state once at the top, access it from any component with a hook. And the navigator automatically shows Login vs Main screens based on auth state.</p>
+    </div>
+
+    <h2>React Context — the concept</h2>
+
+    <p>Context provides values to an entire component tree without prop drilling:</p>
+
+    <pre><code>// 1. Create the context
+const AuthContext = createContext(defaultValue);
+
+// 2. Wrap your app in a Provider (supplies the value)
+&lt;AuthContext.Provider value={authState}&gt;
+  &lt;App /&gt;
+&lt;/AuthContext.Provider&gt;
+
+// 3. Any nested component reads it with useContext
+const auth = useContext(AuthContext);</code></pre>
+
+    <h2>Token's AuthContext</h2>
+
+    <pre><code>// app/src/auth/AuthContext.tsx
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import * as SecureStore from 'expo-secure-store';
+import { setAccessToken, clearTokens } from './store';
+
+interface User {
+  id: number;
+  email: string;
+  displayName: string;
+}
+
+interface AuthState {
+  user: User | null;
+  isLoading: boolean;
+  login: (email: string, password: string) =&gt; Promise&lt;void&gt;;
+  register: (email: string, password: string, displayName: string) =&gt; Promise&lt;void&gt;;
+  logout: () =&gt; Promise&lt;void&gt;;
+}
+
+const AuthContext = createContext&lt;AuthState | null&gt;(null);
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [user, setUser] = useState&lt;User | null&gt;(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Check for existing session on app launch
+  useEffect(() =&gt; {
+    restoreSession();
+  }, []);
+
+  async function restoreSession() {
+    try {
+      const refreshToken = await SecureStore.getItemAsync('refreshToken');
+      if (!refreshToken) {
+        setIsLoading(false);
+        return;
+      }
+
+      const res = await fetch('http://localhost:3000/api/auth/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken }),
+      });
+
+      if (!res.ok) {
+        await clearTokens();
+        setIsLoading(false);
+        return;
+      }
+
+      const json = await res.json();
+      setAccessToken(json.data.accessToken);
+      await SecureStore.setItemAsync('refreshToken', json.data.refreshToken);
+      setUser(json.data.user);
+    } catch {
+      // Network error — stay on loading or show offline
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function login(email: string, password: string) {
+    const res = await fetch('http://localhost:3000/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error);
+
+    setAccessToken(json.data.accessToken);
+    await SecureStore.setItemAsync('refreshToken', json.data.refreshToken);
+    setUser(json.data.user);
+  }
+
+  async function register(email: string, password: string, displayName: string) {
+    const res = await fetch('http://localhost:3000/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, displayName }),
+    });
+
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || json.details?.[0]?.message);
+
+    // Auto-login after registration
+    await login(email, password);
+  }
+
+  async function logout() {
+    try {
+      const token = await SecureStore.getItemAsync('refreshToken');
+      // Tell server to revoke (best effort)
+      await fetch('http://localhost:3000/api/auth/logout', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+    } catch {} // Don't block logout on network error
+
+    await clearTokens();
+    setUser(null);
+  }
+
+  return (
+    &lt;AuthContext.Provider value={{ user, isLoading, login, register, logout }}&gt;
+      {children}
+    &lt;/AuthContext.Provider&gt;
+  );
+}
+
+// Custom hook for easy access
+export function useAuth(): AuthState {
+  const context = useContext(AuthContext);
+  if (!context) throw new Error('useAuth must be used within AuthProvider');
+  return context;
+}</code></pre>
+
+    <h2>Conditional navigation based on auth state</h2>
+
+    <pre><code>// app/src/navigation/RootNavigator.tsx
+import { NavigationContainer } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { useAuth } from '../auth/AuthContext';
+import { LoginScreen } from '../screens/LoginScreen';
+import { RegisterScreen } from '../screens/RegisterScreen';
+import { MainTabs } from './MainTabs';
+import { LoadingSpinner } from '../components/LoadingSpinner';
+
+const Stack = createNativeStackNavigator();
+
+export function RootNavigator() {
+  const { user, isLoading } = useAuth();
+
+  if (isLoading) {
+    return &lt;LoadingSpinner message="Starting Token..." /&gt;;
+  }
+
+  return (
+    &lt;NavigationContainer&gt;
+      &lt;Stack.Navigator screenOptions={{ headerShown: false }}&gt;
+        {user ? (
+          // Authenticated — show main app
+          &lt;Stack.Screen name="Main" component={MainTabs} /&gt;
+        ) : (
+          // Not authenticated — show auth screens
+          &lt;&gt;
+            &lt;Stack.Screen name="Login" component={LoginScreen} /&gt;
+            &lt;Stack.Screen name="Register" component={RegisterScreen} /&gt;
+          &lt;/&gt;
+        )}
+      &lt;/Stack.Navigator&gt;
+    &lt;/NavigationContainer&gt;
+  );
+}</code></pre>
+
+    <p>When <code>user</code> changes from null to a User object (login success), React Navigation automatically swaps the screen stack. No manual <code>navigation.replace()</code> needed — the conditional rendering handles it.</p>
+
+    <h2>App entry point</h2>
+
+    <pre><code>// app/App.tsx
+import { AuthProvider } from './src/auth/AuthContext';
+import { RootNavigator } from './src/navigation/RootNavigator';
+
+export default function App() {
+  return (
+    &lt;AuthProvider&gt;
+      &lt;RootNavigator /&gt;
+    &lt;/AuthProvider&gt;
+  );
+}</code></pre>
+
+    <h2>Using auth in any component</h2>
+
+    <pre><code>// Any screen — no prop drilling needed
+import { useAuth } from '../auth/AuthContext';
+
+function SettingsScreen() {
+  const { user, logout } = useAuth();
+
+  return (
+    &lt;View&gt;
+      &lt;Text&gt;Welcome, {user?.displayName}&lt;/Text&gt;
+      &lt;Text&gt;Email: {user?.email}&lt;/Text&gt;
+      &lt;Pressable onPress={logout}&gt;
+        &lt;Text&gt;Log Out&lt;/Text&gt;
+      &lt;/Pressable&gt;
+    &lt;/View&gt;
+  );
+}
+
+// In the API client — access token from the store
+function TokenDetailScreen() {
+  const { user } = useAuth();
+  // user.id is available for any user-specific logic
+}</code></pre>
+
+    <h2>Updated Login screen using AuthContext</h2>
+
+    <pre><code>// Simpler — all auth logic lives in the context
+function LoginScreen() {
+  const { login } = useAuth();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubmit() {
+    setLoading(true);
+    setError('');
+    try {
+      await login(email, password);
+      // No navigation needed — RootNavigator reacts to user state change
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // ... render form with error display
+}</code></pre>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0001-jwt-storage.html">← Previous: JWT Flow</a>
+      <a href="./0003-handling-401s-logout.html">Next: Handling 401s &amp; Logout →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createSolution("exercise-1", {
+      exercise: "Build Token's AuthContext and conditional navigation: (1) Create AuthContext.tsx with AuthProvider, the useAuth hook, login/register/logout functions, and session restoration on mount, (2) Create RootNavigator that shows Login/Register when not authenticated and MainTabs when authenticated, (3) Refactor LoginScreen to use useAuth().login instead of direct fetch calls, (4) Wire it all together in App.tsx.",
+      hints: [
+        "The AuthProvider wraps everything — it goes in App.tsx around the navigator.",
+        "useAuth() must throw if used outside AuthProvider — this catches bugs early.",
+        "The conditional navigator pattern (user ? MainStack : AuthStack) is idiomatic React Navigation v6+ for auth flows."
+      ],
+      solution: `// app/src/auth/AuthContext.tsx — as shown in the lesson
+// Key points:
+// - restoreSession() runs once on mount via useEffect
+// - login() sets user state which triggers navigation swap
+// - logout() clears tokens AND sets user to null
+
+// app/src/navigation/RootNavigator.tsx — as shown in the lesson
+// Key: conditional rendering based on user state
+// No manual navigation.replace needed
+
+// app/App.tsx
+import { AuthProvider } from './src/auth/AuthContext';
+import { RootNavigator } from './src/navigation/RootNavigator';
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <RootNavigator />
+    </AuthProvider>
+  );
+}
+
+// app/src/screens/LoginScreen.tsx (refactored)
+import { useState } from 'react';
+import { View, Text, TextInput, Pressable } from 'react-native';
+import { useAuth } from '../auth/AuthContext';
+
+export function LoginScreen({ navigation }) {
+  const { login } = useAuth();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  async function handleLogin() {
+    setLoading(true);
+    setError('');
+    try {
+      await login(email, password);
+      // Navigation happens automatically — user state changed
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <View style={{ flex: 1, padding: 24, justifyContent: 'center' }}>
+      <Text style={{ fontSize: 28, fontWeight: '700', marginBottom: 32 }}>
+        Sign in to Token
+      </Text>
+      {error ? <Text style={{ color: '#dc2626', marginBottom: 12 }}>{error}</Text> : null}
+      <TextInput placeholder="Email" value={email} onChangeText={setEmail}
+        autoCapitalize="none" keyboardType="email-address" style={inputStyle} />
+      <TextInput placeholder="Password" value={password} onChangeText={setPassword}
+        secureTextEntry style={inputStyle} />
+      <Pressable onPress={handleLogin} disabled={loading} style={btnStyle}>
+        <Text style={{ color: '#fff', fontWeight: '600' }}>
+          {loading ? 'Signing in...' : 'Sign In'}
+        </Text>
+      </Pressable>
+      <Pressable onPress={() => navigation.navigate('Register')}>
+        <Text style={{ textAlign: 'center', marginTop: 16, color: '#2563EB' }}>
+          Don't have an account? Register
+        </Text>
+      </Pressable>
+    </View>
+  );
+}`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "The user calls login() successfully. What happens to the navigation without any navigate() call?",
+        code: "// In AuthContext:\nasync function login(...) {\n  // ... fetch, store tokens\n  setUser(json.data.user);  // state change\n}\n\n// In RootNavigator:\n{user ? <MainTabs /> : <LoginScreen />}",
+        answer: "React re-renders RootNavigator. Since user is now non-null, LoginScreen unmounts and MainTabs mounts automatically.",
+        explanation: "Conditional rendering in the navigator reacts to state changes. When setUser(user) fires, the component re-renders, the condition flips, and React Navigation swaps the entire stack. No imperative navigation needed — this is the declarative auth pattern."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this custom hook?",
+        code: "export function useAuth() {\n  const context = useContext(AuthContext);\n  return context;\n}",
+        options: [
+          "useContext doesn't work with custom hooks",
+          "No null check — if used outside AuthProvider, context is null and components crash with confusing errors later",
+          "The return type is wrong",
+          "You can't export a function that uses useContext"
+        ],
+        correct: 1,
+        explanation: "If a component uses useAuth() but isn't wrapped in AuthProvider, context is null. Without a guard, the crash happens somewhere random (e.g., 'Cannot read property displayName of null'). Adding: if (!context) throw new Error('useAuth must be inside AuthProvider') gives an immediate, clear error message."
+      },
+      {
+        type: "fill-blank",
+        question: "Provide auth state to the entire app:",
+        code: "export default function App() {\n  return (\n    <___>\n      <RootNavigator />\n    </___>\n  );\n}",
+        answer: "AuthProvider",
+        explanation: "AuthProvider wraps the entire app, making useAuth() available in every component: navigation, screens, and child components. It runs restoreSession() on mount (checking for existing login) and provides login/logout functions."
+      },
+      {
+        question: "Why does Token's logout function clear user state AND call the server's logout endpoint?",
+        options: [
+          "The server endpoint is required — without it, the client can't log out",
+          "Client-side clearing enables instant logout (no network wait); server-side revokes refresh tokens so they can't be reused if stolen",
+          "It's redundant — only one is needed",
+          "The server generates a new refresh token on logout"
+        ],
+        correct: 1,
+        explanation: "Client: setUser(null) immediately shows the login screen (instant UX). Server: revokes refresh tokens so a stolen token is useless. The server call is best-effort (catch {}) — if it fails due to network, the user still logs out locally. The refresh token expires naturally anyway."
+      },
+      {
+        type: "which-breaks",
+        question: "Which Context setup causes unnecessary re-renders?",
+        variants: [
+          "value={{ user, isLoading, login, logout }} with user as a state variable",
+          "value={{ user, login: useCallback(loginFn, []), logout: useCallback(logoutFn, []) }}",
+          "value={{ ...user, login, logout }} spreading user properties"
+        ],
+        correct: 2,
+        explanation: "Spreading user properties (...user) creates a new object on every render, even if user hasn't changed. React sees a new object reference and re-renders every consumer. Keep user as a single property: value={{ user, login, logout }}. The object reference only changes when user/login/logout actually change."
+      }
+    ]);
+  </script>
+</body>
+</html>

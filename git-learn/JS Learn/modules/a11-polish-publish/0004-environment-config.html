@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>A11 — Environment Config</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Polish &amp; Publish</a> &rsaquo;
+        <span>Environment Config</span>
+    </nav>
+
+    <h1>Environment Config</h1>
+    <p class="lesson-meta">A11 &mdash; Lesson 4 of 5 &nbsp;|&nbsp; ~35 min</p>
+
+    <div class="callout">
+        <strong>Why this matters for Token:</strong> During development, your app hits
+        <code>http://localhost:3000</code>. In staging, it hits <code>https://staging-api.tokn.app</code>.
+        In production, <code>https://api.tokn.app</code>. If you hardcode the URL, you have to
+        manually change it before every build &mdash; and one forgotten change means the Play Store
+        version talks to your dev server. Environment config lets EAS Build inject the right values
+        at build time without touching code.
+    </div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>The Three Environments</h2>
+
+    <table>
+        <thead><tr><th>Environment</th><th>API URL</th><th>When</th></tr></thead>
+        <tbody>
+            <tr><td><strong>development</strong></td><td>http://localhost:3000</td><td>Running on your machine via Expo Go or dev build</td></tr>
+            <tr><td><strong>staging</strong></td><td>https://staging-api.tokn.app</td><td>Testing on real devices before release</td></tr>
+            <tr><td><strong>production</strong></td><td>https://api.tokn.app</td><td>Users download from the store</td></tr>
+        </tbody>
+    </table>
+
+    <p>Beyond the API URL, environments differ in:</p>
+    <ul>
+        <li>TURN server address</li>
+        <li>Push notification credentials (FCM sender ID)</li>
+        <li>Feature flags (e.g. voice/video disabled in staging)</li>
+        <li>Log level (verbose in dev, errors-only in production)</li>
+    </ul>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>app.config.js (Dynamic Config)</h2>
+
+    <p>Expo supports a dynamic config file that can read environment variables at build time:</p>
+
+    <pre><code>// app/app.config.js
+export default ({ config }) =&gt; {
+  const ENV = process.env.APP_ENV || 'development';
+
+  const envConfig = {
+    development: {
+      apiUrl: 'http://localhost:3000',
+      turnServer: 'turn:localhost:3478',
+      logLevel: 'debug',
+    },
+    staging: {
+      apiUrl: 'https://staging-api.tokn.app',
+      turnServer: 'turn:staging-turn.tokn.app:3478',
+      logLevel: 'warn',
+    },
+    production: {
+      apiUrl: 'https://api.tokn.app',
+      turnServer: 'turn:turn.tokn.app:3478',
+      logLevel: 'error',
+    },
+  };
+
+  return {
+    ...config,
+    name: ENV === 'production' ? 'Token' : \`Token (\${ENV})\`,
+    slug: 'token',
+    version: '1.0.0',
+    extra: {
+      ...envConfig[ENV],
+      appEnv: ENV,
+      eas: {
+        projectId: process.env.EAS_PROJECT_ID,
+      },
+    },
+    ios: {
+      ...config.ios,
+      bundleIdentifier: ENV === 'production'
+        ? 'app.tokn.token'
+        : \`app.tokn.token.\${ENV}\`,
+    },
+    android: {
+      ...config.android,
+      package: ENV === 'production'
+        ? 'app.tokn.token'
+        : \`app.tokn.token.\${ENV}\`,
+    },
+  };
+};</code></pre>
+
+    <p><strong>Key points:</strong></p>
+    <ul>
+        <li>Different bundle IDs per environment &mdash; you can have dev, staging, and prod installed simultaneously on the same device</li>
+        <li>The app name shows the environment in non-production builds (helps testers know which version they're running)</li>
+        <li><code>extra</code> is where custom config lives &mdash; accessible at runtime via <code>expo-constants</code></li>
+    </ul>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Reading Config at Runtime</h2>
+
+    <pre><code># Already installed with Expo
+npx expo install expo-constants</code></pre>
+
+    <pre><code>// app/src/config/env.ts
+import Constants from 'expo-constants';
+
+interface AppConfig {
+  apiUrl: string;
+  turnServer: string;
+  logLevel: 'debug' | 'warn' | 'error';
+  appEnv: 'development' | 'staging' | 'production';
+}
+
+const extra = Constants.expoConfig?.extra as AppConfig;
+
+export const config: AppConfig = {
+  apiUrl: extra?.apiUrl || 'http://localhost:3000',
+  turnServer: extra?.turnServer || 'turn:localhost:3478',
+  logLevel: extra?.logLevel || 'debug',
+  appEnv: extra?.appEnv || 'development',
+};
+
+export const isDev = config.appEnv === 'development';
+export const isProd = config.appEnv === 'production';</code></pre>
+
+    <p>Now every file in the app imports from one place:</p>
+
+    <pre><code>import { config, isDev } from '../config/env';
+
+const response = await fetch(\`\${config.apiUrl}/tokens\`);
+
+if (isDev) {
+  console.log('Response:', response.status);
+}</code></pre>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>EAS Build Profiles</h2>
+
+    <p>EAS Build uses profiles in <code>eas.json</code> to set environment variables for each build type:</p>
+
+    <pre><code>// app/eas.json
+{
+  "cli": {
+    "version": "&gt;=5.0.0"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "env": {
+        "APP_ENV": "development"
+      }
+    },
+    "staging": {
+      "distribution": "internal",
+      "env": {
+        "APP_ENV": "staging"
+      },
+      "channel": "staging"
+    },
+    "production": {
+      "env": {
+        "APP_ENV": "production"
+      },
+      "channel": "production",
+      "autoIncrement": true
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "ascAppId": "YOUR_APP_STORE_CONNECT_APP_ID"
+      }
+    }
+  }
+}</code></pre>
+
+    <p>Build commands:</p>
+    <pre><code># Development build (installs on your device via QR)
+eas build --profile development --platform ios
+
+# Staging build (internal testers)
+eas build --profile staging --platform all
+
+# Production build (for store submission)
+eas build --profile production --platform all</code></pre>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>EAS Secrets: Protecting Sensitive Values</h2>
+
+    <p>Some values should <strong>never</strong> be in code or git:</p>
+    <ul>
+        <li>FCM server key</li>
+        <li>TURN server credentials</li>
+        <li>Sentry DSN</li>
+        <li>Any API keys for third-party services</li>
+    </ul>
+
+    <p>EAS Secrets stores these encrypted on Expo's servers and injects them as environment variables during builds:</p>
+
+    <pre><code># Set a secret (stored encrypted, never in git)
+eas secret:create --name TURN_PASSWORD --value "s3cret-turn-pw" --scope project
+
+# List secrets
+eas secret:list
+
+# Use in app.config.js
+turnPassword: process.env.TURN_PASSWORD,</code></pre>
+
+    <p><strong>Rule:</strong> If it's a credential, it goes in EAS Secrets. If it's a URL or flag, it goes in
+    <code>eas.json</code> env. If it's structural config (bundle ID, version), it goes in <code>app.config.js</code> directly.</p>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Local Development: .env Files</h2>
+
+    <p>When running locally with <code>npx expo start</code>, EAS isn't involved. Use a <code>.env</code> file for local overrides:</p>
+
+    <pre><code># app/.env (git-ignored)
+APP_ENV=development
+TURN_PASSWORD=local-dev-password</code></pre>
+
+    <p>Expo reads <code>.env</code> automatically in SDK 49+. Earlier versions need <code>dotenv</code>:</p>
+
+    <pre><code>// top of app.config.js (only needed for SDK &lt; 49)
+require('dotenv').config();</code></pre>
+
+    <p>Add to <code>.gitignore</code>:</p>
+    <pre><code># app/.gitignore
+.env
+.env.local
+.env.*.local</code></pre>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Feature Flags by Environment</h2>
+
+    <pre><code>// app/src/config/features.ts
+import { config } from './env';
+
+export const features = {
+  voiceVideo: config.appEnv !== 'staging', // disabled while TURN staging is flaky
+  pushNotifications: config.appEnv !== 'development', // no FCM in simulator
+  analytics: config.appEnv === 'production',
+  devTools: config.appEnv === 'development',
+} as const;</code></pre>
+
+    <pre><code>// Usage in a component
+import { features } from '../config/features';
+
+{features.voiceVideo &amp;&amp; (
+  &lt;Tab.Screen name="Calls" component={CallsScreen} /&gt;
+)}</code></pre>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Validating Config at Startup</h2>
+
+    <p>Catch misconfigurations early &mdash; fail loudly at app launch, not 5 screens in:</p>
+
+    <pre><code>// app/src/config/env.ts (add to the bottom)
+import { z } from 'zod';
+
+const configSchema = z.object({
+  apiUrl: z.string().url(),
+  turnServer: z.string().min(1),
+  logLevel: z.enum(['debug', 'warn', 'error']),
+  appEnv: z.enum(['development', 'staging', 'production']),
+});
+
+// Validates on import — crashes immediately if config is wrong
+configSchema.parse(config);</code></pre>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Summary: Where Each Value Lives</h2>
+
+    <table>
+        <thead><tr><th>What</th><th>Where</th><th>Accessible</th></tr></thead>
+        <tbody>
+            <tr><td>API URLs, log level, feature toggles</td><td><code>eas.json</code> → env → <code>app.config.js</code> → extra</td><td>Runtime via expo-constants</td></tr>
+            <tr><td>Secrets (API keys, passwords)</td><td>EAS Secrets (<code>eas secret:create</code>)</td><td>Build time only (injected into env)</td></tr>
+            <tr><td>Bundle ID, version, name</td><td><code>app.config.js</code> directly</td><td>Build time + runtime</td></tr>
+            <tr><td>Local dev overrides</td><td><code>.env</code> (git-ignored)</td><td>Local <code>expo start</code> only</td></tr>
+        </tbody>
+    </table>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <h2>Quiz</h2>
+    <div id="lesson-quiz"></div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <nav class="lesson-nav">
+        <a href="./0003-forms-validation.html">&larr; Forms &amp; Validation</a>
+        <a href="./0005-store-submission.html">Store Submission &rarr;</a>
+    </nav>
+
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+
+    <script>
+    createSolution("exercise-1", {
+      exercise: `Set up environment config for Token's WebSocket connections.\n\nRequirements:\n1. Add a wsUrl to each environment config in app.config.js (ws://localhost:3001 for dev, wss://staging-ws.tokn.app for staging, wss://ws.tokn.app for production)\n2. Add the wsUrl to the config/env.ts type and export\n3. Add it to the zod validation schema\n4. Create a useWebSocketUrl() hook that returns the correct URL for the current environment\n5. Handle the case where development uses ws:// (insecure) and production uses wss:// (TLS)`,
+      hints: [
+        "ws:// and wss:// are like http:// and https:// — the zod schema should accept both with z.string().url() or a custom regex.",
+        "The hook is simple: import config and return config.wsUrl. The complexity is in setup, not runtime.",
+        "For the zod validation, use z.string().regex(/^wss?:\\/\\/.+/) to allow both ws:// and wss://.",
+        "Remember to add the fallback in env.ts: wsUrl: extra?.wsUrl || 'ws://localhost:3001'"
+      ],
+      solution: `// 1. app.config.js — add wsUrl to envConfig
+const envConfig = {
+  development: {
+    apiUrl: 'http://localhost:3000',
+    wsUrl: 'ws://localhost:3001',
+    turnServer: 'turn:localhost:3478',
+    logLevel: 'debug',
+  },
+  staging: {
+    apiUrl: 'https://staging-api.tokn.app',
+    wsUrl: 'wss://staging-ws.tokn.app',
+    turnServer: 'turn:staging-turn.tokn.app:3478',
+    logLevel: 'warn',
+  },
+  production: {
+    apiUrl: 'https://api.tokn.app',
+    wsUrl: 'wss://ws.tokn.app',
+    turnServer: 'turn:turn.tokn.app:3478',
+    logLevel: 'error',
+  },
+};
+
+// 2. app/src/config/env.ts
+import Constants from 'expo-constants';
+import { z } from 'zod';
+
+interface AppConfig {
+  apiUrl: string;
+  wsUrl: string;
+  turnServer: string;
+  logLevel: 'debug' | 'warn' | 'error';
+  appEnv: 'development' | 'staging' | 'production';
+}
+
+const extra = Constants.expoConfig?.extra as AppConfig;
+
+export const config: AppConfig = {
+  apiUrl: extra?.apiUrl || 'http://localhost:3000',
+  wsUrl: extra?.wsUrl || 'ws://localhost:3001',
+  turnServer: extra?.turnServer || 'turn:localhost:3478',
+  logLevel: extra?.logLevel || 'debug',
+  appEnv: extra?.appEnv || 'development',
+};
+
+// 3. Zod validation
+const configSchema = z.object({
+  apiUrl: z.string().url(),
+  wsUrl: z.string().regex(/^wss?:\\/\\/.+/, 'Must be a ws:// or wss:// URL'),
+  turnServer: z.string().min(1),
+  logLevel: z.enum(['debug', 'warn', 'error']),
+  appEnv: z.enum(['development', 'staging', 'production']),
+});
+
+configSchema.parse(config);
+
+export const isDev = config.appEnv === 'development';
+export const isProd = config.appEnv === 'production';
+
+// 4. Hook
+// app/src/hooks/useWebSocketUrl.ts
+import { config } from '../config/env';
+
+export function useWebSocketUrl(): string {
+  return config.wsUrl;
+}
+
+// Usage:
+// const wsUrl = useWebSocketUrl();
+// const socket = new WebSocket(wsUrl);`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        code: `const ENV = process.env.APP_ENV || 'development';\nconst name = ENV === 'production' ? 'Token' : \`Token (\${ENV})\`;\nconsole.log(name);\n// (APP_ENV is not set)`,
+        answer: "Token (development)",
+        explanation: "When APP_ENV is not set, process.env.APP_ENV is undefined, so the || fallback gives 'development'. That's not 'production', so the template literal branch runs."
+      },
+      {
+        type: "spot-the-bug",
+        code: `// app.config.js\nexport default ({ config }) => {\n  return {\n    ...config,\n    extra: {\n      apiKey: 'sk-live-abc123def456',  // line 6\n      apiUrl: process.env.API_URL,\n    },\n  };\n};`,
+        bugLine: 6,
+        options: ["Line 6: API key hardcoded in config (will be in git)", "Line 7: process.env may be undefined", "Line 2: config parameter is unused"],
+        correct: 0,
+        explanation: "Hardcoding a secret in app.config.js means it's committed to git and visible to anyone with repo access. Use EAS Secrets instead: eas secret:create --name API_KEY --value 'sk-live-...'"
+      },
+      {
+        question: "What is the purpose of different bundle identifiers per environment (e.g. app.tokn.token.staging)?",
+        options: [
+          "It makes the app launch faster in non-production environments",
+          "It allows dev, staging, and production builds to be installed simultaneously on the same device",
+          "Apple and Google require different identifiers for test builds",
+          "It prevents staging builds from sending push notifications"
+        ],
+        correct: 1,
+        explanation: "The OS treats different bundle IDs as different apps. With unique IDs, testers can have all three versions on one phone — useful for comparing behaviour side-by-side."
+      },
+      {
+        type: "fill-blank",
+        code: `// Read custom config at runtime\nimport ___ from 'expo-constants';\nconst apiUrl = ___.expoConfig?.extra?.apiUrl;`,
+        answer: "Constants",
+        explanation: "expo-constants provides Constants.expoConfig which contains the resolved app.config.js, including the extra field where custom environment values live."
+      },
+      {
+        type: "order-steps",
+        steps: [
+          "Create EAS secret for sensitive value",
+          "Reference process.env.SECRET_NAME in app.config.js",
+          "Set APP_ENV in eas.json build profile",
+          "Run eas build --profile staging",
+          "EAS injects env vars and builds the binary"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Secrets are created once (step 1), referenced in config (step 2), the profile sets the environment (step 3), you trigger the build (step 4), and EAS resolves everything during the build (step 5)."
+      }
+    ]);
+    </script>
+</body>
+</html>

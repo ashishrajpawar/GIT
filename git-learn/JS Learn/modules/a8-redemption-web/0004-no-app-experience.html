@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>No-App-Installed Experience — A8.4</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A8 — Redemption Web Page</a>
+      <span class="sep">›</span>
+      <span class="current">No-App-Installed Experience</span>
+    </nav>
+
+    <h1>No-App-Installed Experience</h1>
+    <div class="lesson-meta">
+      <span>A8 — Lesson 4 of 4</span>
+      <span>~50 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>The whole point of the redemption web page: holders communicate <strong>without installing anything</strong>. The web page IS the product for them. A delivery driver opens a link, types their name, and chats with the customer — from any browser, any device, any OS. If the mobile app happens to be installed, deep link into it instead. But the web experience must be complete and polished on its own.</p>
+    </div>
+
+    <h2>The holder's complete journey</h2>
+
+    <p>From the holder's perspective, the entire experience is:</p>
+    <ol>
+      <li>Receive a token code (QR, typed, spoken, printed)</li>
+      <li>Open <code>tokn.app/t/CODE</code> in their phone's browser</li>
+      <li>Enter their name (2 seconds)</li>
+      <li>Chat or call — no sign-up, no download, no permissions upfront</li>
+    </ol>
+
+    <p>This must work on Chrome, Safari, Firefox — desktop and mobile. Every extra step loses holders.</p>
+
+    <h2>Chat UI in the browser</h2>
+
+    <p>The ChatPage component is similar to what you built in the mobile app (A6), but using HTML/CSS instead of React Native Views:</p>
+
+    <pre><code>// web/src/pages/ChatPage.tsx
+import { useState, useEffect, useRef } from 'react';
+import { useParams } from 'react-router-dom';
+import { useWebSocket } from '../hooks/useWebSocket';
+
+interface Message {
+  id: string;
+  text: string;
+  sender: 'holder' | 'issuer';
+  timestamp: string;
+}
+
+export function ChatPage() {
+  const { code } = useParams&lt;{ code: string }&gt;();
+  const [messages, setMessages] = useState&lt;Message[]&gt;([]);
+  const [input, setInput] = useState('');
+  const messagesEndRef = useRef&lt;HTMLDivElement&gt;(null);
+
+  const token = sessionStorage.getItem('holderJwt');
+  const wsClient = useWebSocket(import.meta.env.VITE_WS_URL, token);
+
+  // Listen for incoming messages
+  useEffect(() =&gt; {
+    if (!wsClient.current) return;
+
+    wsClient.current.onMessage((msg: any) =&gt; {
+      if (msg.type === 'chat-message') {
+        setMessages(prev =&gt; [...prev, {
+          id: msg.id,
+          text: msg.text,
+          sender: msg.sender,
+          timestamp: msg.timestamp,
+        }]);
+      }
+    });
+  }, [wsClient]);
+
+  // Auto-scroll to bottom on new messages
+  useEffect(() =&gt; {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  function sendMessage(e: React.FormEvent) {
+    e.preventDefault();
+    if (!input.trim() || !wsClient.current) return;
+
+    wsClient.current.send('chat-message', {
+      text: input.trim(),
+      tokenCode: code,
+    });
+
+    // Optimistic: add to local state immediately
+    setMessages(prev =&gt; [...prev, {
+      id: 'local-' + Date.now(),
+      text: input.trim(),
+      sender: 'holder',
+      timestamp: new Date().toISOString(),
+    }]);
+
+    setInput('');
+  }
+
+  return (
+    &lt;div className="flex flex-col h-screen"&gt;
+      {/* Header */}
+      &lt;header className="px-4 py-3 border-b flex items-center justify-between"&gt;
+        &lt;h1 className="font-semibold"&gt;Token: {code}&lt;/h1&gt;
+        &lt;button
+          onClick={() =&gt; window.location.href = \`/t/\${code}/call\`}
+          className="p-2 rounded-full hover:bg-gray-100"
+          title="Start call"
+        &gt;
+          &#128222;
+        &lt;/button&gt;
+      &lt;/header&gt;
+
+      {/* Messages */}
+      &lt;div className="flex-1 overflow-y-auto p-4 space-y-3"&gt;
+        {messages.map(msg =&gt; (
+          &lt;div
+            key={msg.id}
+            className={\`flex \${msg.sender === 'holder' ? 'justify-end' : 'justify-start'}\`}
+          &gt;
+            &lt;div className={\`max-w-[75%] px-4 py-2 rounded-2xl \${
+              msg.sender === 'holder'
+                ? 'bg-blue-600 text-white rounded-br-md'
+                : 'bg-gray-100 text-gray-900 rounded-bl-md'
+            }\`}&gt;
+              &lt;p&gt;{msg.text}&lt;/p&gt;
+              &lt;span className="text-xs opacity-60 mt-1 block"&gt;
+                {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              &lt;/span&gt;
+            &lt;/div&gt;
+          &lt;/div&gt;
+        ))}
+        &lt;div ref={messagesEndRef} /&gt;
+      &lt;/div&gt;
+
+      {/* Input */}
+      &lt;form onSubmit={sendMessage} className="p-4 border-t flex gap-2"&gt;
+        &lt;input
+          type="text"
+          value={input}
+          onChange={(e) =&gt; setInput(e.target.value)}
+          placeholder="Type a message..."
+          className="flex-1 px-4 py-2 border rounded-full focus:outline-none focus:ring-2"
+        /&gt;
+        &lt;button
+          type="submit"
+          disabled={!input.trim()}
+          className="px-4 py-2 bg-blue-600 text-white rounded-full disabled:opacity-50"
+        &gt;
+          Send
+        &lt;/button&gt;
+      &lt;/form&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+
+    <h2>Voice and video calls in the browser</h2>
+
+    <pre><code>// web/src/pages/CallPage.tsx
+import { useState, useRef, useEffect } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { useCall } from '../hooks/useCall';
+import { useWebSocket } from '../hooks/useWebSocket';
+
+export function CallPage() {
+  const { code } = useParams&lt;{ code: string }&gt;();
+  const navigate = useNavigate();
+  const localVideoRef = useRef&lt;HTMLVideoElement&gt;(null);
+  const remoteVideoRef = useRef&lt;HTMLVideoElement&gt;(null);
+
+  const token = sessionStorage.getItem('holderJwt');
+  const wsClient = useWebSocket(import.meta.env.VITE_WS_URL, token);
+  const { callState, muted, startCall, endCall, toggleMute } = useCall(wsClient.current);
+
+  const [withVideo, setWithVideo] = useState(true);
+
+  useEffect(() =&gt; {
+    // Auto-start call when page loads
+    if (wsClient.current && localVideoRef.current && remoteVideoRef.current) {
+      startCall(localVideoRef.current, remoteVideoRef.current, withVideo)
+        .catch(err =&gt; {
+          alert(err.message);
+          navigate(\`/t/\${code}/chat\`);
+        });
+    }
+  }, [wsClient.current]);
+
+  function handleEndCall() {
+    endCall();
+    navigate(\`/t/\${code}/chat\`);
+  }
+
+  return (
+    &lt;div className="relative h-screen bg-gray-900"&gt;
+      {/* Remote video — full screen */}
+      &lt;video
+        ref={remoteVideoRef}
+        className="w-full h-full object-cover"
+        playsInline
+        autoPlay
+      /&gt;
+
+      {/* Local video — small overlay */}
+      &lt;video
+        ref={localVideoRef}
+        className="absolute top-4 right-4 w-32 h-24 rounded-lg object-cover border-2 border-white"
+        playsInline
+        autoPlay
+        muted
+      /&gt;
+
+      {/* Call status */}
+      {callState === 'calling' && (
+        &lt;div className="absolute inset-0 flex items-center justify-center bg-black/50"&gt;
+          &lt;p className="text-white text-xl"&gt;Connecting...&lt;/p&gt;
+        &lt;/div&gt;
+      )}
+
+      {/* Controls */}
+      &lt;div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex gap-4"&gt;
+        &lt;button
+          onClick={toggleMute}
+          className={\`w-14 h-14 rounded-full flex items-center justify-center \${
+            muted ? 'bg-red-500' : 'bg-white/20'
+          }\`}
+        &gt;
+          {muted ? '&#128263;' : '&#128264;'}
+        &lt;/button&gt;
+        &lt;button
+          onClick={handleEndCall}
+          className="w-14 h-14 rounded-full bg-red-600 flex items-center justify-center"
+        &gt;
+          &#128222;
+        &lt;/button&gt;
+      &lt;/div&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+
+    <div class="callout">
+      <div class="callout-title">The playsInline attribute</div>
+      <p>On iOS Safari, video elements without <code>playsInline</code> go fullscreen automatically. Add <code>playsInline</code> to all <code>&lt;video&gt;</code> elements for proper inline playback on mobile browsers. Without it, the call UI layout breaks on iPhones.</p>
+    </div>
+
+    <h2>Progressive enhancement — app-installed detection</h2>
+
+    <p>If the issuer (who has the app) opens a redemption link, they should be redirected to the native app instead of the web page:</p>
+
+    <pre><code>// web/src/lib/deepLink.ts
+
+/**
+ * Try to open the native app via deep link.
+ * If it fails (app not installed), stay on the web page.
+ */
+export function tryDeepLink(code: string): Promise&lt;boolean&gt; {
+  return new Promise((resolve) =&gt; {
+    const appUrl = \`tokn://t/\${code}\`;
+    const timeout = setTimeout(() =&gt; {
+      // If we're still here after 1.5s, app didn't open
+      resolve(false);
+    }, 1500);
+
+    // Try to open the app
+    window.location.href = appUrl;
+
+    // If the page loses focus, the app opened
+    window.addEventListener('blur', () =&gt; {
+      clearTimeout(timeout);
+      resolve(true);
+    }, { once: true });
+  });
+}
+
+// Usage in RedeemPage — try app first, fall back to web
+async function handleRedeemPageLoad(code: string) {
+  // Only try deep link on mobile
+  const isMobile = /iPhone|iPad|Android/i.test(navigator.userAgent);
+
+  if (isMobile) {
+    const appOpened = await tryDeepLink(code);
+    if (appOpened) return; // User is in the app now
+  }
+
+  // Continue with web redemption flow
+}</code></pre>
+
+    <h2>Universal Links / App Links (better approach)</h2>
+
+    <p>Deep links with custom schemes are fragile. The better approach uses Universal Links (iOS) and App Links (Android):</p>
+
+    <pre><code>// web/public/.well-known/apple-app-site-association
+{
+  "applinks": {
+    "apps": [],
+    "details": [{
+      "appID": "TEAM_ID.app.tokn.mobile",
+      "paths": ["/t/*"]
+    }]
+  }
+}
+
+// web/public/.well-known/assetlinks.json (Android)
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "app.tokn.mobile",
+    "sha256_cert_fingerprints": ["YOUR_SHA256_FINGERPRINT"]
+  }
+}]</code></pre>
+
+    <p>With these files served from <code>tokn.app/.well-known/</code>, the OS intercepts the URL before the browser loads it. If the app is installed, it opens directly. If not, the browser loads the web page normally — no JavaScript detection needed.</p>
+
+    <h2>SEO and meta tags</h2>
+
+    <p>When someone shares a <code>tokn.app/t/CODE</code> link in a chat app, it should show a preview:</p>
+
+    <pre><code>&lt;!-- web/index.html — meta tags for link previews --&gt;
+&lt;head&gt;
+  &lt;meta charset="UTF-8" /&gt;
+  &lt;meta name="viewport" content="width=device-width, initial-scale=1.0" /&gt;
+  &lt;title&gt;Token — Secure Communication&lt;/title&gt;
+
+  &lt;!-- Open Graph (Facebook, WhatsApp, Telegram previews) --&gt;
+  &lt;meta property="og:title" content="Token — Secure Communication" /&gt;
+  &lt;meta property="og:description" content="Open this link to connect securely. No app download required." /&gt;
+  &lt;meta property="og:image" content="https://tokn.app/og-image.png" /&gt;
+  &lt;meta property="og:url" content="https://tokn.app" /&gt;
+  &lt;meta property="og:type" content="website" /&gt;
+
+  &lt;!-- Twitter Card --&gt;
+  &lt;meta name="twitter:card" content="summary" /&gt;
+  &lt;meta name="twitter:title" content="Token — Secure Communication" /&gt;
+  &lt;meta name="twitter:description" content="Open this link to connect securely." /&gt;
+  &lt;meta name="twitter:image" content="https://tokn.app/og-image.png" /&gt;
+
+  &lt;!-- Security --&gt;
+  &lt;meta name="robots" content="noindex" /&gt;
+  &lt;!-- Don't index individual token pages — they're private --&gt;
+&lt;/head&gt;</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">Privacy consideration</div>
+      <p>Individual token URLs (<code>/t/MERC-8GH2-LP4X</code>) should have <code>noindex</code> so search engines don't crawl them. The OG tags are generic — they don't reveal the token label or issuer identity. The preview just says "secure communication link".</p>
+    </div>
+
+    <h2>Responsive design for mobile browsers</h2>
+
+    <p>Most holders will open the link on their phone. The layout must work on small screens:</p>
+
+    <pre><code>// Key responsive patterns for the chat UI:
+
+// 1. Full viewport height (accounts for mobile browser chrome)
+.chat-container {
+  height: 100dvh;  /* dynamic viewport height — excludes address bar */
+}
+
+// 2. Safe area insets (iPhone notch/home indicator)
+.input-area {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+// 3. Prevent zoom on input focus (iOS)
+input, textarea {
+  font-size: 16px;  /* iOS zooms if font-size < 16px */
+}
+
+// 4. Keyboard handling
+.messages-container {
+  /* Use flex-1 with overflow — messages scroll, input stays fixed */
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}</code></pre>
+
+    <pre><code>// In React/Tailwind:
+export function ChatLayout({ children }: { children: React.ReactNode }) {
+  return (
+    &lt;div className="flex flex-col h-[100dvh]"&gt;
+      {/* Header */}
+      &lt;header className="shrink-0 px-4 py-3 border-b"&gt;
+        {/* ... */}
+      &lt;/header&gt;
+
+      {/* Messages — scrollable area */}
+      &lt;main className="flex-1 overflow-y-auto overscroll-contain"&gt;
+        {children}
+      &lt;/main&gt;
+
+      {/* Input — fixed at bottom, respects safe area */}
+      &lt;footer className="shrink-0 p-4 border-t pb-[max(1rem,env(safe-area-inset-bottom))]"&gt;
+        {/* ... */}
+      &lt;/footer&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+
+    <h2>Connection state indicator</h2>
+
+    <p>Show holders the WebSocket connection status so they know if messages are flowing:</p>
+
+    <pre><code>// web/src/components/ConnectionStatus.tsx
+import { useState, useEffect } from 'react';
+
+interface Props {
+  wsClient: any;
+}
+
+export function ConnectionStatus({ wsClient }: Props) {
+  const [connected, setConnected] = useState(true);
+
+  useEffect(() =&gt; {
+    if (!wsClient) return;
+    wsClient.onConnect(() =&gt; setConnected(true));
+    wsClient.onDisconnect(() =&gt; setConnected(false));
+  }, [wsClient]);
+
+  if (connected) return null; // Don't show anything when connected
+
+  return (
+    &lt;div className="fixed top-0 left-0 right-0 bg-orange-500 text-white text-center py-1 text-sm z-50"&gt;
+      Reconnecting...
+    &lt;/div&gt;
+  );
+}</code></pre>
+
+    <h2>Putting it all together — the complete holder flow</h2>
+
+    <pre><code>// web/src/App.tsx — final version with all routes
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { RedeemPage } from './pages/RedeemPage';
+import { ChatPage } from './pages/ChatPage';
+import { CallPage } from './pages/CallPage';
+import { ExpiredPage } from './pages/ExpiredPage';
+
+export default function App() {
+  return (
+    &lt;BrowserRouter&gt;
+      &lt;Routes&gt;
+        &lt;Route path="/t/:code" element={&lt;RedeemPage /&gt;} /&gt;
+        &lt;Route path="/t/:code/chat" element={&lt;ChatPage /&gt;} /&gt;
+        &lt;Route path="/t/:code/call" element={&lt;CallPage /&gt;} /&gt;
+        &lt;Route path="/t/:code/expired" element={&lt;ExpiredPage /&gt;} /&gt;
+        &lt;Route path="*" element={
+          &lt;div className="h-screen flex items-center justify-center"&gt;
+            &lt;p className="text-gray-500"&gt;This link is not valid.&lt;/p&gt;
+          &lt;/div&gt;
+        } /&gt;
+      &lt;/Routes&gt;
+    &lt;/BrowserRouter&gt;
+  );
+}</code></pre>
+
+    <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0003-browser-webrtc-ws.html">← Previous: Browser WebRTC & WebSocket</a>
+      <span class="disabled">Next module: A9 Deep Linking & Routing →</span>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// Simulating responsive viewport calculations
+
+// The problem: mobile browsers have dynamic toolbars
+// 100vh includes the space behind the address bar
+// 100dvh adjusts when the toolbar shows/hides
+
+const screenHeight = 844; // iPhone 14 Pro screen
+const addressBarHeight = 50;
+const homeIndicator = 34;
+
+const vh100 = screenHeight; // includes space behind address bar
+const dvh100 = screenHeight - addressBarHeight; // actual visible area
+
+console.log('Screen height:', screenHeight + 'px');
+console.log('100vh (includes hidden area):', vh100 + 'px');
+console.log('100dvh (visible only):', dvh100 + 'px');
+console.log('');
+
+// Safe area calculations
+const safeAreaBottom = homeIndicator;
+const inputPadding = Math.max(16, safeAreaBottom);
+console.log('Safe area bottom:', safeAreaBottom + 'px');
+console.log('Input padding-bottom:', inputPadding + 'px');
+console.log('');
+
+// Message area height
+const headerHeight = 56;
+const inputAreaHeight = 64 + inputPadding;
+const messagesHeight = dvh100 - headerHeight - inputAreaHeight;
+console.log('Header:', headerHeight + 'px');
+console.log('Input area:', inputAreaHeight + 'px');
+console.log('Messages area:', messagesHeight + 'px');
+console.log('');
+console.log('Total:', headerHeight + inputAreaHeight + messagesHeight, '=', dvh100);
+
+// Font size gotcha
+console.log('');
+console.log('--- iOS zoom prevention ---');
+console.log('Input font-size >= 16px? iOS will NOT auto-zoom');
+console.log('Input font-size < 16px? iOS WILL auto-zoom on focus');`);
+
+    createSolution("exercise-1", {
+      exercise: "Build the complete no-app holder experience: (1) A ChatPage that shows messages with sender alignment (holder = right/blue, issuer = left/gray), auto-scrolls on new messages, and has a fixed input at the bottom. (2) Responsive CSS using dvh, safe-area-inset-bottom, and 16px font-size on inputs. (3) A ConnectionStatus banner that shows when WebSocket disconnects. (4) App-installed detection: if the Token app is installed, offer to open it; otherwise stay on the web page. (5) Meta tags for link previews (OG tags) that don't reveal private information.",
+      hints: [
+        "Use flex with h-[100dvh] for the full layout — header (shrink-0), messages (flex-1 overflow-y-auto), input (shrink-0).",
+        "Auto-scroll: useRef on a div at the end of messages, call scrollIntoView({ behavior: 'smooth' }) in a useEffect triggered by messages.length.",
+        "For app detection, try the custom scheme URL; if the page doesn't lose focus within 1.5 seconds, the app isn't installed."
+      ],
+      solution: `// pages/ChatPage.tsx — complete responsive chat
+import { useState, useEffect, useRef } from 'react';
+import { useParams } from 'react-router-dom';
+import { useWebSocket } from '../hooks/useWebSocket';
+import { ConnectionStatus } from '../components/ConnectionStatus';
+
+interface Message {
+  id: string;
+  text: string;
+  sender: 'holder' | 'issuer';
+  timestamp: string;
+}
+
+export function ChatPage() {
+  const { code } = useParams<{ code: string }>();
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState('');
+  const endRef = useRef<HTMLDivElement>(null);
+
+  const token = sessionStorage.getItem('holderJwt');
+  const wsClient = useWebSocket(import.meta.env.VITE_WS_URL, token);
+
+  useEffect(() => {
+    if (!wsClient.current) return;
+    wsClient.current.onMessage((msg: any) => {
+      if (msg.type === 'chat-message') {
+        setMessages(prev => [...prev, msg]);
+      }
+    });
+  }, [wsClient]);
+
+  // Auto-scroll
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages.length]);
+
+  function send(e: React.FormEvent) {
+    e.preventDefault();
+    if (!input.trim()) return;
+    wsClient.current?.send('chat-message', { text: input.trim(), tokenCode: code });
+    setMessages(prev => [...prev, {
+      id: 'local-' + Date.now(),
+      text: input.trim(),
+      sender: 'holder',
+      timestamp: new Date().toISOString(),
+    }]);
+    setInput('');
+  }
+
+  return (
+    <div className="flex flex-col h-[100dvh]">
+      <ConnectionStatus wsClient={wsClient.current} />
+
+      {/* Header */}
+      <header className="shrink-0 px-4 py-3 border-b flex items-center justify-between">
+        <span className="font-semibold">Token: {code}</span>
+        <a href={\`/t/\${code}/call\`} className="text-blue-600">Call</a>
+      </header>
+
+      {/* Messages */}
+      <main className="flex-1 overflow-y-auto overscroll-contain p-4 space-y-3">
+        {messages.map(msg => (
+          <div key={msg.id} className={\`flex \${msg.sender === 'holder' ? 'justify-end' : 'justify-start'}\`}>
+            <div className={\`max-w-[75%] px-4 py-2 rounded-2xl \${
+              msg.sender === 'holder'
+                ? 'bg-blue-600 text-white rounded-br-md'
+                : 'bg-gray-100 text-gray-900 rounded-bl-md'
+            }\`}>
+              <p>{msg.text}</p>
+              <span className="text-xs opacity-60 block mt-1">
+                {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            </div>
+          </div>
+        ))}
+        <div ref={endRef} />
+      </main>
+
+      {/* Input — respects safe area */}
+      <form onSubmit={send} className="shrink-0 p-4 border-t flex gap-2 pb-[max(1rem,env(safe-area-inset-bottom))]">
+        <input
+          type="text"
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          placeholder="Type a message..."
+          className="flex-1 px-4 py-2 border rounded-full text-base"
+          style={{ fontSize: '16px' }}  // prevent iOS zoom
+        />
+        <button type="submit" disabled={!input.trim()}
+          className="px-4 py-2 bg-blue-600 text-white rounded-full disabled:opacity-50">
+          Send
+        </button>
+      </form>
+    </div>
+  );
+}
+
+// components/ConnectionStatus.tsx
+export function ConnectionStatus({ wsClient }: { wsClient: any }) {
+  const [connected, setConnected] = useState(true);
+
+  useEffect(() => {
+    if (!wsClient) return;
+    wsClient.onConnect(() => setConnected(true));
+    wsClient.onDisconnect(() => setConnected(false));
+  }, [wsClient]);
+
+  if (connected) return null;
+
+  return (
+    <div className="fixed top-0 inset-x-0 bg-orange-500 text-white text-center py-1 text-sm z-50">
+      Connection lost. Reconnecting...
+    </div>
+  );
+}
+
+// lib/deepLink.ts — app detection
+export async function tryOpenApp(code: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => resolve(false), 1500);
+    window.addEventListener('blur', () => {
+      clearTimeout(timeout);
+      resolve(true);
+    }, { once: true });
+    window.location.href = \`tokn://t/\${code}\`;
+  });
+}
+
+// index.html meta tags:
+// <meta property="og:title" content="Token — Secure Communication" />
+// <meta property="og:description" content="Open this link to connect securely. No download required." />
+// <meta property="og:image" content="https://tokn.app/og-image.png" />
+// <meta name="robots" content="noindex" />`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "What does this CSS evaluate to on an iPhone with a 34px home indicator?",
+        code: "padding-bottom: max(1rem, env(safe-area-inset-bottom));\n// 1rem = 16px, safe-area-inset-bottom = 34px on iPhone",
+        answer: "padding-bottom: 34px",
+        explanation: "CSS max() picks the larger value. On an iPhone with the home indicator, safe-area-inset-bottom is 34px, which is larger than 16px (1rem). On devices without the indicator, the env() value is 0, so max() picks 16px. This ensures the input is never too close to the bottom edge."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this video element for mobile browsers?",
+        code: "<video\n  ref={remoteVideoRef}\n  className=\"w-full h-full\"\n  autoPlay\n/>",
+        options: [
+          "className doesn't work on video elements",
+          "Missing playsInline — iOS Safari will force fullscreen playback",
+          "autoPlay is not a valid React prop",
+          "ref can't be used on video elements"
+        ],
+        correct: 1,
+        explanation: "Without the playsInline attribute, iOS Safari plays video in fullscreen mode by default. For the call UI to work properly (local + remote video in a composed layout), you need playsInline on every video element. This is a browser-specific concern that doesn't exist in React Native."
+      },
+      {
+        type: "fill-blank",
+        question: "Use the dynamic viewport height to make a full-screen chat layout on mobile:",
+        code: "<div className=\"flex flex-col h-[___]\">\n  <!-- header, messages, input -->\n</div>",
+        answer: "100dvh",
+        explanation: "100dvh (dynamic viewport height) adjusts when the mobile browser's address bar appears or disappears. Regular 100vh includes the space behind the address bar, causing the bottom of your layout to be hidden. 100dvh gives you the actual visible area."
+      },
+      {
+        question: "Why should individual token URLs have <meta name='robots' content='noindex'>?",
+        options: [
+          "To make the page load faster",
+          "Because React SPAs can't be indexed anyway",
+          "To prevent search engines from indexing private communication links that might appear in public logs",
+          "Because Coolify doesn't support SEO"
+        ],
+        correct: 2,
+        explanation: "Token URLs are private communication channels. If a search engine somehow discovers one (through a public page linking to it, or a crawled log), indexing it would expose that the token exists. noindex tells crawlers to skip these pages entirely, protecting user privacy."
+      },
+      {
+        type: "order-steps",
+        question: "Order the app-installed detection flow:",
+        steps: [
+          "Set a 1.5-second timeout that resolves false (app not installed)",
+          "Navigate to the custom scheme URL (tokn://t/CODE)",
+          "Listen for the 'blur' event on the window",
+          "If blur fires before timeout, app opened — resolve true",
+          "If timeout fires first, stay on web page and continue redemption"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "The detection is a race condition: start the timeout, try the custom URL, and listen for blur. If the OS opens the app, the browser loses focus (blur fires). If nothing happens within 1.5 seconds, we assume the app isn't installed and proceed with the web flow. This provides seamless fallback."
+      }
+    ]);
+  </script>
+</body>
+</html>

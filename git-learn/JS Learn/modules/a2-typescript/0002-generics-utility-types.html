@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Generics &amp; Utility Types — A2.2</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A2 — TypeScript</a>
+      <span class="sep">›</span>
+      <span class="current">Generics &amp; Utility Types</span>
+    </nav>
+
+    <h1>Generics &amp; Utility Types</h1>
+    <div class="lesson-meta">
+      <span>A2 — Lesson 2 of 3</span>
+      <span>~45 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>Your API returns paginated lists, wrapped responses, and partial updates. Generics let you type these patterns once — <code>ApiResponse&lt;Token[]&gt;</code>, <code>Paginated&lt;Message&gt;</code> — and reuse them across every endpoint without losing type safety. Utility types like <code>Partial&lt;Token&gt;</code> model the "update only the fields you're changing" pattern.</p>
+    </div>
+
+    <h2>The problem generics solve</h2>
+
+    <p>Imagine writing an API response wrapper. Without generics, you'd need a separate type for every endpoint:</p>
+
+    <pre><code>// Without generics — repetitive and fragile
+interface TokenResponse {
+  data: Token;
+  success: boolean;
+  error?: string;
+}
+
+interface MessageResponse {
+  data: Message;
+  success: boolean;
+  error?: string;
+}
+
+// For EVERY new type, you'd copy-paste this.
+// 20 endpoints = 20 nearly-identical interfaces.</code></pre>
+
+    <h2>Generics — parameterized types</h2>
+
+    <p>A generic is a type that takes a parameter — like a function takes arguments:</p>
+
+    <pre><code>// One definition, works for any data type
+interface ApiResponse&lt;T&gt; {
+  data: T;
+  success: boolean;
+  error?: string;
+}
+
+// Now use it:
+type TokenResponse = ApiResponse&lt;Token&gt;;
+type MessageListResponse = ApiResponse&lt;Message[]&gt;;
+type UserResponse = ApiResponse&lt;{ id: string; name: string }&gt;;</code></pre>
+
+    <p><code>T</code> is a placeholder. When you write <code>ApiResponse&lt;Token&gt;</code>, TypeScript replaces every <code>T</code> with <code>Token</code>. The result is fully typed.</p>
+
+    <h2>Generic functions</h2>
+
+    <pre><code>// A function that works with any array type
+function firstItem&lt;T&gt;(items: T[]): T | undefined {
+  return items[0];
+}
+
+const firstToken = firstItem(['MERC-8GH2', 'SHOP-4KN9']);  // string
+const firstCount = firstItem([3, 7, 12]);                    // number
+// TypeScript infers T from the argument — no annotation needed at the call site.</code></pre>
+
+    <h2>Constraints — limiting what T can be</h2>
+
+    <p>Sometimes <code>T</code> needs specific properties. Use <code>extends</code> to constrain:</p>
+
+    <pre><code>interface HasId {
+  id: string;
+}
+
+function findById&lt;T extends HasId&gt;(items: T[], id: string): T | undefined {
+  return items.find(item =&gt; item.id === id);
+}
+
+// Works — Token has an id field
+const token = findById(tokens, 'abc-123');
+
+// Error — plain strings don't have an id property
+// findById(['a', 'b'], 'a');  // TS Error!</code></pre>
+
+    <h2>Token's API patterns with generics</h2>
+
+    <pre><code>// Paginated responses
+interface Paginated&lt;T&gt; {
+  items: T[];
+  cursor: string | null;
+  hasMore: boolean;
+}
+
+// Every list endpoint returns this shape:
+type TokenListResponse = ApiResponse&lt;Paginated&lt;Token&gt;&gt;;
+type MessageListResponse = ApiResponse&lt;Paginated&lt;Message&gt;&gt;;
+
+// The fetch function:
+async function fetchPaginated&lt;T&gt;(
+  url: string,
+  cursor?: string
+): Promise&lt;Paginated&lt;T&gt;&gt; {
+  const params = cursor ? \`?cursor=\${cursor}\` : '';
+  const res = await fetch(url + params);
+  return res.json();
+}</code></pre>
+
+    <h2>Built-in utility types</h2>
+
+    <p>TypeScript ships with types that transform other types. The most useful for Token:</p>
+
+    <h3>Partial&lt;T&gt; — all fields optional</h3>
+
+    <pre><code>interface Token {
+  code: string;
+  issuedTo: string;
+  status: 'active' | 'paused' | 'revoked';
+  maxUses: number;
+}
+
+// When updating a token, you only send the fields that changed:
+type TokenUpdate = Partial&lt;Token&gt;;
+
+// This is valid — only updating one field:
+const update: TokenUpdate = { status: 'paused' };</code></pre>
+
+    <h3>Pick&lt;T, Keys&gt; — select specific fields</h3>
+
+    <pre><code>// The token list screen only needs these fields:
+type TokenListItem = Pick&lt;Token, 'code' | 'issuedTo' | 'status'&gt;;
+
+// Equivalent to: { code: string; issuedTo: string; status: TokenStatus }</code></pre>
+
+    <h3>Omit&lt;T, Keys&gt; — exclude specific fields</h3>
+
+    <pre><code>// When creating a token, the server generates 'code' — don't include it:
+type CreateTokenInput = Omit&lt;Token, 'code' | 'status'&gt;;
+
+// Equivalent to: { issuedTo: string; maxUses: number }</code></pre>
+
+    <h3>Record&lt;K, V&gt; — typed dictionaries</h3>
+
+    <pre><code>// Map token status to a display color:
+const statusColors: Record&lt;TokenStatus, string&gt; = {
+  active: '#16a34a',
+  paused: '#d97706',
+  revoked: '#dc2626',
+};
+// If you add a new status to the union, TS forces you to add it here too.</code></pre>
+
+    <h3>Required&lt;T&gt; — all fields required</h3>
+
+    <pre><code>// Make every optional field mandatory (useful for database row types)
+type TokenRow = Required&lt;Token&gt;;</code></pre>
+
+    <h2>Enums — named constants</h2>
+
+    <pre><code>// Const enum — inlined at compile time, zero runtime cost
+const enum HttpStatus {
+  OK = 200,
+  Created = 201,
+  BadRequest = 400,
+  Unauthorized = 401,
+  Forbidden = 403,
+  NotFound = 404,
+}
+
+function handleResponse(status: HttpStatus) {
+  if (status === HttpStatus.Unauthorized) {
+    // refresh token...
+  }
+}</code></pre>
+
+    <p>For Token status, prefer the string literal union (<code>'active' | 'paused' | 'revoked'</code>) over an enum — it's simpler, JSON-serializable, and readable in logs.</p>
+
+    <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0001-types-and-interfaces.html">← Previous: Types &amp; Interfaces</a>
+      <a href="./0003-typescript-react-native.html">Next: TypeScript with React Native →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// Simulating generics in JavaScript (TS compiles away the types)
+// The LOGIC is the same — generics just add compile-time safety
+
+function apiResponse(data, success, error) {
+  return { data, success, error: error || null };
+}
+
+// Token endpoint
+const tokenRes = apiResponse(
+  { code: 'MERC-8GH2', issuedTo: 'Amazon', status: 'active' },
+  true
+);
+
+// Message list endpoint
+const msgRes = apiResponse(
+  [{ id: 1, text: 'Hello' }, { id: 2, text: 'Your delivery is arriving' }],
+  true
+);
+
+console.log("Token response:", JSON.stringify(tokenRes, null, 2));
+console.log("Message response:", JSON.stringify(msgRes, null, 2));`);
+
+    createSolution("exercise-1", {
+      exercise: "Build Token's API type system in shared/api-types.ts. Create: (1) a generic ApiResponse<T> with data, success, error fields; (2) a generic Paginated<T> with items, cursor, hasMore; (3) CreateTokenInput using Omit to exclude server-generated fields (code, status, createdAt); (4) TokenUpdate using Partial; (5) a TokenListItem using Pick with only the fields needed for the list screen.",
+      hints: [
+        "Start with the base Token interface, then derive the others using utility types.",
+        "CreateTokenInput = Omit<Token, 'code' | 'status' | 'createdAt'> — the server generates these.",
+        "The list screen needs: code, issuedTo, status — use Pick to select just those."
+      ],
+      solution: `// shared/api-types.ts
+import { Token, TokenStatus, AccessRule } from './types';
+
+// Generic API envelope
+export interface ApiResponse<T> {
+  data: T;
+  success: boolean;
+  error?: string;
+}
+
+// Generic pagination wrapper
+export interface Paginated<T> {
+  items: T[];
+  cursor: string | null;
+  hasMore: boolean;
+}
+
+// Derived types for Token endpoints:
+
+// POST /tokens — what the client sends (server generates code, status, createdAt)
+export type CreateTokenInput = Omit<Token, 'code' | 'status' | 'createdAt'>;
+
+// PATCH /tokens/:code — partial updates
+export type TokenUpdate = Partial<Pick<Token, 'issuedTo' | 'status' | 'maxUses'>>;
+
+// GET /tokens — list view only needs these fields
+export type TokenListItem = Pick<Token, 'code' | 'issuedTo' | 'status'>;
+
+// Composed response types:
+export type TokenResponse = ApiResponse<Token>;
+export type TokenListResponse = ApiResponse<Paginated<TokenListItem>>;
+export type RuleListResponse = ApiResponse<AccessRule[]>;`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "fill-blank",
+        question: "Complete the generic type that wraps any paginated API response:",
+        code: "type PaginatedResponse<T> = ApiResponse<___<T>>;",
+        answer: "Paginated",
+        explanation: "Generics compose — ApiResponse<Paginated<T>> means an API response whose data field is a paginated list of T items. T could be Token, Message, or any other entity."
+      },
+      {
+        type: "predict-output",
+        question: "Given type TokenStatus = 'active' | 'paused' | 'revoked', what does Record<TokenStatus, string> require?",
+        code: "const colors: Record<TokenStatus, string> = {\n  active: 'green',\n  paused: 'yellow',\n  // missing 'revoked'\n};",
+        answer: "Error: Property 'revoked' is missing",
+        explanation: "Record<K, V> requires a value for EVERY key in K. If you add a new status to the union, TypeScript forces you to handle it everywhere Record is used — no forgotten cases."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this generic function?",
+        code: "function getProperty<T>(obj: T, key: string): any {\n  return obj[key];\n}",
+        options: [
+          "T should be T extends object",
+          "The return type is 'any' — it should be T[keyof T] or use a key constraint",
+          "You can't use generics with object access",
+          "The function name is wrong"
+        ],
+        correct: 1,
+        explanation: "Returning 'any' defeats the purpose of TypeScript. The correct signature is: function getProperty<T, K extends keyof T>(obj: T, key: K): T[K] — this way the return type is specific to the key you pass."
+      },
+      {
+        question: "When would you use Omit<Token, 'code'> vs Pick<Token, 'issuedTo' | 'maxUses'>?",
+        options: [
+          "They're the same thing — use either",
+          "Omit when you want MOST fields minus a few; Pick when you want only SPECIFIC fields",
+          "Omit for server code, Pick for client code",
+          "Pick is faster at runtime"
+        ],
+        correct: 1,
+        explanation: "If Token has 10 fields and you want 8 of them, Omit<Token, 'field1' | 'field2'> is cleaner than listing all 8 with Pick. If you want just 2 fields, Pick is cleaner. Choose whichever is shorter to express."
+      },
+      {
+        type: "which-breaks",
+        question: "Which utility type usage will cause a compiler error?",
+        variants: [
+          "Partial<Token>",
+          "Required<Token>",
+          "Pick<Token, 'code' | 'nonExistentField'>"
+        ],
+        correct: 2,
+        explanation: "Pick requires that the keys actually exist on the type. 'nonExistentField' isn't a property of Token, so TypeScript rejects it. This is the safety you get — you can't accidentally reference fields that don't exist."
+      }
+    ]);
+  </script>
+</body>
+</html>

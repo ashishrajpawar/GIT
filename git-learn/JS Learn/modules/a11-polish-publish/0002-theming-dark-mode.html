@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>A11 — Theming &amp; Dark Mode</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Polish &amp; Publish</a> &rsaquo;
+        <span>Theming &amp; Dark Mode</span>
+    </nav>
+
+    <h1>Theming &amp; Dark Mode</h1>
+    <p class="lesson-meta">A11 &mdash; Lesson 2 of 5 &nbsp;|&nbsp; ~40 min</p>
+
+    <div class="callout">
+        <strong>Why this matters for Token:</strong> A privacy app signals trust through clean, consistent
+        design. Users in India often use OLED phones where dark mode saves significant battery. Supporting
+        system theme preference (and a manual override) isn't a luxury &mdash; it's expected. A scattered
+        colour palette with hardcoded hex values makes this impossible to maintain. A theme system gives
+        you one source of truth for every colour in the app.
+    </div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>The Problem with Hardcoded Colours</h2>
+
+    <pre><code>// Scattered across 30 files:
+&lt;View style={{ backgroundColor: '#fff' }}&gt;
+&lt;Text style={{ color: '#333' }}&gt;
+&lt;View style={{ borderColor: '#e0e0e0' }}&gt;</code></pre>
+
+    <p>To add dark mode, you'd have to find and conditionally replace every single one. Instead, define
+    colours once and reference them everywhere through a context.</p>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Defining the Token Colour Palette</h2>
+
+    <pre><code>// app/src/theme/colors.ts
+
+export const colors = {
+  light: {
+    background: '#FFFFFF',
+    surface: '#F8F9FA',
+    surfaceElevated: '#FFFFFF',
+    text: '#1A1A2E',
+    textSecondary: '#6C757D',
+    textMuted: '#ADB5BD',
+    primary: '#2C3E50',
+    primaryLight: '#34495E',
+    accent: '#3498DB',
+    success: '#27AE60',
+    warning: '#F39C12',
+    danger: '#E74C3C',
+    border: '#E9ECEF',
+    borderLight: '#F1F3F5',
+    cardBackground: '#FFFFFF',
+    inputBackground: '#F8F9FA',
+    overlay: 'rgba(0, 0, 0, 0.5)',
+  },
+  dark: {
+    background: '#0D1117',
+    surface: '#161B22',
+    surfaceElevated: '#21262D',
+    text: '#F0F6FC',
+    textSecondary: '#8B949E',
+    textMuted: '#484F58',
+    primary: '#58A6FF',
+    primaryLight: '#79C0FF',
+    accent: '#58A6FF',
+    success: '#3FB950',
+    warning: '#D29922',
+    danger: '#F85149',
+    border: '#30363D',
+    borderLight: '#21262D',
+    cardBackground: '#161B22',
+    inputBackground: '#0D1117',
+    overlay: 'rgba(0, 0, 0, 0.7)',
+  },
+} as const;
+
+export type ThemeColors = typeof colors.light;</code></pre>
+
+    <p>Both palettes have identical keys. Any component that uses <code>theme.colors.text</code> works in
+    both modes without conditional logic.</p>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Spacing &amp; Typography Constants</h2>
+
+    <pre><code>// app/src/theme/spacing.ts
+export const spacing = {
+  xs: 4,
+  sm: 8,
+  md: 16,
+  lg: 24,
+  xl: 32,
+  xxl: 48,
+} as const;
+
+// app/src/theme/typography.ts
+import { Platform } from 'react-native';
+
+export const typography = {
+  h1: {
+    fontSize: 28,
+    fontWeight: '700' as const,
+    lineHeight: 34,
+  },
+  h2: {
+    fontSize: 22,
+    fontWeight: '600' as const,
+    lineHeight: 28,
+  },
+  body: {
+    fontSize: 16,
+    fontWeight: '400' as const,
+    lineHeight: 24,
+  },
+  caption: {
+    fontSize: 13,
+    fontWeight: '400' as const,
+    lineHeight: 18,
+  },
+  mono: {
+    fontSize: 16,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
+    fontWeight: '600' as const,
+  },
+} as const;</code></pre>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Building the Theme Context</h2>
+
+    <pre><code>// app/src/theme/ThemeContext.tsx
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { useColorScheme } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { colors, ThemeColors } from './colors';
+import { spacing } from './spacing';
+import { typography } from './typography';
+
+type ThemeMode = 'light' | 'dark' | 'system';
+
+interface ThemeContextValue {
+  mode: ThemeMode;
+  isDark: boolean;
+  colors: ThemeColors;
+  spacing: typeof spacing;
+  typography: typeof typography;
+  setMode: (mode: ThemeMode) => void;
+}
+
+const ThemeContext = createContext&lt;ThemeContextValue | null&gt;(null);
+
+const STORAGE_KEY = 'token_theme_mode';
+
+export function ThemeProvider({ children }: { children: ReactNode }) {
+  const systemScheme = useColorScheme();
+  const [mode, setModeState] = useState&lt;ThemeMode&gt;('system');
+
+  useEffect(() =&gt; {
+    AsyncStorage.getItem(STORAGE_KEY).then((stored) =&gt; {
+      if (stored === 'light' || stored === 'dark' || stored === 'system') {
+        setModeState(stored);
+      }
+    });
+  }, []);
+
+  const setMode = (newMode: ThemeMode) =&gt; {
+    setModeState(newMode);
+    AsyncStorage.setItem(STORAGE_KEY, newMode);
+  };
+
+  const isDark = mode === 'system'
+    ? systemScheme === 'dark'
+    : mode === 'dark';
+
+  const value: ThemeContextValue = {
+    mode,
+    isDark,
+    colors: isDark ? colors.dark : colors.light,
+    spacing,
+    typography,
+    setMode,
+  };
+
+  return (
+    &lt;ThemeContext.Provider value={value}&gt;
+      {children}
+    &lt;/ThemeContext.Provider&gt;
+  );
+}
+
+export function useTheme(): ThemeContextValue {
+  const ctx = useContext(ThemeContext);
+  if (!ctx) throw new Error('useTheme must be used within ThemeProvider');
+  return ctx;
+}</code></pre>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Wiring It Into the App</h2>
+
+    <pre><code>// app/App.tsx
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { ThemeProvider } from './src/theme/ThemeContext';
+import { StatusBar } from 'expo-status-bar';
+import { useTheme } from './src/theme/ThemeContext';
+import { Navigation } from './src/navigation';
+
+function ThemedApp() {
+  const { isDark } = useTheme();
+  return (
+    &lt;&gt;
+      &lt;StatusBar style={isDark ? 'light' : 'dark'} /&gt;
+      &lt;Navigation /&gt;
+    &lt;/&gt;
+  );
+}
+
+export default function App() {
+  return (
+    &lt;GestureHandlerRootView style={{ flex: 1 }}&gt;
+      &lt;ThemeProvider&gt;
+        &lt;ThemedApp /&gt;
+      &lt;/ThemeProvider&gt;
+    &lt;/GestureHandlerRootView&gt;
+  );
+}</code></pre>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Using the Theme in Components</h2>
+
+    <pre><code>// app/src/screens/TokenListScreen.tsx
+import { View, Text, FlatList } from 'react-native';
+import { useTheme } from '../theme/ThemeContext';
+
+export function TokenListScreen() {
+  const { colors, spacing, typography } = useTheme();
+
+  return (
+    &lt;View style={{ flex: 1, backgroundColor: colors.background }}&gt;
+      &lt;Text style={[typography.h1, { color: colors.text, padding: spacing.lg }]}&gt;
+        My Tokens
+      &lt;/Text&gt;
+      {/* token list */}
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <p>No <code>StyleSheet.create</code> for themed styles &mdash; you build them inline from context
+    values. This avoids stale cached styles when the theme changes.</p>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>The Theme Picker Component</h2>
+
+    <pre><code>// app/src/components/ThemePicker.tsx
+import { View, Text, Pressable, StyleSheet } from 'react-native';
+import { useTheme } from '../theme/ThemeContext';
+
+const OPTIONS: Array&lt;{ label: string; value: 'light' | 'dark' | 'system' }&gt; = [
+  { label: '☀️ Light', value: 'light' },
+  { label: '🌙 Dark', value: 'dark' },
+  { label: '📱 System', value: 'system' },
+];
+
+export function ThemePicker() {
+  const { mode, setMode, colors, spacing } = useTheme();
+
+  return (
+    &lt;View style={{ flexDirection: 'row', gap: spacing.sm }}&gt;
+      {OPTIONS.map((option) =&gt; {
+        const isActive = mode === option.value;
+        return (
+          &lt;Pressable
+            key={option.value}
+            onPress={() =&gt; setMode(option.value)}
+            style={[
+              styles.chip,
+              {
+                backgroundColor: isActive ? colors.primary : colors.surface,
+                borderColor: isActive ? colors.primary : colors.border,
+              },
+            ]}
+          &gt;
+            &lt;Text style={{
+              color: isActive ? '#fff' : colors.text,
+              fontSize: 14,
+              fontWeight: isActive ? '600' : '400',
+            }}&gt;
+              {option.label}
+            &lt;/Text&gt;
+          &lt;/Pressable&gt;
+        );
+      })}
+    &lt;/View&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  chip: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
+});</code></pre>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Animating Theme Transitions</h2>
+
+    <p>An abrupt colour change feels jarring. Use Reanimated to smoothly transition background colours:</p>
+
+    <pre><code>import Animated, {
+  useAnimatedStyle,
+  withTiming,
+  useSharedValue,
+  useDerivedValue,
+} from 'react-native-reanimated';
+import { useTheme } from '../theme/ThemeContext';
+
+export function AnimatedBackground({ children }) {
+  const { colors } = useTheme();
+
+  const bgColor = useDerivedValue(() =&gt;
+    withTiming(colors.background, { duration: 300 })
+  );
+
+  const animatedStyle = useAnimatedStyle(() =&gt; ({
+    backgroundColor: bgColor.value,
+    flex: 1,
+  }));
+
+  return (
+    &lt;Animated.View style={animatedStyle}&gt;
+      {children}
+    &lt;/Animated.View&gt;
+  );
+}</code></pre>
+
+    <p><strong>Note:</strong> Reanimated can animate colour strings directly (it interpolates the RGB components). This works for <code>backgroundColor</code>, <code>borderColor</code>, and <code>color</code>.</p>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Navigation Theming</h2>
+
+    <p>React Navigation has its own theme system. Sync it with yours:</p>
+
+    <pre><code>import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native';
+import { useTheme } from '../theme/ThemeContext';
+
+export function Navigation() {
+  const { isDark, colors } = useTheme();
+
+  const navTheme = {
+    ...(isDark ? DarkTheme : DefaultTheme),
+    colors: {
+      ...(isDark ? DarkTheme.colors : DefaultTheme.colors),
+      primary: colors.primary,
+      background: colors.background,
+      card: colors.surface,
+      text: colors.text,
+      border: colors.border,
+    },
+  };
+
+  return (
+    &lt;NavigationContainer theme={navTheme}&gt;
+      {/* stacks and tabs */}
+    &lt;/NavigationContainer&gt;
+  );
+}</code></pre>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Common Mistakes</h2>
+
+    <ul>
+        <li><strong>Hardcoding #fff / #000 alongside theme colours</strong> &mdash; everything visual must come from the theme. The one exception: shadows (which are always dark regardless of mode).</li>
+        <li><strong>Using StyleSheet.create for themed styles</strong> &mdash; the styles are cached at create time and won't update when the theme changes. Use inline styles from <code>useTheme()</code>, or re-create the stylesheet inside a <code>useMemo</code> keyed on <code>isDark</code>.</li>
+        <li><strong>Forgetting the StatusBar</strong> &mdash; dark text on a dark background makes the clock/battery invisible.</li>
+        <li><strong>Not persisting the choice</strong> &mdash; if the user picks "Dark", it should survive an app restart. That's why we use AsyncStorage for the mode.</li>
+    </ul>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <h2>Quiz</h2>
+    <div id="lesson-quiz"></div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <nav class="lesson-nav">
+        <a href="./0001-animations-gestures.html">&larr; Animations &amp; Gestures</a>
+        <a href="./0003-forms-validation.html">Forms &amp; Validation &rarr;</a>
+    </nav>
+
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+
+    <script>
+    createSolution("exercise-1", {
+      exercise: `Create a themed TokenCard component that:\n\n1. Uses useTheme() for all colours\n2. Shows the token code (monospace), issued-to name, and status badge\n3. The status badge is coloured: success (active), warning (paused), danger (revoked)\n4. Has elevation/shadow appropriate to the current theme\n5. Has a subtle border in light mode, no border in dark mode (the elevated surface is enough)`,
+      hints: [
+        "Destructure colors, spacing, typography from useTheme().",
+        "Use colors.success / colors.warning / colors.danger for the status badge background.",
+        "For shadows: use shadowColor '#000' always (it's a shadow), but reduce shadowOpacity in dark mode (0.3 → 0.1) since the background is already dark.",
+        "Conditional border: { borderWidth: isDark ? 0 : 1, borderColor: colors.border }"
+      ],
+      solution: `// app/src/components/TokenCard.tsx
+import { View, Text } from 'react-native';
+import { useTheme } from '../theme/ThemeContext';
+
+interface Props {
+  tokenCode: string;
+  issuedTo: string;
+  status: 'active' | 'paused' | 'revoked';
+}
+
+export function TokenCard({ tokenCode, issuedTo, status }: Props) {
+  const { colors, spacing, typography, isDark } = useTheme();
+
+  const statusColor = {
+    active: colors.success,
+    paused: colors.warning,
+    revoked: colors.danger,
+  }[status];
+
+  return (
+    <View
+      style={{
+        backgroundColor: colors.cardBackground,
+        borderRadius: 12,
+        padding: spacing.md,
+        marginVertical: spacing.sm,
+        marginHorizontal: spacing.md,
+        borderWidth: isDark ? 0 : 1,
+        borderColor: colors.border,
+        // Shadow (both platforms)
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: isDark ? 0.3 : 0.08,
+        shadowRadius: 6,
+        elevation: isDark ? 4 : 2,
+      }}
+    >
+      <Text style={[typography.mono, { color: colors.text }]}>
+        {tokenCode}
+      </Text>
+      <Text style={[typography.caption, { color: colors.textSecondary, marginTop: spacing.xs }]}>
+        Issued to: {issuedTo}
+      </Text>
+      <View
+        style={{
+          alignSelf: 'flex-start',
+          marginTop: spacing.sm,
+          paddingHorizontal: spacing.sm,
+          paddingVertical: spacing.xs,
+          borderRadius: 6,
+          backgroundColor: statusColor + '20', // 12% opacity tint
+        }}
+      >
+        <Text style={{ color: statusColor, fontSize: 12, fontWeight: '600' }}>
+          {status.toUpperCase()}
+        </Text>
+      </View>
+    </View>
+  );
+}`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        code: `const mode = 'system';\nconst systemScheme = 'dark';\nconst isDark = mode === 'system'\n  ? systemScheme === 'dark'\n  : mode === 'dark';\nconsole.log(isDark);`,
+        answer: "true",
+        explanation: "mode is 'system', so the ternary takes the first branch. systemScheme === 'dark' is true, so isDark is true."
+      },
+      {
+        type: "spot-the-bug",
+        code: `const styles = StyleSheet.create({\n  card: { backgroundColor: colors.background },  // line 2\n});\n\nfunction Card() {\n  const { colors } = useTheme();\n  return <View style={styles.card} />;\n}`,
+        bugLine: 2,
+        options: ["Line 2: colors used before useTheme call", "Line 6: destructuring is wrong", "Line 7: View needs Animated.View"],
+        correct: 0,
+        explanation: "StyleSheet.create runs at module load time, before any component renders. The colors variable doesn't exist yet (or is stale). Themed styles must be created inside the component using useTheme()."
+      },
+      {
+        question: "Why should you avoid using StyleSheet.create for themed styles?",
+        options: [
+          "StyleSheet.create doesn't support the transform property",
+          "Styles are cached at creation time and won't update when the theme changes",
+          "StyleSheet.create is slower than inline styles",
+          "React Navigation doesn't recognise StyleSheet objects"
+        ],
+        correct: 1,
+        explanation: "StyleSheet.create captures the values once. When the theme toggles from light to dark, the cached style object still has the old colours. Inline styles from useTheme() are recalculated on every render."
+      },
+      {
+        type: "fill-blank",
+        code: `const navTheme = {\n  ...(isDark ? DarkTheme : DefaultTheme),\n  colors: {\n    ...(isDark ? DarkTheme.colors : DefaultTheme.colors),\n    primary: colors.___,\n  },\n};`,
+        answer: "primary",
+        explanation: "We're mapping our theme's primary colour into React Navigation's theme object. The key on the left is Navigation's 'primary', and we read from our own colors.primary."
+      },
+      {
+        type: "order-steps",
+        steps: [
+          "Define light and dark colour palettes with identical keys",
+          "Create ThemeContext with mode state and useColorScheme",
+          "Wrap the app root with ThemeProvider",
+          "Sync React Navigation's theme with your context",
+          "Replace hardcoded hex values with useTheme() calls in components"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Define the data first, build the context around it, integrate it at the app level, sync with navigation, then migrate components one by one."
+      }
+    ]);
+    </script>
+</body>
+</html>

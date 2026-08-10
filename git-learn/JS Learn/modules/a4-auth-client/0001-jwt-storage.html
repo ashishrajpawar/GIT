@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JWT Flow — Login, Signup, Token Storage — A4.1</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A4 — Auth on the Client</a>
+      <span class="sep">›</span>
+      <span class="current">JWT Flow — Login, Signup, Token Storage</span>
+    </nav>
+
+    <h1>JWT Flow — Login, Signup, Token Storage</h1>
+    <div class="lesson-meta">
+      <span>A4 — Lesson 1 of 3</span>
+      <span>~50 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>The mobile app needs to log in, store the JWT tokens securely, and send the access token with every API request. Where you store these tokens determines your app's security posture. AsyncStorage is unencrypted plaintext — anyone with device access can read it. <code>expo-secure-store</code> uses the device's hardware-backed keychain (iOS) or keystore (Android). This lesson builds the client-side half of the auth system from B4.</p>
+    </div>
+
+    <h2>The client-side auth flow</h2>
+
+    <ol>
+      <li>User opens app → check if refresh token exists in secure storage</li>
+      <li>If no token → show Login/Register screens</li>
+      <li>User submits credentials → API returns access + refresh tokens</li>
+      <li>Store refresh token in secure storage, access token in memory</li>
+      <li>All subsequent API calls include the access token in Authorization header</li>
+      <li>When access token expires (15 min) → silently refresh using the refresh token</li>
+    </ol>
+
+    <h2>expo-secure-store — hardware-backed encryption</h2>
+
+    <pre><code>npx expo install expo-secure-store</code></pre>
+
+    <pre><code>import * as SecureStore from 'expo-secure-store';
+
+// Store a value (encrypted by iOS Keychain / Android Keystore)
+await SecureStore.setItemAsync('refreshToken', token);
+
+// Read a value
+const token = await SecureStore.getItemAsync('refreshToken');
+
+// Delete a value
+await SecureStore.deleteItemAsync('refreshToken');</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">Never use AsyncStorage for secrets</div>
+      <p>AsyncStorage stores data as unencrypted JSON files on disk. A rooted device, a backup extraction, or a malicious app with storage access can read everything. Refresh tokens, API keys, and any credential must go in SecureStore. AsyncStorage is fine for non-sensitive data: theme preference, onboarding completion, cached display names.</p>
+    </div>
+
+    <h2>Token storage strategy</h2>
+
+    <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
+      <tr style="border-bottom:2px solid var(--gray-200);">
+        <td style="padding:0.5rem;font-weight:600;">What</td>
+        <td style="padding:0.5rem;font-weight:600;">Where</td>
+        <td style="padding:0.5rem;font-weight:600;">Why</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;">Refresh token</td>
+        <td style="padding:0.5rem;">SecureStore</td>
+        <td style="padding:0.5rem;">Long-lived, must survive app restarts, security-critical</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;">Access token</td>
+        <td style="padding:0.5rem;">In-memory variable</td>
+        <td style="padding:0.5rem;">Short-lived (15 min), no persistence needed, gone on app close</td>
+      </tr>
+      <tr>
+        <td style="padding:0.5rem;">User profile</td>
+        <td style="padding:0.5rem;">In-memory (React state)</td>
+        <td style="padding:0.5rem;">Refetched on every app launch, not sensitive</td>
+      </tr>
+    </table>
+
+    <h2>Building the auth store</h2>
+
+    <pre><code>// app/src/auth/store.ts
+import * as SecureStore from 'expo-secure-store';
+
+const REFRESH_KEY = 'token_refresh';
+let accessToken: string | null = null;
+
+export function getAccessToken(): string | null {
+  return accessToken;
+}
+
+export function setAccessToken(token: string | null) {
+  accessToken = token;
+}
+
+export async function getRefreshToken(): Promise&lt;string | null&gt; {
+  return SecureStore.getItemAsync(REFRESH_KEY);
+}
+
+export async function setRefreshToken(token: string): Promise&lt;void&gt; {
+  await SecureStore.setItemAsync(REFRESH_KEY, token);
+}
+
+export async function clearTokens(): Promise&lt;void&gt; {
+  accessToken = null;
+  await SecureStore.deleteItemAsync(REFRESH_KEY);
+}</code></pre>
+
+    <h2>Login screen</h2>
+
+    <pre><code>// app/src/screens/LoginScreen.tsx
+import { useState } from 'react';
+import { View, Text, TextInput, Pressable, Alert } from 'react-native';
+import { setAccessToken, setRefreshToken } from '../auth/store';
+
+export function LoginScreen({ navigation }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  async function handleLogin() {
+    setLoading(true);
+    try {
+      const res = await fetch('http://localhost:3000/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+
+      const json = await res.json();
+
+      if (!res.ok) {
+        Alert.alert('Login failed', json.error);
+        return;
+      }
+
+      // Store tokens
+      setAccessToken(json.data.accessToken);
+      await setRefreshToken(json.data.refreshToken);
+
+      // Navigate to main app
+      navigation.replace('Main');
+    } catch (err) {
+      Alert.alert('Network error', 'Could not connect to server');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    &lt;View style={{ flex: 1, padding: 24, justifyContent: 'center' }}&gt;
+      &lt;Text style={{ fontSize: 28, fontWeight: '700', marginBottom: 32 }}&gt;
+        Sign in to Token
+      &lt;/Text&gt;
+
+      &lt;TextInput
+        placeholder="Email"
+        value={email}
+        onChangeText={setEmail}
+        autoCapitalize="none"
+        keyboardType="email-address"
+        style={inputStyle}
+      /&gt;
+
+      &lt;TextInput
+        placeholder="Password"
+        value={password}
+        onChangeText={setPassword}
+        secureTextEntry
+        style={inputStyle}
+      /&gt;
+
+      &lt;Pressable
+        onPress={handleLogin}
+        disabled={loading}
+        style={[buttonStyle, loading && { opacity: 0.6 }]}
+      &gt;
+        &lt;Text style={{ color: '#fff', fontWeight: '600', fontSize: 16 }}&gt;
+          {loading ? 'Signing in...' : 'Sign In'}
+        &lt;/Text&gt;
+      &lt;/Pressable&gt;
+
+      &lt;Pressable onPress={() =&gt; navigation.navigate('Register')}&gt;
+        &lt;Text style={{ textAlign: 'center', marginTop: 16, color: '#2563EB' }}&gt;
+          Don't have an account? Register
+        &lt;/Text&gt;
+      &lt;/Pressable&gt;
+    &lt;/View&gt;
+  );
+}
+
+const inputStyle = {
+  borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 8,
+  padding: 14, fontSize: 16, marginBottom: 12,
+};
+const buttonStyle = {
+  backgroundColor: '#2563EB', padding: 16, borderRadius: 8,
+  alignItems: 'center', marginTop: 8,
+};</code></pre>
+
+    <h2>Registration screen</h2>
+
+    <pre><code>// app/src/screens/RegisterScreen.tsx
+export function RegisterScreen({ navigation }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  async function handleRegister() {
+    setLoading(true);
+    try {
+      const res = await fetch('http://localhost:3000/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, displayName }),
+      });
+
+      const json = await res.json();
+
+      if (!res.ok) {
+        Alert.alert('Registration failed', json.error || json.details?.[0]?.message);
+        return;
+      }
+
+      // Auto-login after successful registration
+      Alert.alert('Success', 'Account created! Please sign in.');
+      navigation.replace('Login');
+    } catch (err) {
+      Alert.alert('Network error', 'Could not connect to server');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // ... similar UI to LoginScreen with displayName field added
+}</code></pre>
+
+    <h2>App startup — checking existing session</h2>
+
+    <pre><code>// app/src/screens/SplashScreen.tsx
+import { useEffect } from 'react';
+import { getRefreshToken, setAccessToken, setRefreshToken } from '../auth/store';
+
+export function SplashScreen({ navigation }) {
+  useEffect(() =&gt; {
+    checkSession();
+  }, []);
+
+  async function checkSession() {
+    const refreshToken = await getRefreshToken();
+
+    if (!refreshToken) {
+      // No saved session — go to login
+      navigation.replace('Login');
+      return;
+    }
+
+    // Try to get a new access token using the refresh token
+    try {
+      const res = await fetch('http://localhost:3000/api/auth/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken }),
+      });
+
+      if (!res.ok) {
+        // Refresh token expired or revoked — go to login
+        navigation.replace('Login');
+        return;
+      }
+
+      const json = await res.json();
+      setAccessToken(json.data.accessToken);
+      await setRefreshToken(json.data.refreshToken);
+
+      navigation.replace('Main');
+    } catch {
+      // Network error — could show offline screen or retry
+      navigation.replace('Login');
+    }
+  }
+
+  return null; // Or a splash/loading screen
+}</code></pre>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <span class="disabled">← Previous</span>
+      <a href="./0002-auth-context-protected-routes.html">Next: Auth Context &amp; Protected Routes →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createSolution("exercise-1", {
+      exercise: "Build Token's complete login flow: (1) Install expo-secure-store, (2) Create the auth store module (app/src/auth/store.ts) with get/set/clear functions, (3) Build the LoginScreen with email + password inputs and error handling, (4) Build the RegisterScreen with displayName added, (5) Build the SplashScreen that checks for an existing refresh token on app launch and either refreshes or redirects to login.",
+      hints: [
+        "Use secureTextEntry on the password TextInput to show dots instead of characters.",
+        "The SplashScreen runs once on app startup — it's the first screen in your navigator. It decides whether to show Login or Main.",
+        "Always handle both the 'server returned error' case (res.ok === false) and the 'couldn't reach server' case (catch block)."
+      ],
+      solution: `// Install:
+// npx expo install expo-secure-store
+
+// app/src/auth/store.ts — as shown in the lesson
+
+// app/src/screens/LoginScreen.tsx — as shown in the lesson
+// Key points:
+// - setAccessToken(json.data.accessToken) — in memory
+// - await setRefreshToken(json.data.refreshToken) — in SecureStore
+// - navigation.replace('Main') — replace so user can't go "back" to login
+
+// app/src/screens/RegisterScreen.tsx
+// Same pattern as Login but:
+// - Extra displayName field
+// - Calls /api/auth/register
+// - On success: navigate to Login (don't auto-login, let them type it once)
+
+// app/src/screens/SplashScreen.tsx — as shown in the lesson
+// Key flow:
+// 1. Read refresh token from SecureStore
+// 2. If missing → Login
+// 3. If exists → try POST /auth/refresh
+// 4. If refresh succeeds → store new tokens, go to Main
+// 5. If refresh fails (401) → token revoked/expired, go to Login
+// 6. If network error → could retry or go to Login
+
+// Navigation setup (app/src/navigation/RootNavigator.tsx):
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+
+const Stack = createNativeStackNavigator();
+
+export function RootNavigator() {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="Splash" component={SplashScreen} />
+      <Stack.Screen name="Login" component={LoginScreen} />
+      <Stack.Screen name="Register" component={RegisterScreen} />
+      <Stack.Screen name="Main" component={MainTabs} />
+    </Stack.Navigator>
+  );
+}`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "The app is force-closed and reopened. What happens to the access token stored in a JavaScript variable?",
+        code: "let accessToken: string | null = null;\n// User logs in, accessToken = 'eyJ...'\n// App force-closed\n// App reopens",
+        answer: "accessToken is null — in-memory variables don't survive app closure",
+        explanation: "In-memory variables are wiped when the process exits. On reopen, the SplashScreen reads the refresh token from SecureStore (which persists) and uses it to get a fresh access token. This is by design — short-lived access tokens don't need persistence."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's the security problem?",
+        code: "import AsyncStorage from '@react-native-async-storage/async-storage';\n\nasync function handleLogin(tokens) {\n  await AsyncStorage.setItem('accessToken', tokens.accessToken);\n  await AsyncStorage.setItem('refreshToken', tokens.refreshToken);\n}",
+        options: [
+          "AsyncStorage is async and needs await (it has await here)",
+          "AsyncStorage is unencrypted — refresh tokens stored in plaintext can be stolen from a rooted device",
+          "You can't store two items in AsyncStorage",
+          "The key names are wrong"
+        ],
+        correct: 1,
+        explanation: "AsyncStorage writes to an unencrypted file on the device filesystem. Anyone with physical access (or root) can read it. The refresh token grants access to the user's account for 7 days. Always use expo-secure-store for secrets — it uses hardware-backed encryption (Keychain on iOS, Keystore on Android)."
+      },
+      {
+        type: "fill-blank",
+        question: "Store the refresh token securely on the device:",
+        code: "import * as SecureStore from 'expo-secure-store';\nawait SecureStore.___('refreshToken', token);",
+        answer: "setItemAsync",
+        explanation: "SecureStore.setItemAsync(key, value) stores the value encrypted by the device's hardware security module. On iOS it's the Keychain; on Android it's the Keystore. The value is only readable by your app."
+      },
+      {
+        question: "Why use navigation.replace('Main') instead of navigation.navigate('Main') after login?",
+        options: [
+          "replace is faster than navigate",
+          "replace removes the Login screen from the stack — the user can't press 'back' to return to the login form",
+          "navigate doesn't work with auth screens",
+          "replace works without navigation params"
+        ],
+        correct: 1,
+        explanation: "After login, pressing the hardware back button should NOT take the user back to the login screen (they're authenticated now). replace() swaps the current screen instead of pushing on top — the login screen is gone from the stack."
+      },
+      {
+        type: "which-breaks",
+        question: "Which app startup behavior is incorrect?",
+        variants: [
+          "No refresh token in SecureStore → show Login screen",
+          "Refresh token exists, refresh call returns 401 → show Login screen",
+          "Refresh token exists, network is offline → show Login screen immediately"
+        ],
+        correct: 2,
+        explanation: "If the network is offline but a refresh token exists, the user might still be authenticated — you just can't verify right now. Showing Login forces them to re-enter credentials they might not remember. Better: show the app with cached data, or show an offline state with a retry button."
+      }
+    ]);
+  </script>
+</body>
+</html>

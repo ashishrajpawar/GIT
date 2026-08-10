@@ -1,0 +1,731 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Access Rules UI — A5.4</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A5 — Core Token Features</a>
+      <span class="sep">›</span>
+      <span class="current">Access Rules UI</span>
+    </nav>
+
+    <h1>Access Rules UI</h1>
+    <div class="lesson-meta">
+      <span>A5 — Lesson 4 of 5</span>
+      <span>~55 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>Access rules are what make Token more than a glorified contact card. A user doesn't just share a code — they define <em>what</em> the holder can do with it. Time windows ("only reach me 9am–6pm"), contact limits ("max 3 messages per day"), category restrictions ("text only, no calls"). Rules are enforced server-side (B7), but the UI for setting them lives here. This is where the user feels in control.</p>
+    </div>
+
+    <h2>The access_rules schema (recap from B2)</h2>
+
+    <p>From the schema design module, each rule is stored as a row in <code>access_rules</code>:</p>
+
+    <pre><code>CREATE TABLE access_rules (
+  id          SERIAL PRIMARY KEY,
+  token_id    INTEGER NOT NULL REFERENCES tokens(id) ON DELETE CASCADE,
+  rule_type   TEXT NOT NULL
+              CHECK (rule_type IN ('time_window', 'contact_limit', 'channel_restrict', 'expiry')),
+  payload     JSONB NOT NULL,
+  enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);</code></pre>
+
+    <p>The <code>payload</code> is JSONB — each rule type has a different shape:</p>
+
+    <pre><code>// time_window
+{ "days": [1,2,3,4,5], "start": "09:00", "end": "18:00", "timezone": "Asia/Kolkata" }
+
+// contact_limit
+{ "max_per_day": 3, "type": "messages" }  // or "calls"
+
+// channel_restrict
+{ "allowed": ["text"], "blocked": ["voice", "video"] }
+
+// expiry
+{ "expires_at": "2026-09-01T00:00:00.000Z" }</code></pre>
+
+    <h2>TypeScript types for rules</h2>
+
+    <pre><code>// shared/src/rules.ts
+
+export type RuleType = 'time_window' | 'contact_limit' | 'channel_restrict' | 'expiry';
+
+export interface TimeWindowPayload {
+  days: number[];       // 0=Sun, 1=Mon, ... 6=Sat
+  start: string;        // "HH:MM" 24h format
+  end: string;          // "HH:MM" 24h format
+  timezone: string;     // IANA timezone
+}
+
+export interface ContactLimitPayload {
+  max_per_day: number;
+  type: 'messages' | 'calls';
+}
+
+export interface ChannelRestrictPayload {
+  allowed: ('text' | 'voice' | 'video')[];
+  blocked: ('text' | 'voice' | 'video')[];
+}
+
+export interface ExpiryPayload {
+  expires_at: string;   // ISO 8601
+}
+
+export type RulePayload =
+  | TimeWindowPayload
+  | ContactLimitPayload
+  | ChannelRestrictPayload
+  | ExpiryPayload;
+
+export interface AccessRule {
+  id: number;
+  token_id: number;
+  rule_type: RuleType;
+  payload: RulePayload;
+  enabled: boolean;
+  created_at: string;
+}</code></pre>
+
+    <h2>The rules API endpoints</h2>
+
+    <pre><code>// GET /tokens/:tokenId/rules — list rules for a token
+// POST /tokens/:tokenId/rules — add a rule
+// PATCH /tokens/:tokenId/rules/:ruleId — update a rule
+// DELETE /tokens/:tokenId/rules/:ruleId — remove a rule</code></pre>
+
+    <p>Example — adding a time window rule:</p>
+
+    <pre><code>POST /tokens/42/rules
+Content-Type: application/json
+
+{
+  "rule_type": "time_window",
+  "payload": {
+    "days": [1, 2, 3, 4, 5],
+    "start": "09:00",
+    "end": "18:00",
+    "timezone": "Asia/Kolkata"
+  }
+}</code></pre>
+
+    <h2>The AccessRuleEditor component</h2>
+
+    <p>This is a modal or bottom sheet where users configure rules for a token. Each rule type has its own form section:</p>
+
+    <pre><code>// app/src/components/AccessRuleEditor.tsx
+import { useState } from 'react';
+import {
+  View, Text, Switch, TouchableOpacity, StyleSheet, ScrollView,
+} from 'react-native';
+import { AccessRule, RuleType } from '@token/shared/rules';
+
+interface AccessRuleEditorProps {
+  tokenId: number;
+  existingRules: AccessRule[];
+  onSave: (rules: AccessRule[]) => void;
+  onClose: () => void;
+}
+
+export function AccessRuleEditor({ tokenId, existingRules, onSave, onClose }: AccessRuleEditorProps) {
+  const [rules, setRules] = useState&lt;AccessRule[]&gt;(existingRules);
+
+  return (
+    &lt;ScrollView style={styles.container}&gt;
+      &lt;Text style={styles.heading}&gt;Access Rules&lt;/Text&gt;
+      &lt;Text style={styles.subtext}&gt;
+        Control when and how this token's holder can reach you.
+      &lt;/Text&gt;
+
+      &lt;TimeWindowSection
+        rule={rules.find(r =&gt; r.rule_type === 'time_window')}
+        tokenId={tokenId}
+        onUpdate={updated =&gt; updateRule(updated)}
+      /&gt;
+
+      &lt;ContactLimitSection
+        rule={rules.find(r =&gt; r.rule_type === 'contact_limit')}
+        tokenId={tokenId}
+        onUpdate={updated =&gt; updateRule(updated)}
+      /&gt;
+
+      &lt;ChannelRestrictSection
+        rule={rules.find(r =&gt; r.rule_type === 'channel_restrict')}
+        tokenId={tokenId}
+        onUpdate={updated =&gt; updateRule(updated)}
+      /&gt;
+
+      &lt;TouchableOpacity style={styles.doneButton} onPress={onClose}&gt;
+        &lt;Text style={styles.doneButtonText}&gt;Done&lt;/Text&gt;
+      &lt;/TouchableOpacity&gt;
+    &lt;/ScrollView&gt;
+  );
+
+  function updateRule(updated: AccessRule) {
+    setRules(prev =&gt; {
+      const idx = prev.findIndex(r =&gt; r.id === updated.id);
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = updated;
+        return copy;
+      }
+      return [...prev, updated];
+    });
+  }
+}</code></pre>
+
+    <h2>Time Window rule editor</h2>
+
+    <p>The most complex rule UI. Users pick which days and what hours:</p>
+
+    <pre><code>// app/src/components/rules/TimeWindowSection.tsx
+import { useState } from 'react';
+import { View, Text, TouchableOpacity, Switch, StyleSheet } from 'react-native';
+import { TimeWindowPayload } from '@token/shared/rules';
+import { apiRequest } from '../../api/client';
+
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+interface TimeWindowSectionProps {
+  tokenId: number;
+  rule?: { id: number; payload: TimeWindowPayload; enabled: boolean };
+  onUpdate: (rule: any) =&gt; void;
+}
+
+export function TimeWindowSection({ tokenId, rule, onUpdate }: TimeWindowSectionProps) {
+  const [enabled, setEnabled] = useState(rule?.enabled ?? false);
+  const [days, setDays] = useState&lt;number[]&gt;(rule?.payload.days ?? [1,2,3,4,5]);
+  const [start, setStart] = useState(rule?.payload.start ?? '09:00');
+  const [end, setEnd] = useState(rule?.payload.end ?? '18:00');
+
+  function toggleDay(day: number) {
+    setDays(prev =&gt;
+      prev.includes(day) ? prev.filter(d =&gt; d !== day) : [...prev, day].sort()
+    );
+  }
+
+  async function handleSave() {
+    const payload: TimeWindowPayload = {
+      days,
+      start,
+      end,
+      timezone: 'Asia/Kolkata',
+    };
+
+    if (rule) {
+      // Update existing
+      const res = await apiRequest('PATCH', `/tokens/${tokenId}/rules/${rule.id}`, {
+        payload,
+        enabled,
+      });
+      onUpdate(res.data);
+    } else {
+      // Create new
+      const res = await apiRequest('POST', `/tokens/${tokenId}/rules`, {
+        rule_type: 'time_window',
+        payload,
+      });
+      onUpdate(res.data);
+    }
+  }
+
+  return (
+    &lt;View style={styles.section}&gt;
+      &lt;View style={styles.sectionHeader}&gt;
+        &lt;Text style={styles.sectionTitle}&gt;Time Window&lt;/Text&gt;
+        &lt;Switch
+          value={enabled}
+          onValueChange={val =&gt; { setEnabled(val); if (rule) handleSave(); }}
+        /&gt;
+      &lt;/View&gt;
+      &lt;Text style={styles.sectionDesc}&gt;
+        Only allow contact during specific hours
+      &lt;/Text&gt;
+
+      {enabled && (
+        &lt;View&gt;
+          &lt;View style={styles.dayRow}&gt;
+            {DAYS.map((name, idx) =&gt; (
+              &lt;TouchableOpacity
+                key={idx}
+                style={[styles.dayChip, days.includes(idx) && styles.dayChipActive]}
+                onPress={() =&gt; toggleDay(idx)}
+              &gt;
+                &lt;Text style={[styles.dayText, days.includes(idx) && styles.dayTextActive]}&gt;
+                  {name}
+                &lt;/Text&gt;
+              &lt;/TouchableOpacity&gt;
+            ))}
+          &lt;/View&gt;
+
+          &lt;View style={styles.timeRow}&gt;
+            &lt;TimeInput label="From" value={start} onChange={setStart} /&gt;
+            &lt;Text style={styles.timeSeparator}&gt;to&lt;/Text&gt;
+            &lt;TimeInput label="Until" value={end} onChange={setEnd} /&gt;
+          &lt;/View&gt;
+
+          &lt;TouchableOpacity style={styles.saveButton} onPress={handleSave}&gt;
+            &lt;Text style={styles.saveButtonText}&gt;Save&lt;/Text&gt;
+          &lt;/TouchableOpacity&gt;
+        &lt;/View&gt;
+      )}
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <h2>Contact Limit rule editor</h2>
+
+    <pre><code>// app/src/components/rules/ContactLimitSection.tsx
+import { useState } from 'react';
+import { View, Text, Switch, TextInput, StyleSheet } from 'react-native';
+
+export function ContactLimitSection({ tokenId, rule, onUpdate }) {
+  const [enabled, setEnabled] = useState(rule?.enabled ?? false);
+  const [maxPerDay, setMaxPerDay] = useState(
+    rule?.payload.max_per_day?.toString() ?? '5'
+  );
+  const [type, setType] = useState&lt;'messages' | 'calls'&gt;(
+    rule?.payload.type ?? 'messages'
+  );
+
+  return (
+    &lt;View style={styles.section}&gt;
+      &lt;View style={styles.sectionHeader}&gt;
+        &lt;Text style={styles.sectionTitle}&gt;Daily Limit&lt;/Text&gt;
+        &lt;Switch value={enabled} onValueChange={setEnabled} /&gt;
+      &lt;/View&gt;
+      &lt;Text style={styles.sectionDesc}&gt;
+        Cap how many times the holder can contact you per day
+      &lt;/Text&gt;
+
+      {enabled && (
+        &lt;View&gt;
+          &lt;View style={styles.limitRow}&gt;
+            &lt;Text style={styles.limitLabel}&gt;Max per day:&lt;/Text&gt;
+            &lt;TextInput
+              style={styles.limitInput}
+              value={maxPerDay}
+              onChangeText={setMaxPerDay}
+              keyboardType="number-pad"
+              maxLength={3}
+            /&gt;
+          &lt;/View&gt;
+
+          &lt;View style={styles.typeRow}&gt;
+            &lt;TypeChip
+              label="Messages"
+              active={type === 'messages'}
+              onPress={() =&gt; setType('messages')}
+            /&gt;
+            &lt;TypeChip
+              label="Calls"
+              active={type === 'calls'}
+              onPress={() =&gt; setType('calls')}
+            /&gt;
+          &lt;/View&gt;
+        &lt;/View&gt;
+      )}
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <h2>Channel Restrict rule editor</h2>
+
+    <pre><code>// app/src/components/rules/ChannelRestrictSection.tsx
+import { useState } from 'react';
+import { View, Text, Switch, StyleSheet } from 'react-native';
+
+const CHANNELS = ['text', 'voice', 'video'] as const;
+
+export function ChannelRestrictSection({ tokenId, rule, onUpdate }) {
+  const [enabled, setEnabled] = useState(rule?.enabled ?? false);
+  const [allowed, setAllowed] = useState&lt;string[]&gt;(
+    rule?.payload.allowed ?? ['text', 'voice', 'video']
+  );
+
+  function toggleChannel(channel: string) {
+    setAllowed(prev =&gt;
+      prev.includes(channel)
+        ? prev.filter(c =&gt; c !== channel)
+        : [...prev, channel]
+    );
+  }
+
+  return (
+    &lt;View style={styles.section}&gt;
+      &lt;View style={styles.sectionHeader}&gt;
+        &lt;Text style={styles.sectionTitle}&gt;Channel Restrictions&lt;/Text&gt;
+        &lt;Switch value={enabled} onValueChange={setEnabled} /&gt;
+      &lt;/View&gt;
+      &lt;Text style={styles.sectionDesc}&gt;
+        Choose which communication channels this token allows
+      &lt;/Text&gt;
+
+      {enabled && (
+        &lt;View style={styles.channelList}&gt;
+          {CHANNELS.map(channel =&gt; (
+            &lt;View key={channel} style={styles.channelRow}&gt;
+              &lt;Text style={styles.channelLabel}&gt;
+                {channel.charAt(0).toUpperCase() + channel.slice(1)}
+              &lt;/Text&gt;
+              &lt;Switch
+                value={allowed.includes(channel)}
+                onValueChange={() =&gt; toggleChannel(channel)}
+              /&gt;
+            &lt;/View&gt;
+          ))}
+          {allowed.length === 0 && (
+            &lt;Text style={styles.warningText}&gt;
+              ⚠ No channels allowed — the holder won't be able to contact you at all.
+            &lt;/Text&gt;
+          )}
+        &lt;/View&gt;
+      )}
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <h2>Composing rules on the TokenDetail screen</h2>
+
+    <pre><code>// app/src/screens/TokenDetail.tsx — rules section
+import { useState, useEffect } from 'react';
+import { View, Text, TouchableOpacity, Modal } from 'react-native';
+import { AccessRuleEditor } from '../components/AccessRuleEditor';
+import { AccessRule } from '@token/shared/rules';
+import { apiRequest } from '../api/client';
+
+function TokenDetailScreen({ route }) {
+  const { token } = route.params;
+  const [rules, setRules] = useState&lt;AccessRule[]&gt;([]);
+  const [showEditor, setShowEditor] = useState(false);
+
+  useEffect(() =&gt; {
+    apiRequest&lt;{ data: AccessRule[] }&gt;('GET', `/tokens/${token.id}/rules`)
+      .then(res =&gt; setRules(res.data));
+  }, [token.id]);
+
+  return (
+    &lt;View&gt;
+      {/* ... code, QR, status ... */}
+
+      &lt;View style={styles.rulesSection}&gt;
+        &lt;Text style={styles.rulesHeading}&gt;Access Rules&lt;/Text&gt;
+        {rules.length === 0 ? (
+          &lt;Text style={styles.noRules}&gt;No restrictions — holder has full access&lt;/Text&gt;
+        ) : (
+          rules.map(rule =&gt; &lt;RuleSummary key={rule.id} rule={rule} /&gt;)
+        )}
+        &lt;TouchableOpacity
+          style={styles.editRulesButton}
+          onPress={() =&gt; setShowEditor(true)}
+        &gt;
+          &lt;Text style={styles.editRulesText}&gt;Edit Rules&lt;/Text&gt;
+        &lt;/TouchableOpacity&gt;
+      &lt;/View&gt;
+
+      &lt;Modal visible={showEditor} animationType="slide"&gt;
+        &lt;AccessRuleEditor
+          tokenId={token.id}
+          existingRules={rules}
+          onSave={setRules}
+          onClose={() =&gt; setShowEditor(false)}
+        /&gt;
+      &lt;/Modal&gt;
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <h2>Rule summary display</h2>
+
+    <p>On the TokenDetail screen, show a compact summary of each active rule:</p>
+
+    <pre><code>function RuleSummary({ rule }: { rule: AccessRule }) {
+  if (!rule.enabled) return null;
+
+  const summaries: Record&lt;string, string&gt; = {
+    time_window: formatTimeWindow(rule.payload as TimeWindowPayload),
+    contact_limit: formatContactLimit(rule.payload as ContactLimitPayload),
+    channel_restrict: formatChannelRestrict(rule.payload as ChannelRestrictPayload),
+    expiry: formatExpiry(rule.payload as ExpiryPayload),
+  };
+
+  return (
+    &lt;View style={styles.ruleSummary}&gt;
+      &lt;View style={styles.ruleIcon}&gt;
+        &lt;Text&gt;{ruleIcons[rule.rule_type]}&lt;/Text&gt;
+      &lt;/View&gt;
+      &lt;Text style={styles.ruleText}&gt;{summaries[rule.rule_type]}&lt;/Text&gt;
+    &lt;/View&gt;
+  );
+}
+
+function formatTimeWindow(p: TimeWindowPayload): string {
+  const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const dayStr = p.days.map(d =&gt; dayNames[d]).join(', ');
+  return `${dayStr} · ${p.start}–${p.end}`;
+}
+
+function formatContactLimit(p: ContactLimitPayload): string {
+  return `Max ${p.max_per_day} ${p.type}/day`;
+}
+
+function formatChannelRestrict(p: ChannelRestrictPayload): string {
+  return `${p.allowed.join(', ')} only`;
+}
+
+function formatExpiry(p: ExpiryPayload): string {
+  return `Expires ${new Date(p.expires_at).toLocaleDateString()}`;
+}</code></pre>
+
+    <h2>Server-side rules endpoints</h2>
+
+    <pre><code>// api/src/routes/rules.ts
+import { Router } from 'express';
+import { requireAuth } from '../middleware/auth';
+import { db } from '../db';
+import { z } from 'zod';
+
+const router = Router();
+
+const ruleSchema = z.object({
+  rule_type: z.enum(['time_window', 'contact_limit', 'channel_restrict', 'expiry']),
+  payload: z.record(z.unknown()),
+  enabled: z.boolean().optional().default(true),
+});
+
+// List rules for a token
+router.get('/tokens/:tokenId/rules', requireAuth, async (req, res) =&gt; {
+  const { tokenId } = req.params;
+
+  // Verify token belongs to user
+  const token = await db.query(
+    'SELECT id FROM tokens WHERE id = $1 AND user_id = $2',
+    [tokenId, req.user.id]
+  );
+  if (token.rows.length === 0) {
+    return res.status(404).json({ error: 'Token not found' });
+  }
+
+  const rules = await db.query(
+    'SELECT * FROM access_rules WHERE token_id = $1 ORDER BY created_at',
+    [tokenId]
+  );
+  res.json({ data: rules.rows });
+});
+
+// Add a rule
+router.post('/tokens/:tokenId/rules', requireAuth, async (req, res) =&gt; {
+  const { tokenId } = req.params;
+  const parsed = ruleSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0].message });
+  }
+
+  // Verify ownership
+  const token = await db.query(
+    'SELECT id FROM tokens WHERE id = $1 AND user_id = $2',
+    [tokenId, req.user.id]
+  );
+  if (token.rows.length === 0) {
+    return res.status(404).json({ error: 'Token not found' });
+  }
+
+  const { rule_type, payload, enabled } = parsed.data;
+  const result = await db.query(
+    `INSERT INTO access_rules (token_id, rule_type, payload, enabled)
+     VALUES ($1, $2, $3, $4)
+     RETURNING *`,
+    [tokenId, rule_type, JSON.stringify(payload), enabled]
+  );
+
+  res.status(201).json({ data: result.rows[0] });
+});
+
+// Update a rule
+router.patch('/tokens/:tokenId/rules/:ruleId', requireAuth, async (req, res) =&gt; {
+  const { tokenId, ruleId } = req.params;
+  const { payload, enabled } = req.body;
+
+  const result = await db.query(
+    `UPDATE access_rules
+     SET payload = COALESCE($1, payload), enabled = COALESCE($2, enabled)
+     WHERE id = $3 AND token_id = $4
+     RETURNING *`,
+    [payload ? JSON.stringify(payload) : null, enabled ?? null, ruleId, tokenId]
+  );
+
+  if (result.rows.length === 0) {
+    return res.status(404).json({ error: 'Rule not found' });
+  }
+  res.json({ data: result.rows[0] });
+});
+
+// Delete a rule
+router.delete('/tokens/:tokenId/rules/:ruleId', requireAuth, async (req, res) =&gt; {
+  const { tokenId, ruleId } = req.params;
+  await db.query(
+    'DELETE FROM access_rules WHERE id = $1 AND token_id = $2',
+    [ruleId, tokenId]
+  );
+  res.status(204).end();
+});
+
+export default router;</code></pre>
+
+    <h2>UX principles for rule configuration</h2>
+
+    <ol>
+      <li><strong>Off by default</strong> — every rule section starts with a toggle OFF. The user opts in to restrictions, not out.</li>
+      <li><strong>Sensible defaults when enabled</strong> — when a user enables "Time Window", pre-fill Mon–Fri 9am–6pm. They can adjust, but the common case is one tap.</li>
+      <li><strong>Immediate feedback</strong> — show a plain-language summary: "Reachable Mon–Fri, 9:00am to 6:00pm IST"</li>
+      <li><strong>Warn on empty</strong> — if all channels are disabled, warn: "This token won't allow any contact." If the time window has no days selected, warn.</li>
+      <li><strong>Save on change</strong> — no "Save All" button at the bottom. Each rule section saves when the user changes it. Reduces data loss if they back-navigate.</li>
+    </ol>
+
+    <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0003-token-list-management.html">← Previous: Token List &amp; Management</a>
+      <a href="./0005-share-path-warnings.html">Next: Share-Path Warnings →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// Rule payload formatting — try each type
+function formatTimeWindow(payload) {
+  const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const dayStr = payload.days.map(d => dayNames[d]).join(', ');
+  return dayStr + ' · ' + payload.start + '–' + payload.end;
+}
+
+function formatContactLimit(payload) {
+  return 'Max ' + payload.max_per_day + ' ' + payload.type + '/day';
+}
+
+function formatChannelRestrict(payload) {
+  return payload.allowed.join(', ') + ' only';
+}
+
+// Test
+console.log(formatTimeWindow({ days: [1,2,3,4,5], start: '09:00', end: '18:00' }));
+console.log(formatContactLimit({ max_per_day: 3, type: 'messages' }));
+console.log(formatChannelRestrict({ allowed: ['text'], blocked: ['voice', 'video'] }));
+
+// Edge case: weekend only
+console.log(formatTimeWindow({ days: [0, 6], start: '10:00', end: '20:00' }));`);
+
+    createSolution("exercise-1", {
+      exercise: "Build the full access rules system:\n\n1. Create `shared/src/rules.ts` with TypeScript types for all four rule types and their payloads.\n\n2. Create the server-side CRUD endpoints: GET (list), POST (create), PATCH (update), DELETE (remove) for `/tokens/:tokenId/rules`.\n\n3. Build the `TimeWindowSection` component: day picker (7 tappable chips), start/end time inputs, and a save button that calls the API.\n\n4. Build the `ChannelRestrictSection` component: three toggles (text/voice/video) with a warning when all are disabled.\n\n5. Build the `RuleSummary` component that shows a one-line description of each active rule on the TokenDetail screen.\n\n6. Test: create a token, add a time window (Mon–Fri 9–6), add a channel restriction (text only), and verify the summaries display correctly.",
+      hints: [
+        "Each rule type has its own payload shape — use a discriminated union with rule_type as the discriminator.",
+        "The JSONB column stores any valid JSON. Use JSON.stringify() when inserting and the pg driver auto-parses on SELECT.",
+        "For the day picker, toggle days in/out of an array. Sort after adding to keep display order consistent.",
+        "COALESCE in the UPDATE query means you can PATCH just the payload or just the enabled field — whichever is sent."
+      ],
+      solution: `// shared/src/rules.ts — see the lesson code above for full types.
+
+// Key design decisions:
+// 1. RuleType is a string literal union — exhaustive switch/case catches missing types
+// 2. Each payload interface has its own shape — no generic 'config' object
+// 3. The AccessRule interface combines the DB row with typed payload
+
+// Server endpoints — see lesson code for full implementation.
+// Key points:
+// 1. Always verify token ownership before CRUD on rules
+// 2. Use zod to validate the incoming rule_type and shape
+// 3. COALESCE in PATCH allows partial updates
+// 4. CASCADE on token_id means deleting a token removes all its rules
+
+// Client components — see lesson code for TimeWindowSection, ChannelRestrictSection.
+// Key patterns:
+// 1. Each section has its own local state + save handler
+// 2. Toggle OFF = rule is disabled (not deleted) — preserves config for re-enable
+// 3. Days are stored as numbers (0-6), displayed as names
+// 4. Pre-fill sensible defaults when enabling a rule for the first time`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "What does this rule summary display?",
+        code: "const payload = { days: [1,2,3,4,5], start: '09:00', end: '18:00' };\nconst dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];\nconst result = payload.days.map(d => dayNames[d]).join(', ') + ' · ' + payload.start + '–' + payload.end;\nconsole.log(result);",
+        answer: "Mon, Tue, Wed, Thu, Fri · 09:00–18:00",
+        explanation: "Days [1,2,3,4,5] map to Mon through Fri. The format shows which days are allowed and the time window. This compact summary lets users see at a glance when the token is active."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this rule creation endpoint?",
+        code: "router.post('/tokens/:tokenId/rules', requireAuth, async (req, res) => {\n  const { tokenId } = req.params;\n  const { rule_type, payload } = req.body;\n  const result = await db.query(\n    `INSERT INTO access_rules (token_id, rule_type, payload) VALUES ($1, $2, $3) RETURNING *`,\n    [tokenId, rule_type, payload]\n  );\n  res.status(201).json({ data: result.rows[0] });\n});",
+        options: [
+          "Missing ownership check — any authenticated user could add rules to another user's token",
+          "payload should be wrapped in JSON.stringify()",
+          "The route path is wrong — should be /rules/:tokenId",
+          "RETURNING * is not valid SQL"
+        ],
+        correct: 0,
+        explanation: "The endpoint takes tokenId from the URL but never verifies that the token belongs to req.user.id. Any logged-in user could add rules to any token by guessing or iterating IDs. Always check ownership: SELECT ... WHERE id = $1 AND user_id = $2."
+      },
+      {
+        type: "which-breaks",
+        question: "Which channel restriction configuration is problematic?",
+        variants: [
+          "{ allowed: ['text', 'voice', 'video'], blocked: [] }",
+          "{ allowed: ['text'], blocked: ['voice', 'video'] }",
+          "{ allowed: [], blocked: ['text', 'voice', 'video'] }",
+          "{ allowed: ['text', 'voice'], blocked: ['video'] }"
+        ],
+        correct: 2,
+        explanation: "An empty allowed list means the holder cannot contact the user through ANY channel. The token is effectively useless — they can redeem it but can't actually communicate. The UI should warn: 'No channels allowed — the holder won't be able to contact you at all.' This might be intentional (a 'silent' token that just logs visits), but it's almost always a mistake."
+      },
+      {
+        type: "fill-blank",
+        question: "Allow partial updates in the PATCH query using:",
+        code: "UPDATE access_rules\nSET payload = ___(${1}, payload),\n    enabled = ___($2, enabled)\nWHERE id = $3",
+        answer: "COALESCE",
+        explanation: "COALESCE returns the first non-null argument. If the client sends null for payload (meaning 'don't change it'), COALESCE(NULL, payload) returns the existing payload value. This lets clients PATCH just the fields they want to change without overwriting others."
+      },
+      {
+        type: "order-steps",
+        question: "Put the rule configuration UX flow in order:",
+        steps: [
+          "User opens TokenDetail and sees 'No restrictions' summary",
+          "User taps 'Edit Rules' — modal with rule sections appears",
+          "User toggles ON 'Time Window' — day picker and time inputs appear with Mon-Fri 9-6 pre-filled",
+          "User adjusts days/times and the section auto-saves to the API",
+          "User closes modal — TokenDetail now shows 'Mon-Fri · 09:00-18:00' summary"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "The flow goes from viewing (no rules) → editing (modal) → enabling (toggle + defaults) → adjusting (auto-save) → viewing updated summary. Each step gives immediate feedback. Auto-save means the user never loses work by accidentally navigating away."
+      }
+    ]);
+  </script>
+</body>
+</html>

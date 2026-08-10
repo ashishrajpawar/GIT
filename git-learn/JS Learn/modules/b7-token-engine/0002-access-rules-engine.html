@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Access Rules Engine — B7.2</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <nav class="breadcrumb">
+    <a href="../../index.html">Course Home</a> &rsaquo;
+    <a href="./README.html">B7 — Token Engine</a> &rsaquo;
+    <strong>Access Rules Engine</strong>
+  </nav>
+
+  <h1>Access Rules Engine</h1>
+  <p class="lesson-meta">B7 — Lesson 2 of 3 &bull; ~50 min</p>
+
+  <section class="callout">
+    <h2>Why this matters for Token</h2>
+    <p>
+      Rules are what make Token more than a contact form. A user can say "this
+      delivery driver can message me only between 9 AM and 6 PM, only text, max
+      5 messages per day." The rules are stored as JSONB in the tokens table —
+      the engine evaluates them on every message or call attempt. If the engine
+      is wrong, privacy erodes. Deny-by-default: if a rule cannot be evaluated,
+      the action is blocked.
+    </p>
+  </section>
+
+  <h2>The Rules Schema</h2>
+  <p>
+    Rules live in the <code>rules</code> JSONB column of the tokens table. The
+    structure supports multiple rule types that are evaluated together — ALL
+    must pass for an action to be allowed.
+  </p>
+  <pre><code>// The rules JSONB structure
+interface TokenRules {
+  time_window?: {
+    days: number[];        // 0=Sun, 1=Mon, ..., 6=Sat
+    start_time: string;    // "09:00" (24h format)
+    end_time: string;      // "18:00"
+    timezone: string;      // "Asia/Kolkata"
+  };
+  contact_limit?: {
+    max_messages_per_day: number;
+    max_calls_per_day: number;
+  };
+  channel_restrict?: {
+    allow_text: boolean;
+    allow_voice: boolean;
+    allow_video: boolean;
+  };
+}
+
+// Example rules stored in the database:
+{
+  "time_window": {
+    "days": [1, 2, 3, 4, 5],
+    "start_time": "09:00",
+    "end_time": "18:00",
+    "timezone": "Asia/Kolkata"
+  },
+  "contact_limit": {
+    "max_messages_per_day": 10,
+    "max_calls_per_day": 2
+  },
+  "channel_restrict": {
+    "allow_text": true,
+    "allow_voice": true,
+    "allow_video": false
+  }
+}</code></pre>
+
+  <h2>The Core evaluateRules Function</h2>
+  <p>
+    This is the heart of the token engine. Every action (send message, initiate
+    call) passes through this function. It returns either <code>{ allowed: true }</code>
+    or <code>{ allowed: false, reason: string }</code>.
+  </p>
+  <pre><code>// api/src/engine/rules.ts
+import { pool } from '../db';
+
+type Action = 'message' | 'voice_call' | 'video_call';
+
+interface RuleResult {
+  allowed: boolean;
+  reason?: string;
+}
+
+export async function evaluateRules(
+  tokenId: number,
+  action: Action
+): Promise&lt;RuleResult&gt; {
+  // Fetch rules from token
+  const { rows } = await pool.query(
+    'SELECT rules FROM tokens WHERE id = $1',
+    [tokenId]
+  );
+
+  if (rows.length === 0) {
+    return { allowed: false, reason: 'Token not found' };
+  }
+
+  const rules = rows[0].rules;
+
+  // No rules means open access (user chose not to restrict)
+  if (!rules || Object.keys(rules).length === 0) {
+    return { allowed: true };
+  }
+
+  // Evaluate each rule type — ALL must pass
+  if (rules.channel_restrict) {
+    const result = evaluateChannelRestrict(rules.channel_restrict, action);
+    if (!result.allowed) return result;
+  }
+
+  if (rules.time_window) {
+    const result = evaluateTimeWindow(rules.time_window);
+    if (!result.allowed) return result;
+  }
+
+  if (rules.contact_limit) {
+    const result = await evaluateContactLimit(rules.contact_limit, tokenId, action);
+    if (!result.allowed) return result;
+  }
+
+  return { allowed: true };
+}</code></pre>
+
+  <h2>Channel Restriction Evaluation</h2>
+  <p>
+    The simplest rule — a direct boolean check against the action type.
+  </p>
+  <pre><code>function evaluateChannelRestrict(
+  rule: { allow_text: boolean; allow_voice: boolean; allow_video: boolean },
+  action: Action
+): RuleResult {
+  switch (action) {
+    case 'message':
+      if (!rule.allow_text) {
+        return { allowed: false, reason: 'Text messages are not allowed on this token' };
+      }
+      break;
+    case 'voice_call':
+      if (!rule.allow_voice) {
+        return { allowed: false, reason: 'Voice calls are not allowed on this token' };
+      }
+      break;
+    case 'video_call':
+      if (!rule.allow_video) {
+        return { allowed: false, reason: 'Video calls are not allowed on this token' };
+      }
+      break;
+  }
+  return { allowed: true };
+}</code></pre>
+
+  <h2>Time Window Evaluation</h2>
+  <p>
+    Checks the current time in the token owner's timezone against the allowed
+    window. This handles day-of-week and time range.
+  </p>
+  <pre><code>function evaluateTimeWindow(
+  rule: { days: number[]; start_time: string; end_time: string; timezone: string }
+): RuleResult {
+  // Get current time in the token owner's timezone
+  const now = new Date();
+  const options: Intl.DateTimeFormatOptions = {
+    timeZone: rule.timezone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    weekday: 'short'
+  };
+
+  const formatter = new Intl.DateTimeFormat('en-US', options);
+  const parts = formatter.formatToParts(now);
+
+  // Extract day of week (0-6)
+  const dayFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: rule.timezone,
+    weekday: 'short'
+  });
+  const dayStr = dayFormatter.format(now);
+  const dayMap: Record&lt;string, number&gt; = {
+    Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6
+  };
+  const currentDay = dayMap[dayStr];
+
+  // Check day is allowed
+  if (!rule.days.includes(currentDay)) {
+    return { allowed: false, reason: 'Contact not allowed on this day' };
+  }
+
+  // Extract current time as HH:MM
+  const hourPart = parts.find(p => p.type === 'hour')?.value || '00';
+  const minutePart = parts.find(p => p.type === 'minute')?.value || '00';
+  const currentTime = `${hourPart}:${minutePart}`;
+
+  // Compare as strings (works because HH:MM format sorts correctly)
+  if (currentTime < rule.start_time || currentTime >= rule.end_time) {
+    return {
+      allowed: false,
+      reason: `Contact allowed only between ${rule.start_time} and ${rule.end_time} (${rule.timezone})`
+    };
+  }
+
+  return { allowed: true };
+}</code></pre>
+
+  <h2>Contact Limit Evaluation</h2>
+  <p>
+    Counts today's actions in the database. This requires a query on each check,
+    but correctness matters more than speed here. Caching would risk allowing
+    messages past the limit.
+  </p>
+  <pre><code>async function evaluateContactLimit(
+  rule: { max_messages_per_day: number; max_calls_per_day: number },
+  tokenId: number,
+  action: Action
+): Promise&lt;RuleResult&gt; {
+  // Get start of today in UTC (we count by calendar day)
+  const todayStart = new Date();
+  todayStart.setUTCHours(0, 0, 0, 0);
+
+  if (action === 'message') {
+    const { rows } = await pool.query(
+      `SELECT COUNT(*)::int as cnt FROM messages m
+       JOIN conversations c ON m.conversation_id = c.id
+       WHERE c.token_id = $1
+         AND m.sender_role = 'holder'
+         AND m.created_at >= $2`,
+      [tokenId, todayStart.toISOString()]
+    );
+
+    if (rows[0].cnt >= rule.max_messages_per_day) {
+      return {
+        allowed: false,
+        reason: `Daily message limit reached (${rule.max_messages_per_day})`
+      };
+    }
+  }
+
+  if (action === 'voice_call' || action === 'video_call') {
+    const { rows } = await pool.query(
+      `SELECT COUNT(*)::int as cnt FROM calls
+       WHERE token_id = $1
+         AND initiated_by = 'holder'
+         AND created_at >= $2`,
+      [tokenId, todayStart.toISOString()]
+    );
+
+    if (rows[0].cnt >= rule.max_calls_per_day) {
+      return {
+        allowed: false,
+        reason: `Daily call limit reached (${rule.max_calls_per_day})`
+      };
+    }
+  }
+
+  return { allowed: true };
+}</code></pre>
+
+  <h2>Integrating into Chat and Call Handlers</h2>
+  <p>
+    Every incoming message or call request passes through <code>evaluateRules</code>
+    before being processed.
+  </p>
+  <pre><code>// In your WebSocket message handler:
+ws.on('message', async (data) => {
+  const { type, conversationId, content } = JSON.parse(data);
+
+  if (type === 'chat_message') {
+    // Get tokenId from conversation
+    const { rows } = await pool.query(
+      'SELECT token_id FROM conversations WHERE id = $1',
+      [conversationId]
+    );
+    const tokenId = rows[0].token_id;
+
+    // Evaluate rules BEFORE processing
+    const ruleCheck = await evaluateRules(tokenId, 'message');
+    if (!ruleCheck.allowed) {
+      ws.send(JSON.stringify({
+        type: 'error',
+        code: 'RULE_DENIED',
+        reason: ruleCheck.reason
+      }));
+      return;  // Message blocked
+    }
+
+    // Rules passed — save and broadcast message
+    await saveMessage(conversationId, content);
+    broadcastToConversation(conversationId, content);
+  }
+});</code></pre>
+
+  <h2>Deny-by-Default Principle</h2>
+  <p>
+    If anything goes wrong during rule evaluation — a database error, an
+    unexpected rule format, a missing timezone — the action is DENIED. This is
+    the security-first approach: bugs should restrict access, never grant it.
+  </p>
+  <pre><code>export async function evaluateRulesSafe(
+  tokenId: number,
+  action: Action
+): Promise&lt;RuleResult&gt; {
+  try {
+    return await evaluateRules(tokenId, action);
+  } catch (err) {
+    console.error('Rule evaluation failed, denying by default:', err);
+    return { allowed: false, reason: 'Rule evaluation error — access denied' };
+  }
+}</code></pre>
+
+  <div id="playground-1"></div>
+
+  <h2>Exercise</h2>
+  <div id="exercise-1"></div>
+
+  <h2>Knowledge Check</h2>
+  <div id="lesson-quiz"></div>
+
+  <nav class="lesson-nav">
+    <a href="./0001-token-generation-redemption.html">&larr; Token Generation &amp; Redemption</a>
+    <a href="./0003-revocation-pause.html">Revocation &amp; Pause &rarr;</a>
+  </nav>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+  <script>
+    createPlayground("playground-1", `// Simulate time window evaluation in the browser
+function evaluateTimeWindow(rule) {
+  const now = new Date();
+
+  // Get current day and time in the specified timezone
+  const dayFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: rule.timezone,
+    weekday: 'short'
+  });
+  const dayStr = dayFormatter.format(now);
+  const dayMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const currentDay = dayMap[dayStr];
+
+  const timeFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: rule.timezone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
+  const parts = timeFormatter.formatToParts(now);
+  const hour = parts.find(p => p.type === 'hour').value;
+  const minute = parts.find(p => p.type === 'minute').value;
+  const currentTime = hour + ':' + minute;
+
+  console.log('Timezone:', rule.timezone);
+  console.log('Current day:', dayStr, '(' + currentDay + ')');
+  console.log('Current time:', currentTime);
+  console.log('Allowed days:', rule.days);
+  console.log('Allowed window:', rule.start_time, '-', rule.end_time);
+
+  if (!rule.days.includes(currentDay)) {
+    return { allowed: false, reason: 'Day not allowed' };
+  }
+  if (currentTime < rule.start_time || currentTime >= rule.end_time) {
+    return { allowed: false, reason: 'Outside time window' };
+  }
+  return { allowed: true };
+}
+
+const result = evaluateTimeWindow({
+  days: [1, 2, 3, 4, 5],
+  start_time: '09:00',
+  end_time: '18:00',
+  timezone: 'Asia/Kolkata'
+});
+
+console.log('Result:', JSON.stringify(result));`);
+
+    createSolution("exercise-1", {
+      exercise: "Build the complete evaluateRules function that handles all three rule types (time_window, contact_limit, channel_restrict). For this exercise, mock the database calls — use a passed-in count instead of querying. The function should accept (rules, action, todayMessageCount, todayCallCount) and return { allowed, reason }. Remember: deny-by-default if anything fails.",
+      hints: [
+        "Evaluate channel_restrict first — it's the cheapest check (no DB, no time calculation).",
+        "For time_window, use Intl.DateTimeFormat with the timeZone option to get the current time in the owner's timezone.",
+        "Wrap the entire function in try/catch — any error means denied."
+      ],
+      solution: `function evaluateRules(rules, action, todayMessageCount, todayCallCount) {
+  try {
+    // No rules = open access
+    if (!rules || Object.keys(rules).length === 0) {
+      return { allowed: true };
+    }
+
+    // 1. Channel restriction (cheapest check first)
+    if (rules.channel_restrict) {
+      const cr = rules.channel_restrict;
+      if (action === 'message' && !cr.allow_text) {
+        return { allowed: false, reason: 'Text not allowed' };
+      }
+      if (action === 'voice_call' && !cr.allow_voice) {
+        return { allowed: false, reason: 'Voice calls not allowed' };
+      }
+      if (action === 'video_call' && !cr.allow_video) {
+        return { allowed: false, reason: 'Video calls not allowed' };
+      }
+    }
+
+    // 2. Time window
+    if (rules.time_window) {
+      const tw = rules.time_window;
+      const now = new Date();
+      const dayFormatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: tw.timezone, weekday: 'short'
+      });
+      const dayStr = dayFormatter.format(now);
+      const dayMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+      const currentDay = dayMap[dayStr];
+
+      if (!tw.days.includes(currentDay)) {
+        return { allowed: false, reason: 'Not allowed on this day' };
+      }
+
+      const timeFormatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: tw.timezone, hour: '2-digit', minute: '2-digit', hour12: false
+      });
+      const parts = timeFormatter.formatToParts(now);
+      const currentTime = parts.find(p => p.type === 'hour').value
+        + ':' + parts.find(p => p.type === 'minute').value;
+
+      if (currentTime < tw.start_time || currentTime >= tw.end_time) {
+        return { allowed: false, reason: 'Outside allowed hours' };
+      }
+    }
+
+    // 3. Contact limits
+    if (rules.contact_limit) {
+      const cl = rules.contact_limit;
+      if (action === 'message' && todayMessageCount >= cl.max_messages_per_day) {
+        return { allowed: false, reason: 'Daily message limit reached' };
+      }
+      if ((action === 'voice_call' || action === 'video_call')
+          && todayCallCount >= cl.max_calls_per_day) {
+        return { allowed: false, reason: 'Daily call limit reached' };
+      }
+    }
+
+    return { allowed: true };
+  } catch (err) {
+    // Deny-by-default: errors block access
+    return { allowed: false, reason: 'Evaluation error — access denied' };
+  }
+}`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        code: "const currentTime = '14:30';\nconst start = '09:00';\nconst end = '18:00';\nconsole.log(currentTime >= start && currentTime < end);",
+        answer: "true",
+        explanation: "String comparison works for HH:MM format because the strings sort lexicographically in the same order as time. '14:30' >= '09:00' is true, and '14:30' < '18:00' is true."
+      },
+      {
+        type: "order-steps",
+        steps: [
+          "Check channel_restrict (cheapest — no DB or time calc)",
+          "Evaluate time_window (uses Intl API, no DB query)",
+          "Query database for today's action count",
+          "Evaluate contact_limit against the count",
+          "Return { allowed: true } if all pass"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Order rules from cheapest to most expensive. Channel restrict is a simple boolean lookup, time window uses the Intl API (fast), and contact limit requires a database query (slow). This avoids unnecessary DB hits when cheaper checks already deny."
+      },
+      {
+        question: "What does 'deny-by-default' mean in the context of the rules engine?",
+        options: [
+          "All tokens start with all channels disabled",
+          "If rule evaluation throws an error, the action is blocked",
+          "Holders are denied until they verify their identity",
+          "Tokens with no rules block all actions"
+        ],
+        correct: 1,
+        explanation: "Deny-by-default means that when the system cannot determine whether an action should be allowed (due to errors, unexpected formats, etc.), it defaults to blocking the action. Safety over convenience."
+      },
+      {
+        type: "fill-blank",
+        code: "const formatter = new Intl.DateTimeFormat('en-US', {\n  ___: rule.timezone,\n  hour: '2-digit',\n  minute: '2-digit',\n  hour12: false\n});",
+        answer: "timeZone",
+        explanation: "The timeZone option in Intl.DateTimeFormat converts the current time to the specified timezone. This is how we evaluate rules in the token owner's local time, not the server's time."
+      },
+      {
+        type: "which-breaks",
+        variants: [
+          "if (currentTime < rule.start_time || currentTime >= rule.end_time) { deny(); }",
+          "if (currentTime < rule.start_time || currentTime > rule.end_time) { deny(); }",
+          "if (!(currentTime >= rule.start_time && currentTime < rule.end_time)) { deny(); }"
+        ],
+        correct: 1,
+        explanation: "Variant B uses > instead of >=. If end_time is '18:00' and currentTime is exactly '18:00', variant B would allow it (18:00 is not > 18:00). The window should be exclusive of the end time — a message at exactly 18:00 should be denied. Variants A and C both correctly use < for the end boundary."
+      }
+    ]);
+  </script>
+</body>
+</html>

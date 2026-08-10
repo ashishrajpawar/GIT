@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Input Validation &amp; Error Handling — B3.4</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">B3 — Node &amp; HTTP Server</a>
+      <span class="sep">›</span>
+      <span class="current">Input Validation &amp; Error Handling</span>
+    </nav>
+
+    <h1>Input Validation &amp; Error Handling</h1>
+    <div class="lesson-meta">
+      <span>B3 — Lesson 4 of 4</span>
+      <span>~50 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>Every request to your API comes from the internet. Attackers send malformed data, SQL injection attempts, and garbage payloads. Your API must reject invalid input immediately — before it reaches the database, before it corrupts state, before it exposes errors that leak your schema. Validation is the security boundary between the outside world and your system.</p>
+    </div>
+
+    <h2>The principle: never trust client input</h2>
+
+    <p>Even your own mobile app can send bad data (stale cache, network corruption, bugs). The API must validate independently:</p>
+
+    <ul>
+      <li><strong>Type</strong> — is it actually a string/number/array?</li>
+      <li><strong>Required fields</strong> — are all mandatory fields present?</li>
+      <li><strong>Format</strong> — is the email valid? Is the date ISO format?</li>
+      <li><strong>Range</strong> — is maxUses between 0 and 1000?</li>
+      <li><strong>Length</strong> — is the label under 200 characters?</li>
+    </ul>
+
+    <h2>Zod — schema validation for TypeScript</h2>
+
+    <p>Zod defines validation schemas that also give you TypeScript types. One schema, shared between client and server:</p>
+
+    <pre><code>npm install zod</code></pre>
+
+    <pre><code>// shared/schemas/tokens.ts
+import { z } from 'zod';
+
+export const createTokenSchema = z.object({
+  label: z.string().min(1).max(200),
+  maxUses: z.number().int().min(0).max(10000).default(0),
+  expiresAt: z.string().datetime().optional(),
+});
+
+// TypeScript type derived from the schema (no duplication!)
+export type CreateTokenInput = z.infer&lt;typeof createTokenSchema&gt;;
+// = { label: string; maxUses: number; expiresAt?: string }</code></pre>
+
+    <p>The same schema works on both the client (form validation) and server (API validation). Define once in <code>shared/</code>, import everywhere.</p>
+
+    <h2>Using Zod in route handlers</h2>
+
+    <pre><code>import { createTokenSchema } from '@token/shared/schemas/tokens.js';
+import { ApiError } from '../utils/api-error.js';
+
+router.post('/', async (req, res, next) =&gt; {
+  try {
+    // Validate and parse — throws ZodError if invalid
+    const input = createTokenSchema.parse(req.body);
+    // input is fully typed and validated at this point
+
+    const token = await createToken(req.user.id, input);
+    res.status(201).json({ data: token, success: true });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({
+        error: 'Validation failed',
+        details: err.errors.map(e =&gt; ({
+          field: e.path.join('.'),
+          message: e.message,
+        })),
+        success: false,
+      });
+    }
+    next(err);
+  }
+});</code></pre>
+
+    <h2>Validation middleware</h2>
+
+    <p>Instead of repeating Zod parsing in every route, create a middleware:</p>
+
+    <pre><code>// api/src/middleware/validate.ts
+import { ZodSchema, ZodError } from 'zod';
+
+export function validate(schema: ZodSchema) {
+  return (req, res, next) =&gt; {
+    try {
+      req.body = schema.parse(req.body);
+      next();
+    } catch (err) {
+      if (err instanceof ZodError) {
+        return res.status(400).json({
+          error: 'Validation failed',
+          details: err.errors.map(e =&gt; ({
+            field: e.path.join('.'),
+            message: e.message,
+          })),
+          success: false,
+        });
+      }
+      next(err);
+    }
+  };
+}
+
+// Usage:
+import { validate } from '../middleware/validate.js';
+import { createTokenSchema } from '@token/shared/schemas/tokens.js';
+
+router.post('/', validate(createTokenSchema), async (req, res, next) =&gt; {
+  // req.body is already validated and typed
+  const token = await createToken(req.user.id, req.body);
+  res.status(201).json({ data: token, success: true });
+});</code></pre>
+
+    <h2>All of Token's validation schemas</h2>
+
+    <pre><code>// shared/schemas/tokens.ts
+import { z } from 'zod';
+
+export const createTokenSchema = z.object({
+  label: z.string().min(1, 'Label is required').max(200),
+  maxUses: z.number().int().min(0).max(10000).default(0),
+  expiresAt: z.string().datetime().optional(),
+});
+
+export const updateTokenSchema = z.object({
+  label: z.string().min(1).max(200).optional(),
+  maxUses: z.number().int().min(0).max(10000).optional(),
+}).refine(data =&gt; Object.keys(data).length &gt; 0, {
+  message: 'At least one field must be provided',
+});
+
+// Access rule payload schemas
+export const timeWindowPayload = z.object({
+  startHour: z.number().int().min(0).max(23),
+  endHour: z.number().int().min(0).max(23),
+  timezone: z.string().default('Asia/Kolkata'),
+  days: z.array(z.number().int().min(0).max(6)).optional(),
+});
+
+export const callLimitPayload = z.object({
+  maxPerDay: z.number().int().min(1).max(100),
+  maxPerWeek: z.number().int().min(1).max(1000).optional(),
+});
+
+export const createRuleSchema = z.object({
+  ruleType: z.enum(['time_window', 'call_limit', 'category', 'cooldown']),
+  payload: z.record(z.unknown()),  // validated per type in the service layer
+});</code></pre>
+
+    <h2>Error handling strategy</h2>
+
+    <p>Token's error handling has three layers:</p>
+
+    <ol>
+      <li><strong>Validation layer</strong> (Zod) — catches malformed input → 400</li>
+      <li><strong>Business logic layer</strong> (ApiError) — catches rule violations → 403, 404, 409</li>
+      <li><strong>Catch-all layer</strong> (error handler) — catches unexpected errors → 500</li>
+    </ol>
+
+    <pre><code>// api/src/middleware/error-handler.ts
+import { ZodError } from 'zod';
+import { ApiError } from '../utils/api-error.js';
+
+export function errorHandler(err, req, res, next) {
+  // Known validation errors
+  if (err instanceof ZodError) {
+    return res.status(400).json({
+      error: 'Validation failed',
+      details: err.errors.map(e =&gt; ({ field: e.path.join('.'), message: e.message })),
+      success: false,
+    });
+  }
+
+  // Known business errors
+  if (err instanceof ApiError) {
+    return res.status(err.status).json({
+      error: err.message,
+      success: false,
+    });
+  }
+
+  // Unknown errors — log but don't expose internals
+  console.error('Unhandled error:', err);
+  res.status(500).json({
+    error: process.env.NODE_ENV === 'development'
+      ? err.message
+      : 'Internal server error',
+    success: false,
+  });
+}</code></pre>
+
+    <h2>Query parameter validation</h2>
+
+    <pre><code>// Validate query params (they're always strings from the URL)
+const paginationSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  cursor: z.string().optional(),
+  status: z.enum(['active', 'paused', 'revoked']).optional(),
+});
+
+router.get('/', async (req, res, next) =&gt; {
+  try {
+    const { limit, cursor, status } = paginationSchema.parse(req.query);
+    // limit is now a number (coerced from string), validated
+    // ...
+  } catch (err) { next(err); }
+});</code></pre>
+
+    <p><code>z.coerce.number()</code> converts the string "20" to the number 20 before validating. Query parameters are always strings from the URL.</p>
+
+    <h2>Sanitization</h2>
+
+    <p>Beyond validation (rejecting bad input), sanitize input to prevent stored XSS:</p>
+
+    <pre><code>// Strip HTML tags from user-provided text
+function sanitize(input: string): string {
+  return input.replace(/&lt;[^&gt;]*&gt;/g, '').trim();
+}
+
+// In Token, sanitize: label, holder_name, message content
+// Don't sanitize: code (generated by server), timestamps, numbers</code></pre>
+
+    <p>For Token specifically, SQL injection is prevented by parameterized queries ($1), and XSS is prevented by React's built-in escaping on the client. Server-side sanitization is a defense-in-depth measure.</p>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0003-rest-api-design.html">← Previous: REST API Design</a>
+      <span class="disabled">Next module: B4 Auth (Server) →</span>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createSolution("exercise-1", {
+      exercise: "Add full input validation to Token's API: (1) Create shared/schemas/tokens.ts with Zod schemas for create, update, and list-query validation, (2) Create the validate() middleware, (3) Create the errorHandler middleware that handles ZodError, ApiError, and unknown errors differently, (4) Wire them into the tokens router. Test by sending invalid data with curl and verify you get structured error responses.",
+      hints: [
+        "z.coerce.number() is essential for query params — they arrive as strings from the URL.",
+        "The .refine() method on updateTokenSchema ensures at least one field is provided (otherwise PATCH with empty body is meaningless).",
+        "Test: curl -X POST -H 'Content-Type: application/json' -d '{}' localhost:3000/api/tokens should return 400 with details about missing 'label'."
+      ],
+      solution: `// shared/schemas/tokens.ts
+import { z } from 'zod';
+
+export const createTokenSchema = z.object({
+  label: z.string().min(1, 'Label is required').max(200, 'Label too long'),
+  maxUses: z.number().int().min(0).max(10000).default(0),
+  expiresAt: z.string().datetime().optional(),
+});
+
+export const updateTokenSchema = z.object({
+  label: z.string().min(1).max(200).optional(),
+  maxUses: z.number().int().min(0).max(10000).optional(),
+}).refine(data => Object.keys(data).length > 0, {
+  message: 'At least one field must be provided',
+});
+
+export const tokenListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  cursor: z.string().optional(),
+  status: z.enum(['active', 'paused', 'revoked']).optional(),
+});
+
+export type CreateTokenInput = z.infer<typeof createTokenSchema>;
+export type UpdateTokenInput = z.infer<typeof updateTokenSchema>;
+
+// api/src/middleware/validate.ts
+import { ZodSchema, ZodError } from 'zod';
+
+export function validate(schema: ZodSchema) {
+  return (req, res, next) => {
+    try {
+      req.body = schema.parse(req.body);
+      next();
+    } catch (err) {
+      if (err instanceof ZodError) {
+        return res.status(400).json({
+          error: 'Validation failed',
+          details: err.errors.map(e => ({
+            field: e.path.join('.'),
+            message: e.message,
+          })),
+          success: false,
+        });
+      }
+      next(err);
+    }
+  };
+}
+
+// api/src/middleware/error-handler.ts
+import { ZodError } from 'zod';
+import { ApiError } from '../utils/api-error.js';
+
+export function errorHandler(err, req, res, next) {
+  if (err instanceof ZodError) {
+    return res.status(400).json({
+      error: 'Validation failed',
+      details: err.errors.map(e => ({ field: e.path.join('.'), message: e.message })),
+      success: false,
+    });
+  }
+  if (err instanceof ApiError) {
+    return res.status(err.status).json({ error: err.message, success: false });
+  }
+  console.error('Unhandled:', err);
+  res.status(500).json({ error: 'Internal server error', success: false });
+}
+
+// Usage in router:
+import { validate } from '../middleware/validate.js';
+import { createTokenSchema, updateTokenSchema } from '@token/shared/schemas/tokens.js';
+
+router.post('/', validate(createTokenSchema), async (req, res, next) => {
+  // req.body is validated CreateTokenInput
+  const token = await createToken(req.user.id, req.body);
+  res.status(201).json({ data: token, success: true });
+});
+
+router.patch('/:code', validate(updateTokenSchema), async (req, res, next) => {
+  // req.body is validated UpdateTokenInput
+  // ...
+});
+
+// Test:
+// curl -X POST -H "Content-Type: application/json" -d '{}' localhost:3000/api/tokens
+// Response: { "error": "Validation failed", "details": [{"field": "label", "message": "Label is required"}] }`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "What does Zod return for this input?",
+        code: "const schema = z.object({ maxUses: z.number().int().min(0).max(100) });\nschema.parse({ maxUses: -5 });",
+        answer: "ZodError: Number must be greater than or equal to 0",
+        explanation: "Zod's .min(0) rejects negative numbers. The parse() method throws a ZodError with a structured message. Your error handler catches this and returns a 400 response with the field name and message."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this validation approach?",
+        code: "router.post('/', async (req, res) => {\n  const { label } = req.body;\n  if (!label) {\n    return res.status(400).json({ error: 'label required' });\n  }\n  // ... create token with label\n});",
+        options: [
+          "The status code should be 422 not 400",
+          "Only checks existence — doesn't check type, length, or content. label could be a number, an object, or a 10MB string.",
+          "You can't destructure req.body",
+          "The error response format is wrong"
+        ],
+        correct: 1,
+        explanation: "Manual validation only checks one thing. What if label = 12345? (type wrong) What if label = '<script>alert(1)</script>'? (XSS) What if it's 50,000 characters? Zod validates type, format, length, and content in one declaration."
+      },
+      {
+        type: "fill-blank",
+        question: "Convert a query param from string to number with validation:",
+        code: "const schema = z.object({\n  limit: z.___.number().int().min(1).max(100)\n});",
+        answer: "coerce",
+        explanation: "z.coerce.number() first converts the input to a number (like Number('20') → 20), then validates. Without coerce, z.number() rejects the string '20' because its type is string, not number. Query params are always strings."
+      },
+      {
+        question: "Why define Zod schemas in shared/ instead of in the API only?",
+        options: [
+          "Zod only works in shared folders",
+          "The same schema validates on both client (form) and server (API) — one source of truth, no drift",
+          "TypeScript requires schemas in a specific folder",
+          "Express can't import from other folders"
+        ],
+        correct: 1,
+        explanation: "With schemas in shared/, the mobile app uses them for form validation (instant feedback) and the API uses them for request validation. If you add a field or change a constraint, both sides update from the same definition. No 'the client allows it but the server rejects it' bugs."
+      },
+      {
+        type: "order-steps",
+        question: "Put Token's error handling layers in the correct priority order:",
+        steps: ["Zod validation (malformed input → 400)", "Business logic check (ApiError → 403/404/409)", "Database constraint violation (→ 409 or 500)", "Catch-all unknown error (→ 500)"],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "Validation catches bad input before it reaches your logic. Business rules catch violations your logic detects. Database constraints catch anything that slipped through (defense in depth). The catch-all handles truly unexpected errors without crashing the server."
+      }
+    ]);
+  </script>
+</body>
+</html>

@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Token Generation &amp; Display — A5.1</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A5 — Core Token Features</a>
+      <span class="sep">›</span>
+      <span class="current">Token Generation &amp; Display</span>
+    </nav>
+
+    <h1>Token Generation &amp; Display</h1>
+    <div class="lesson-meta">
+      <span>A5 — Lesson 1 of 5</span>
+      <span>~50 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>This is <em>the</em> primary action in the app. A user taps "Create Token", picks a label ("Amazon Delivery", "NoBroker Agent"), and gets a code like <code>MERC-8GH2-LP4X</code> they can share. The code must be cryptographically unpredictable (so nobody can guess another user's token), human-readable (so it can be spoken aloud or typed), and copy-to-clipboard ready. Everything else in the app — rules, revocation, chat — flows from this one action.</p>
+    </div>
+
+    <h2>Code format decisions</h2>
+
+    <p>A Token code must satisfy competing requirements:</p>
+
+    <table>
+      <thead>
+        <tr><th>Requirement</th><th>Decision</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Unpredictable</td><td>Crypto-random source (not <code>Math.random()</code>)</td></tr>
+        <tr><td>Speakable</td><td>Uppercase letters + digits, no ambiguous chars (0/O, 1/I/L)</td></tr>
+        <tr><td>Short enough to type</td><td>12 characters → 3 groups of 4</td></tr>
+        <tr><td>Collision-resistant</td><td>28-char alphabet × 12 = 28<sup>12</sup> ≈ 1.2 × 10<sup>17</sup> possibilities</td></tr>
+        <tr><td>URL-safe</td><td>Alphanumeric only, dashes are separators not part of the code</td></tr>
+      </tbody>
+    </table>
+
+    <h3>The safe alphabet</h3>
+
+    <pre><code>// shared/src/token.ts
+const ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+// 29 characters — removed: 0, O, 1, I, L (too similar)</code></pre>
+
+    <p>29 characters × 12 positions = 29<sup>12</sup> ≈ 1.7 × 10<sup>17</sup> possible codes. Even at 1 million tokens created per second, it would take 5,400 years to exhaust the space. Collisions are negligible.</p>
+
+    <h2>Crypto-safe randomness</h2>
+
+    <p><code>Math.random()</code> is a pseudo-random number generator (PRNG). It's seeded from a predictable state — an attacker who observes a few outputs can predict future ones. For security-sensitive values like token codes, you need a cryptographically secure random number generator (CSPRNG).</p>
+
+    <h3>On the server (Node.js)</h3>
+
+    <pre><code>import { randomBytes } from 'node:crypto';
+
+function generateTokenCode(): string {
+  const ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+  const bytes = randomBytes(12);
+  let code = '';
+  for (let i = 0; i < 12; i++) {
+    code += ALPHABET[bytes[i] % ALPHABET.length];
+  }
+  // Format: XXXX-XXXX-XXXX
+  return `${code.slice(0, 4)}-${code.slice(4, 8)}-${code.slice(8, 12)}`;
+}</code></pre>
+
+    <h3>On the client (React Native / browser)</h3>
+
+    <pre><code>import * as Crypto from 'expo-crypto';
+
+async function generateTokenCode(): Promise&lt;string&gt; {
+  const ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+  const bytes = await Crypto.getRandomBytesAsync(12);
+  let code = '';
+  for (let i = 0; i < 12; i++) {
+    code += ALPHABET[bytes[i] % ALPHABET.length];
+  }
+  return `${code.slice(0, 4)}-${code.slice(4, 8)}-${code.slice(8, 12)}`;
+}</code></pre>
+
+    <p><strong>Why both?</strong> The server generates the real code (stored in the database). The client generates a preview for instant UI feedback while the API call is in-flight. But only the server's code is canonical — the client replaces its preview with the server's response.</p>
+
+    <h2>The modulo bias problem</h2>
+
+    <p>Using <code>bytes[i] % ALPHABET.length</code> introduces a slight bias when 256 doesn't divide evenly by the alphabet length. With 29 characters: 256 / 29 = 8 remainder 24. The first 24 characters appear with probability 9/256, the rest with 8/256 — about 12% bias.</p>
+
+    <p>For Token, this is acceptable. The bias doesn't help an attacker guess codes because:</p>
+    <ul>
+      <li>The absolute entropy is still massive (>55 bits)</li>
+      <li>Each position is independent — knowing one doesn't help guess another</li>
+      <li>Rate limiting on the redemption endpoint prevents brute force</li>
+    </ul>
+
+    <p>If you wanted zero bias, you'd use rejection sampling:</p>
+
+    <pre><code>// Rejection sampling — unbiased but slightly slower
+function unbiasedRandomChar(bytes: Uint8Array, offset: number): string {
+  const ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+  const limit = 256 - (256 % ALPHABET.length); // largest multiple ≤ 256
+  let value = bytes[offset];
+  while (value >= limit) {
+    // reject and re-roll (need fresh random bytes)
+    value = crypto.getRandomValues(new Uint8Array(1))[0];
+  }
+  return ALPHABET[value % ALPHABET.length];
+}</code></pre>
+
+    <p>We'll use the simpler modulo approach. The math says it's fine for our use case.</p>
+
+    <h2>Shared code in <code>shared/</code></h2>
+
+    <p>Since both the server and client need the same alphabet and format validation, put the shared logic in the <code>shared/</code> folder:</p>
+
+    <pre><code>// shared/src/token.ts
+
+export const TOKEN_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+export const TOKEN_LENGTH = 12;
+export const TOKEN_FORMAT_REGEX = /^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}$/;
+
+export function formatTokenCode(raw: string): string {
+  const clean = raw.replace(/-/g, '').toUpperCase();
+  if (clean.length !== TOKEN_LENGTH) throw new Error('Invalid token length');
+  return `${clean.slice(0, 4)}-${clean.slice(4, 8)}-${clean.slice(8, 12)}`;
+}
+
+export function isValidTokenCode(code: string): boolean {
+  return TOKEN_FORMAT_REGEX.test(code);
+}
+
+export function stripDashes(code: string): string {
+  return code.replace(/-/g, '');
+}</code></pre>
+
+    <p>The generation function itself is NOT shared — it depends on platform-specific crypto APIs. But validation and formatting are identical everywhere.</p>
+
+    <h2>The API endpoint</h2>
+
+    <p>Token creation is a server-side operation. The client sends the label and optional rules; the server generates the code, stores it, and returns the result:</p>
+
+    <pre><code>// api/src/routes/tokens.ts
+import { Router } from 'express';
+import { randomBytes } from 'node:crypto';
+import { TOKEN_ALPHABET } from '@token/shared/token';
+import { requireAuth } from '../middleware/auth';
+import { db } from '../db';
+
+const router = Router();
+
+router.post('/tokens', requireAuth, async (req, res) => {
+  const { label } = req.body;
+  if (!label || typeof label !== 'string' || label.trim().length === 0) {
+    return res.status(400).json({ error: 'Label is required' });
+  }
+
+  // Generate crypto-safe code
+  const bytes = randomBytes(12);
+  let raw = '';
+  for (let i = 0; i < 12; i++) {
+    raw += TOKEN_ALPHABET[bytes[i] % TOKEN_ALPHABET.length];
+  }
+  const code = `${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8, 12)}`;
+
+  // Insert into database
+  const result = await db.query(
+    `INSERT INTO tokens (code, user_id, label)
+     VALUES ($1, $2, $3)
+     RETURNING id, code, label, status, created_at`,
+    [code, req.user.id, label.trim()]
+  );
+
+  res.status(201).json({ data: result.rows[0] });
+});
+
+export default router;</code></pre>
+
+    <h2>Handling collisions</h2>
+
+    <p>With 1.7 × 10<sup>17</sup> possible codes, a collision is astronomically unlikely. But the database enforces UNIQUE on the <code>code</code> column — if it happens, you get a constraint violation. Handle it with a retry:</p>
+
+    <pre><code>async function createToken(userId: number, label: string) {
+  const MAX_RETRIES = 3;
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const code = generateTokenCode();
+    try {
+      const result = await db.query(
+        `INSERT INTO tokens (code, user_id, label)
+         VALUES ($1, $2, $3)
+         RETURNING id, code, label, status, created_at`,
+        [code, userId, label]
+      );
+      return result.rows[0];
+    } catch (err: any) {
+      if (err.code === '23505' && attempt < MAX_RETRIES - 1) {
+        continue; // unique violation — retry with new code
+      }
+      throw err;
+    }
+  }
+  throw new Error('Failed to generate unique token code');
+}</code></pre>
+
+    <p>Postgres error code <code>23505</code> = unique_violation. In practice, you'll never hit this retry. But defense in depth.</p>
+
+    <h2>The client-side creation flow</h2>
+
+    <p>The CreateToken screen: a text input for the label, a "Create" button, and then the generated code displayed large and copyable.</p>
+
+    <pre><code>// app/src/screens/CreateToken.tsx
+import { useState } from 'react';
+import {
+  View, Text, TextInput, TouchableOpacity, StyleSheet,
+  ActivityIndicator, Alert,
+} from 'react-native';
+import * as Clipboard from 'expo-clipboard';
+import { apiRequest } from '../api/client';
+
+interface TokenResponse {
+  data: {
+    id: number;
+    code: string;
+    label: string;
+    status: string;
+    created_at: string;
+  };
+}
+
+export function CreateTokenScreen({ navigation }) {
+  const [label, setLabel] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [createdToken, setCreatedToken] = useState&lt;TokenResponse['data'] | null&gt;(null);
+
+  async function handleCreate() {
+    if (!label.trim()) {
+      Alert.alert('Label required', 'Give this token a name so you know who it\'s for.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await apiRequest&lt;TokenResponse&gt;('POST', '/tokens', {
+        label: label.trim(),
+      });
+      setCreatedToken(res.data);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to create token');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleCopy() {
+    if (!createdToken) return;
+    await Clipboard.setStringAsync(createdToken.code);
+    Alert.alert('Copied!', 'Token code copied to clipboard.');
+  }
+
+  if (createdToken) {
+    return (
+      &lt;View style={styles.container}&gt;
+        &lt;Text style={styles.successLabel}&gt;Token created for&lt;/Text&gt;
+        &lt;Text style={styles.label}&gt;{createdToken.label}&lt;/Text&gt;
+
+        &lt;View style={styles.codeCard}&gt;
+          &lt;Text style={styles.code}&gt;{createdToken.code}&lt;/Text&gt;
+        &lt;/View&gt;
+
+        &lt;TouchableOpacity style={styles.copyButton} onPress={handleCopy}&gt;
+          &lt;Text style={styles.copyButtonText}&gt;Copy Code&lt;/Text&gt;
+        &lt;/TouchableOpacity&gt;
+
+        &lt;TouchableOpacity
+          style={styles.doneButton}
+          onPress={() =&gt; navigation.goBack()}
+        &gt;
+          &lt;Text style={styles.doneButtonText}&gt;Done&lt;/Text&gt;
+        &lt;/TouchableOpacity&gt;
+      &lt;/View&gt;
+    );
+  }
+
+  return (
+    &lt;View style={styles.container}&gt;
+      &lt;Text style={styles.heading}&gt;Create a Token&lt;/Text&gt;
+      &lt;Text style={styles.subtext}&gt;
+        Give it a label so you remember who it's for.
+      &lt;/Text&gt;
+
+      &lt;TextInput
+        style={styles.input}
+        placeholder="e.g. Amazon Delivery, NoBroker Agent"
+        value={label}
+        onChangeText={setLabel}
+        autoFocus
+        maxLength={60}
+      /&gt;
+
+      &lt;TouchableOpacity
+        style={[styles.createButton, loading && styles.disabled]}
+        onPress={handleCreate}
+        disabled={loading}
+      &gt;
+        {loading ? (
+          &lt;ActivityIndicator color="#fff" /&gt;
+        ) : (
+          &lt;Text style={styles.createButtonText}&gt;Generate Token&lt;/Text&gt;
+        )}
+      &lt;/TouchableOpacity&gt;
+    &lt;/View&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    padding: 24,
+    backgroundColor: '#fff',
+  },
+  heading: {
+    fontSize: 24,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  subtext: {
+    fontSize: 15,
+    color: '#666',
+    marginBottom: 24,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    padding: 14,
+    fontSize: 16,
+    marginBottom: 20,
+  },
+  createButton: {
+    backgroundColor: '#2563eb',
+    paddingVertical: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  createButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  disabled: {
+    opacity: 0.6,
+  },
+  successLabel: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 40,
+    textAlign: 'center',
+  },
+  label: {
+    fontSize: 20,
+    fontWeight: '600',
+    textAlign: 'center',
+    marginBottom: 32,
+  },
+  codeCard: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 2,
+    borderColor: '#2563eb',
+    borderRadius: 12,
+    paddingVertical: 24,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  code: {
+    fontSize: 28,
+    fontWeight: '700',
+    letterSpacing: 2,
+    fontFamily: 'monospace',
+    color: '#1e293b',
+  },
+  copyButton: {
+    backgroundColor: '#2563eb',
+    paddingVertical: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  copyButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  doneButton: {
+    paddingVertical: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#ddd',
+  },
+  doneButtonText: {
+    fontSize: 16,
+    color: '#666',
+  },
+});</code></pre>
+
+    <h2>Copy to clipboard</h2>
+
+    <p>The <code>expo-clipboard</code> package handles clipboard access on both iOS and Android:</p>
+
+    <pre><code>// Install: npx expo install expo-clipboard
+
+import * as Clipboard from 'expo-clipboard';
+
+// Write to clipboard
+await Clipboard.setStringAsync('MERC-8GH2-LP4X');
+
+// Read from clipboard (for paste-to-redeem features later)
+const text = await Clipboard.getStringAsync();</code></pre>
+
+    <p><strong>Platform note:</strong> On iOS 14+, the system shows a paste notification banner ("App pasted from Clipboard"). This is expected behaviour — it's Apple's transparency feature. You can't suppress it.</p>
+
+    <h2>Display design for the code</h2>
+
+    <p>The generated code should be the hero of the screen — large, monospace, high contrast. The dashes are visual separators that make it easy to read aloud ("MERC — 8GH2 — LP4X"). Design rules:</p>
+
+    <ul>
+      <li><strong>Monospace font</strong> — every character takes equal width, aligning the groups</li>
+      <li><strong>Letter spacing</strong> — slightly increased for readability</li>
+      <li><strong>Large size</strong> — minimum 24pt, ideally 28–32pt</li>
+      <li><strong>High contrast</strong> — dark text on light card, or vice versa in dark mode</li>
+      <li><strong>Tappable to copy</strong> — the whole code card is a touch target</li>
+    </ul>
+
+    <div id="playground-1"></div>
+
+    <h2>Wiring it into navigation</h2>
+
+    <p>The CreateToken screen lives in the TokensStack (inside the Tokens tab):</p>
+
+    <pre><code>// app/src/navigation/TokensStack.tsx
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { TokenListScreen } from '../screens/TokenList';
+import { TokenDetailScreen } from '../screens/TokenDetail';
+import { CreateTokenScreen } from '../screens/CreateToken';
+
+const Stack = createNativeStackNavigator();
+
+export function TokensStack() {
+  return (
+    &lt;Stack.Navigator&gt;
+      &lt;Stack.Screen name="TokenList" component={TokenListScreen} options={{ title: 'My Tokens' }} /&gt;
+      &lt;Stack.Screen name="TokenDetail" component={TokenDetailScreen} options={{ title: 'Token' }} /&gt;
+      &lt;Stack.Screen name="CreateToken" component={CreateTokenScreen} options={{ title: 'New Token' }} /&gt;
+    &lt;/Stack.Navigator&gt;
+  );
+}</code></pre>
+
+    <p>From the TokenList screen, a FAB (floating action button) or header button navigates to CreateToken:</p>
+
+    <pre><code>&lt;TouchableOpacity
+  style={styles.fab}
+  onPress={() =&gt; navigation.navigate('CreateToken')}
+&gt;
+  &lt;Text style={styles.fabText}&gt;+&lt;/Text&gt;
+&lt;/TouchableOpacity&gt;</code></pre>
+
+    <h2>What the server returns</h2>
+
+    <p>After the <code>POST /tokens</code> call succeeds, the server returns the created token object:</p>
+
+    <pre><code>{
+  "data": {
+    "id": 42,
+    "code": "MERC-8GH2-LP4X",
+    "label": "Amazon Delivery",
+    "status": "active",
+    "max_uses": 0,
+    "use_count": 0,
+    "expires_at": null,
+    "created_at": "2026-08-07T10:30:00.000Z"
+  }
+}</code></pre>
+
+    <p>The client stores this in local state and displays the code. No second fetch needed.</p>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./README.html">← Module overview</a>
+      <a href="./0002-qr-generation-scanning.html">Next: QR Generation &amp; Scanning →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// Try generating a token code in the browser
+// (uses Math.random for demo — NOT suitable for production)
+const ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+
+function demoGenerateCode() {
+  let code = '';
+  for (let i = 0; i < 12; i++) {
+    code += ALPHABET[Math.floor(Math.random() * ALPHABET.length)];
+  }
+  return code.slice(0, 4) + '-' + code.slice(4, 8) + '-' + code.slice(8, 12);
+}
+
+// Generate 5 sample codes
+for (let i = 0; i < 5; i++) {
+  console.log(demoGenerateCode());
+}`);
+
+    createSolution("exercise-1", {
+      exercise: "Build the full token generation and display flow:\n\n1. Create `shared/src/token.ts` with the alphabet, format regex, formatTokenCode(), isValidTokenCode(), and stripDashes() functions.\n\n2. Create the server endpoint `POST /tokens` that generates a crypto-safe code, inserts it into the database, and returns the created token.\n\n3. Create the `CreateTokenScreen` component with: a label input, create button with loading state, and a success view showing the large formatted code with a copy button.\n\n4. Test: create 3 tokens with different labels and verify each code is unique and matches the XXXX-XXXX-XXXX format.",
+      hints: [
+        "Use randomBytes(12) from node:crypto on the server — each byte maps to one character via modulo.",
+        "The UNIQUE constraint on the code column means Postgres will reject duplicates — catch error code 23505 and retry.",
+        "expo-clipboard's setStringAsync() copies text. Show an Alert or a brief 'Copied!' indicator."
+      ],
+      solution: `// === shared/src/token.ts ===
+
+export const TOKEN_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+export const TOKEN_LENGTH = 12;
+export const TOKEN_FORMAT_REGEX = /^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}$/;
+
+export function formatTokenCode(raw: string): string {
+  const clean = raw.replace(/-/g, '').toUpperCase();
+  if (clean.length !== TOKEN_LENGTH) throw new Error('Invalid token length');
+  return \`\${clean.slice(0, 4)}-\${clean.slice(4, 8)}-\${clean.slice(8, 12)}\`;
+}
+
+export function isValidTokenCode(code: string): boolean {
+  return TOKEN_FORMAT_REGEX.test(code);
+}
+
+export function stripDashes(code: string): string {
+  return code.replace(/-/g, '');
+}
+
+
+// === api/src/routes/tokens.ts ===
+
+import { Router } from 'express';
+import { randomBytes } from 'node:crypto';
+import { TOKEN_ALPHABET } from '@token/shared/token';
+import { requireAuth } from '../middleware/auth';
+import { db } from '../db';
+
+const router = Router();
+
+function generateTokenCode(): string {
+  const bytes = randomBytes(12);
+  let raw = '';
+  for (let i = 0; i < 12; i++) {
+    raw += TOKEN_ALPHABET[bytes[i] % TOKEN_ALPHABET.length];
+  }
+  return \`\${raw.slice(0, 4)}-\${raw.slice(4, 8)}-\${raw.slice(8, 12)}\`;
+}
+
+router.post('/tokens', requireAuth, async (req, res) => {
+  const { label } = req.body;
+  if (!label || typeof label !== 'string' || label.trim().length === 0) {
+    return res.status(400).json({ error: 'Label is required' });
+  }
+
+  const MAX_RETRIES = 3;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const code = generateTokenCode();
+    try {
+      const result = await db.query(
+        \`INSERT INTO tokens (code, user_id, label)
+         VALUES ($1, $2, $3)
+         RETURNING id, code, label, status, max_uses, use_count, expires_at, created_at\`,
+        [code, req.user.id, label.trim()]
+      );
+      return res.status(201).json({ data: result.rows[0] });
+    } catch (err: any) {
+      if (err.code === '23505' && attempt < MAX_RETRIES - 1) continue;
+      throw err;
+    }
+  }
+  res.status(500).json({ error: 'Failed to generate unique token code' });
+});
+
+export default router;
+
+
+// === app/src/screens/CreateToken.tsx ===
+
+import { useState } from 'react';
+import {
+  View, Text, TextInput, TouchableOpacity, StyleSheet,
+  ActivityIndicator, Alert
+} from 'react-native';
+import * as Clipboard from 'expo-clipboard';
+import { apiRequest } from '../api/client';
+
+interface Token {
+  id: number;
+  code: string;
+  label: string;
+  status: string;
+  created_at: string;
+}
+
+export function CreateTokenScreen({ navigation }) {
+  const [label, setLabel] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [token, setToken] = useState<Token | null>(null);
+
+  async function handleCreate() {
+    if (!label.trim()) {
+      Alert.alert('Label required', 'Name this token so you know who it\\'s for.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await apiRequest<{ data: Token }>('POST', '/tokens', { label: label.trim() });
+      setToken(res.data);
+    } catch (err: any) {
+      Alert.alert('Error', err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleCopy() {
+    if (!token) return;
+    await Clipboard.setStringAsync(token.code);
+    Alert.alert('Copied!', 'Token code copied to clipboard.');
+  }
+
+  if (token) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.successLabel}>Token created for</Text>
+        <Text style={styles.label}>{token.label}</Text>
+        <View style={styles.codeCard}>
+          <Text style={styles.code}>{token.code}</Text>
+        </View>
+        <TouchableOpacity style={styles.copyBtn} onPress={handleCopy}>
+          <Text style={styles.copyBtnText}>Copy Code</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.doneBtn} onPress={() => navigation.goBack()}>
+          <Text style={styles.doneBtnText}>Done</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      <Text style={styles.heading}>Create a Token</Text>
+      <TextInput
+        style={styles.input}
+        placeholder="e.g. Amazon Delivery"
+        value={label}
+        onChangeText={setLabel}
+        autoFocus
+        maxLength={60}
+      />
+      <TouchableOpacity
+        style={[styles.createBtn, loading && { opacity: 0.6 }]}
+        onPress={handleCreate}
+        disabled={loading}
+      >
+        {loading
+          ? <ActivityIndicator color="#fff" />
+          : <Text style={styles.createBtnText}>Generate Token</Text>
+        }
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, padding: 24, backgroundColor: '#fff' },
+  heading: { fontSize: 24, fontWeight: '700', marginBottom: 20 },
+  input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 14, fontSize: 16, marginBottom: 20 },
+  createBtn: { backgroundColor: '#2563eb', padding: 14, borderRadius: 8, alignItems: 'center' },
+  createBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  successLabel: { fontSize: 14, color: '#666', textAlign: 'center', marginTop: 40 },
+  label: { fontSize: 20, fontWeight: '600', textAlign: 'center', marginBottom: 32 },
+  codeCard: { backgroundColor: '#f8fafc', borderWidth: 2, borderColor: '#2563eb', borderRadius: 12, padding: 24, alignItems: 'center', marginBottom: 24 },
+  code: { fontSize: 28, fontWeight: '700', letterSpacing: 2, fontFamily: 'monospace' },
+  copyBtn: { backgroundColor: '#2563eb', padding: 14, borderRadius: 8, alignItems: 'center', marginBottom: 12 },
+  copyBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  doneBtn: { padding: 14, borderRadius: 8, alignItems: 'center', borderWidth: 1, borderColor: '#ddd' },
+  doneBtnText: { fontSize: 16, color: '#666' },
+});`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "What does this code print?",
+        code: "const ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';\nconsole.log(ALPHABET.length);\nconsole.log(ALPHABET.includes('0'));\nconsole.log(ALPHABET.includes('O'));",
+        answer: "29\nfalse\nfalse",
+        explanation: "The alphabet has 29 characters. Both '0' (zero) and 'O' (letter O) are excluded because they look too similar. Also excluded: 1, I, and L."
+      },
+      {
+        type: "which-breaks",
+        question: "Which token generation approach is INSECURE?",
+        variants: [
+          "const bytes = randomBytes(12); code += ALPHABET[bytes[i] % ALPHABET.length];",
+          "const bytes = crypto.getRandomValues(new Uint8Array(12)); code += ALPHABET[bytes[i] % ALPHABET.length];",
+          "code += ALPHABET[Math.floor(Math.random() * ALPHABET.length)];",
+          "const bytes = await Crypto.getRandomBytesAsync(12); code += ALPHABET[bytes[i] % ALPHABET.length];"
+        ],
+        correct: 2,
+        explanation: "Math.random() is a PRNG — its output is predictable if an attacker observes enough values. All other options use cryptographically secure random sources (node:crypto, Web Crypto API, expo-crypto). For security-sensitive values like token codes, always use a CSPRNG."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this token creation endpoint?",
+        code: "router.post('/tokens', requireAuth, async (req, res) => {\n  const code = generateTokenCode();\n  const result = await db.query(\n    `INSERT INTO tokens (code, user_id, label) VALUES ($1, $2, $3) RETURNING *`,\n    [code, req.user.id, req.body.label]\n  );\n  res.status(201).json({ data: result.rows[0] });\n});",
+        options: [
+          "Missing input validation — req.body.label could be empty, null, or not a string",
+          "The query uses RETURNING * which is a syntax error",
+          "generateTokenCode() is called synchronously which blocks the event loop",
+          "req.user.id doesn't exist on the request object"
+        ],
+        correct: 0,
+        explanation: "The endpoint blindly passes req.body.label to the database without checking if it exists, is a string, or is non-empty. The UNIQUE constraint on code will catch duplicates, but garbage labels will be stored. Always validate input at the API boundary."
+      },
+      {
+        type: "fill-blank",
+        question: "To handle code collisions, catch the Postgres unique violation error:",
+        code: "} catch (err: any) {\n  if (err.code === '___' && attempt < MAX_RETRIES - 1) {\n    continue;\n  }\n  throw err;\n}",
+        answer: "23505",
+        explanation: "Postgres error code 23505 means unique_violation — the INSERT tried to write a value that already exists in a UNIQUE column. By catching this specific error, we can retry with a new code without crashing on other database errors."
+      },
+      {
+        type: "order-steps",
+        question: "Put the token creation flow in order (client perspective):",
+        steps: [
+          "User types a label and taps 'Generate Token'",
+          "Show loading spinner, disable button",
+          "POST /tokens with the label in the body",
+          "Server generates code, inserts into DB, returns token object",
+          "Display the code large and centered with a Copy button"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "The client never generates the canonical code — only the server does. The client sends the label, shows loading, receives the server-generated code, and displays it. This ensures the database is the source of truth for all token codes."
+      }
+    ]);
+  </script>
+</body>
+</html>

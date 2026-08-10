@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vite + React Project Setup — A8.1</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A8 — Redemption Web Page</a>
+      <span class="sep">›</span>
+      <span class="current">Vite + React Project Setup</span>
+    </nav>
+
+    <h1>Vite + React Project Setup</h1>
+    <div class="lesson-meta">
+      <span>A8 — Lesson 1 of 4</span>
+      <span>~45 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>The redemption page (<code>tokn.app/t/CODE</code>) is a <strong>separate web app</strong> — not the mobile app, not React Native Web. It's a plain Vite + React project that runs in any browser. Holders never install anything; they open a URL and communicate through it. This web app lives in the <code>web/</code> folder of your repo, shares TypeScript types with the mobile app via <code>shared/</code>, and deploys as its own container on Coolify alongside the API.</p>
+    </div>
+
+    <h2>Why a separate web app?</h2>
+
+    <p>Token has two clients with completely different users:</p>
+    <ul>
+      <li><strong>Mobile app</strong> (React Native + Expo) — for the token <em>issuer</em> who manages their tokens, sees conversations, takes calls</li>
+      <li><strong>Web app</strong> (Vite + React) — for the token <em>holder</em> who redeems a code and communicates through the browser</li>
+    </ul>
+
+    <p>The web app is intentionally lightweight. No account required. No install. Just open the link and talk.</p>
+
+    <h2>Creating the web/ directory</h2>
+
+    <p>Inside your Token repo, create the web app with Vite:</p>
+
+    <pre><code># From the token/ root
+npm create vite@latest web -- --template react-ts
+
+cd web
+npm install
+npm install react-router-dom
+npm install -D tailwindcss @tailwindcss/vite</code></pre>
+
+    <h2>Project structure</h2>
+
+    <pre><code>token/
+  app/              ← React Native mobile (existing)
+  api/              ← Express backend (existing)
+  shared/           ← TypeScript types (existing)
+  web/              ← NEW: Vite + React web app
+    src/
+      main.tsx
+      App.tsx
+      pages/
+        RedeemPage.tsx
+        ChatPage.tsx
+        CallPage.tsx
+        ExpiredPage.tsx
+      components/
+        Layout.tsx
+        LoadingSpinner.tsx
+      lib/
+        api.ts
+        ws.ts
+        webrtc.ts
+      types/
+        index.ts      ← re-exports from shared/
+    public/
+    index.html
+    vite.config.ts
+    tailwind.config.ts
+    tsconfig.json
+    Dockerfile
+    package.json</code></pre>
+
+    <h2>vite.config.ts</h2>
+
+    <p>The Vite config handles path aliases (so you can import from <code>shared/</code>) and the development proxy:</p>
+
+    <pre><code>import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
+import path from 'path';
+
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+      '@shared': path.resolve(__dirname, '../shared'),
+    },
+  },
+  server: {
+    port: 5173,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+      },
+      '/ws': {
+        target: 'ws://localhost:3000',
+        ws: true,
+      },
+    },
+  },
+});</code></pre>
+
+    <p>The proxy means during development, <code>fetch('/api/tokens/ABC')</code> hits your local Express server without CORS issues.</p>
+
+    <h2>Environment variables</h2>
+
+    <p>Vite exposes env vars prefixed with <code>VITE_</code>:</p>
+
+    <pre><code># web/.env.development
+VITE_API_URL=http://localhost:3000
+VITE_WS_URL=ws://localhost:3000
+
+# web/.env.production
+VITE_API_URL=https://api.tokn.app
+VITE_WS_URL=wss://api.tokn.app</code></pre>
+
+    <pre><code>// src/lib/api.ts
+const API_URL = import.meta.env.VITE_API_URL || '';
+const WS_URL = import.meta.env.VITE_WS_URL || '';
+
+export { API_URL, WS_URL };</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">Important</div>
+      <p><code>import.meta.env.VITE_*</code> variables are embedded at build time, not runtime. If you change them, you must rebuild. Never put secrets in <code>VITE_</code> vars — they end up in the browser bundle.</p>
+    </div>
+
+    <h2>Shared types from shared/</h2>
+
+    <p>The web app reuses the same TypeScript types as the mobile app:</p>
+
+    <pre><code>// shared/types/token.ts (already exists)
+export interface Token {
+  id: string;
+  code: string;
+  label: string;
+  issuerId: string;
+  maxUses: number;
+  currentUses: number;
+  status: 'active' | 'paused' | 'revoked' | 'expired';
+  expiresAt: string | null;
+  createdAt: string;
+}
+
+export interface RedemptionResult {
+  token: Token;
+  holderSessionId: string;
+  holderJwt: string;
+}</code></pre>
+
+    <pre><code>// web/src/types/index.ts — re-export shared types
+export type { Token, RedemptionResult } from '@shared/types/token';</code></pre>
+
+    <h2>App.tsx with React Router</h2>
+
+    <pre><code>// web/src/App.tsx
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { RedeemPage } from './pages/RedeemPage';
+import { ChatPage } from './pages/ChatPage';
+import { CallPage } from './pages/CallPage';
+import { ExpiredPage } from './pages/ExpiredPage';
+
+export default function App() {
+  return (
+    &lt;BrowserRouter&gt;
+      &lt;Routes&gt;
+        {/* The main redemption URL pattern */}
+        &lt;Route path="/t/:code" element={&lt;RedeemPage /&gt;} /&gt;
+
+        {/* After redemption, holder enters chat */}
+        &lt;Route path="/t/:code/chat" element={&lt;ChatPage /&gt;} /&gt;
+
+        {/* Voice/video call page */}
+        &lt;Route path="/t/:code/call" element={&lt;CallPage /&gt;} /&gt;
+
+        {/* Token no longer valid */}
+        &lt;Route path="/t/:code/expired" element={&lt;ExpiredPage /&gt;} /&gt;
+
+        {/* Fallback */}
+        &lt;Route path="*" element={&lt;div&gt;Invalid link&lt;/div&gt;} /&gt;
+      &lt;/Routes&gt;
+    &lt;/BrowserRouter&gt;
+  );
+}</code></pre>
+
+    <p>Notice the URL pattern: <code>/t/:code</code>. Short, clean, easy to type or scan from a QR code.</p>
+
+    <h2>Dockerfile for Coolify deployment</h2>
+
+    <p>Multi-stage build: build with Node, serve with nginx:</p>
+
+    <pre><code># web/Dockerfile
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Copy shared types first (needed at build time)
+COPY shared/ /shared/
+
+# Install and build the web app
+COPY web/package*.json ./
+RUN npm ci
+
+COPY web/ ./
+ENV VITE_API_URL=https://api.tokn.app
+ENV VITE_WS_URL=wss://api.tokn.app
+RUN npm run build
+
+# --- Production stage ---
+FROM nginx:alpine
+
+# Custom nginx config for SPA routing
+COPY web/nginx.conf /etc/nginx/conf.d/default.conf
+
+# Copy built files
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]</code></pre>
+
+    <h2>nginx.conf for SPA routing</h2>
+
+    <p>Single-page apps need all routes to serve <code>index.html</code>:</p>
+
+    <pre><code># web/nginx.conf
+server {
+    listen 80;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # SPA fallback — all routes serve index.html
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Cache static assets aggressively
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # Don't cache index.html (always serve fresh)
+    location = /index.html {
+        expires -1;
+        add_header Cache-Control "no-store";
+    }
+}</code></pre>
+
+    <h2>Tailwind CSS setup</h2>
+
+    <pre><code>// web/src/main.tsx
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import App from './App';
+import './index.css';
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  &lt;React.StrictMode&gt;
+    &lt;App /&gt;
+  &lt;/React.StrictMode&gt;
+);</code></pre>
+
+    <pre><code>/* web/src/index.css */
+@import "tailwindcss";</code></pre>
+
+    <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./README.html">← Previous: Module Overview</a>
+      <a href="./0002-token-redemption-flow.html">Next: Token Redemption Flow →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// Simulating Vite's import.meta.env behavior
+// In Vite, these are replaced at build time with actual values
+
+const env = {
+  VITE_API_URL: 'https://api.tokn.app',
+  VITE_WS_URL: 'wss://api.tokn.app',
+};
+
+// This is what import.meta.env.VITE_API_URL becomes after build:
+const API_URL = env.VITE_API_URL || '';
+const WS_URL = env.VITE_WS_URL || '';
+
+console.log('API URL:', API_URL);
+console.log('WS URL:', WS_URL);
+
+// Building a fetch URL for token redemption:
+const tokenCode = 'MERC-8GH2-LP4X';
+const redeemUrl = API_URL + '/api/tokens/' + tokenCode + '/redeem';
+console.log('Redeem endpoint:', redeemUrl);
+
+// Route matching simulation
+const path = '/t/MERC-8GH2-LP4X';
+const match = path.match(/\\/t\\/([A-Z0-9-]+)/);
+console.log('Extracted code:', match ? match[1] : 'no match');`);
+
+    createSolution("exercise-1", {
+      exercise: "Set up the complete web/ directory for Token's redemption page. Create: (1) vite.config.ts with path aliases pointing to ../shared and a dev proxy for /api, (2) App.tsx with React Router routes for /t/:code, /t/:code/chat, /t/:code/call, and a 404 fallback, (3) A placeholder RedeemPage.tsx that extracts the code from the URL and displays it, (4) The Dockerfile (multi-stage build with nginx), (5) .env.development with localhost URLs.",
+      hints: [
+        "Use path.resolve(__dirname, '../shared') for the @shared alias in vite.config.ts.",
+        "React Router's useParams() hook gives you the :code parameter inside RedeemPage.",
+        "The Dockerfile needs to COPY shared/ first since the build depends on those types."
+      ],
+      solution: `// 1. vite.config.ts
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
+import path from 'path';
+
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+      '@shared': path.resolve(__dirname, '../shared'),
+    },
+  },
+  server: {
+    port: 5173,
+    proxy: {
+      '/api': { target: 'http://localhost:3000', changeOrigin: true },
+      '/ws': { target: 'ws://localhost:3000', ws: true },
+    },
+  },
+});
+
+// 2. App.tsx
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { RedeemPage } from './pages/RedeemPage';
+import { ChatPage } from './pages/ChatPage';
+import { CallPage } from './pages/CallPage';
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/t/:code" element={<RedeemPage />} />
+        <Route path="/t/:code/chat" element={<ChatPage />} />
+        <Route path="/t/:code/call" element={<CallPage />} />
+        <Route path="*" element={<div>Link not found</div>} />
+      </Routes>
+    </BrowserRouter>
+  );
+}
+
+// 3. pages/RedeemPage.tsx
+import { useParams } from 'react-router-dom';
+
+export function RedeemPage() {
+  const { code } = useParams<{ code: string }>();
+
+  return (
+    <div className="min-h-screen flex items-center justify-center">
+      <div className="text-center">
+        <h1 className="text-2xl font-bold">Token Redemption</h1>
+        <p className="mt-2 text-gray-600">Code: {code}</p>
+        {/* Redemption logic will go here */}
+      </div>
+    </div>
+  );
+}
+
+// 4. Dockerfile
+// FROM node:20-alpine AS builder
+// WORKDIR /app
+// COPY shared/ /shared/
+// COPY web/package*.json ./
+// RUN npm ci
+// COPY web/ ./
+// ENV VITE_API_URL=https://api.tokn.app
+// ENV VITE_WS_URL=wss://api.tokn.app
+// RUN npm run build
+// FROM nginx:alpine
+// COPY web/nginx.conf /etc/nginx/conf.d/default.conf
+// COPY --from=builder /app/dist /usr/share/nginx/html
+// EXPOSE 80
+// CMD ["nginx", "-g", "daemon off;"]
+
+// 5. .env.development
+// VITE_API_URL=http://localhost:3000
+// VITE_WS_URL=ws://localhost:3000`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "What does import.meta.env.VITE_API_URL evaluate to in the browser after a production build?",
+        code: "// .env.production has: VITE_API_URL=https://api.tokn.app\nconsole.log(import.meta.env.VITE_API_URL);",
+        answer: "https://api.tokn.app",
+        explanation: "Vite replaces import.meta.env.VITE_* references at build time with their literal values from the .env file matching the mode. In the compiled JS bundle, you'd literally see the string 'https://api.tokn.app' where import.meta.env.VITE_API_URL was."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this Dockerfile for the web app?",
+        code: "FROM node:20-alpine AS builder\nWORKDIR /app\nCOPY web/package*.json ./\nRUN npm ci\nCOPY web/ ./\nRUN npm run build\n\nFROM nginx:alpine\nCOPY --from=builder /app/dist /usr/share/nginx/html",
+        options: [
+          "Should use node:20 not node:20-alpine",
+          "Missing COPY of shared/ directory — build will fail on @shared imports",
+          "nginx can't serve React apps",
+          "RUN npm run build should be CMD npm run build"
+        ],
+        correct: 1,
+        explanation: "The web app imports types from @shared which resolves to ../shared. If the shared/ directory isn't copied into the builder stage, TypeScript compilation fails. You need COPY shared/ /shared/ before building."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the Vite proxy config so /api requests hit your local Express server:",
+        code: "server: {\n  proxy: {\n    '/api': {\n      target: '___',\n      changeOrigin: true,\n    }\n  }\n}",
+        answer: "http://localhost:3000",
+        explanation: "During development, the Vite dev server proxies /api/* requests to your local Express server running on port 3000. This avoids CORS issues since the browser sees requests going to the same origin (localhost:5173)."
+      },
+      {
+        type: "which-breaks",
+        question: "Which route configuration is wrong for the Token web app?",
+        variants: [
+          "<Route path=\"/t/:code\" element={<RedeemPage />} />",
+          "<Route path=\"/t/:code/chat\" element={<ChatPage />} />",
+          "<Route path=\"/t/code\" element={<RedeemPage />} />"
+        ],
+        correct: 2,
+        explanation: "The third route uses a literal string 'code' instead of the :code parameter. It would only match the exact URL /t/code, not /t/MERC-8GH2-LP4X. The colon prefix (:code) makes it a dynamic parameter that React Router extracts via useParams()."
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps to deploy the web app to Coolify:",
+        steps: [
+          "Push code to git repository",
+          "Coolify detects the push and triggers build",
+          "Docker builds the multi-stage image (node build + nginx)",
+          "Coolify deploys the container and routes tokn.app traffic to it"
+        ],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "Coolify watches your git repo for pushes. When it detects one, it runs the Dockerfile which first builds the Vite app with Node, then packages the static output into an nginx container. Coolify then deploys that container and configures TLS + routing automatically."
+      }
+    ]);
+  </script>
+</body>
+</html>

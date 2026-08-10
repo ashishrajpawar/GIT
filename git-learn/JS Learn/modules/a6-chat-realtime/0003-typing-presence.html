@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Typing Indicators &amp; Presence — A6.3</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">A6 — Chat &amp; Real-time</a>
+      <span class="sep">›</span>
+      <span class="current">Typing Indicators &amp; Presence</span>
+    </nav>
+
+    <h1>Typing Indicators &amp; Presence</h1>
+    <div class="lesson-meta">
+      <span>A6 — Lesson 3 of 3</span>
+      <span>~45 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>Typing indicators ("typing...") and presence ("online" / "last seen 5 min ago") turn a static message list into a live conversation. They're the difference between "did they see my message?" and knowing the other person is actively there, composing a reply. These signals cost almost nothing in bandwidth but make the chat feel human.</p>
+    </div>
+
+    <h2>Typing indicator — client-side debounce</h2>
+
+    <p>You don't want to send a WebSocket message on every keystroke. The pattern: send <code>typing:start</code> on the first keystroke, then reset a 3-second timer on each subsequent keystroke. When the timer expires (no typing for 3 seconds), send <code>typing:stop</code>.</p>
+
+    <pre><code>// app/src/hooks/useTypingIndicator.ts
+import { useRef, useCallback } from 'react';
+import { send } from '../ws/connection';
+
+export function useTypingIndicator(conversationId: number) {
+  const isTyping = useRef(false);
+  const timeoutRef = useRef&lt;ReturnType&lt;typeof setTimeout&gt; | null&gt;(null);
+
+  const handleTextChange = useCallback((text: string) =&gt; {
+    if (text.length > 0 && !isTyping.current) {
+      // First keystroke — notify start
+      isTyping.current = true;
+      send('typing:start', { conversationId });
+    }
+
+    // Reset the stop timer on every change
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+
+    if (text.length > 0) {
+      timeoutRef.current = setTimeout(() =&gt; {
+        isTyping.current = false;
+        send('typing:stop', { conversationId });
+      }, 3000);
+    } else {
+      // Text cleared (e.g. after send) — stop immediately
+      if (isTyping.current) {
+        isTyping.current = false;
+        send('typing:stop', { conversationId });
+      }
+    }
+  }, [conversationId]);
+
+  const stopTyping = useCallback(() =&gt; {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    if (isTyping.current) {
+      isTyping.current = false;
+      send('typing:stop', { conversationId });
+    }
+  }, [conversationId]);
+
+  return { handleTextChange, stopTyping };
+}</code></pre>
+
+    <h3>Integrating into MessageThread</h3>
+
+    <pre><code>// In MessageThreadScreen:
+const { handleTextChange, stopTyping } = useTypingIndicator(conversationId);
+
+function onChangeText(newText: string) {
+  setText(newText);
+  handleTextChange(newText);
+}
+
+function handleSend() {
+  // ... send message ...
+  stopTyping();  // stop typing when message is sent
+}</code></pre>
+
+    <h2>Displaying "typing..." from the other user</h2>
+
+    <pre><code>// app/src/components/TypingIndicator.tsx
+import { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, Animated } from 'react-native';
+import { useWsMessage } from '../ws/useWebSocket';
+
+interface TypingIndicatorProps {
+  conversationId: number;
+  currentUserId: number;
+}
+
+export function TypingIndicator({ conversationId, currentUserId }: TypingIndicatorProps) {
+  const [isOtherTyping, setIsOtherTyping] = useState(false);
+
+  useWsMessage('typing:update', (payload) =&gt; {
+    if (
+      payload.conversationId === conversationId &&
+      payload.userId !== currentUserId
+    ) {
+      setIsOtherTyping(payload.isTyping);
+    }
+  });
+
+  // Safety: auto-clear after 5 seconds (in case stop event is lost)
+  useEffect(() =&gt; {
+    if (!isOtherTyping) return;
+
+    const timer = setTimeout(() =&gt; setIsOtherTyping(false), 5000);
+    return () =&gt; clearTimeout(timer);
+  }, [isOtherTyping]);
+
+  if (!isOtherTyping) return null;
+
+  return (
+    &lt;View style={styles.container}&gt;
+      &lt;BouncingDots /&gt;
+      &lt;Text style={styles.text}&gt;typing&lt;/Text&gt;
+    &lt;/View&gt;
+  );
+}
+
+function BouncingDots() {
+  // Three dots with staggered animation
+  const dot1 = new Animated.Value(0);
+  const dot2 = new Animated.Value(0);
+  const dot3 = new Animated.Value(0);
+
+  useEffect(() =&gt; {
+    const animate = (dot: Animated.Value, delay: number) =&gt;
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.timing(dot, { toValue: -4, duration: 300, useNativeDriver: true }),
+          Animated.timing(dot, { toValue: 0, duration: 300, useNativeDriver: true }),
+        ])
+      );
+
+    const a1 = animate(dot1, 0);
+    const a2 = animate(dot2, 150);
+    const a3 = animate(dot3, 300);
+    a1.start(); a2.start(); a3.start();
+
+    return () =&gt; { a1.stop(); a2.stop(); a3.stop(); };
+  }, []);
+
+  return (
+    &lt;View style={styles.dotsRow}&gt;
+      {[dot1, dot2, dot3].map((dot, i) =&gt; (
+        &lt;Animated.View
+          key={i}
+          style={[styles.dot, { transform: [{ translateY: dot }] }]}
+        /&gt;
+      ))}
+    &lt;/View&gt;
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 4,
+    gap: 6,
+  },
+  text: {
+    fontSize: 13,
+    color: '#94a3b8',
+    fontStyle: 'italic',
+  },
+  dotsRow: {
+    flexDirection: 'row',
+    gap: 3,
+  },
+  dot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#94a3b8',
+  },
+});</code></pre>
+
+    <h3>Placing it in the thread</h3>
+
+    <pre><code>// In MessageThreadScreen, between FlatList and input:
+&lt;TypingIndicator conversationId={conversationId} currentUserId={user!.id} /&gt;</code></pre>
+
+    <p>It appears just above the input row — like WhatsApp's "typing..." at the bottom of the chat.</p>
+
+    <h2>Presence — online/offline dots</h2>
+
+    <h3>Tracking presence state</h3>
+
+    <pre><code>// app/src/hooks/usePresence.ts
+import { useState, useEffect } from 'react';
+import { useWsMessage } from '../ws/useWebSocket';
+import { apiRequest } from '../api/client';
+
+interface PresenceState {
+  status: 'online' | 'offline';
+  lastSeenAt: string | null;
+}
+
+export function usePresence(userId: number): PresenceState {
+  const [presence, setPresence] = useState&lt;PresenceState&gt;({
+    status: 'offline',
+    lastSeenAt: null,
+  });
+
+  // Fetch initial presence on mount
+  useEffect(() =&gt; {
+    apiRequest&lt;{ data: PresenceState }&gt;('GET', `/users/${userId}/presence`)
+      .then(res =&gt; setPresence(res.data))
+      .catch(() =&gt; {}); // not critical — default to offline
+  }, [userId]);
+
+  // Listen for real-time updates
+  useWsMessage('presence:update', (payload) =&gt; {
+    if (payload.userId === userId) {
+      setPresence({
+        status: payload.status,
+        lastSeenAt: payload.status === 'offline' ? new Date().toISOString() : null,
+      });
+    }
+  });
+
+  return presence;
+}</code></pre>
+
+    <h3>Displaying presence</h3>
+
+    <pre><code>// app/src/components/PresenceDot.tsx
+import { View, Text, StyleSheet } from 'react-native';
+
+interface PresenceDotProps {
+  status: 'online' | 'offline';
+  lastSeenAt: string | null;
+  showLabel?: boolean;
+}
+
+export function PresenceDot({ status, lastSeenAt, showLabel = false }: PresenceDotProps) {
+  return (
+    &lt;View style={styles.container}&gt;
+      &lt;View style={[styles.dot, status === 'online' ? styles.online : styles.offline]} /&gt;
+      {showLabel && (
+        &lt;Text style={styles.label}&gt;
+          {status === 'online' ? 'Online' : formatLastSeen(lastSeenAt)}
+        &lt;/Text&gt;
+      )}
+    &lt;/View&gt;
+  );
+}
+
+function formatLastSeen(iso: string | null): string {
+  if (!iso) return 'Offline';
+
+  const diff = Date.now() - new Date(iso).getTime();
+  const minutes = Math.floor(diff / 60000);
+
+  if (minutes &lt; 1) return 'Last seen just now';
+  if (minutes &lt; 60) return `Last seen ${minutes}m ago`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours &lt; 24) return `Last seen ${hours}h ago`;
+
+  return `Last seen ${new Date(iso).toLocaleDateString()}`;
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  online: {
+    backgroundColor: '#22c55e',
+  },
+  offline: {
+    backgroundColor: '#94a3b8',
+  },
+  label: {
+    fontSize: 12,
+    color: '#64748b',
+  },
+});</code></pre>
+
+    <h3>Using in the message thread header</h3>
+
+    <pre><code>// In MessageThreadScreen's navigation options or header:
+function MessageThreadHeader({ otherUserId, tokenLabel }) {
+  const presence = usePresence(otherUserId);
+
+  return (
+    &lt;View&gt;
+      &lt;Text style={styles.headerTitle}&gt;{tokenLabel}&lt;/Text&gt;
+      &lt;PresenceDot
+        status={presence.status}
+        lastSeenAt={presence.lastSeenAt}
+        showLabel
+      /&gt;
+    &lt;/View&gt;
+  );
+}</code></pre>
+
+    <h2>Client-side safety timeout for typing</h2>
+
+    <p>The server has a 5-second timeout (B5 lesson 3), but the client should also protect itself. If a <code>typing:update { isTyping: true }</code> arrives and no <code>isTyping: false</code> follows within 5 seconds, auto-clear:</p>
+
+    <pre><code>// Already in TypingIndicator above:
+useEffect(() =&gt; {
+  if (!isOtherTyping) return;
+  const timer = setTimeout(() =&gt; setIsOtherTyping(false), 5000);
+  return () =&gt; clearTimeout(timer);
+}, [isOtherTyping]);</code></pre>
+
+    <p>This handles edge cases: server crashes mid-typing event, network drops the stop message, or the typing user's app crashes.</p>
+
+    <h2>Performance — avoiding unnecessary re-renders</h2>
+
+    <p>Typing events fire frequently. Each <code>typing:update</code> message triggers a state change. Make sure only the <code>TypingIndicator</code> component re-renders — not the entire message list:</p>
+
+    <pre><code>// TypingIndicator is a separate component with its own state.
+// The MessageThread doesn't own the typing state — TypingIndicator does.
+// This means typing:update events DON'T cause FlatList to re-render.
+
+// Pattern: lift state DOWN, not up.
+// Each component subscribes to only the WebSocket events it cares about.</code></pre>
+
+    <p>Same for presence: the <code>PresenceDot</code> in the header subscribes independently. A presence change doesn't re-render the message list.</p>
+
+    <h2>Combining it all in the thread</h2>
+
+    <pre><code>// app/src/screens/MessageThread.tsx — complete structure
+export function MessageThreadScreen({ route, navigation }) {
+  const { conversationId, tokenLabel, otherUserId } = route.params;
+  const { user } = useAuth();
+  const [messages, setMessages] = useState([]);
+  const [text, setText] = useState('');
+  const { handleTextChange, stopTyping } = useTypingIndicator(conversationId);
+
+  // Set custom header with presence
+  useEffect(() =&gt; {
+    navigation.setOptions({
+      headerTitle: () =&gt; (
+        &lt;MessageThreadHeader otherUserId={otherUserId} tokenLabel={tokenLabel} /&gt;
+      ),
+    });
+  }, [otherUserId, tokenLabel]);
+
+  // ... message loading, sending, receiving (from lesson 2) ...
+
+  function onChangeText(newText: string) {
+    setText(newText);
+    handleTextChange(newText);
+  }
+
+  function handleSend() {
+    if (!text.trim()) return;
+    stopTyping();
+    // ... optimistic send logic ...
+    setText('');
+  }
+
+  return (
+    &lt;KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}&gt;
+      &lt;FlatList data={messages} /* ... */ /&gt;
+
+      &lt;TypingIndicator conversationId={conversationId} currentUserId={user!.id} /&gt;
+
+      &lt;View style={styles.inputRow}&gt;
+        &lt;TextInput
+          value={text}
+          onChangeText={onChangeText}
+          placeholder="Type a message..."
+          multiline
+        /&gt;
+        &lt;TouchableOpacity onPress={handleSend} disabled={!text.trim()}&gt;
+          &lt;Text&gt;Send&lt;/Text&gt;
+        &lt;/TouchableOpacity&gt;
+      &lt;/View&gt;
+    &lt;/KeyboardAvoidingView&gt;
+  );
+}</code></pre>
+
+    <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Exercise</h2>
+
+    <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0002-message-thread-ui.html">← Previous: Message Thread UI</a>
+      <a href="../b6-webrtc-signalling/0001-signalling-server.html">Next module: B6 WebRTC Signalling →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+    createPlayground("playground-1", `// Simulate typing debounce behavior
+let isTyping = false;
+let timer = null;
+const wsSent = [];
+
+function simulateKeystroke(char, timeMs) {
+  if (!isTyping) {
+    isTyping = true;
+    wsSent.push(timeMs + 'ms: typing:start');
+  }
+
+  if (timer) clearTimeout(timer);
+  timer = setTimeout(() => {
+    isTyping = false;
+    wsSent.push((timeMs + 3000) + 'ms: typing:stop');
+  }, 3000);
+}
+
+// User types "Hello" over 600ms
+simulateKeystroke('H', 0);
+simulateKeystroke('e', 150);
+simulateKeystroke('l', 300);
+simulateKeystroke('l', 450);
+simulateKeystroke('o', 600);
+// Then stops for 3 seconds...
+
+// Simulate the timeout
+isTyping = false;
+wsSent.push('3600ms: typing:stop');
+
+console.log('User types "Hello" (5 keystrokes over 600ms, then stops):');
+console.log('');
+console.log('WebSocket messages sent:');
+wsSent.forEach(msg => console.log('  ' + msg));
+console.log('');
+console.log('Result: only 2 WS messages total');
+console.log('(not 5 typing:starts — debounced!)');
+
+console.log('\\nFormat last seen:');
+function formatLastSeen(ms) {
+  if (ms < 60000) return 'just now';
+  if (ms < 3600000) return Math.floor(ms/60000) + 'm ago';
+  return Math.floor(ms/3600000) + 'h ago';
+}
+console.log('30 seconds:', formatLastSeen(30000));
+console.log('5 minutes:', formatLastSeen(300000));
+console.log('2 hours:', formatLastSeen(7200000));`);
+
+    createSolution("exercise-1", {
+      exercise: "Build the complete typing and presence system (client side):\n\n1. Create `useTypingIndicator(conversationId)` hook: sends typing:start on first keystroke, resets 3-second timer on each keystroke, sends typing:stop when timer expires or when message is sent.\n\n2. Create `TypingIndicator` component: listens for typing:update events, shows animated bouncing dots + 'typing' text, auto-clears after 5 seconds (safety timeout).\n\n3. Create `usePresence(userId)` hook: fetches initial presence via REST, listens for presence:update events, returns { status, lastSeenAt }.\n\n4. Create `PresenceDot` component: green dot for online, gray for offline, with optional label ('Online' / 'Last seen 5m ago').\n\n5. Integrate into MessageThread: typing debounce on the TextInput's onChangeText, TypingIndicator between messages and input, presence in the header.\n\n6. Test: open two clients in the same conversation. Type in one — verify 'typing...' appears in the other. Stop typing — verify it disappears after 3 seconds.",
+      hints: [
+        "useRef for isTyping and the timeout — they don't need to trigger re-renders, just track state between events.",
+        "The TypingIndicator subscribes to 'typing:update' but filters on conversationId and excludes the current user (you don't show your own typing indicator).",
+        "For the bouncing dots: use Animated.loop with staggered delays (0ms, 150ms, 300ms) for the wave effect.",
+        "formatLastSeen: calculate diff in minutes, format as 'Xm ago' / 'Xh ago' / date."
+      ],
+      solution: `// See the full implementation in the lesson code above.
+// Architecture:
+
+// useTypingIndicator:
+// - useRef(false) for isTyping state (no re-renders)
+// - useRef(null) for timeout handle
+// - handleTextChange: start on first keystroke, reset timer on each
+// - stopTyping: clear timer + send stop (call on message send)
+
+// TypingIndicator:
+// - Own state: isOtherTyping (boolean)
+// - useWsMessage('typing:update') filters on conversationId + other user
+// - 5-second safety timeout auto-clears
+// - BouncingDots: 3 Animated.Values with staggered loop
+
+// usePresence:
+// - Fetch initial state via GET /users/:id/presence
+// - Listen for presence:update events matching userId
+// - Return { status, lastSeenAt }
+
+// PresenceDot:
+// - Green/gray dot + optional formatted label
+// - formatLastSeen: 'just now' / '5m ago' / '2h ago' / date
+
+// Performance:
+// - Each component has its own WS subscription
+// - Typing events don't re-render the message FlatList
+// - Presence changes don't re-render the message FlatList`
+    });
+
+    createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        question: "User types 10 characters over 2 seconds, then stops. How many typing:start messages are sent?",
+        code: "// Keystroke 1 (0ms): isTyping=false → send start, set isTyping=true\n// Keystroke 2 (200ms): isTyping=true → don't send start\n// ...\n// Keystroke 10 (1800ms): isTyping=true → don't send start\n// 3000ms later: timer fires → send stop",
+        answer: "1",
+        explanation: "Only the FIRST keystroke sends typing:start (when isTyping transitions from false to true). All subsequent keystrokes just reset the stop timer. After 3 seconds of no typing, one typing:stop is sent. Total: 2 WebSocket messages for 10 keystrokes."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this typing indicator display?",
+        code: "function TypingIndicator({ conversationId }) {\n  const [isTyping, setIsTyping] = useState(false);\n\n  useWsMessage('typing:update', (payload) => {\n    if (payload.conversationId === conversationId) {\n      setIsTyping(payload.isTyping);\n    }\n  });\n\n  if (!isTyping) return null;\n  return <Text>typing...</Text>;\n}",
+        options: [
+          "It shows 'typing...' for YOUR OWN typing events too — need to filter out currentUserId",
+          "useWsMessage can't be used inside a component",
+          "setIsTyping should use a ref instead of state",
+          "The component should always render, just hidden"
+        ],
+        correct: 0,
+        explanation: "The server forwards typing events to all participants — including back to the typer's other devices. Without checking payload.userId !== currentUserId, you'd see 'typing...' triggered by your own keystrokes. Add the filter: payload.userId !== currentUserId."
+      },
+      {
+        type: "which-breaks",
+        question: "When should the client auto-clear the typing indicator even without a typing:stop message?",
+        variants: [
+          "Never — trust the server to always send typing:stop",
+          "After 5 seconds — if no stop arrives, the typing user's app probably crashed or the stop event was lost",
+          "After 30 seconds — same as heartbeat interval",
+          "After 1 second — typing events should be very short"
+        ],
+        correct: 1,
+        explanation: "5 seconds is a reasonable safety timeout. If the other user is still actually typing, the server will send another typing:start (the server has its own 5-second timeout that auto-stops and resets). If they crashed or the network lost the stop event, the indicator disappears gracefully instead of showing 'typing...' forever."
+      },
+      {
+        type: "fill-blank",
+        question: "Format the 'last seen' time for a user who went offline 45 minutes ago:",
+        code: "function formatLastSeen(iso) {\n  const diff = Date.now() - new Date(iso).getTime();\n  const ___ = Math.floor(diff / 60000);\n  if (___ < 60) return `Last seen ${___}m ago`;\n}",
+        answer: "minutes",
+        explanation: "Divide milliseconds by 60000 to get minutes. 45 minutes → 'Last seen 45m ago'. For hours: divide by 3600000. For days: show the date. The hierarchy: just now (<1m) → Xm ago (<60m) → Xh ago (<24h) → date."
+      },
+      {
+        type: "order-steps",
+        question: "Put the typing indicator UX flow in order:",
+        steps: [
+          "User starts typing — useTypingIndicator sends typing:start via WS",
+          "Server forwards typing:update { isTyping: true } to the other participant",
+          "TypingIndicator component receives event, shows bouncing dots",
+          "User pauses for 3 seconds — timeout fires, sends typing:stop",
+          "Server forwards typing:update { isTyping: false } — dots disappear"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Start on keystroke, forward through server, display on recipient, stop on silence, clear on recipient. The round-trip is fast (<100ms on good connections), so the indicator appears almost instantly when the other person starts typing."
+      }
+    ]);
+  </script>
+</body>
+</html>
