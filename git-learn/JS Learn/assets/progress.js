@@ -113,8 +113,14 @@
     var el = document.getElementById("overall-progress");
     if (!el) return;
 
+    fetch("./assets/search-index.json")
+      .then(function (r) { return r.json(); })
+      .then(function (index) { renderProgressWithTotal(el, index.length); })
+      .catch(function () { renderProgressWithTotal(el, 140); });
+  }
+
+  function renderProgressWithTotal(el, total) {
     var completed = getCompletedPaths();
-    var total = 71; // known lesson count
 
     var pct = total > 0 ? Math.round((completed.length / total) * 100) : 0;
 
