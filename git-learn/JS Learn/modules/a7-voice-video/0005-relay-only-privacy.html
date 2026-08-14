@@ -357,6 +357,237 @@ console.log('Max voice hours/month:', Math.floor(voiceHours));`);
         ],
         correctOrder: [0, 1, 2, 3, 4],
         explanation: "The setting is configured ahead of time. When a call starts, the setting is read and baked into the PC configuration. ICE respects the policy and only gathers relay candidates. The call connects entirely through TURN. Privacy is enforced at the protocol level — not by trusting the other peer to not look at candidates."
+      },
+      // --- Questions 6–25 ---
+      {
+        question: "What does a 'host' ICE candidate reveal about the local device?",
+        options: [
+          "Only the TURN server's IP address",
+          "The device's local/private IP address (e.g. 192.168.1.5)",
+          "The public IP address as seen by the STUN server",
+          "Nothing — host candidates contain no IP information"
+        ],
+        correct: 1,
+        explanation: "A 'host' candidate contains the device's local network IP address. While this is typically a private IP (e.g. 192.168.x.x) and not directly routable from the internet, it can still reveal information about the local network topology. In relay-only mode, host candidates are never generated."
+      },
+      {
+        question: "What does a 'srflx' (server reflexive) candidate reveal?",
+        options: [
+          "The private LAN IP of the device",
+          "The public IP address of the device as seen by the STUN server",
+          "The IP address of the TURN relay server",
+          "An anonymized hash of the IP address"
+        ],
+        correct: 1,
+        explanation: "A server-reflexive (srflx) candidate is discovered by sending a STUN binding request to a STUN server, which reflects back the public IP and port it saw the request come from. This is typically the NAT's external address — it reveals your ISP, approximate city, and can be correlated across services."
+      },
+      {
+        type: "predict-output",
+        question: "What candidates will ICE gather with this configuration?",
+        code: "const pc = new RTCPeerConnection({\n  iceServers: [\n    { urls: 'stun:stun.l.google.com:19302' },\n    { urls: 'turn:turn.tokn.app:3478', username: 'u', credential: 'p' }\n  ],\n  iceTransportPolicy: 'relay'\n});\n// What candidate types will onicecandidate fire with?",
+        answer: "Only relay candidates (from the TURN server)",
+        explanation: "Even though both STUN and TURN servers are configured in iceServers, setting iceTransportPolicy to 'relay' causes the ICE agent to discard all host and srflx candidates. Only relay candidates obtained via the TURN server are kept and fired through onicecandidate. The STUN server entry is effectively ignored."
+      },
+      {
+        type: "spot-the-bug",
+        question: "Why won't relay mode work with this iceServers configuration?",
+        code: "const pc = new RTCPeerConnection({\n  iceServers: [\n    { urls: 'stun:stun.l.google.com:19302' }\n  ],\n  iceTransportPolicy: 'relay'\n});",
+        options: [
+          "No TURN server is configured — relay candidates require a TURN server, so ICE will find zero candidates and the connection will fail.",
+          "The STUN server URL is wrong",
+          "iceTransportPolicy should be uppercase 'RELAY'",
+          "You need at least two STUN servers for relay mode"
+        ],
+        correct: 0,
+        explanation: "Relay candidates can ONLY be obtained from a TURN server. STUN servers only help discover srflx candidates. If you set iceTransportPolicy: 'relay' but provide no TURN server, the ICE agent gathers zero usable candidates and the connection fails. Always ensure TURN credentials are configured when relay mode is enabled."
+      },
+      {
+        question: "Why does relay mode actually INCREASE connection reliability from ~85% to ~99%?",
+        options: [
+          "The TURN server has better internet connectivity",
+          "TURN bypasses NAT traversal issues — symmetric NATs that block P2P still allow outbound connections to the TURN server",
+          "Relay mode uses TCP which is more reliable than UDP",
+          "The TURN server retransmits lost packets"
+        ],
+        correct: 1,
+        explanation: "About 15% of P2P WebRTC connections fail because of symmetric NATs or restrictive firewalls that block the hole-punching needed for direct connections. TURN works because the client makes a standard outbound connection to the TURN server — the same kind of connection that regular web traffic uses. If you can reach the internet at all, you can reach TURN."
+      },
+      {
+        type: "fill-blank",
+        question: "Verify that relay mode is active by checking getStats():",
+        code: "pc.getStats().then(stats => {\n  stats.forEach(report => {\n    if (report.type === '___' && report.state === 'succeeded') {\n      console.log(report.localCandidateType);\n    }\n  });\n});",
+        answer: "candidate-pair",
+        explanation: "The 'candidate-pair' report type in WebRTC statistics contains information about the selected ICE candidate pair including localCandidateType and remoteCandidateType. When relay mode is active, both should be 'relay'. The state 'succeeded' indicates this is the pair currently carrying media."
+      },
+      {
+        type: "which-breaks",
+        question: "Which scenario would still leak the user's IP even with relay mode enabled?",
+        variants: [
+          "A malicious remote peer inspects the SDP offer",
+          "The app falls back to iceTransportPolicy: 'all' when TURN fails to connect within 5 seconds",
+          "The TURN server logs are compromised",
+          "The call lasts longer than 30 minutes"
+        ],
+        correct: 1,
+        explanation: "If the app has a 'fallback' mechanism that switches from relay to 'all' when TURN is slow, it would generate host and srflx candidates containing the real IP. This defeats the entire privacy guarantee. Token should NEVER fall back from relay mode — if TURN fails, the call simply fails. The TURN server logs (option C) do know your IP, but that's your own infrastructure, not the peer."
+      },
+      {
+        question: "How much bandwidth does a 1-hour relay voice call consume on your TURN server?",
+        options: [
+          "About 3 MB",
+          "About 29 MB",
+          "About 450 MB",
+          "About 1 GB"
+        ],
+        correct: 1,
+        explanation: "Voice uses Opus at ~32kbps. Through TURN, both directions flow through the server: 32kbps x 2 = 64kbps. Over 1 hour: 64,000 bits/sec x 3600 sec / 8 = ~28.8 MB, approximately 29 MB. This is quite modest — a 1TB/month VPS could handle thousands of voice call hours."
+      },
+      {
+        type: "predict-output",
+        question: "How much bandwidth does a 1-hour relay VIDEO call (500kbps) consume on the TURN server?",
+        code: "const videoBitrate = 500; // kbps\nconst directions = 2;\nconst seconds = 3600;\nconst totalKbits = videoBitrate * directions * seconds;\nconst totalMB = totalKbits / 8 / 1024;\nconsole.log(Math.round(totalMB) + ' MB');",
+        answer: "439 MB",
+        explanation: "500kbps x 2 directions = 1000kbps = 1Mbps through TURN. Over 1 hour: 1000 x 3600 = 3,600,000 kilobits / 8 = 450,000 KB / 1024 = ~439 MB. This is significant — video relay calls are expensive. At scale, you'd need to monitor this and potentially implement bandwidth-adaptive bitrate."
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps for implementing time-limited TURN credentials:",
+        steps: [
+          "API server generates username = 'timestamp:userId'",
+          "API server computes credential = HMAC-SHA1(secret, username)",
+          "Client receives iceServers with temporary username and credential",
+          "Client creates RTCPeerConnection with those iceServers",
+          "TURN server independently computes HMAC to verify credential is valid and not expired"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Time-limited TURN credentials use a shared secret between your API and the TURN server (coturn). The API generates credentials that embed an expiry timestamp. The TURN server validates them using the same HMAC algorithm and shared secret — it never needs to call your API. This is the standard coturn authentication mechanism."
+      },
+      {
+        question: "What is the primary advantage of self-hosting coturn for Token vs using a commercial TURN service?",
+        options: [
+          "coturn supports more protocols",
+          "You control the logs and data — no third party sees which IPs are communicating through the relay",
+          "coturn is faster than commercial alternatives",
+          "Commercial services don't support relay-only mode"
+        ],
+        correct: 1,
+        explanation: "For a privacy-first app, self-hosting coturn means the relay server is entirely under your control. No third-party TURN provider sees the IP addresses of your users' calls. You control log retention, data location, and access. This aligns with Token's principle that the user's privacy depends only on Token's infrastructure, not on trusting external vendors."
+      },
+      {
+        type: "fill-blank",
+        question: "Store the relay preference using AsyncStorage:",
+        code: "import AsyncStorage from '@react-native-async-storage/async-storage';\n\nexport async function setRelayOnlyMode(enabled: boolean): Promise<void> {\n  await AsyncStorage.___(RELAY_ONLY_KEY, String(enabled));\n}",
+        answer: "setItem",
+        explanation: "AsyncStorage.setItem(key, value) stores a string value. Since AsyncStorage only supports strings, we convert the boolean to 'true'/'false' with String(enabled). When reading it back, we compare with === 'true' to get a boolean."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this approach to changing relay mode mid-call?",
+        code: "async function toggleRelayDuringCall(pc, enabled) {\n  await setRelayOnlyMode(enabled);\n  const config = pc.getConfiguration();\n  config.iceTransportPolicy = enabled ? 'relay' : 'all';\n  pc.setConfiguration(config);\n  pc.restartIce();\n}",
+        options: [
+          "setConfiguration() cannot change iceTransportPolicy — it's fixed at construction time. An ICE restart with new config requires a completely new RTCPeerConnection.",
+          "restartIce() is not a valid method",
+          "getConfiguration() returns a copy so modifying it does nothing",
+          "You need to await restartIce()"
+        ],
+        correct: 0,
+        explanation: "While setConfiguration() exists in the spec, it cannot change iceTransportPolicy on most implementations — this property is fixed when the PC is constructed. Even if an ICE restart occurs, the transport policy remains the same. To truly switch modes, you must create a new RTCPeerConnection with the desired policy, which means renegotiating the entire call (or ending it and reconnecting)."
+      },
+      {
+        question: "In Token v1, the relay setting is global. What would per-token relay settings enable?",
+        options: [
+          "Different video quality for different tokens",
+          "Relay ON for tokens issued to strangers (delivery, services) while allowing direct connections for trusted contacts — optimizing latency where privacy risk is low",
+          "Charging different prices for different tokens",
+          "Allowing some tokens to bypass encryption"
+        ],
+        correct: 1,
+        explanation: "Per-token relay settings let users make granular privacy decisions. A token issued to a delivery driver should always use relay (you don't want them knowing your IP). But a token shared with a close friend could allow direct connections for better call quality — they already know where you live. This matches Token's philosophy of user-controlled privacy rules."
+      },
+      {
+        type: "which-breaks",
+        question: "Which iceServers configuration is correct for Token's TURN setup?",
+        variants: [
+          "{ urls: 'turn:turn.tokn.app:3478', username: creds.username, credential: creds.credential }",
+          "{ urls: 'turn:turn.tokn.app:3478', user: creds.username, pass: creds.credential }",
+          "{ urls: 'turn.tokn.app:3478', username: creds.username, credential: creds.credential }",
+          "{ url: 'turn:turn.tokn.app:3478', username: creds.username, credential: creds.credential }"
+        ],
+        correct: 0,
+        explanation: "The correct format uses 'urls' (with 's'), a proper 'turn:' protocol prefix, and the properties 'username' and 'credential'. Option B uses wrong property names (user/pass). Option C is missing the 'turn:' protocol prefix. Option D uses the deprecated singular 'url' instead of 'urls'."
+      },
+      {
+        type: "predict-output",
+        question: "What happens when ICE gathers candidates with iceTransportPolicy: 'all'?",
+        code: "// iceTransportPolicy: 'all' — candidate types gathered:\n// 1. host candidates (local IPs)\n// 2. srflx candidates (public IP via STUN)\n// 3. relay candidates (TURN server IP)\n//\n// ICE priority order for connection attempts?",
+        answer: "host > srflx > relay (prefers direct, falls back to relay)",
+        explanation: "With policy 'all', ICE gathers all three types and assigns priorities: host (highest — direct LAN), then srflx (public IP — direct through NAT), then relay (lowest — through TURN). ICE tries the highest priority pairs first. This minimizes latency when possible, but it means both peers' real IPs are exchanged during candidate gathering, even if relay ends up being used."
+      },
+      {
+        question: "What information can an attacker realistically extract from your public IP address?",
+        options: [
+          "Your exact street address and apartment number",
+          "Your approximate city/district, ISP name, and potentially correlate your activity across services if the IP is static",
+          "Your phone number and email address",
+          "Your device's hardware specifications"
+        ],
+        correct: 1,
+        explanation: "A public IP reveals: approximate location (city-level, sometimes district), ISP identity (Jio, Airtel, etc.), and for static IPs, it can be used to correlate activity across websites and services. It does NOT reveal exact addresses (only ISPs have that mapping) or personal details directly. However, for privacy-sensitive users, even city + ISP is too much information to give a stranger."
+      },
+      {
+        question: "When would you recommend a Token user keep relay mode OFF?",
+        options: [
+          "When calling delivery drivers or service providers",
+          "When the user is a journalist protecting sources",
+          "When calling close friends or family who already know their location — better call quality with no privacy cost",
+          "Never — relay mode should always be on"
+        ],
+        correct: 2,
+        explanation: "Relay mode adds 50-100ms latency and consumes server bandwidth. For calls with people who already know where you live (close friends, family), hiding your IP provides no practical privacy benefit but does reduce call quality. Token should guide users to enable relay for strangers and high-risk situations, but allow direct connections where privacy risk is minimal."
+      },
+      {
+        type: "fill-blank",
+        question: "Check that the active connection is using relay candidates:",
+        code: "stats.forEach(report => {\n  if (report.type === 'candidate-pair' && report.state === '___') {\n    // This is the pair currently carrying media\n    console.log(report.localCandidateType);\n  }\n});",
+        answer: "succeeded",
+        explanation: "The 'succeeded' state on a candidate-pair report means this pair completed connectivity checks and is actively being used to transport media. Other states like 'waiting', 'in-progress', or 'failed' represent pairs that are not (yet) carrying traffic. Only the succeeded pair tells you the actual transport path of the call."
+      },
+      {
+        question: "With a 1TB/month VPS transfer limit, approximately how many hours of relay VIDEO calls (500kbps) can the server support?",
+        options: [
+          "About 220 hours",
+          "About 2,200 hours",
+          "About 22,000 hours",
+          "About 220,000 hours"
+        ],
+        correct: 1,
+        explanation: "Each video call hour uses ~450MB through TURN. 1TB = ~1,024,000 MB. 1,024,000 / 450 = ~2,275 hours. In practice, most Token calls are short (1-5 minutes), and only privacy-conscious users enable relay. For a small user base this is plenty, but at scale you'd need to monitor bandwidth and potentially upgrade the VPS or add adaptive bitrate."
+      },
+      {
+        type: "order-steps",
+        question: "Order the threat model escalation — from least to most information leaked without relay:",
+        steps: [
+          "Attacker learns your ISP name (e.g. Jio Fiber)",
+          "Attacker determines your approximate city from IP geolocation",
+          "Attacker correlates your static IP with other online activity",
+          "Attacker performs targeted network scanning against your IP",
+          "Attacker combines IP with other data points to narrow location further"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "The threat escalates: first the attacker learns basic info (ISP, city), then correlates across services if the IP is static, then can actively probe the network, and finally combine everything to refine location. For most users the practical risk is low, but for high-threat users (activists, journalists, abuse survivors), even step 1 is unacceptable — which is exactly why Token offers relay mode."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's the security issue with this TURN credentials approach?",
+        code: "// iceServers sent from API to client:\n{\n  urls: 'turn:turn.tokn.app:3478',\n  username: 'token_app',\n  credential: 'SuperSecret123!'\n}",
+        options: [
+          "Static long-lived credentials. If leaked (from one client), anyone can use your TURN server indefinitely. Should use time-limited HMAC credentials that expire after minutes/hours.",
+          "The port number is wrong",
+          "The URL should use HTTPS",
+          "The username should be the user's email"
+        ],
+        correct: 0,
+        explanation: "Static TURN credentials are a common mistake. If any client extracts the credential (trivial from JavaScript or app memory), they can use your TURN server forever — racking up bandwidth costs or enabling abuse. Time-limited credentials use HMAC: the username embeds an expiry timestamp, and the credential is an HMAC of that timestamp with a shared secret. coturn verifies the HMAC and checks the timestamp — credentials expire automatically."
       }
     ]);
   </script>

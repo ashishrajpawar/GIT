@@ -554,6 +554,253 @@ export function RedeemForm({ code, label }: Props) {
         ],
         correctOrder: [0, 1, 2, 3, 4],
         explanation: "The flow is linear: open URL, validate token, enter nickname, submit, get session. Each step depends on the previous one succeeding. If validation fails (step 2), steps 3-5 never happen — the holder sees an error state instead."
+      },
+      // --- Questions 6–25 ---
+      {
+        question: "What is the key difference between sessionStorage and localStorage?",
+        options: [
+          "sessionStorage is faster because it uses RAM",
+          "sessionStorage is cleared when the browser tab is closed; localStorage persists until explicitly deleted",
+          "localStorage cannot store strings longer than 100 characters",
+          "sessionStorage is encrypted; localStorage is not"
+        ],
+        correct: 1,
+        explanation: "sessionStorage is scoped to the lifetime of a single browser tab. When the user closes that tab, the data is gone. localStorage persists across tabs, windows, and browser restarts until the code or user explicitly removes it."
+      },
+      {
+        question: "Why is sessionStorage the right choice for the holder JWT instead of localStorage?",
+        options: [
+          "localStorage doesn't support JWT tokens",
+          "Holders are ephemeral — they don't have accounts, and stale JWTs shouldn't persist on shared or public devices",
+          "sessionStorage is more secure because it's encrypted at rest",
+          "The JWT is too large for localStorage"
+        ],
+        correct: 1,
+        explanation: "Holders don't create accounts. Their session is scoped to one tab visit. If a holder uses a library computer or shared phone, closing the tab should destroy the JWT. localStorage would leave credentials behind for the next person to find."
+      },
+      {
+        type: "predict-output",
+        question: "What does this discriminated union narrowing produce?",
+        code: "type State =\n  | { status: 'valid'; label: string }\n  | { status: 'error'; message: string };\n\nconst s: State = { status: 'valid', label: 'Plumber' };\n\nif (s.status === 'valid') {\n  console.log(s.label);\n} else {\n  console.log(s.message);\n}",
+        answer: "Plumber",
+        explanation: "TypeScript narrows the union based on the status discriminant. Inside the 'valid' branch, TypeScript knows s has a label property. This is exactly how RedeemPage renders different UI for each state — checking state.status tells TypeScript which properties are available."
+      },
+      {
+        question: "Why is the GET /api/tokens/:code/status endpoint public (no auth required)?",
+        options: [
+          "It's a bug — all endpoints should require auth",
+          "The holder has no account or credentials yet; they need to check validity before they can redeem and get a JWT",
+          "Public endpoints are faster because they skip middleware",
+          "React Router cannot attach Authorization headers to initial page loads"
+        ],
+        correct: 1,
+        explanation: "The status endpoint must be public because the holder arrives with nothing — no account, no JWT, no session. They only get credentials AFTER successful redemption. The endpoint returns minimal info (valid/invalid + label) and doesn't expose private data."
+      },
+      {
+        type: "which-breaks",
+        question: "Which of these token states would NOT allow a holder to proceed to the nickname form?",
+        variants: [
+          "{ status: 'valid', label: 'Electrician' }",
+          "{ status: 'paused' }",
+          "{ status: 'active', label: 'Doctor' }"
+        ],
+        correct: 1,
+        explanation: "A paused token means the issuer has temporarily suspended it. The holder cannot redeem a paused token — they'd see a message like 'This token is currently unavailable.' Only 'valid'/'active' states allow proceeding to the nickname form."
+      },
+      {
+        type: "predict-output",
+        question: "What happens when this fetch fails due to the device being offline?",
+        code: "try {\n  const res = await fetch('/api/tokens/ABC/status');\n  console.log('got response:', res.status);\n} catch (err) {\n  console.log('caught:', err.message);\n}",
+        answer: "caught: Failed to fetch",
+        explanation: "When the device is offline, fetch() throws a TypeError with the message 'Failed to fetch' (or similar). It does NOT return a response with an error status code. This is why you need both try/catch (for network failures) AND checking !res.ok (for HTTP errors like 500)."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the holder JWT payload — what field holds the expiration timestamp?",
+        code: "{\n  sub: 'holder_session_abc123',\n  tokenCode: 'MERC-8GH2-LP4X',\n  nickname: 'Ravi',\n  conversationId: 'conv_xyz',\n  iat: 1700000000,\n  ___: 1700086400\n}",
+        answer: "exp",
+        explanation: "The 'exp' claim (expiration time) is a standard JWT field defined in RFC 7519. It contains a Unix timestamp after which the token is no longer valid. Here, 1700086400 - 1700000000 = 86400 seconds = 24 hours."
+      },
+      {
+        question: "The holder JWT expires after 24 hours. Why not make it last longer (e.g., 30 days)?",
+        options: [
+          "JWTs cannot be set to expire after more than 24 hours",
+          "Shorter expiry limits damage if the JWT is stolen, and holders can always re-redeem the token for a fresh session",
+          "The server doesn't have enough memory to track longer sessions",
+          "Browser sessionStorage automatically deletes data after 24 hours"
+        ],
+        correct: 1,
+        explanation: "A 24-hour window balances usability (holder can chat for a day without re-entering their name) with security (stolen JWT is useless after a day). Since holders can re-redeem at any time, the short expiry isn't burdensome."
+      },
+      {
+        question: "Why is the holder JWT scoped to a single conversation (contains conversationId)?",
+        options: [
+          "To reduce JWT size — one field is smaller than a list",
+          "A holder should only access the one conversation they redeemed into, not other conversations on the same token or other tokens",
+          "JavaScript can only parse JWTs with fewer than 5 fields",
+          "The WebSocket protocol requires conversationId in the JWT"
+        ],
+        correct: 1,
+        explanation: "Principle of least privilege. A holder who redeems token X gets access to exactly one conversation. Even if the same token creates multiple conversations (maxUses > 1), each holder session is isolated. This prevents one holder from reading another holder's messages."
+      },
+      {
+        question: "What information about the token issuer does the holder JWT contain?",
+        options: [
+          "The issuer's email address for display in the chat header",
+          "The issuer's userId so the client can fetch their profile photo",
+          "Nothing — the holder JWT contains no issuer identity information",
+          "The issuer's public key for end-to-end encryption"
+        ],
+        correct: 2,
+        explanation: "Privacy by design: the holder JWT contains sub, tokenCode, nickname, conversationId, and exp. No issuer name, email, phone, or ID is exposed to the holder. The backend routes messages using internal IDs that the holder never sees."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this nickname validation?",
+        code: "function isValidNickname(name) {\n  if (name.length < 2 || name.length > 50) {\n    return false;\n  }\n  return true;\n}",
+        options: [
+          "The function should use >= and <= instead of < and >",
+          "It doesn't trim whitespace — a name of '   ' (3 spaces) would pass validation",
+          "The max length should be 100, not 50",
+          "It should check for special characters"
+        ],
+        correct: 1,
+        explanation: "Without trimming, a user could submit a name that's entirely whitespace. The validation should check name.trim().length to ensure there are at least 2 actual characters. The form's required attribute doesn't help here since spaces count as non-empty."
+      },
+      {
+        type: "predict-output",
+        question: "What does e.preventDefault() do in this form handler?",
+        code: "function handleRedeem(e) {\n  e.preventDefault();\n  console.log('submitting via fetch');\n  // ... fetch call\n}\n// <form onSubmit={handleRedeem}>\n// User clicks Submit\nconsole.log('form will not reload the page');",
+        answer: "form will not reload the page",
+        explanation: "e.preventDefault() stops the browser's default form submission behavior (which would cause a full page reload/navigation). Without it, the browser would send a traditional form POST and navigate away, destroying your React app state. With it, you handle submission via fetch() in JavaScript."
+      },
+      {
+        type: "which-breaks",
+        question: "Which fetch error handling approach will fail to catch a 500 server error?",
+        variants: [
+          "try { const res = await fetch(url); if (!res.ok) throw new Error(res.status); } catch (e) { handleError(e); }",
+          "try { const res = await fetch(url); const data = await res.json(); } catch (e) { handleError(e); }",
+          "fetch(url).then(res => { if (!res.ok) throw new Error(); return res.json(); }).catch(handleError);"
+        ],
+        correct: 1,
+        explanation: "Variant B only has a try/catch, which catches network failures (offline, DNS) but NOT HTTP error statuses. fetch() resolves successfully for 4xx and 5xx responses — it only rejects on network-level failures. Without checking !res.ok, a 500 error silently proceeds to parse the (likely error) response body."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the useEffect dependency array so the status check re-runs when the token code changes:",
+        code: "useEffect(() => {\n  checkTokenStatus(code);\n}, [___]);",
+        answer: "code",
+        explanation: "The dependency array tells React when to re-run the effect. Since the effect uses 'code' (the token code from the URL), it must be listed as a dependency. If the code changes (e.g., user navigates to a different token URL), the effect needs to re-validate."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this conditional rendering?",
+        code: "function RedeemPage({ state }) {\n  return (\n    <div>\n      {state.status === 'valid' && <NicknameForm label={state.label} />}\n      {state.status === 'error' && <ErrorMsg message={state.message} />}\n      {state.status === 'loading' && <Spinner />}\n    </div>\n  );\n}",
+        options: [
+          "You can't use && for conditional rendering in React",
+          "No bug — missing states (revoked, expired, maxed, not-found) render nothing, leaving the user with a blank screen",
+          "state.label might be undefined even when status is 'valid'",
+          "Multiple conditions can be true at the same time"
+        ],
+        correct: 1,
+        explanation: "The code compiles fine but misses several states. If state.status is 'revoked', 'expired', 'maxed', or 'not-found', none of the conditions match and the user sees an empty div. Always handle every member of a discriminated union — TypeScript's exhaustive checking or a default fallback helps catch this."
+      },
+      {
+        question: "Why does the RedeemPage validate the token before showing the nickname form, rather than doing both checks on form submit?",
+        options: [
+          "The server requires two separate API calls — it's a technical limitation",
+          "Immediate feedback: the holder knows within 1-2 seconds if the token is dead, instead of typing a name first and then getting rejected",
+          "React cannot render a form until an API call succeeds",
+          "The nickname form needs the token label from the status response to display it"
+        ],
+        correct: 1,
+        explanation: "While option D is also partially true (the label is shown to the holder), the primary reason is UX. Showing a dead-token error instantly respects the holder's time. Making them fill out a form first and THEN telling them it was pointless creates frustration."
+      },
+      {
+        type: "predict-output",
+        question: "A token has maxUses: 3 and currentUses: 3. What does the status endpoint return?",
+        code: "// Server logic:\nif (token.currentUses >= token.maxUses) {\n  return { valid: false, label: token.label, reason: 'max_uses' };\n}\nconsole.log('Token response for maxed token:');\nconsole.log(JSON.stringify({ valid: false, label: 'Courier', reason: 'max_uses' }));",
+        answer: "Token response for maxed token:\n{\"valid\":false,\"label\":\"Courier\",\"reason\":\"max_uses\"}",
+        explanation: "When currentUses equals maxUses, the token is fully consumed. The status endpoint returns valid: false with reason 'max_uses'. The client maps this to the 'maxed' state and shows 'This token has reached its maximum number of uses.' The holder cannot redeem it."
+      },
+      {
+        question: "The status response includes a 'label' field (e.g., 'Amazon Delivery'). Why show this to the holder?",
+        options: [
+          "It's required by the API schema — removing it would break the client",
+          "It helps the holder confirm they're redeeming the correct token, especially if they have multiple token URLs saved",
+          "The label is needed for end-to-end encryption key exchange",
+          "React Router uses the label for page titles"
+        ],
+        correct: 1,
+        explanation: "If you gave out separate tokens to your electrician and your plumber, the label ('Electrician' or 'Plumber') confirms which one the holder is about to redeem. Without it, the holder sees only a cryptic code and must guess. It's a confirmation signal, not an identification mechanism."
+      },
+      {
+        type: "fill-blank",
+        question: "After successful redemption, navigate to the chat page:",
+        code: "const data = await res.json();\nsessionStorage.setItem('holderJwt', data.holderJwt);\n___(`/t/${code}/chat`);",
+        answer: "navigate",
+        explanation: "React Router's navigate() function (from useNavigate()) performs client-side routing without a page reload. This preserves the React app state and the sessionStorage data. Using window.location.href would work but would reload the entire app unnecessarily."
+      },
+      {
+        type: "which-breaks",
+        question: "Which scenario creates a race condition in the redemption flow?",
+        variants: [
+          "Holder opens the page, token is valid, holder types nickname, submits — token gets revoked between validation and submission",
+          "Holder opens the page, sees 'Token Not Found', closes the tab",
+          "Holder opens the page, token is valid, holder submits immediately with a valid nickname"
+        ],
+        correct: 0,
+        explanation: "There's a time gap between the initial GET /status (token valid) and the POST /redeem (token now revoked). The server must re-check validity during redemption and return an error if the token became invalid. The client should handle this gracefully — e.g., showing 'This token was revoked while you were filling in the form.'"
+      },
+      {
+        type: "order-steps",
+        question: "Order the error handling layers from first check to last:",
+        steps: [
+          "try/catch around fetch (catches network failures like offline)",
+          "Check !res.ok (catches HTTP 4xx/5xx errors)",
+          "Parse response body for error details (await res.json())",
+          "Display error to user in the UI (setState with error)"
+        ],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "Error handling is layered: (1) The outermost try/catch handles network-level failures where no response exists. (2) If a response arrives, check the status code. (3) If it's an error response, parse the body for a detailed message. (4) Finally, update the UI state to show the error. Skipping any layer means some errors go unhandled."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's the problem with this useEffect?",
+        code: "useEffect(() => {\n  async function validate() {\n    const res = await fetch(`/api/tokens/${code}/status`);\n    const data = await res.json();\n    setState({ status: 'valid', label: data.label });\n  }\n  validate();\n});",
+        options: [
+          "You can't call async functions inside useEffect",
+          "Missing dependency array — this effect runs on EVERY render, spamming the API",
+          "setState is not available inside useEffect",
+          "fetch cannot be called without a try/catch"
+        ],
+        correct: 1,
+        explanation: "Without a dependency array (the second argument to useEffect), the effect runs after every single render. Each setState triggers a re-render, which triggers the effect again — creating an infinite loop of API calls. The fix: useEffect(() => { ... }, [code]) to run only when code changes."
+      },
+      {
+        type: "predict-output",
+        question: "What happens to sessionStorage data when the user opens the same URL in a new tab?",
+        code: "// Tab 1:\nsessionStorage.setItem('holderJwt', 'abc123');\nconsole.log('Tab 1:', sessionStorage.getItem('holderJwt'));\n\n// Tab 2 (same URL, opened separately):\nconsole.log('Tab 2:', sessionStorage.getItem('holderJwt'));",
+        answer: "Tab 1: abc123\nTab 2: null",
+        explanation: "sessionStorage is scoped to the individual browser tab (technically, the top-level browsing context). A new tab gets its own empty sessionStorage, even for the same URL. This means each holder tab is independent — opening the same token URL twice creates two separate sessions."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the nickname length validation check:",
+        code: "const trimmed = nickname.trim();\nconst isValid = trimmed.length >= 2 && trimmed.___ <= 50;",
+        answer: "length",
+        explanation: "After trimming whitespace, check that the nickname is between 2 and 50 characters. The minimum prevents empty/single-char names that aren't useful identifiers. The maximum prevents abuse (extremely long names breaking the UI). The input also has maxLength={50} as a first line of defense."
+      },
+      {
+        question: "What does the holder see if they try to redeem a token but their device goes offline during the POST /redeem call?",
+        options: [
+          "The page silently fails with no feedback",
+          "The browser shows its own offline error page",
+          "The catch block fires with a network error, and the UI shows the error state with a message like 'Network error — check your connection'",
+          "The redemption succeeds and the JWT is cached for when they come back online"
+        ],
+        correct: 2,
+        explanation: "fetch() rejects with a TypeError when offline. The try/catch in handleRedeem catches this, and setState({ status: 'error', message: err.message }) updates the UI to show the error. The holder stays on the page and can retry. No silent failures — always show what went wrong."
       }
     ]);
   </script>

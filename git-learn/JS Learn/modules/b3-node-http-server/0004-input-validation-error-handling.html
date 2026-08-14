@@ -401,6 +401,238 @@ router.patch('/:code', validate(updateTokenSchema), async (req, res, next) => {
         steps: ["Zod validation (malformed input → 400)", "Business logic check (ApiError → 403/404/409)", "Database constraint violation (→ 409 or 500)", "Catch-all unknown error (→ 500)"],
         correctOrder: [0, 1, 2, 3],
         explanation: "Validation catches bad input before it reaches your logic. Business rules catch violations your logic detects. Database constraints catch anything that slipped through (defense in depth). The catch-all handles truly unexpected errors without crashing the server."
+      },
+      // --- Questions 6–25 ---
+      {
+        type: "predict-output",
+        question: "What does safeParse return when input is invalid?",
+        code: "const schema = z.object({ label: z.string().min(1) });\nconst result = schema.safeParse({ label: '' });\nconsole.log(result.success);",
+        answer: "false",
+        explanation: "Unlike parse() which throws a ZodError, safeParse() returns a result object with { success: false, error: ZodError } on failure or { success: true, data: ... } on success. This lets you handle validation without try/catch — useful in middleware where you want to format the error yourself."
+      },
+      {
+        question: "What is the purpose of z.infer<typeof schema>?",
+        options: [
+          "It runs the schema validation at runtime",
+          "It extracts a TypeScript type from a Zod schema — one definition, both runtime validation and compile-time types",
+          "It converts a TypeScript interface into a Zod schema",
+          "It infers the database column types from the schema"
+        ],
+        correct: 1,
+        explanation: "z.infer<typeof CreateTokenSchema> gives you a TypeScript type that exactly matches the schema's shape. You define the schema once in shared/ and derive the type from it — no manual interface that can drift out of sync with the validation rules."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This validate middleware silently swallows errors. What's wrong?",
+        code: "function validate(schema) {\n  return (req, res, next) => {\n    const result = schema.safeParse(req.body);\n    if (!result.success) {\n      res.status(400).json({ error: result.error });\n    }\n    req.body = result.data;\n    next();\n  };\n}",
+        options: [
+          "safeParse doesn't exist on Zod schemas",
+          "Missing return after the error response — execution continues, calling next() with invalid data",
+          "result.error should be result.errors",
+          "You can't reassign req.body"
+        ],
+        correct: 1,
+        explanation: "Without 'return' before or after the res.status(400) call, the function continues past the if block. It sets req.body = result.data (which is undefined on failure) and calls next(), letting the route handler run with garbage data. Always return after sending an error response."
+      },
+      {
+        type: "fill-blank",
+        question: "Extract TypeScript type from a Zod schema:",
+        code: "const CreateTokenSchema = z.object({ label: z.string() });\ntype CreateTokenInput = z.___<typeof CreateTokenSchema>;",
+        answer: "infer",
+        explanation: "z.infer<typeof Schema> extracts the TypeScript type that the schema validates. This means your type definition and runtime validation are always in sync — change the schema, the type updates automatically."
+      },
+      {
+        type: "which-breaks",
+        question: "Which of these Zod schemas will reject the query string '?page=2&limit=abc'?",
+        variants: [
+          "z.object({ page: z.coerce.number(), limit: z.coerce.number() })",
+          "z.object({ page: z.string(), limit: z.string() })",
+          "z.object({ page: z.number(), limit: z.number() })"
+        ],
+        correct: 0,
+        explanation: "Option A uses z.coerce.number() which converts '2' to 2 (fine) but 'abc' to NaN — and NaN fails number validation, so it rejects. Option B accepts any strings (no rejection). Option C rejects ALL query params because they arrive as strings, not numbers — but the question says 'reject this specific input', and C rejects everything including valid inputs, so A is the one that correctly catches specifically 'abc' while accepting '2'."
+      },
+      {
+        type: "predict-output",
+        question: "What happens when .transform() is combined with validation?",
+        code: "const schema = z.string().trim().min(3).transform(s => s.toUpperCase());\nconsole.log(schema.parse('  hi  '));",
+        answer: "ZodError: String must contain at least 3 character(s)",
+        explanation: "Zod processes left to right: .trim() strips whitespace giving 'hi', then .min(3) checks length — 'hi' is only 2 characters, so it throws before reaching .transform(). This is why ordering matters: trim first reveals the true length."
+      },
+      {
+        question: "What's the difference between .optional() and .default('general') on a Zod field?",
+        options: [
+          "They are identical — both allow the field to be missing",
+          ".optional() makes the output type include undefined; .default() fills in the value so the output type is always defined",
+          ".optional() only works on strings; .default() works on any type",
+          ".default() makes the field required but with a fallback error message"
+        ],
+        correct: 1,
+        explanation: "With .optional(), if the field is missing, the parsed output contains undefined (type: string | undefined). With .default('general'), if the field is missing, Zod fills in 'general' — the output type is just string, never undefined. Use .default() when your code shouldn't have to check for undefined downstream."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This error handler has a subtle issue. What is it?",
+        code: "app.use((err, req, res, next) => {\n  if (err instanceof ZodError) {\n    return res.status(400).json({ error: 'Validation failed', details: err.errors });\n  }\n  if (err instanceof ApiError) {\n    return res.status(err.status).json({ error: err.message });\n  }\n  console.log(err);\n  res.status(500).json({ error: err.message });\n});",
+        options: [
+          "ZodError check should come after ApiError",
+          "In production, the catch-all exposes err.message to the client — internal details (stack traces, SQL errors) may leak",
+          "console.log should be console.error",
+          "You need to call next(err) at the end"
+        ],
+        correct: 1,
+        explanation: "The catch-all sends err.message directly to the client. If the error is a database connection failure, the message might contain your DB host, credentials, or query text. In production, always send a generic message like 'Internal server error' and log the real error server-side only."
+      },
+      {
+        type: "fill-blank",
+        question: "Create a partial schema for PATCH endpoints (all fields become optional):",
+        code: "const CreateTokenSchema = z.object({ label: z.string(), maxUses: z.number() });\nconst UpdateTokenSchema = CreateTokenSchema.___();",
+        answer: "partial",
+        explanation: ".partial() makes every field optional — perfect for PATCH endpoints where the client sends only the fields they want to update. The schema becomes { label?: string, maxUses?: number }. You don't have to redefine the constraints; they still apply when a field IS provided."
+      },
+      {
+        type: "order-steps",
+        question: "Order the validation steps for a POST /api/tokens request body:",
+        steps: ["Parse JSON body (express.json() middleware)", "Validate shape and types with Zod schema", "Sanitize strings (trim, strip HTML)", "Pass cleaned data to route handler"],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "First the body must be parsed from JSON text into a JS object. Then Zod checks structure, types, and constraints. Sanitization (trim, strip tags) runs as part of or after Zod transforms. Finally the validated, sanitized data reaches your business logic. Each step depends on the previous one succeeding."
+      },
+      {
+        type: "predict-output",
+        question: "What does .nullable() do differently from .optional()?",
+        code: "const schema = z.object({\n  revokedAt: z.string().datetime().nullable()\n});\nconsole.log(schema.parse({ revokedAt: null }).revokedAt);",
+        answer: "null",
+        explanation: ".nullable() allows the value null (field must be present but can be null). .optional() allows the field to be missing entirely (undefined). For Token's revokedAt, we use .nullable() because the field always exists in the database — it's either a timestamp or NULL."
+      },
+      {
+        question: "Why should Token sanitize string inputs even after Zod validation passes?",
+        options: [
+          "Zod cannot validate string types",
+          "Zod ensures type and length but doesn't strip HTML/script tags — a valid 50-char string could still contain <script>alert(1)</script>",
+          "Sanitization is required by Express",
+          "PostgreSQL rejects unsanitized strings"
+        ],
+        correct: 1,
+        explanation: "Zod validates shape, type, and constraints. But a label like '<img src=x onerror=alert(1)>' passes z.string().min(1).max(100) just fine. Sanitization (stripping HTML, encoding special characters) is a separate concern that prevents XSS when the string is later rendered in the web redemption page."
+      },
+      {
+        type: "which-breaks",
+        question: "Which .refine() usage will throw when the Token schema is parsed?",
+        variants: [
+          "z.string().refine(s => s.length > 0, 'Required')\n// input: 'hello'",
+          "z.number().refine(n => n >= 0, 'Must be positive')\n// input: 5",
+          "z.array(z.string()).refine(arr => new Set(arr).size === arr.length, 'No duplicates')\n// input: ['read', 'write', 'read']"
+        ],
+        correct: 2,
+        explanation: "Option C has duplicate 'read' entries. The refine checks that the Set size equals the array length — with duplicates, Set size (2) !== array length (3), so the refinement fails and Zod throws. This pattern enforces unique items in Token's permission arrays."
+      },
+      {
+        type: "fill-blank",
+        question: "Add a custom error message to a Zod validation:",
+        code: "const schema = z.object({\n  label: z.string().min(1, { ___: 'Token label cannot be empty' })\n});",
+        answer: "message",
+        explanation: "Zod validators accept an options object with a 'message' field for custom error messages. This message appears in the ZodError and gets forwarded to the client in your error response, giving users actionable feedback instead of generic 'String must contain at least 1 character(s)'."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This schema for Token access rules has a problem. What is it?",
+        code: "const AccessRuleSchema = z.object({\n  type: z.enum(['time_window', 'use_limit', 'geo_fence']),\n  config: z.object({\n    startHour: z.number(),\n    endHour: z.number(),\n    maxUses: z.number(),\n    latitude: z.number(),\n    longitude: z.number(),\n    radiusKm: z.number()\n  })\n});",
+        options: [
+          "z.enum should be z.string",
+          "All config fields are required regardless of rule type — a time_window shouldn't need latitude/longitude, and a geo_fence shouldn't need startHour/endHour",
+          "You can't nest z.object inside another z.object",
+          "Numbers should use z.coerce.number()"
+        ],
+        correct: 1,
+        explanation: "This schema requires all config fields for every rule type. A time_window rule shouldn't need geo fields. The fix is a discriminated union: z.discriminatedUnion('type', [...]) where each variant has only its relevant config fields. This gives precise validation per rule type."
+      },
+      {
+        type: "predict-output",
+        question: "What does .strip() do on a Zod object schema?",
+        code: "const schema = z.object({ label: z.string() }).strict();\ntry {\n  schema.parse({ label: 'Test', hackerField: 'pwned' });\n} catch (e) {\n  console.log('rejected');\n}",
+        answer: "rejected",
+        explanation: ".strict() rejects any unrecognized keys (throws ZodError). The default behavior (.strip()) silently removes extra keys. .passthrough() keeps them. For Token's API, .strict() or .strip() prevents clients from injecting unexpected fields like 'isAdmin: true' that might bypass checks downstream."
+      },
+      {
+        type: "which-breaks",
+        question: "Which schema composition will fail to compile or produce unexpected results?",
+        variants: [
+          "const Base = z.object({ id: z.string() });\nconst Extended = Base.extend({ label: z.string() });",
+          "const A = z.object({ id: z.string() });\nconst B = z.object({ id: z.number() });\nconst Merged = A.merge(B);",
+          "const Schema = z.object({ label: z.string() });\nconst Partial = Schema.partial();"
+        ],
+        correct: 1,
+        explanation: "Option B merges two schemas that both define 'id' with different types. The second schema's type wins (z.number()), which silently overrides the first. This isn't a compile error but produces unexpected behavior — data that was valid under A.id (a string) now fails under Merged.id (expects number). Use .extend() when you want to override intentionally."
+      },
+      {
+        type: "fill-blank",
+        question: "Validate that a Token code matches the format XXXX-XXXX-XXXX:",
+        code: "const TokenCodeSchema = z.string().___(/^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/, 'Invalid token code format');",
+        answer: "regex",
+        explanation: ".regex() validates that the string matches a regular expression. For Token codes, this ensures the format is exactly 3 groups of 4 alphanumeric characters separated by hyphens. Combined with .toUpperCase() transform, this catches malformed codes before they hit the database."
+      },
+      {
+        question: "In Token's validate middleware, why use schema.parse(req.body) instead of manual if/else checks?",
+        options: [
+          "parse() is faster than if/else",
+          "Manual checks can't return error messages",
+          "parse() validates all fields at once and returns ALL errors — manual checks stop at the first failure and require N separate if blocks that grow with every field",
+          "Express requires Zod for body parsing"
+        ],
+        correct: 2,
+        explanation: "With 10 fields, manual validation needs 10+ if blocks, each with its own response. Zod validates everything in one call and collects all errors — the user sees 'label is too short AND maxUses must be positive' in one response instead of fixing errors one by one. Plus the schema is reusable on the client."
+      },
+      {
+        type: "order-steps",
+        question: "Order how a discriminated union schema validates Token access rules:",
+        steps: ["Check the discriminator field ('type') value", "Select the matching variant schema", "Validate the rest of the object against that variant's shape", "Return typed data or collect errors specific to that variant"],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "z.discriminatedUnion first reads the discriminator ('type' field) to pick which sub-schema applies. Then only that variant's fields are validated. This gives precise errors — 'missing radiusKm' for a geo_fence rule, not for a time_window rule. It also gives TypeScript narrowed types in each branch."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This shared schema setup has an import problem. What is it?",
+        code: "// shared/schemas/tokens.ts\nimport { z } from 'zod';\nimport { db } from '../../api/src/db';\n\nexport const CreateTokenSchema = z.object({\n  label: z.string().min(1).max(100)\n}).refine(async ({ label }) => {\n  const existing = await db.query('SELECT 1 FROM tokens WHERE label = $1', [label]);\n  return existing.rows.length === 0;\n}, 'Label already exists');",
+        options: [
+          "z.object can't have .refine()",
+          "The shared/ folder imports from api/ — this creates a circular dependency and breaks the client (mobile app can't access the database)",
+          "async refine is not supported in Zod",
+          "The SQL query syntax is wrong"
+        ],
+        correct: 1,
+        explanation: "Shared schemas must be pure — no server imports, no database access. The mobile app imports from shared/ too, and it can't reach the API's database module. Uniqueness checks belong in the API's business logic layer, not in the shared validation schema. The schema validates shape; the server checks business rules."
+      },
+      {
+        type: "fill-blank",
+        question: "Use .superRefine() to validate that a token's expiry is in the future:",
+        code: "const schema = z.object({\n  expiresAt: z.string().datetime()\n}).superRefine((data, ___) => {\n  if (new Date(data.expiresAt) <= new Date()) {\n    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Expiry must be in the future', path: ['expiresAt'] });\n  }\n});",
+        answer: "ctx",
+        explanation: ".superRefine() receives the data and a context object (ctx) that lets you add multiple custom issues with precise paths. Unlike .refine() which returns true/false for a single check, .superRefine() can add multiple issues in one pass — useful when several fields have cross-dependent validation rules."
+      },
+      {
+        type: "predict-output",
+        question: "What type does z.coerce.number() produce from this input?",
+        code: "const schema = z.coerce.number().int();\nconsole.log(schema.parse('3.7'));",
+        answer: "ZodError: Number must be an integer",
+        explanation: "z.coerce.number() first converts '3.7' to the number 3.7 (coercion succeeds). Then .int() checks if it's an integer — 3.7 is not, so Zod throws. Coercion handles type conversion (string to number), but subsequent validators still enforce constraints on the converted value."
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps for adding a new validated endpoint to Token's API:",
+        steps: ["Define the Zod schema in shared/schemas/", "Export the inferred TypeScript type", "Add validate(schema) middleware to the route", "Use the typed req.body in the route handler"],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "Start with the schema (single source of truth), export the type so both client and server use it, wire up the validate middleware so bad requests never reach your handler, then write the handler knowing req.body is guaranteed to match the type. This order ensures type safety flows from definition to usage."
+      },
+      {
+        question: "What does .passthrough() do on a Zod object schema compared to the default behavior?",
+        options: [
+          "It makes all fields optional",
+          "It keeps unrecognized keys in the output instead of stripping them — useful for forwarding metadata you don't validate",
+          "It skips validation entirely",
+          "It passes errors to the next middleware"
+        ],
+        correct: 1,
+        explanation: "By default Zod strips unknown keys from the parsed output. .passthrough() preserves them. .strict() rejects them. For Token's API, the default (strip) is safest — it silently discards injected fields like 'isAdmin'. Use .passthrough() only when proxying data you don't control but need to forward intact."
       }
     ]);
   </script>

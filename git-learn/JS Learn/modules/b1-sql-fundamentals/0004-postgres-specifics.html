@@ -352,6 +352,200 @@ DO UPDATE SET payload = EXCLUDED.payload;`
         ],
         correct: 2,
         explanation: "The ->> operator returns TEXT. Comparing TEXT > 1 (integer) works in some databases but is unreliable — '9' > 1 but '10' < '9' in text comparison! Always cast to integer explicitly: (payload->>'field')::integer > 1."
+      },
+      // --- Questions 6–25 ---
+      {
+        type: "fill-blank",
+        question: "Check if the JSONB payload contains the key 'timezone':",
+        code: "SELECT * FROM access_rules WHERE payload ___ 'timezone';",
+        answer: "?",
+        explanation: "The ? operator checks if a JSONB object contains a top-level key. payload ? 'timezone' returns true if the key exists (regardless of its value). This is useful for filtering rules that have a timezone field vs those that don't."
+      },
+      {
+        type: "predict-output",
+        question: "What's the difference between -> and ->> when extracting from JSONB?",
+        code: "SELECT\n  payload->'allowed' AS with_arrow,\n  payload->>'timezone' AS with_double_arrow\nFROM access_rules\nWHERE rule_type = 'categories';",
+        answer: "-> returns JSON (e.g., [\"delivery\",\"support\"]), ->> returns TEXT (e.g., null since categories has no timezone)",
+        explanation: "-> preserves the JSON type (arrays stay as arrays, objects as objects). ->> casts to plain text. Use -> when you need to chain operators (payload->'allowed'->0) or when the value is an array/object. Use ->> when you want a simple text value for comparison or display."
+      },
+      {
+        question: "What Postgres type should you use for Token's created_at column to handle users across Indian time zones correctly?",
+        options: [
+          "TIMESTAMP (without timezone)",
+          "TIMESTAMPTZ (with timezone)",
+          "TEXT with ISO format",
+          "INTEGER (unix epoch)"
+        ],
+        correct: 1,
+        explanation: "TIMESTAMPTZ stores the instant in UTC and converts to/from the session timezone automatically. Since Token users are in India (IST = UTC+5:30), TIMESTAMPTZ ensures correct handling. Plain TIMESTAMP ignores timezone — if your server moves zones, times break."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this LISTEN/NOTIFY setup for Token's real-time revocation?",
+        code: "-- In the Node.js WebSocket server:\n-- client.query('LISTEN token_events');\n\n-- In a trigger:\nCREATE FUNCTION notify_revoke() RETURNS TRIGGER AS $$\nBEGIN\n  NOTIFY token_events, NEW.code;\n  RETURN NEW;\nEND; $$ LANGUAGE plpgsql;",
+        options: [
+          "LISTEN syntax is wrong",
+          "The payload is just the code string — should be JSON with action and user_id for the WebSocket server to know what to do",
+          "NOTIFY can't be called inside a trigger",
+          "RETURN NEW is wrong for AFTER triggers"
+        ],
+        correct: 1,
+        explanation: "While this works syntactically, the payload only contains the token code. The WebSocket server needs to know the action (revoked vs paused), user_id (to route to the right client), and possibly more context. Use json_build_object() to send structured data."
+      },
+      {
+        type: "fill-blank",
+        question: "Generate a random UUID for a new token's id in Postgres:",
+        code: "INSERT INTO tokens (id, code, user_id) VALUES (___, 'MERC-8GH2-LP4X', 1);",
+        answer: "gen_random_uuid()",
+        explanation: "gen_random_uuid() generates a v4 UUID. It's built into Postgres 13+. UUIDs are ideal for distributed IDs — no sequence conflicts between servers. Token could use UUID primary keys to support future horizontal scaling."
+      },
+      {
+        type: "predict-output",
+        question: "What does the @> operator do with JSONB?",
+        code: "SELECT * FROM access_rules\nWHERE payload @> '{\"timezone\": \"Asia/Kolkata\"}';",
+        answer: "Returns rows where payload contains the specified key-value pair (containment check)",
+        explanation: "The @> operator tests JSONB containment — does the left side contain the right side? This is powerful because it works with GIN indexes, making it fast even on large tables. It's like asking 'does this JSON object have at least these fields with these values?'"
+      },
+      {
+        question: "Why does Token use JSONB for access_rules payload instead of separate columns?",
+        options: [
+          "JSONB is always faster than regular columns",
+          "Different rule types have different fields — a time_window has start_hour/end_hour, a call_limit has max_per_day/max_per_week",
+          "Postgres doesn't support more than 10 columns per table",
+          "JSONB avoids the need for indexes"
+        ],
+        correct: 1,
+        explanation: "Each rule type has a completely different structure. A fixed schema would need NULLable columns for every possible field across all rule types (start_hour, end_hour, max_per_day, max_per_week, allowed, blocked...). JSONB lets each row store exactly the fields its rule type needs."
+      },
+      {
+        type: "which-breaks",
+        question: "Which NOTIFY payload will fail?",
+        variants: [
+          "NOTIFY token_events, 'simple text message';",
+          "NOTIFY token_events, '{\"code\": \"ABC\"}';",
+          "NOTIFY token_events, (SELECT json_build_object('code', code) FROM tokens WHERE id = 1);"
+        ],
+        correct: 2,
+        explanation: "NOTIFY's payload must be a string literal or a simple expression — you can't use a subquery directly. Use PERFORM pg_notify('token_events', (SELECT ...)) instead, which accepts an expression. Or assign to a variable first in a plpgsql function."
+      },
+      {
+        type: "order-steps",
+        question: "Put these steps in order for setting up real-time token revocation with LISTEN/NOTIFY:",
+        steps: ["Create trigger function with pg_notify()", "Attach trigger to tokens table (AFTER UPDATE)", "Node.js server calls LISTEN on the channel", "WebSocket server receives notification and disconnects revoked sessions"],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "First create the function that will fire notifications. Then attach it as a trigger on UPDATE. The Node.js server subscribes with LISTEN. When a token is revoked (by any means), the trigger fires, the server receives the event, and disconnects any active sessions using that token."
+      },
+      {
+        type: "fill-blank",
+        question: "Insert a token and get back the generated id and timestamp in one query:",
+        code: "INSERT INTO tokens (code, user_id, issued_to)\nVALUES ('NEW1-ABCD-EFGH', 1, 'Vendor')\n___;",
+        answer: "RETURNING id, created_at",
+        explanation: "RETURNING gives you column values from the newly inserted row. Without it, you'd need a separate SELECT to get the generated id and created_at. This saves a round-trip to the database — your API gets everything it needs to respond to the client."
+      },
+      {
+        type: "predict-output",
+        question: "What does ON CONFLICT DO UPDATE do when there's no conflict?",
+        code: "INSERT INTO access_rules (token_id, rule_type, payload)\nVALUES (1, 'new_rule', '{\"key\": \"value\"}')\nON CONFLICT (token_id, rule_type)\nDO UPDATE SET payload = EXCLUDED.payload;",
+        answer: "The row is inserted normally (the ON CONFLICT clause is ignored)",
+        explanation: "ON CONFLICT only triggers when the specified constraint is violated. If there's no existing row with token_id=1 and rule_type='new_rule', the INSERT proceeds normally. The DO UPDATE part only runs when a conflict (duplicate) is detected."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's the problem with this INET usage for Token's redemption logging?",
+        code: "CREATE TABLE redemption_events (\n  id SERIAL PRIMARY KEY,\n  token_id INTEGER REFERENCES tokens(id),\n  holder_ip TEXT NOT NULL,\n  redeemed_at TIMESTAMPTZ DEFAULT NOW()\n);",
+        options: [
+          "SERIAL is deprecated in modern Postgres",
+          "holder_ip should use INET type instead of TEXT — enables IP range queries and validation",
+          "TIMESTAMPTZ can't have a DEFAULT",
+          "REFERENCES syntax is wrong"
+        ],
+        correct: 1,
+        explanation: "Postgres has a native INET type that validates IP addresses and supports range operations (e.g., WHERE holder_ip << '192.168.0.0/16' to check subnet membership). TEXT accepts any string — including invalid IPs. INET gives you validation and network-aware queries for free."
+      },
+      {
+        question: "What happens to NOTIFY messages if no client is listening?",
+        options: [
+          "They're queued until someone listens",
+          "They're lost — if nobody is listening, the notification is discarded",
+          "They cause an error",
+          "They're stored in a system table for 24 hours"
+        ],
+        correct: 1,
+        explanation: "NOTIFY is fire-and-forget. If no client has called LISTEN on that channel, the notification is silently discarded. This means your WebSocket server must be connected and listening before revocations happen. If it restarts, it should re-check for recent changes on startup."
+      },
+      {
+        type: "fill-blank",
+        question: "Extract the first element from a JSONB array in the payload:",
+        code: "SELECT payload->'allowed'___0 FROM access_rules WHERE rule_type = 'categories';",
+        answer: "->",
+        explanation: "Use -> with an integer index to access JSONB array elements (0-based). payload->'allowed'->0 gets the first element of the 'allowed' array. Use ->>0 if you want it as text instead of JSON."
+      },
+      {
+        type: "which-breaks",
+        question: "Which Postgres-specific feature does NOT exist in SQLite?",
+        variants: [
+          "Foreign key constraints",
+          "JSONB type with @> containment operator",
+          "INTEGER PRIMARY KEY with auto-increment"
+        ],
+        correct: 1,
+        explanation: "SQLite supports foreign keys (with PRAGMA foreign_keys = ON) and auto-increment integer primary keys. But JSONB with native operators (@>, ->, ->>, ?) is Postgres-specific. In SQLite, store JSON as TEXT and parse it in your application code."
+      },
+      {
+        type: "predict-output",
+        question: "What does EXCLUDED refer to in an UPSERT's DO UPDATE clause?",
+        code: "INSERT INTO access_rules (token_id, rule_type, payload)\nVALUES (1, 'time_window', '{\"start\": 10}')\nON CONFLICT (token_id, rule_type)\nDO UPDATE SET payload = EXCLUDED.payload;",
+        answer: "EXCLUDED refers to the row that was proposed for insertion (the VALUES row that conflicted)",
+        explanation: "EXCLUDED is a special table reference to the row that would have been inserted if there were no conflict. EXCLUDED.payload is the new value you tried to insert. This lets you update the existing row with the new incoming data."
+      },
+      {
+        question: "Which Postgres type is best for storing a token holder's IP address?",
+        options: [
+          "TEXT",
+          "VARCHAR(45)",
+          "INET",
+          "INTEGER"
+        ],
+        correct: 2,
+        explanation: "INET validates that the value is a real IP address (v4 or v6), supports subnet operations (<<, >>), and is storage-efficient. TEXT/VARCHAR accept any string. INTEGER only works for IPv4. INET is purpose-built for network addresses."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this JSONB query for checking if delivery is in the allowed categories?",
+        code: "SELECT * FROM access_rules\nWHERE payload->'allowed' = 'delivery';",
+        options: [
+          "Should use ->> instead of ->",
+          "The -> operator returns a JSON array, and you're comparing it to a text string — use @> or the ? operator on the array",
+          "JSONB columns can't be filtered",
+          "Single quotes are wrong for JSONB"
+        ],
+        correct: 1,
+        explanation: "payload->'allowed' returns a JSON array like [\"delivery\", \"support\"]. Comparing an array to a plain string 'delivery' doesn't work. Use: payload->'allowed' ? 'delivery' (contains key/element) or payload @> '{\"allowed\": [\"delivery\"]}' (containment)."
+      },
+      {
+        type: "order-steps",
+        question: "Put these Postgres setup steps in order for Token's access_rules system:",
+        steps: ["CREATE TABLE access_rules with JSONB payload column", "Add UNIQUE(token_id, rule_type) for UPSERT support", "CREATE INDEX USING GIN on the payload column", "Test with INSERT ... ON CONFLICT DO UPDATE"],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "First create the table with the JSONB column. Then add the unique constraint that ON CONFLICT needs. Then add a GIN index so JSONB queries (@>, ?) are fast. Finally test the UPSERT — it relies on both the unique constraint and benefits from the index."
+      },
+      {
+        type: "fill-blank",
+        question: "Check if the JSONB payload contains at least these key-value pairs:",
+        code: "SELECT * FROM access_rules WHERE payload ___ '{\"timezone\": \"Asia/Kolkata\"}';",
+        answer: "@>",
+        explanation: "The @> (contains) operator checks if the left JSONB value contains all key-value pairs from the right side. The payload can have additional fields — it just must include at least the ones specified. This operator uses GIN indexes efficiently."
+      },
+      {
+        question: "What's the maximum payload size for NOTIFY in Postgres?",
+        options: [
+          "256 bytes",
+          "8000 bytes (8 KB)",
+          "1 MB",
+          "Unlimited"
+        ],
+        correct: 1,
+        explanation: "NOTIFY payloads are limited to about 8000 bytes. For Token's revocation events, this is plenty (just need code, action, user_id). But don't try to send entire conversation histories through NOTIFY — use it as a signal, then query for details if needed."
       }
     ]);
   </script>

@@ -525,6 +525,226 @@ console.log('After that: 0 messages through the server (P2P)');`);
         ],
         correctOrder: [0, 1, 2, 3, 4],
         explanation: "Initiate → incoming → accept → offer → answer+ICE. The key insight: the offer/answer only happens AFTER the callee accepts (UI confirmation). ICE candidates start flowing as soon as each peer creates its RTCPeerConnection, and can arrive before/during/after the answer."
+      },
+
+      // --- Questions 6–25 ---
+      {
+        question: "Why does WebRTC need a signalling server at all, if the goal is peer-to-peer media?",
+        options: [
+          "To carry audio and video packets between peers",
+          "To exchange SDP and ICE metadata so both peers know each other's media capabilities and network addresses before the direct connection exists",
+          "To encrypt the media stream end-to-end",
+          "To store call history in the database"
+        ],
+        correct: 1,
+        explanation: "P2P media needs coordination first. Both peers must agree on codecs (via SDP) and discover working network paths (via ICE candidates). They can't reach each other directly to exchange this metadata until they already have a connection — the signalling server breaks that chicken-and-egg problem. Once the P2P connection opens, the server steps aside."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the ICE handler so it silently drops candidates that arrive after a call ends:",
+        code: "export function handleCallIce(ws, payload) {\n  const call = getActiveCallForUser(ws.userId, payload.callId);\n  if (!call) ___; // silently drop\n\n  const targetId = call.callerId === ws.userId ? call.calleeId : call.callerId;\n  deliverToUser(targetId, 'call:ice', { callId: payload.callId, candidate: payload.candidate });\n}",
+        answer: "return",
+        explanation: "ICE candidates can arrive milliseconds after a hangup message — the two events race on the network. A silent `return` is correct here because the call is already over. Sending an error response would cause a spurious error on the client side. This is the one place where silent failure is intentional design."
+      },
+      {
+        type: "predict-output",
+        question: "What is the value of callId when userId1=7, userId2=3?",
+        code: "function createCallId(userId1, userId2) {\n  const sorted = [userId1, userId2].sort((a, b) => a - b);\n  return `call:${sorted[0]}:${sorted[1]}`;\n}\nconsole.log(createCallId(7, 3));\nconsole.log(createCallId(3, 7));",
+        answer: "call:3:7\ncall:3:7",
+        explanation: "Both calls produce the same string because sort((a,b) => a-b) orders numerically ascending. This determinism is essential: the caller and callee must agree on the same callId to look up the same ActiveCall entry in the Map. Without sorting, one side would compute 'call:7:3' and the other 'call:3:7', and lookups would fail."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What is the bug in this disconnect cleanup code?",
+        code: "ws.on('close', () => {\n  clients.delete(ws.userId);\n\n  const call = getActiveCall(ws.userId);\n  if (call) {\n    const callId = createCallId(call.callerId, call.calleeId);\n    const otherId = call.callerId === ws.userId ? call.calleeId : call.callerId;\n    endCall(callId);\n    deliverToUser(otherId, 'call:hangup', { callId, reason: 'peer_disconnected' });\n  }\n});",
+        options: [
+          "clients.delete must happen after the call cleanup",
+          "endCall is called before deliverToUser — if deliverToUser relies on the call Map, it will find nothing",
+          "getActiveCall should be called with callId, not userId",
+          "The close handler cannot be async"
+        ],
+        correct: 1,
+        explanation: "The order matters: endCall removes the ActiveCall from the Map, then deliverToUser tries to look it up (in some implementations). Safe order: deliver the hangup notification first, THEN call endCall. This way the other party's socket still receives the message before the call state is destroyed."
+      },
+      {
+        type: "which-breaks",
+        question: "Which approach correctly identifies whether a user is already in a call before initiating a new one?",
+        variants: [
+          "Check if activeCalls.has(ws.userId)",
+          "Check if getActiveCall(ws.userId) !== undefined",
+          "Check if activeCalls.size > 0",
+          "Check if ws.callId !== undefined"
+        ],
+        correct: 1,
+        explanation: "activeCalls is keyed by callId (e.g. 'call:3:7'), not by userId. So activeCalls.has(ws.userId) always returns false. getActiveCall(ws.userId) iterates the Map values and checks both callerId and calleeId, which is the correct approach. activeCalls.size > 0 would block all new calls whenever anyone is in a call. ws.callId is not a real property."
+      },
+      {
+        type: "order-steps",
+        question: "Put the call rejection flow in the correct order:",
+        steps: [
+          "Callee's app shows ringing UI",
+          "Callee taps Decline",
+          "App sends call:reject with callId to server",
+          "Server calls endCall(callId) and sends call:rejected to caller",
+          "Caller's app dismisses the ringing/waiting UI"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "The server receives call:reject from the callee, notifies the caller with call:rejected (note the past-tense form), and immediately cleans up the call state. The caller's app must handle call:rejected to dismiss its ringing screen. Without server cleanup, the call entry would leak in the activeCalls Map and future calls from either user would be blocked."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the busy-check so that the caller gets a call:busy response when they themselves are already in a call:",
+        code: "if (___(ws.userId)) {\n  sendTo(ws, 'call:busy', { reason: 'You are already in a call' });\n  return;\n}\nif (isInCall(calleeId)) {\n  sendTo(ws, 'call:busy', { reason: 'User is busy' });\n  return;\n}",
+        answer: "isInCall",
+        explanation: "isInCall(userId) calls getActiveCall internally and returns true if any ActiveCall in the Map has that userId as either callerId or calleeId. Checking the caller first prevents them from initiating a second call while already in one — a common edge case when the user's own call state wasn't cleaned up after a previous call."
+      },
+      {
+        type: "predict-output",
+        question: "What happens when the ring-timeout fires if the call was already answered?",
+        code: "// 30s after call:initiate:\nsetTimeout(() => {\n  const callId = createCallId(ws.userId, calleeId);\n  const call = getActiveCall(ws.userId);\n  if (call && createCallId(call.callerId, call.calleeId) === callId) {\n    deliverToUser(ws.userId, 'call:timeout', { callId });\n    deliverToUser(calleeId, 'call:timeout', { callId });\n    endCall(callId);\n  }\n}, 30000);\n// Callee answered at t=10s; at t=30s the timeout fires",
+        answer: "Nothing happens — the guard condition (call still exists with the same callId) is false after hangup/answer, so the timeout is a no-op.",
+        explanation: "When the callee answers and the call eventually ends normally, endCall removes the entry from the Map. When the timeout fires at 30s, getActiveCall(ws.userId) returns undefined and the `if` condition is false. This stale-check pattern is essential for any setTimeout in a stateful server — always verify the state is still what you expect before acting."
+      },
+      {
+        type: "spot-the-bug",
+        question: "Token privacy rule: what is wrong with this call:initiate handler?",
+        code: "export async function handleCallInitiate(ws, payload) {\n  const { targetUserId, type } = payload;\n\n  if (isInCall(ws.userId) || isInCall(targetUserId)) {\n    sendTo(ws, 'call:busy', {});\n    return;\n  }\n\n  const callId = createCallId(ws.userId, targetUserId);\n  startCall(callId, { callerId: ws.userId, calleeId: targetUserId, type });\n  deliverToUser(targetUserId, 'call:incoming', { callId, callerId: ws.userId, type });\n}",
+        options: [
+          "isInCall is called before startCall, which causes a race condition",
+          "The handler accepts a raw targetUserId from the client, bypassing Token's access control — callers should only be able to reach users via an active conversation backed by a valid token",
+          "type should default to 'voice' when not provided",
+          "createCallId is called with the wrong argument order"
+        ],
+        correct: 1,
+        explanation: "Token's privacy model requires that a caller can only reach a callee if they have an active conversation backed by a non-revoked token. Accepting a raw targetUserId from the client skips this check entirely — any authenticated user could call any other user ID. The correct approach: accept conversationId, query the conversation table, validate ws.userId is a participant, check the token is active, then derive calleeId from the database."
+      },
+      {
+        type: "multiple-choice",
+        question: "Which ICE candidate type has the highest latency but always works even through symmetric NATs?",
+        options: [
+          "host — uses the device's local IP",
+          "srflx — server reflexive, discovered via STUN",
+          "relay — uses a TURN server as a media relay",
+          "prflx — peer reflexive, discovered mid-session"
+        ],
+        correct: 2,
+        explanation: "A relay (TURN) candidate routes all media through the TURN server, adding latency proportional to the extra network hop. It is the fallback of last resort — used only when host and srflx candidates fail (e.g. both peers are behind symmetric NATs that block UDP). For Token's privacy mode, you can force relay-only with iceTransportPolicy: 'relay' to prevent IP leakage, accepting the latency trade-off."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the SDP line that declares VP8 video at 90 kHz clock rate:",
+        code: "// SDP snippet in a call:offer payload:\nm=video 9 UDP/TLS/RTP/SAVPF 96\na=rtpmap:96 ___/90000",
+        answer: "VP8",
+        explanation: "VP8 is a common open-source video codec used in WebRTC. The SDP 'a=rtpmap' attribute maps the payload type number (96) to a codec name and clock rate. The signalling server never reads this line — it passes the entire SDP blob opaquely. But understanding what's in the SDP helps you debug calls where codec negotiation fails."
+      },
+      {
+        type: "predict-output",
+        question: "After one complete call (initiate → answer → hangup), what is activeCalls.size?",
+        code: "// Initial state\nconsole.log(activeCalls.size); // ?\n\n// Call starts\nstartCall('call:3:7', { callerId: 3, calleeId: 7, type: 'voice' });\nconsole.log(activeCalls.size); // ?\n\n// Call ends\nendCall('call:3:7');\nconsole.log(activeCalls.size); // ?",
+        answer: "0\n1\n0",
+        explanation: "activeCalls is a plain Map. startCall does activeCalls.set(callId, call), adding one entry. endCall does activeCalls.delete(callId), removing it. The Map returns to size 0 after cleanup. If endCall is never called (e.g. on crash), the entry leaks and future calls from either user will be blocked by the isInCall check — which is why disconnect cleanup is mandatory."
+      },
+      {
+        type: "which-breaks",
+        question: "The signalling server receives a call:offer message. Which implementation is correct?",
+        variants: [
+          "Parse the SDP string to verify it contains at least one m= line before forwarding",
+          "Base64-encode the SDP string before forwarding to prevent injection",
+          "Forward the SDP string as-is to the peer identified by the callId, without parsing or modifying it",
+          "Store the SDP in the database so call quality can be audited later"
+        ],
+        correct: 2,
+        explanation: "The signalling server is a relay, not a media processor. SDP parsing is complex and error-prone (the spec has hundreds of edge cases). The correct stance: trust that the sender's WebRTC stack generated valid SDP and forward it unchanged. The receiving peer's WebRTC stack handles validation. Storing SDP in a database would also be a privacy concern — SDP can contain IP addresses and fingerprints."
+      },
+      {
+        type: "order-steps",
+        question: "Put the ICE negotiation steps in order after both RTCPeerConnections are created:",
+        steps: [
+          "Each peer's ICE agent gathers local candidates (host, srflx via STUN)",
+          "Each candidate is sent to the other peer via call:ice through the signalling server",
+          "Each peer calls addIceCandidate() to register the remote candidates",
+          "ICE agent tries candidate pairs — local candidate vs. remote candidate",
+          "Best working pair is selected; DTLS handshake completes; media flows"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Gathering → relay → register → connectivity checks → media. ICE candidates trickle in over time (trickle ICE) — you don't wait for all candidates before starting connectivity checks. This means call:ice messages can arrive while SDP offer/answer is still being exchanged. The client must buffer candidates received before setRemoteDescription() completes."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What is wrong with this handleCallAnswer function?",
+        code: "export function handleCallAnswer(ws, payload) {\n  const call = getActiveCallForUser(ws.userId, payload.callId);\n  if (!call) {\n    sendTo(ws, 'error', { message: 'No active call' });\n    return;\n  }\n\n  // Always send the answer to the callee\n  deliverToUser(call.calleeId, 'call:answer', {\n    callId: payload.callId,\n    sdp: payload.sdp\n  });\n}",
+        options: [
+          "sendTo should be deliverToUser",
+          "The answer should go to the CALLER (call.callerId), not the callee — the callee is the one sending the answer",
+          "call:answer should be call:sdp-answer",
+          "payload.sdp should be JSON.stringify'd before forwarding"
+        ],
+        correct: 1,
+        explanation: "The callee generates the SDP answer and sends call:answer to the server. The server must relay it to the CALLER, who is waiting to call setRemoteDescription(). Sending it back to the callee would loop the message to the wrong party and the caller would never receive the answer, leaving the connection stuck. Always relay to the OTHER party: the sender of offer/answer/ice is never the recipient."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the Map lookup to find a user's current active call:",
+        code: "export function getActiveCall(userId: number): ActiveCall | undefined {\n  for (const call of activeCalls.___()) {\n    if (call.callerId === userId || call.calleeId === userId) {\n      return call;\n    }\n  }\n  return undefined;\n}",
+        answer: "values",
+        explanation: "activeCalls is a Map<string, ActiveCall> keyed by callId. To find a call by userId, iterate the Map values (the ActiveCall objects) and check both callerId and calleeId. Using activeCalls.keys() would give strings, and activeCalls.entries() would give [key, value] pairs. Only .values() gives the ActiveCall objects directly for the membership check."
+      },
+      {
+        type: "predict-output",
+        question: "User 5 is in an active call. What does isInCall(5) return?",
+        code: "// activeCalls Map contains:\n// 'call:5:9' => { callerId: 5, calleeId: 9, type: 'voice' }\n\nexport function isInCall(userId) {\n  return getActiveCall(userId) !== undefined;\n}\n\nconsole.log(isInCall(5));\nconsole.log(isInCall(9));\nconsole.log(isInCall(3));",
+        answer: "true\ntrue\nfalse",
+        explanation: "Both callerId (5) and calleeId (9) are in the call — getActiveCall finds them by scanning all values and checking both fields. User 3 has no entry in any active call, so getActiveCall(3) returns undefined and isInCall(3) is false. This is why isInCall correctly blocks EITHER party from entering a second call."
+      },
+      {
+        type: "which-breaks",
+        question: "How should the server handle a call:hangup from a user who is NOT in an active call (e.g. duplicate hangup)?",
+        variants: [
+          "Throw an error and close the WebSocket connection",
+          "Return an error message to the client",
+          "Silently return without doing anything — this is expected and should not be an error",
+          "Re-send call:hangup to all connected users as a broadcast"
+        ],
+        correct: 2,
+        explanation: "Duplicate hangup messages are normal: the user may tap hang up twice, or a timeout and a manual hangup race. The handler already does `if (!call) return;` which silently ignores the second hangup. This is correct. Returning an error for a no-op would confuse the client. Closing the connection would be catastrophic. The golden rule: idempotent cleanup handlers are safe; noisy ones cause bugs."
+      },
+      {
+        type: "multiple-choice",
+        question: "Why does Token use its own signalling server rather than a third-party service like Firebase Realtime Database?",
+        options: [
+          "Firebase Realtime Database does not support JSON messages",
+          "Token is self-hosted and open-source by design; using Firebase would introduce a proprietary dependency, require sharing user call metadata with Google, and violate the project's open-source constraint",
+          "Firebase is too slow for signalling",
+          "Third-party signalling services do not support ICE candidates"
+        ],
+        correct: 1,
+        explanation: "Token's requirements are: fully open source, self-hosted, and privacy-first. Firebase Realtime Database is proprietary, routes data through Google's infrastructure, and would mean call metadata (who called whom, when) is stored with a third party. A plain WebSocket server on the same Coolify VPS is simpler, faster, cheaper, and keeps all metadata on your own hardware."
+      },
+      {
+        type: "order-steps",
+        question: "Put the call:busy flow in the correct order:",
+        steps: [
+          "Caller sends call:initiate for user ID 9",
+          "Server calls isInCall(9) and finds user 9 is in 'call:9:12'",
+          "Server responds to the caller with call:busy { reason: 'User is busy' }",
+          "Server does NOT create a new call entry or notify user 9",
+          "Caller's app shows 'User is busy, try again later'"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "When the callee is busy, the server short-circuits immediately after the busy check — no call state is created, no notification is sent to the callee (interrupting an active call with a new incoming ring would be disruptive), and the caller's app handles the UI. This is different from call:reject where the callee actively declines; busy is a server-side guard before the call even reaches the callee."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What is the problem with this ring-timeout implementation?",
+        code: "async function handleCallInitiate(ws, payload) {\n  // ... validation and call setup ...\n  const callId = createCallId(ws.userId, calleeId);\n  startCall(callId, { callerId: ws.userId, calleeId, type: payload.type });\n\n  deliverToUser(calleeId, 'call:incoming', { callId, callerId: ws.userId });\n\n  // Ring timeout\n  setTimeout(() => {\n    deliverToUser(ws.userId, 'call:timeout', { callId });\n    deliverToUser(calleeId, 'call:timeout', { callId });\n    endCall(callId);\n  }, 30000);\n}",
+        options: [
+          "setTimeout should be setInterval",
+          "The timeout fires unconditionally — it does not check whether the call was already answered or rejected, causing a spurious call:timeout after a normal call",
+          "endCall should be called before deliverToUser",
+          "30000 milliseconds is too short for a ring timeout"
+        ],
+        correct: 1,
+        explanation: "The missing guard is the stale-check: `const call = getActiveCall(ws.userId); if (call && createCallId(call.callerId, call.calleeId) === callId)`. Without it, the timeout fires 30 seconds after initiation regardless of what happened — it would send call:timeout even if the call was answered at second 10 and ended normally at second 25. Always check that the state you're about to act on still exists and hasn't changed."
       }
     ]);
   </script>

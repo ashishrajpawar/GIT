@@ -564,6 +564,242 @@ console.log('2 hours:', formatLastSeen(7200000));`);
         ],
         correctOrder: [0, 1, 2, 3, 4],
         explanation: "Start on keystroke, forward through server, display on recipient, stop on silence, clear on recipient. The round-trip is fast (<100ms on good connections), so the indicator appears almost instantly when the other person starts typing."
+      },
+
+      // --- Questions 6–25 ---
+
+      {
+        question: "What is the key difference between debouncing and throttling typing events?",
+        options: [
+          "They are the same thing — just different names",
+          "Debounce waits for a pause before firing; throttle fires at a fixed maximum rate regardless of pauses",
+          "Throttle waits for a pause; debounce fires at a fixed rate",
+          "Debounce fires on every event; throttle fires only once"
+        ],
+        correct: 1,
+        explanation: "Debounce delays execution until after a quiet period — perfect for typing:stop (wait for the user to stop). Throttle ensures at most one call per interval — useful for scroll events. For typing indicators, debounce is the right choice for the stop signal because you want to wait for a genuine pause, not limit the rate."
+      },
+
+      {
+        type: "predict-output",
+        question: "What does this debounce output when called three times rapidly?",
+        code: "function debounce(fn, delay) {\n  let timer = null;\n  return function(...args) {\n    clearTimeout(timer);\n    timer = setTimeout(() => fn(...args), delay);\n  };\n}\n\nconst log = debounce((msg) => console.log(msg), 200);\n\nlog('a');\nlog('b');\nlog('c');\n// (after 200ms)",
+        answer: "c",
+        explanation: "Each call to log() clears the previous timer and sets a new one. Only the last call ('c') survives the 200ms wait and actually executes the inner function. 'a' and 'b' are cancelled. This is exactly how useTypingIndicator works — only the final keystroke's stop-timer fires."
+      },
+
+      {
+        type: "fill-blank",
+        question: "Complete the useTypingIndicator hook: clear the previous timeout before setting a new one.",
+        code: "const handleTextChange = useCallback((text: string) => {\n  if (text.length > 0 && !isTyping.current) {\n    isTyping.current = true;\n    send('typing:start', { conversationId });\n  }\n\n  if (timeoutRef.current) ___(timeoutRef.current);\n\n  if (text.length > 0) {\n    timeoutRef.current = setTimeout(() => {\n      isTyping.current = false;\n      send('typing:stop', { conversationId });\n    }, 3000);\n  }\n}, [conversationId]);",
+        answer: "clearTimeout",
+        explanation: "clearTimeout() cancels a previously scheduled setTimeout. Without it, you'd accumulate hundreds of timers — one per keystroke — and get many spurious typing:stop events. Always clear before setting a new timer when debouncing."
+      },
+
+      {
+        type: "spot-the-bug",
+        question: "This presence hook has a subtle bug. What is it?",
+        code: "export function usePresence(userId: number) {\n  const [presence, setPresence] = useState({\n    status: 'offline',\n    lastSeenAt: null,\n  });\n\n  useWsMessage('presence:update', (payload) => {\n    setPresence({\n      status: payload.status,\n      lastSeenAt: payload.lastSeenAt,\n    });\n  });\n\n  return presence;\n}",
+        options: [
+          "useState initial value should be null, not an object",
+          "The WebSocket listener updates presence for ANY user, not just the userId being tracked",
+          "lastSeenAt should be a number not a string",
+          "useWsMessage cannot be used in a custom hook"
+        ],
+        correct: 1,
+        explanation: "The listener is missing payload.userId === userId check. All users' presence events flow through the same WebSocket channel. Without filtering, one person going online would set 'online' presence for every usePresence hook in every component — regardless of which userId they're tracking."
+      },
+
+      {
+        type: "which-breaks",
+        question: "Which implementation correctly calls stopTyping() when a message is sent?",
+        variants: [
+          "function handleSend() {\n  stopTyping();\n  if (!text.trim()) return;\n  sendMessage(text);\n  setText('');\n}",
+          "function handleSend() {\n  if (!text.trim()) return;\n  stopTyping();\n  sendMessage(text);\n  setText('');\n}",
+          "function handleSend() {\n  if (!text.trim()) return;\n  sendMessage(text);\n  setText('');\n  // stopTyping not needed\n}",
+          "function handleSend() {\n  if (!text.trim()) return;\n  sendMessage(text);\n  stopTyping();\n  setText('');\n}"
+        ],
+        correct: 1,
+        explanation: "Option B is correct: guard the empty check first (return early if no text), then call stopTyping() before sending. Option A calls stopTyping() even when the message isn't sent. Option C skips stopTyping entirely — the 3-second timer will eventually fire but the other user sees 'typing...' unnecessarily after the message arrives. Option D works but calling stopTyping after sendMessage is a minor race condition."
+      },
+
+      {
+        question: "Why does useTypingIndicator use useRef for isTyping instead of useState?",
+        options: [
+          "useRef is faster than useState",
+          "The isTyping flag doesn't need to trigger a re-render — it's internal bookkeeping for the hook's logic only",
+          "useState can't hold boolean values",
+          "useRef persists across component unmounts"
+        ],
+        correct: 1,
+        explanation: "isTyping.current is read and written inside event handlers and timeouts — it's used to decide whether to send a WS message, not to update the UI. If it were useState, every keystroke would trigger an extra re-render. useRef gives you a mutable container that survives re-renders without causing them."
+      },
+
+      {
+        type: "predict-output",
+        question: "User types 'Hi', clears the input, then types 'Hello'. How many typing:start events are sent?",
+        code: "// t=0ms:   type 'H'  → isTyping=false → send typing:start, set isTyping=true\n// t=100ms: type 'i'  → isTyping=true  → reset timer only\n// t=200ms: clear '' → isTyping=true  → send typing:stop, set isTyping=false\n// t=500ms: type 'H'  → isTyping=false → send typing:start, set isTyping=true\n// t=600ms: type 'e'  → isTyping=true  → reset timer only\n// ... 'l', 'l', 'o'  → reset timer only",
+        answer: "2",
+        explanation: "Two typing:start events are sent: one when 'H' is first typed, and a second when the user starts typing again after clearing the input. Clearing the input (text.length === 0) immediately sends typing:stop and resets isTyping to false — so the next keystroke triggers a fresh start."
+      },
+
+      {
+        type: "order-steps",
+        question: "Order the steps to set up the PresenceDot in the message thread header:",
+        steps: [
+          "Call usePresence(otherUserId) to get { status, lastSeenAt }",
+          "Pass status and lastSeenAt as props to PresenceDot",
+          "Use navigation.setOptions({ headerTitle }) to replace the default header",
+          "Import usePresence and PresenceDot in MessageThreadScreen",
+          "Wrap title and dot in a View with flexDirection: 'row'"
+        ],
+        correctOrder: [3, 2, 0, 4, 1],
+        explanation: "First import the hooks/components (3), then configure the navigation header (2), call the hook for data (0), build the layout (4), and finally pass the data as props to render (1). The hook call must happen inside the component that renders in the header."
+      },
+
+      {
+        type: "fill-blank",
+        question: "Complete the safety timeout that auto-clears a stale typing indicator after 5 seconds:",
+        code: "useEffect(() => {\n  if (!isOtherTyping) return;\n\n  const timer = setTimeout(() => ___(false), 5000);\n  return () => clearTimeout(timer);\n}, [isOtherTyping]);",
+        answer: "setIsOtherTyping",
+        explanation: "When isOtherTyping becomes true, we start a 5-second timer. If no typing:stop arrives within 5 seconds, we force the state back to false. The cleanup function clears the timer when the effect re-runs (e.g., isOtherTyping toggles back to false before the timeout) — preventing a double-clear."
+      },
+
+      {
+        type: "spot-the-bug",
+        question: "The BouncingDots component has a performance bug. What is it?",
+        code: "function BouncingDots() {\n  const dot1 = new Animated.Value(0);\n  const dot2 = new Animated.Value(0);\n  const dot3 = new Animated.Value(0);\n\n  useEffect(() => {\n    const a1 = animate(dot1, 0);\n    const a2 = animate(dot2, 150);\n    const a3 = animate(dot3, 300);\n    a1.start(); a2.start(); a3.start();\n    return () => { a1.stop(); a2.stop(); a3.stop(); };\n  }, []);\n\n  // ...\n}",
+        options: [
+          "useEffect dependency array should include dot1, dot2, dot3",
+          "Animated.Value instances are recreated on every render since they're declared outside useRef",
+          "a1.stop() doesn't work on looping animations",
+          "Animated.loop needs a callback"
+        ],
+        correct: 1,
+        explanation: "Declaring Animated.Value with 'new' at the top level of the component body means new instances are created on every render. This breaks the animation reference the useEffect is holding. The fix: wrap them in useRef — const dot1 = useRef(new Animated.Value(0)).current — so the same instance persists across re-renders."
+      },
+
+      {
+        question: "In Token's privacy model, what should happen when a user enables 'Hide my presence'?",
+        options: [
+          "The server should send fake 'offline' presence events to all observers",
+          "The client should not render PresenceDot at all",
+          "The server should stop broadcasting presence:update events for that user, and their status should appear as offline to others",
+          "Presence data should be deleted from the database"
+        ],
+        correct: 2,
+        explanation: "Privacy is enforced server-side: the server checks the user's presence visibility preference before broadcasting. If the user hides presence, no presence:update events are sent for them — observers see their last known state (offline). Client-side hiding only is insufficient because someone could intercept the raw WebSocket messages. The Token principle: privacy controls belong in the server, not the UI."
+      },
+
+      {
+        type: "predict-output",
+        question: "What does formatLastSeen output for a timestamp 90 minutes ago?",
+        code: "function formatLastSeen(iso) {\n  const diff = Date.now() - new Date(iso).getTime();\n  const minutes = Math.floor(diff / 60000);\n  if (minutes < 1) return 'Last seen just now';\n  if (minutes < 60) return `Last seen ${minutes}m ago`;\n  const hours = Math.floor(minutes / 60);\n  if (hours < 24) return `Last seen ${hours}h ago`;\n  return `Last seen ${new Date(iso).toLocaleDateString()}`;\n}\n// Called with a timestamp 90 minutes in the past",
+        answer: "Last seen 1h ago",
+        explanation: "90 minutes = 1.5 hours. Math.floor(1.5) = 1. So the output is 'Last seen 1h ago'. The function uses integer division throughout — 89 minutes would return 'Last seen 89m ago' (still under 60), and 120 minutes would return 'Last seen 2h ago'."
+      },
+
+      {
+        type: "which-breaks",
+        question: "Which approach correctly avoids re-rendering the FlatList when a typing:update arrives?",
+        variants: [
+          "// Store typing state in MessageThreadScreen\nconst [isTyping, setIsTyping] = useState(false);\n// Pass to TypingIndicator as prop",
+          "// TypingIndicator manages its own state internally\n// MessageThreadScreen just renders <TypingIndicator />",
+          "// Use Redux to share typing state globally",
+          "// Pass a callback from MessageThread into TypingIndicator"
+        ],
+        correct: 1,
+        explanation: "When TypingIndicator owns its own state (option B), typing:update events only re-render TypingIndicator. With option A, the state lives in MessageThreadScreen — any state change there re-renders the whole screen including the FlatList. This 'lift state DOWN' pattern is the key performance insight: components subscribe to only what they need."
+      },
+
+      {
+        type: "fill-blank",
+        question: "Complete the onChangeText handler that both updates the text state and triggers typing detection:",
+        code: "const { handleTextChange, stopTyping } = useTypingIndicator(conversationId);\n\nfunction onChangeText(newText: string) {\n  setText(newText);\n  ___(newText);\n}",
+        answer: "handleTextChange",
+        explanation: "onChangeText calls both setText (to update the controlled input value) and handleTextChange (to run the debounce logic and send WS events). They're separate concerns: one manages UI state, one manages real-time signalling. Combining them in one function keeps the component clean."
+      },
+
+      {
+        type: "spot-the-bug",
+        question: "This multi-user typing display has a bug. What is it?",
+        code: "const [typingUsers, setTypingUsers] = useState([]);\n\nuseWsMessage('typing:update', (payload) => {\n  if (payload.conversationId !== conversationId) return;\n  if (payload.isTyping) {\n    setTypingUsers(prev => [...prev, payload.userId]);\n  } else {\n    setTypingUsers(prev => prev.filter(id => id !== payload.userId));\n  }\n});\n\n// Display:\nif (typingUsers.length === 0) return null;\nreturn <Text>{typingUsers.length} people typing...</Text>;",
+        options: [
+          "filter() doesn't work on arrays of numbers",
+          "Starting typing events can add the same userId multiple times to the array",
+          "The component needs a key prop",
+          "useState should use useReducer instead"
+        ],
+        correct: 1,
+        explanation: "If typing:update { isTyping: true } fires multiple times for the same user (e.g., they briefly lost connection and reconnected), the userId gets pushed multiple times. The fix: use a Set or deduplicate on add: setTypingUsers(prev => prev.includes(payload.userId) ? prev : [...prev, payload.userId])."
+      },
+
+      {
+        question: "What happens if you forget to return the cleanup function from the safety timeout useEffect in TypingIndicator?",
+        options: [
+          "Nothing — cleanup is optional in useEffect",
+          "The timer still fires but React shows a warning",
+          "If isOtherTyping flips false then true again quickly, multiple timers run concurrently — the indicator may disappear unexpectedly",
+          "The component will crash"
+        ],
+        correct: 2,
+        explanation: "Without cleanup, each time isOtherTyping changes to true, a new 5-second timer is registered and the old one is NOT cancelled. If the user stops and starts typing rapidly, multiple timers accumulate. One of them will fire and set isOtherTyping to false at an unexpected time — making the dots vanish mid-typing. Always return clearTimeout from effects that set timers."
+      },
+
+      {
+        type: "predict-output",
+        question: "What does this presence update handler set lastSeenAt to when a user comes online?",
+        code: "useWsMessage('presence:update', (payload) => {\n  if (payload.userId === userId) {\n    setPresence({\n      status: payload.status,\n      lastSeenAt: payload.status === 'offline'\n        ? new Date().toISOString()\n        : null,\n    });\n  }\n});\n// payload = { userId: 5, status: 'online' }",
+        answer: "null",
+        explanation: "When status is 'online', lastSeenAt is set to null. The ternary only records the timestamp when the user goes offline (that's the 'last seen' moment). When online, there's no meaningful 'last seen' — they're here now. The PresenceDot component uses null to decide to show 'Online' rather than a timestamp."
+      },
+
+      {
+        type: "order-steps",
+        question: "Order the steps that happen when a token holder sends a message in Token:",
+        steps: [
+          "TextInput onChangeText fires, calling handleTextChange",
+          "User presses the Send button",
+          "handleSend calls stopTyping() — clears timer, sends typing:stop if needed",
+          "The message is sent via WebSocket",
+          "setText('') clears the input",
+          "handleTextChange: isTyping becomes true, typing:start sent over WebSocket"
+        ],
+        correctOrder: [0, 5, 1, 2, 3, 4],
+        explanation: "The flow: type first character (0) triggers typing:start (5), user composes and hits send (1), stopTyping runs immediately (2), message is sent (3), input clears (4). stopTyping before the message send ensures the recipient sees the typing indicator disappear at the same time or before the message arrives."
+      },
+
+      {
+        type: "fill-blank",
+        question: "Complete the PresenceDot component to conditionally apply green or grey color:",
+        code: "export function PresenceDot({ status, lastSeenAt, showLabel = false }) {\n  return (\n    <View style={styles.container}>\n      <View style={[\n        styles.dot,\n        status === 'online' ? ___ : styles.offline\n      ]} />\n    </View>\n  );\n}",
+        answer: "styles.online",
+        explanation: "The conditional style applies styles.online (green background) when status is 'online', falling back to styles.offline (grey) for any other value. React Native StyleSheet.create doesn't accept dynamic values, so this array syntax — passing two style objects — is the standard way to conditionally apply styles."
+      },
+
+      {
+        type: "which-breaks",
+        question: "Which implementation of usePresence correctly handles the userId changing (e.g., navigating to a different conversation)?",
+        variants: [
+          "useEffect(() => {\n  apiRequest('GET', `/users/${userId}/presence`)\n    .then(res => setPresence(res.data));\n}, []); // empty deps",
+          "useEffect(() => {\n  apiRequest('GET', `/users/${userId}/presence`)\n    .then(res => setPresence(res.data));\n}, [userId]); // userId in deps",
+          "// No useEffect — call API directly in component body",
+          "useEffect(() => {\n  apiRequest('GET', `/users/${userId}/presence`)\n    .then(res => setPresence(res.data));\n}); // no deps array — run every render"
+        ],
+        correct: 1,
+        explanation: "Option B is correct: userId in the dependency array means the effect re-runs when userId changes, fetching fresh presence data for the new user. Option A only fetches on mount — navigating to a different thread shows stale presence. Option C causes an error (no side effects in render). Option D re-fetches on every render causing infinite loops."
+      },
+
+      {
+        question: "Token issues tokens instead of sharing phone numbers. How does this affect the typing indicator implementation?",
+        options: [
+          "Tokens can't be used with WebSocket connections",
+          "No impact — typing indicators use conversationId and userId, not the token code itself",
+          "The typing:start event must include the token code instead of userId",
+          "Typing indicators should be disabled for token-based conversations"
+        ],
+        correct: 1,
+        explanation: "Typing indicators use conversationId (to scope to the right chat) and userId (to filter your own events). The token code (MERC-8GH2-LP4X) is the access credential — it identifies which conversation you can join, but once inside, standard WebSocket presence events work normally with internal IDs. The privacy comes from not exposing the phone number, not from changing the real-time protocol."
       }
     ]);
   </script>

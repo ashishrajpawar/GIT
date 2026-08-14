@@ -517,6 +517,218 @@ CMD ["node", "dist/server.js"]
                 ],
                 correct: 1,
                 explanation: "If an attacker exploits a vulnerability in your app, they get the permissions of the user running the process. As root, they could install packages, read /etc/shadow, or escape to the host. As 'token', they can only access the app's own files."
+            },
+            // --- Questions 6-25 ---
+            {
+                question: "What does the WORKDIR instruction do in a Dockerfile?",
+                options: [
+                    "Creates a directory on the host machine",
+                    "Sets the working directory for subsequent instructions (RUN, CMD, COPY, etc.)",
+                    "Mounts a volume at the specified path",
+                    "Changes the build context directory"
+                ],
+                correct: 1,
+                explanation: "WORKDIR sets the working directory inside the container for all subsequent instructions. If the directory doesn't exist, Docker creates it. It's like cd but persistent across layers."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the Dockerfile instruction that exposes port 3000 for documentation purposes:",
+                code: "___ 3000",
+                answer: "EXPOSE",
+                explanation: "EXPOSE documents which port the container listens on. It doesn't actually publish the port — you still need -p 3000:3000 at runtime or ports: in docker-compose. It's metadata for other developers and tools."
+            },
+            {
+                type: "predict-output",
+                question: "What is the final value of NODE_ENV in the running container?",
+                code: "// Dockerfile:\n// ENV NODE_ENV=production\n//\n// docker run -e NODE_ENV=development token-api\nconsole.log(process.env.NODE_ENV);",
+                answer: "development",
+                explanation: "Runtime environment variables (-e flag or environment: in compose) override ENV values set in the Dockerfile. The Dockerfile sets defaults; runtime flags take precedence."
+            },
+            {
+                type: "spot-the-bug",
+                question: "Find the issue in this Dockerfile for the Token API:",
+                code: "FROM node:20-alpine\nWORKDIR /app\nCOPY package*.json ./\nRUN npm ci\nCOPY . .\nRUN npm run build\nEXPOSE 3000\nCMD npm start",
+                options: [
+                    "Line 3 — package*.json glob is invalid",
+                    "Line 8 — CMD should use exec form [\"npm\", \"start\"] for proper signal handling",
+                    "Line 5 — COPY . . should be COPY src/ ./src/"
+                ],
+                correct: 1,
+                explanation: "Shell form (CMD npm start) runs via /bin/sh -c, which doesn't forward signals like SIGTERM to the Node process. The container won't stop gracefully. Exec form [\"npm\", \"start\"] or better [\"node\", \"dist/server.js\"] receives signals directly."
+            },
+            {
+                type: "which-breaks",
+                question: "Which docker-compose volume syntax is INVALID?",
+                variants: [
+                    "volumes:\n  - ./src:/app/src",
+                    "volumes:\n  - pgdata:/var/lib/postgresql/data",
+                    "volumes:\n  - /app/node_modules"
+                ],
+                correct: 2,
+                explanation: "Actually none of these break — option C is a valid anonymous volume that prevents the bind mount from overwriting node_modules. Trick question: all three are valid Docker Compose volume syntaxes. Anonymous volumes, named volumes, and bind mounts are all supported."
+            },
+            {
+                type: "order-steps",
+                question: "Order the steps to deploy the Token API container to production:",
+                steps: [
+                    "Write a .dockerignore to exclude node_modules and .env",
+                    "Build the image: docker build -t token-api:1.0 .",
+                    "Push to registry: docker push registry/token-api:1.0",
+                    "Pull on production server: docker pull registry/token-api:1.0",
+                    "Run with environment config: docker run -d --env-file .env.prod token-api:1.0"
+                ],
+                correctOrder: [0, 1, 2, 3, 4],
+                explanation: "The .dockerignore must exist before build (it controls what enters the build context). Build creates the image locally, push uploads it, pull fetches it on the target server, and run starts the container with production config."
+            },
+            {
+                question: "What is the difference between ARG and ENV in a Dockerfile?",
+                options: [
+                    "ARG is available only during build, ENV persists into the running container",
+                    "ENV is available only during build, ARG persists into the running container",
+                    "ARG sets environment variables, ENV sets build arguments",
+                    "They are identical but ARG is the newer syntax"
+                ],
+                correct: 0,
+                explanation: "ARG defines build-time variables (used in RUN commands during docker build). ENV defines runtime environment variables available to the running container. Use ARG for build secrets or version flags; use ENV for app configuration."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the multi-stage build to copy only the built output:",
+                code: "FROM node:20-alpine AS builder\nWORKDIR /app\nCOPY . .\nRUN npm ci && npm run build\n\nFROM node:20-alpine\nWORKDIR /app\nCOPY --from=___ /app/dist ./dist\nCOPY --from=builder /app/node_modules ./node_modules\nCMD [\"node\", \"dist/server.js\"]",
+                answer: "builder",
+                explanation: "COPY --from=builder references the build stage named 'builder' (the AS alias). This copies only the compiled output and production dependencies into the final image, leaving behind TypeScript source, devDependencies, and build tools — dramatically reducing image size."
+            },
+            {
+                type: "predict-output",
+                question: "What happens when you run this docker-compose command?",
+                code: "// docker-compose.yml services:\n//   api:\n//     ports:\n//       - \"3000:4000\"\n//\n// The Token API inside the container listens on port 4000.\n// You open http://localhost:3000 in your browser.\nconsole.log('Request reaches container port: 4000');",
+                answer: "Request reaches container port: 4000",
+                explanation: "Port mapping syntax is HOST:CONTAINER. So localhost:3000 on your machine maps to port 4000 inside the container. The app must listen on 4000 internally for this to work."
+            },
+            {
+                question: "Why should the Token API's .dockerignore include node_modules?",
+                options: [
+                    "node_modules contains sensitive credentials",
+                    "It reduces build context size and prevents host dependencies overwriting container dependencies",
+                    "Docker cannot copy node_modules directories",
+                    "It makes the container run faster"
+                ],
+                correct: 1,
+                explanation: "Sending node_modules in the build context is slow (hundreds of MB). Worse, host node_modules may contain native binaries compiled for macOS/Windows that won't work in the Linux container. Always install fresh inside the container with npm ci."
+            },
+            {
+                type: "spot-the-bug",
+                question: "Find the networking issue in this docker-compose.yml for Token:",
+                code: "services:\n  api:\n    environment:\n      DATABASE_URL: postgres://token:secret@localhost:5432/tokendb\n    depends_on:\n      - db\n  db:\n    image: postgres:16-alpine",
+                options: [
+                    "Line 4 — should use the service name 'db' instead of 'localhost'",
+                    "Line 6 — depends_on should use condition: service_healthy",
+                    "Line 7 — postgres:16-alpine doesn't exist"
+                ],
+                correct: 0,
+                explanation: "Inside Docker Compose, containers communicate via service names on the internal network. 'localhost' inside the api container refers to itself, not the db container. The URL should be postgres://token:secret@db:5432/tokendb."
+            },
+            {
+                type: "which-breaks",
+                question: "Which Dockerfile instruction will FAIL during build?",
+                variants: [
+                    "RUN apt-get update && apt-get install -y curl",
+                    "RUN echo $DATABASE_URL",
+                    "RUN --mount=type=secret,id=db_pass cat /run/secrets/db_pass"
+                ],
+                correct: 1,
+                explanation: "Option B won't technically fail, but it will print an empty string because DATABASE_URL is likely not set at build time (it's a runtime variable). However, all three are syntactically valid. The real danger is option B leaking secrets into build logs if you set it via ARG — it's a security anti-pattern, not a syntax error."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the healthcheck for the Postgres container:",
+                code: "services:\n  db:\n    image: postgres:16-alpine\n    healthcheck:\n      test: [\"CMD-SHELL\", \"pg_isready -U ___\"]\n      interval: 5s\n      timeout: 3s\n      retries: 5",
+                answer: "token",
+                explanation: "pg_isready checks if Postgres is accepting connections. The -U flag specifies which user to check as. For the Token app, the database user is 'token'. The healthcheck lets depends_on with condition: service_healthy work correctly."
+            },
+            {
+                type: "order-steps",
+                question: "Order the container lifecycle from creation to removal:",
+                steps: [
+                    "docker create (container exists but not running)",
+                    "docker start (container is running)",
+                    "docker stop (sends SIGTERM, then SIGKILL after timeout)",
+                    "docker rm (removes the stopped container)"
+                ],
+                correctOrder: [0, 1, 2, 3],
+                explanation: "Containers go through: created → running → stopped → removed. 'docker run' combines create+start. A stopped container still exists on disk (logs, filesystem) until explicitly removed. 'docker rm -f' combines stop+rm."
+            },
+            {
+                question: "What is the benefit of using node:20-alpine over node:20 as a base image?",
+                options: [
+                    "Alpine runs Node.js faster due to optimized musl libc",
+                    "Alpine images are ~150MB vs ~1GB, reducing pull times and attack surface",
+                    "Alpine includes more pre-installed tools for debugging",
+                    "Alpine is required for production Docker deployments"
+                ],
+                correct: 1,
+                explanation: "Alpine Linux is a minimal distribution (~5MB base). The node:20-alpine image is roughly 150MB vs ~1GB for the full Debian-based image. Smaller images mean faster deployments, less storage, and fewer packages that could contain vulnerabilities."
+            },
+            {
+                type: "predict-output",
+                question: "What is the final image size composition?",
+                code: "// Stage 1 (builder): node:20-alpine (150MB) + source (5MB) + all deps (200MB) + build output (2MB)\n// Stage 2 (final): node:20-alpine (150MB) + dist (2MB) + prod deps (80MB)\n// What gets shipped?\nconst finalSize = 150 + 2 + 80;\nconsole.log(finalSize + 'MB');",
+                answer: "232MB",
+                explanation: "Multi-stage builds discard everything from previous stages. Only the final FROM stage ships. The builder's 200MB of devDependencies and 5MB of TypeScript source are gone. You ship base image + compiled JS + production node_modules only."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the Dockerfile instruction to run the Token API as a non-root user:",
+                code: "FROM node:20-alpine\nRUN addgroup -S token && adduser -S token -G token\nWORKDIR /app\nCOPY --chown=token:token . .\n___ token\nCMD [\"node\", \"dist/server.js\"]",
+                answer: "USER",
+                explanation: "The USER instruction switches all subsequent commands (and the final CMD) to run as the specified user. Combined with --chown on COPY, this ensures the container process has minimal privileges — critical for the Token API which handles sensitive user data."
+            },
+            {
+                type: "spot-the-bug",
+                question: "Find the layer caching problem in this Dockerfile:",
+                code: "FROM node:20-alpine\nWORKDIR /app\nCOPY package.json ./\nARG BUILD_DATE\nRUN npm ci\nCOPY . .\nCMD [\"node\", \"dist/server.js\"]",
+                options: [
+                    "Line 3 — should also copy package-lock.json",
+                    "Line 4 — ARG before RUN npm ci busts the cache every build when BUILD_DATE changes",
+                    "Line 6 — COPY . . should come before npm ci"
+                ],
+                correct: 1,
+                explanation: "ARG values that change between builds invalidate all subsequent layers. Placing ARG BUILD_DATE before RUN npm ci means every build (with a new date) will re-run npm ci from scratch. Move the ARG after npm ci, or to just before where it's actually needed."
+            },
+            {
+                type: "which-breaks",
+                question: "Which docker image tag strategy will cause deployment issues?",
+                variants: [
+                    "docker build -t token-api:latest .\ndocker push token-api:latest",
+                    "docker build -t token-api:$(git rev-parse --short HEAD) .\ndocker push token-api:$(git rev-parse --short HEAD)",
+                    "docker build -t token-api:v1.2.3 .\ndocker push token-api:v1.2.3"
+                ],
+                correct: 0,
+                explanation: "Using only :latest is dangerous because you can't tell which version is running, can't rollback to a specific version, and Kubernetes/Coolify may not pull the new image if the tag hasn't changed. Always tag with a commit hash or semantic version for traceability."
+            },
+            {
+                question: "In Docker Compose, what does the 'networks' key allow you to do for the Token stack?",
+                options: [
+                    "Connect containers to the internet",
+                    "Isolate groups of services — e.g., only api can reach db, but web cannot",
+                    "Set static IP addresses required by Docker",
+                    "Enable HTTPS between containers"
+                ],
+                correct: 1,
+                explanation: "Custom networks let you segment services. For Token: api and db share a 'backend' network, while api and web share a 'frontend' network. The web container can never reach the database directly — defense in depth."
+            },
+            {
+                type: "order-steps",
+                question: "Order the steps Docker performs when you run 'docker build':",
+                steps: [
+                    "Read .dockerignore and exclude matched files from build context",
+                    "Send build context (remaining files) to Docker daemon",
+                    "Execute each Dockerfile instruction as a layer",
+                    "Check layer cache — reuse cached layers where possible",
+                    "Tag the final layer as the image"
+                ],
+                correctOrder: [0, 1, 2, 3, 4],
+                explanation: "Docker first filters the context via .dockerignore, sends it to the daemon, then processes instructions top-to-bottom. For each instruction, it checks if a cached layer exists. Steps 3 and 4 happen interleaved per instruction, but conceptually: filter → send → process with cache → tag."
             }
         ]);
     </script>

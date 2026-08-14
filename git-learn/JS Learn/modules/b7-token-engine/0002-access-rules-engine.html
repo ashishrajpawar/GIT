@@ -501,6 +501,199 @@ console.log('Result:', JSON.stringify(result));`);
         ],
         correct: 1,
         explanation: "Variant B uses > instead of >=. If end_time is '18:00' and currentTime is exactly '18:00', variant B would allow it (18:00 is not > 18:00). The window should be exclusive of the end time — a message at exactly 18:00 should be denied. Variants A and C both correctly use < for the end boundary."
+      },
+      // --- Questions 6-25 ---
+      {
+        type: "predict-output",
+        code: "const rules = {};\nconst hasRules = !rules || Object.keys(rules).length === 0;\nconsole.log(hasRules);",
+        answer: "true",
+        explanation: "An empty object {} is truthy, so !rules is false. But Object.keys({}).length === 0 is true. The || means if either condition is true, the result is true. Empty rules means open access — no restrictions applied."
+      },
+      {
+        type: "spot-the-bug",
+        code: "function evaluateChannelRestrict(rule, action) {\n  if (action === 'message' && !rule.allow_text) return { allowed: false };\n  if (action === 'voice' && !rule.allow_voice) return { allowed: false };\n  if (action === 'video_call' && !rule.allow_video) return { allowed: false };\n  return { allowed: true };\n}",
+        bugLine: 3,
+        options: [
+          "Line 2: should check rule.allow_text === false, not !rule.allow_text",
+          "Line 3: action type is 'voice_call' not 'voice' — this check never matches",
+          "Line 4: should use 'video' instead of 'video_call'"
+        ],
+        correct: 1,
+        explanation: "The Action type uses 'voice_call' not 'voice'. The check on line 3 will never match any incoming action, so voice calls would always be allowed regardless of the rule. This is a critical privacy bug."
+      },
+      {
+        type: "fill-blank",
+        code: "const dayMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };\nconst dayStr = dayFormatter.format(now);\nconst currentDay = ___[dayStr];",
+        answer: "dayMap",
+        explanation: "dayMap converts the short weekday string (from Intl.DateTimeFormat) to a numeric day index (0-6). This lets us compare against the rule's days array which uses numeric indices."
+      },
+      {
+        type: "predict-output",
+        code: "const rule = { days: [1, 2, 3, 4, 5] };\nconsole.log(rule.days.includes(0), rule.days.includes(6));",
+        answer: "false false",
+        explanation: "Days 0 (Sunday) and 6 (Saturday) are not in the array [1,2,3,4,5]. This rule only allows weekday access — Saturday and Sunday contacts are denied."
+      },
+      {
+        question: "Why is channel_restrict evaluated before time_window and contact_limit?",
+        options: [
+          "Channel restrictions are more important than time rules",
+          "It is a simple boolean check with no DB query or time calculation — cheapest to evaluate first",
+          "The order doesn't actually matter since all rules must pass",
+          "Channel restrictions apply globally while time rules are per-conversation"
+        ],
+        correct: 1,
+        explanation: "While all rules must pass regardless of order, evaluating cheapest first is an optimization. Channel restrict is a simple boolean lookup (O(1), no I/O). If it fails, we skip the time calculation and database query entirely."
+      },
+      {
+        type: "which-breaks",
+        variants: [
+          "if (!rules || Object.keys(rules).length === 0) return { allowed: true };",
+          "if (rules === null || rules === undefined) return { allowed: true };",
+          "if (JSON.stringify(rules) === '{}') return { allowed: true };"
+        ],
+        correct: 1,
+        explanation: "Variant B only checks null/undefined. If rules is an empty object {}, it passes the check and the engine tries to evaluate non-existent rule types. While the individual evaluateX functions won't run (their if-checks will be falsy), variant B doesn't correctly express the 'no rules = open access' intent as clearly and could fail if rules is explicitly set to {}."
+      },
+      {
+        type: "predict-output",
+        code: "const times = ['08:59', '09:00', '17:59', '18:00'];\nconst start = '09:00';\nconst end = '18:00';\ntimes.forEach(t => {\n  const blocked = t < start || t >= end;\n  console.log(t, blocked);\n});",
+        answer: "08:59 true\n09:00 false\n17:59 false\n18:00 true",
+        explanation: "08:59 is before start (blocked). 09:00 equals start — not less than start, not >= end (allowed). 17:59 is in range (allowed). 18:00 equals end — the >= end condition catches it (blocked). The window is [start, end) — inclusive start, exclusive end."
+      },
+      {
+        type: "order-steps",
+        steps: [
+          "Receive action request (message/call) from holder",
+          "Look up token status (is it active?)",
+          "Fetch rules JSONB from the tokens table",
+          "Check channel_restrict for the action type",
+          "Check time_window against current timezone time",
+          "Query DB for today's count, check contact_limit",
+          "Return { allowed: true } — all rules passed"
+        ],
+        correctOrder: [0, 1, 2, 3, 4, 5, 6],
+        explanation: "The full pipeline: action arrives, check token is active (gate), load rules, then evaluate from cheapest to most expensive. Only after all checks pass does the action proceed."
+      },
+      {
+        type: "fill-blank",
+        code: "const { rows } = await pool.query(\n  `SELECT COUNT(*)::int as cnt FROM messages m\n   JOIN conversations c ON m.conversation_id = c.id\n   WHERE c.token_id = $1\n     AND m.sender_role = '___'\n     AND m.created_at >= $2`,\n  [tokenId, todayStart.toISOString()]\n);",
+        answer: "holder",
+        explanation: "We only count messages sent by the holder (sender_role = 'holder'). The token owner's replies should not count against the holder's daily limit — the owner is always free to respond."
+      },
+      {
+        type: "spot-the-bug",
+        code: "async function evaluateContactLimit(rule, tokenId, action) {\n  const todayStart = new Date();\n  todayStart.setHours(0, 0, 0, 0);\n  const { rows } = await pool.query(\n    'SELECT COUNT(*)::int as cnt FROM messages WHERE token_id = $1 AND created_at >= $2',\n    [tokenId, todayStart.toISOString()]\n  );\n  if (rows[0].cnt >= rule.max_messages_per_day) return { allowed: false };\n  return { allowed: true };\n}",
+        bugLine: 3,
+        options: [
+          "Line 3: setHours uses local time, not UTC — counts will vary by server timezone",
+          "Line 5: Messages table may not have a direct token_id column — needs JOIN through conversations",
+          "Line 8: Should use > instead of >="
+        ],
+        correct: 0,
+        explanation: "setHours(0,0,0,0) uses the server's local timezone. If the server is in UTC but the user is in Asia/Kolkata, the 'day' boundary is wrong. Use setUTCHours(0,0,0,0) or calculate the boundary in the user's timezone."
+      },
+      {
+        question: "What happens when evaluateRules encounters an unexpected rule type it doesn't recognize?",
+        options: [
+          "It throws a TypeError crashing the server",
+          "It ignores the unknown rule and allows the action",
+          "With the deny-by-default wrapper, any unhandled exception blocks the action",
+          "It logs a warning and asks the user to update their rules"
+        ],
+        correct: 2,
+        explanation: "The evaluateRulesSafe wrapper catches all exceptions and returns { allowed: false }. If a new rule type causes an error during evaluation, deny-by-default ensures the action is blocked rather than accidentally allowed."
+      },
+      {
+        type: "predict-output",
+        code: "const rules = { channel_restrict: { allow_text: true, allow_voice: false, allow_video: false } };\nconst actions = ['message', 'voice_call', 'video_call'];\nactions.forEach(a => {\n  const cr = rules.channel_restrict;\n  const allowed = (a === 'message' && cr.allow_text) || (a === 'voice_call' && cr.allow_voice) || (a === 'video_call' && cr.allow_video);\n  console.log(a, allowed);\n});",
+        answer: "message true\nvoice_call false\nvideo_call false",
+        explanation: "With allow_text: true, allow_voice: false, allow_video: false, only messages are permitted. Voice and video calls are blocked by the channel restriction rule."
+      },
+      {
+        type: "fill-blank",
+        code: "export async function evaluateRulesSafe(tokenId, action) {\n  try {\n    return await evaluateRules(tokenId, action);\n  } catch (err) {\n    return { allowed: ___, reason: 'Rule evaluation error' };\n  }\n}",
+        answer: "false",
+        explanation: "Deny-by-default: when an error occurs during rule evaluation, the action is denied (allowed: false). This ensures bugs in the rules engine restrict access rather than accidentally granting it."
+      },
+      {
+        type: "which-breaks",
+        variants: [
+          "const todayStart = new Date(); todayStart.setUTCHours(0, 0, 0, 0);",
+          "const todayStart = new Date('today');",
+          "const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);"
+        ],
+        correct: 1,
+        explanation: "new Date('today') returns Invalid Date — JavaScript's Date constructor doesn't accept the string 'today'. It would produce NaN timestamps, causing the SQL query to return incorrect results or error. Variants A and C both produce valid dates (UTC midnight vs local midnight)."
+      },
+      {
+        type: "spot-the-bug",
+        code: "function evaluateTimeWindow(rule) {\n  const now = new Date();\n  const currentDay = now.getDay();\n  if (!rule.days.includes(currentDay)) {\n    return { allowed: false, reason: 'Day not allowed' };\n  }\n  const hours = now.getHours();\n  const mins = now.getMinutes();\n  const currentTime = hours + ':' + mins;\n  if (currentTime < rule.start_time || currentTime >= rule.end_time) {\n    return { allowed: false, reason: 'Outside window' };\n  }\n  return { allowed: true };\n}",
+        bugLine: 3,
+        options: [
+          "Line 3: getDay() returns server local day, ignoring the rule's timezone",
+          "Line 9: Time format is wrong — '9:5' instead of '09:05' breaks string comparison",
+          "Both A and B are bugs in this code"
+        ],
+        correct: 2,
+        explanation: "Both bugs exist. (A) now.getDay() uses server timezone, not the token owner's timezone from rule.timezone. (B) hours/mins aren't zero-padded, so '9:5' < '09:00' is false when it should be true. Must use Intl.DateTimeFormat with the timeZone option and 2-digit formatting."
+      },
+      {
+        question: "Why does the contact_limit rule count only holder messages, not owner replies?",
+        options: [
+          "Owner messages are stored in a different table",
+          "The limit protects the owner from excess contact — the owner should always be free to respond",
+          "It's a technical limitation of the JOIN query",
+          "Owner messages don't go through the rules engine"
+        ],
+        correct: 1,
+        explanation: "The contact_limit rule protects the token owner from being overwhelmed. The holder's messages are what the owner wants to limit. The owner choosing to reply should never be blocked by a rule they set — they can always respond on their own terms."
+      },
+      {
+        type: "predict-output",
+        code: "const rule = { max_messages_per_day: 5 };\nconst counts = [0, 4, 5, 6];\ncounts.forEach(c => console.log(c >= rule.max_messages_per_day));",
+        answer: "false\nfalse\ntrue\ntrue",
+        explanation: "The limit is 5 messages per day. Counts 0 and 4 are below (allowed), 5 and 6 are at or above (denied). The >= comparison means the 5th message itself is blocked — so effectively only 4 messages get through. Wait — actually the count is checked before sending, so if count is 4, the 5th message is allowed; if count is 5, the 6th is blocked."
+      },
+      {
+        type: "order-steps",
+        steps: [
+          "User sets rules via PUT /tokens/:id/rules",
+          "Rules stored as JSONB in the tokens table",
+          "Holder sends a message through WebSocket",
+          "Server calls evaluateRules(tokenId, 'message')",
+          "Engine fetches rules JSONB from database",
+          "Each rule type evaluated in order",
+          "Action allowed or denied with reason"
+        ],
+        correctOrder: [0, 1, 2, 3, 4, 5, 6],
+        explanation: "The lifecycle: rules are configured by the user and stored, then evaluated on every holder action. The engine re-reads rules from the DB each time to ensure the latest configuration is always enforced."
+      },
+      {
+        type: "fill-blank",
+        code: "const ruleCheck = await evaluateRules(tokenId, 'message');\nif (!ruleCheck.___) {\n  ws.send(JSON.stringify({ type: 'error', code: 'RULE_DENIED', reason: ruleCheck.reason }));\n  return;\n}",
+        answer: "allowed",
+        explanation: "The evaluateRules function returns { allowed: boolean, reason?: string }. Checking !ruleCheck.allowed determines if the action was denied, at which point the error with the denial reason is sent back to the holder."
+      },
+      {
+        type: "which-breaks",
+        variants: [
+          "if (rows[0].cnt >= rule.max_messages_per_day) return { allowed: false, reason: 'Limit reached' };",
+          "if (rows[0].cnt > rule.max_messages_per_day) return { allowed: false, reason: 'Limit reached' };",
+          "if (rows[0].cnt >= (rule.max_messages_per_day || Infinity)) return { allowed: false, reason: 'Limit reached' };"
+        ],
+        correct: 1,
+        explanation: "Variant B uses > instead of >=. If max_messages_per_day is 5 and count is 5, variant B allows a 6th message (5 > 5 is false). The check should fire when count equals the limit, meaning the limit has been reached. Use >= to correctly enforce the cap."
+      },
+      {
+        question: "What data structure does the rules engine use to store rules in PostgreSQL?",
+        options: [
+          "A separate rules table with one row per rule type",
+          "A TEXT column with comma-separated key=value pairs",
+          "A JSONB column that holds all rules as a single structured object",
+          "Multiple boolean columns (allow_text, allow_voice, etc.) on the tokens table"
+        ],
+        correct: 2,
+        explanation: "JSONB stores the complete rules structure as a single JSON document. This allows flexible rule schemas without migrations for new rule types, supports indexing, and keeps all rules for a token together for atomic reads."
       }
     ]);
   </script>

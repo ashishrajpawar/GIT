@@ -419,6 +419,223 @@ export function TokenListScreen() {
         ],
         correct: 2,
         explanation: "revokeToken calls client.delete() which returns Promise<null> (DELETE returns 204 No Content). Trying to access res.data.code on null causes a TypeScript error — the type system prevents you from reading properties on a null response."
+      },
+
+      // --- Questions 6–25: Extended API client layer quiz ---
+
+      {
+        type: "fill-blank",
+        question: "Complete the createApiClient factory so it stores the base URL:",
+        code: "export function createApiClient(config: ClientConfig) {\n  const baseUrl = config.___;\n  // ...\n}",
+        answer: "baseUrl",
+        explanation: "The factory function accepts a config object with a baseUrl property. This is the single place where the API root URL is defined — the mobile app passes its dev/staging/prod URL, and the web page passes its own. One config, two clients."
+      },
+      {
+        question: "What is the main advantage of the createApiClient factory pattern over a singleton?",
+        options: [
+          "Factories are faster at runtime than singletons",
+          "Each platform (app/, web/) can pass its own config (base URL, token storage) while sharing the same typed logic",
+          "Singletons can't be exported from shared/",
+          "TypeScript doesn't support the singleton pattern"
+        ],
+        correct: 1,
+        explanation: "The React Native app and the Vite web page both import createApiClient from shared/ but pass different configs — different base URLs, different token storage mechanisms (SecureStore vs localStorage). The factory pattern makes this trivial."
+      },
+      {
+        type: "predict-output",
+        question: "What does the interceptor do when it encounters a network error?",
+        code: "async function request<T>(method, path, body?) {\n  try {\n    const res = await fetch(baseUrl + path, { method, body, headers: await getHeaders() });\n    if (!res.ok) throw new ApiError(res.status, await res.text());\n    return res.status === 204 ? null : await res.json() as T;\n  } catch (err) {\n    if (err instanceof ApiError) throw err;\n    throw new ApiError(0, 'Network error');\n  }\n}\n// Wi-Fi disconnects mid-request",
+        answer: "It catches the fetch TypeError, and since it's not an ApiError, throws new ApiError(0, 'Network error')",
+        explanation: "When fetch fails due to no connectivity, it throws a TypeError (not an HTTP error). The catch block checks if it's already an ApiError — it isn't — so it wraps it in an ApiError with status 0 and a generic message. Components can check err.status === 0 to show an offline banner."
+      },
+      {
+        type: "spot-the-bug",
+        question: "Find the bug in this auth interceptor:",
+        code: "async function getHeaders() {\n  const token = config.getAccessToken();\n  return {\n    'Content-Type': 'application/json',\n    'Authorization': `Bearer ${token}`\n  };\n}",
+        options: [
+          "Content-Type should be text/plain",
+          "getAccessToken() is async (returns a Promise) but is not awaited — token will be '[object Promise]'",
+          "Bearer should be lowercase",
+          "You can't use template literals in headers"
+        ],
+        correct: 1,
+        explanation: "In the mobile app, getAccessToken reads from SecureStore (async). Without await, the token variable holds a Promise object, which gets stringified as '[object Promise]' in the header. The server receives 'Bearer [object Promise]' and returns 401. The fix: const token = await config.getAccessToken();"
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps that happen when a component calls api.createToken(data):",
+        steps: [
+          "createToken calls client.post('/tokens', data)",
+          "post() calls request('POST', path, body)",
+          "request() calls getHeaders() to build auth headers",
+          "getHeaders() calls config.getAccessToken() to read the stored JWT",
+          "fetch() sends the request with headers and JSON body",
+          "Response is parsed and returned as ApiResponse<Token>"
+        ],
+        correctOrder: [0, 1, 2, 3, 4, 5],
+        explanation: "The call flows from the high-level endpoint function (createToken) down through the HTTP method (post), into the generic request function that builds headers via the config callback, sends the fetch, and parses the typed response. Each layer has a single responsibility."
+      },
+      {
+        type: "which-breaks",
+        question: "Which base URL configuration is correct for the Token API client?",
+        variants: [
+          "const api = createApiClient({ baseUrl: 'https://api.tokn.app/v1', getAccessToken: () => getToken() });",
+          "const api = createApiClient({ baseUrl: 'https://api.tokn.app/v1/', getAccessToken: () => getToken() });",
+          "const api = createApiClient({ baseUrl: '/v1', getAccessToken: () => getToken() });"
+        ],
+        correct: 1,
+        explanation: "A trailing slash on the baseUrl causes double slashes when endpoints are appended (e.g., 'https://api.tokn.app/v1//tokens'). The client concatenates baseUrl + path where path starts with '/'. Option C uses a relative path which only works if the web page is served from the same domain — it fails on mobile. Option A is correct: no trailing slash, absolute URL."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the ApiError class so components can check the HTTP status:",
+        code: "export class ApiError extends Error {\n  constructor(\n    public readonly ___: number,\n    message: string\n  ) {\n    super(message);\n    this.name = 'ApiError';\n  }\n}",
+        answer: "status",
+        explanation: "The ApiError class extends Error and adds a status property. Components can catch errors and check err.status === 401 for auth issues, err.status === 404 for not found, err.status === 0 for network failures. This typed error handling replaces checking raw response objects."
+      },
+      {
+        question: "Why does the Token API client use generics like client.get<ApiResponse<Token>>(path)?",
+        options: [
+          "Generics make the code run faster",
+          "TypeScript requires generics for all function calls",
+          "The generic parameter tells TypeScript the shape of the response, enabling autocomplete and compile-time type checking on the result",
+          "Generics are needed for the fetch API to work"
+        ],
+        correct: 2,
+        explanation: "Without the generic, the response type would be unknown or any. With client.get<ApiResponse<Token>>('/tokens/ABC'), TypeScript knows the return type — you get autocomplete on res.data.code, res.data.status, etc., and a compile error if you access res.data.nonexistent. The generic flows from the endpoint function all the way to the component."
+      },
+      {
+        type: "predict-output",
+        question: "What happens when two requests race and both get 401?",
+        code: "// request() implementation:\nif (res.status === 401) {\n  config.onUnauthorized();\n  throw new ApiError(401, 'Authentication required');\n}\n\n// App config:\nonUnauthorized: () => {\n  if (!isRefreshing) {\n    isRefreshing = true;\n    refreshToken().finally(() => { isRefreshing = false; });\n  }\n}",
+        answer: "Both throw ApiError(401), but onUnauthorized only triggers one refresh because isRefreshing guards against duplicate refresh calls",
+        explanation: "Without the isRefreshing guard, two simultaneous 401s would fire two refresh requests — potentially invalidating each other's tokens. The guard ensures only one refresh happens. Both original requests still throw (the components handle retry), but the token refresh runs only once."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with how this web page configures the API client?",
+        code: "// web/src/api.ts\nimport { createApiClient } from '../../shared/api-client';\n\nconst api = createApiClient({\n  baseUrl: import.meta.env.VITE_API_URL,\n  getAccessToken: () => localStorage.getItem('accessToken'),\n  onUnauthorized: () => window.location.href = '/login'\n});\n\nexport default api;",
+        options: [
+          "import.meta.env doesn't work in Vite",
+          "localStorage.getItem returns string | null, but getAccessToken should return string — a null token sends 'Bearer null' as the header",
+          "window.location.href can't be assigned",
+          "You can't export a default from a .ts file"
+        ],
+        correct: 1,
+        explanation: "localStorage.getItem() returns null when the key doesn't exist. If getAccessToken returns null, the Authorization header becomes 'Bearer null' (the string). The fix: return localStorage.getItem('accessToken') ?? '' or better, return localStorage.getItem('accessToken') || undefined and make the header conditional."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the endpoint function for fetching a single token by code:",
+        code: "getToken(code: string) {\n  return client.get<___<Token>>(`/tokens/${code}`);\n}",
+        answer: "ApiResponse",
+        explanation: "Single-resource endpoints return ApiResponse<Token> — an object with { data: Token, success: true }. Unlike list endpoints which wrap in Paginated<T>, a single item is returned directly in the data field. The generic ensures TypeScript knows res.data is a Token."
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps to set up the API client in the React Native app:",
+        steps: [
+          "Install shared/ as a path alias in tsconfig.json",
+          "Import createApiClient from '@token/shared/api-client'",
+          "Define getAccessToken using expo-secure-store",
+          "Define onUnauthorized to navigate to Login screen",
+          "Call createApiClient with baseUrl and callbacks",
+          "Export the configured api instance"
+        ],
+        correctOrder: [0, 1, 2, 3, 4, 5],
+        explanation: "Setup flows from infrastructure (path alias so imports resolve) through defining platform-specific callbacks (SecureStore for tokens, navigation for auth failures), to creating and exporting the configured instance. The api instance is created once at app startup and imported wherever needed."
+      },
+      {
+        question: "What does the onUnauthorized callback handle differently in the mobile app vs the web page?",
+        options: [
+          "Nothing — they both call the same function",
+          "Mobile navigates to Login screen via React Navigation; web redirects via window.location or a router",
+          "Mobile shows an alert; web does nothing",
+          "Mobile refreshes the token; web logs the user out immediately"
+        ],
+        correct: 1,
+        explanation: "The API client itself is platform-agnostic — it just calls onUnauthorized(). What that callback DOES differs: on mobile, it triggers navigation.replace('Login') via React Navigation. On the web page, it uses window.location.href = '/login' or a router push. The shared/ client doesn't know or care about the platform."
+      },
+      {
+        type: "which-breaks",
+        question: "Which endpoint function signature is incorrect for the Token API?",
+        variants: [
+          "listConversations(): Promise<ApiResponse<Paginated<Conversation>>>",
+          "sendMessage(conversationId: string, body: SendMessagePayload): Promise<ApiResponse<Message>>",
+          "deleteToken(code: string): Promise<ApiResponse<Token>>"
+        ],
+        correct: 2,
+        explanation: "DELETE /tokens/:code returns 204 No Content — there's no response body. The return type should be Promise<null>, not Promise<ApiResponse<Token>>. The API confirms deletion by the 204 status, not by sending the deleted resource back. The client's request() function returns null for 204 responses."
+      },
+      {
+        type: "predict-output",
+        question: "What does this endpoint function return if the token has been revoked?",
+        code: "async getToken(code: string) {\n  return client.get<ApiResponse<Token>>(`/tokens/${code}`);\n}\n\n// Server response for a revoked token:\n// HTTP 200 { success: true, data: { code: 'MERC-8GH2', status: 'revoked', revokedAt: '2026-01-15' } }",
+        answer: "It returns normally with { success: true, data: { code: 'MERC-8GH2', status: 'revoked', revokedAt: '2026-01-15' } } — the client doesn't treat revoked as an error",
+        explanation: "A revoked token still exists — it's just in a different state. The API returns 200 with the token data including status: 'revoked'. The client layer passes it through normally. It's the component's responsibility to check token.status and show the appropriate UI (e.g., a 'This token has been revoked' message)."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the client method that attaches the auth header only when a token exists:",
+        code: "async function getHeaders() {\n  const headers: Record<string, string> = { 'Content-Type': 'application/json' };\n  const token = await config.getAccessToken();\n  if (___) headers['Authorization'] = `Bearer ${token}`;\n  return headers;\n}",
+        answer: "token",
+        explanation: "The conditional if (token) ensures the Authorization header is only added when a token exists. For unauthenticated endpoints (like /auth/login or /auth/register), the stored token will be null/undefined — so no Authorization header is sent. This lets the same client handle both public and protected endpoints."
+      },
+      {
+        type: "spot-the-bug",
+        question: "Find the bug in this API client configuration for the React Native app:",
+        code: "import { createApiClient } from '@token/shared/api-client';\nimport * as SecureStore from 'expo-secure-store';\n\nconst api = createApiClient({\n  baseUrl: 'http://localhost:3000/v1',\n  getAccessToken: async () => await SecureStore.getItemAsync('accessToken'),\n  onUnauthorized: () => { /* navigate to login */ }\n});\n\nexport default api;",
+        options: [
+          "SecureStore doesn't have getItemAsync",
+          "The baseUrl uses localhost which only works on iOS simulator — Android emulator needs 10.0.2.2 and physical devices need the actual network IP",
+          "You can't use async in getAccessToken",
+          "createApiClient must be called inside a React component"
+        ],
+        correct: 1,
+        explanation: "http://localhost:3000 works in iOS simulator (it shares the host network) but fails on Android emulator (needs 10.0.2.2:3000) and physical devices (needs the machine's LAN IP or a deployed URL). The fix: use an environment variable or a platform-detection helper to set the correct base URL."
+      },
+      {
+        type: "order-steps",
+        question: "Order how the client handles a 401 response with token refresh:",
+        steps: [
+          "Component calls api.listTokens()",
+          "request() sends fetch with expired access token",
+          "Server responds with 401 Unauthorized",
+          "request() catches 401, calls config.onUnauthorized()",
+          "onUnauthorized triggers refresh flow — sends refresh token to /auth/refresh",
+          "New access token is stored; component retries the original request"
+        ],
+        correctOrder: [0, 1, 2, 3, 4, 5],
+        explanation: "The flow starts with the component making a normal call. The client detects the 401, delegates to onUnauthorized (which knows how to refresh on this platform), and the component's error handling or a retry mechanism re-issues the request with the new token. The client layer separates detection from recovery."
+      },
+      {
+        question: "Why does the API client throw an ApiError instead of returning { success: false, error: ... }?",
+        options: [
+          "JavaScript doesn't support returning error objects",
+          "Throwing interrupts execution — components use try/catch or error boundaries, preventing accidentally rendering error data as if it were success data",
+          "TypeScript can't type-narrow on object properties",
+          "The fetch API requires throwing on non-200 responses"
+        ],
+        correct: 1,
+        explanation: "If errors were returned as values, a component could accidentally destructure and render error data as if it were valid. By throwing, the error forces handling via try/catch — there's no way to accidentally use an error response as if it were success. TypeScript's control flow analysis also narrows types correctly after a catch."
+      },
+      {
+        type: "which-breaks",
+        question: "Which shared/ API client import path will work in both app/ and web/?",
+        variants: [
+          "import { createApiClient } from '@token/shared/api-client';",
+          "import { createApiClient } from '../../../shared/api-client';",
+          "import { createApiClient } from 'shared/api-client';"
+        ],
+        correct: 1,
+        explanation: "Relative paths like '../../../shared/api-client' are fragile — they break if a file moves, and the number of '../' differs between app/ and web/ directory structures. Option A uses a path alias (@token/shared) configured in tsconfig.json for both projects — same import everywhere. Option C is a bare specifier that won't resolve without a bundler alias."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the register endpoint that does NOT need an auth token:",
+        code: "register(payload: RegisterPayload) {\n  return client.___<ApiResponse<AuthResult>>('/auth/register', payload);\n}",
+        answer: "post",
+        explanation: "Registration uses POST to create a new user. The client's getHeaders() function already handles the auth case — when there's no stored token, it skips the Authorization header. So the register endpoint uses the same client.post() method; the auth header simply won't be present because no token exists yet."
       }
     ]);
   </script>

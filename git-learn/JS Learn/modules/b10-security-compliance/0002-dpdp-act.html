@@ -602,7 +602,203 @@ router.delete('/me', authenticateJWT, async (req, res) => {
                 ],
                 correctOrder: [0, 1, 2, 4, 3, 5],
                 explanation: "You must delete child records before parents (foreign keys prevent otherwise). Users is last because everything references it. Tokens must come after access_rules and redemption_events which reference tokens."
-            }
+            },
+            // --- Questions 6-25 ---
+            {
+                question: "Under the DPDP Act, what is a 'Consent Manager'?",
+                options: [
+                    "A government official who approves consent forms",
+                    "A registered entity that helps Data Principals manage their consent across multiple Data Fiduciaries",
+                    "A software library for building consent UIs",
+                    "The data protection officer within a company"
+                ],
+                correct: 1,
+                explanation: "A Consent Manager is a DPBI-registered entity that acts as a single point through which Data Principals can give, manage, review, and withdraw consent across multiple Data Fiduciaries. Think of it as a consent dashboard spanning all apps/services."
+            },
+            {
+                type: "predict-output",
+                question: "What does this consent check return?",
+                code: "const consents = [\n  { purpose: 'data_processing', granted: true, withdrawnAt: null },\n  { purpose: 'push', granted: true, withdrawnAt: '2024-03-01' },\n  { purpose: 'analytics', granted: false, withdrawnAt: null }\n];\n\nconst active = consents.filter(c => c.granted && !c.withdrawnAt);\nconsole.log(active.map(c => c.purpose).join(', '));",
+                answer: "data_processing",
+                explanation: "Only data_processing passes both checks: granted is true AND withdrawnAt is null. Push was granted but later withdrawn (withdrawnAt has a date). Analytics was never granted in the first place."
+            },
+            {
+                type: "spot-the-bug",
+                question: "What DPDP violation exists in this data export endpoint?",
+                code: "router.get('/me/data-export', auth, async (req, res) => {\n  const user = await db.query('SELECT * FROM users WHERE id = $1', [req.user.id]);\n  res.json({ user: user.rows[0] });\n});",
+                options: [
+                    "Line 2 — SELECT * exposes the password hash in the export",
+                    "Line 1 — should use POST not GET",
+                    "Line 3 — should set Content-Disposition header"
+                ],
+                correct: 0,
+                explanation: "SELECT * includes all columns, including password_hash. The data export must include personal data but EXCLUDE security credentials. Explicitly list columns: SELECT id, username, created_at. Also, a complete export should include all tables (tokens, messages, consents), not just the users table."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the SQL for recording consent withdrawal with a timestamp:",
+                code: "await db.query(\n  'UPDATE consent_records SET withdrawn_at = ___ WHERE user_id = $1 AND purpose = $2',\n  [userId, purpose]\n);",
+                answer: "NOW()",
+                explanation: "NOW() records the exact server timestamp of when consent was withdrawn. This creates an audit trail proving when the withdrawal happened — essential for demonstrating DPDP compliance if the Data Protection Board ever asks."
+            },
+            {
+                type: "which-breaks",
+                question: "Which data retention practice violates the DPDP Act's storage limitation principle?",
+                variants: [
+                    "Delete server logs after 30 days, overwrite backups after 7 days",
+                    "Keep all user messages indefinitely even after account deletion 'for analytics'",
+                    "Retain anonymised aggregate statistics (no personal data) permanently"
+                ],
+                correct: 1,
+                explanation: "The DPDP Act requires data to be deleted once the purpose is fulfilled. Keeping messages after account deletion for analytics violates storage limitation and the right to erasure. Anonymised aggregate data (option C) is fine because it's no longer personal data."
+            },
+            {
+                question: "In the DPDP Act, what is a 'Significant Data Fiduciary'?",
+                options: [
+                    "Any company that processes personal data",
+                    "A Data Fiduciary designated by the government based on volume of data, risk, or impact on sovereignty",
+                    "A company with more than 100 employees",
+                    "Any foreign company processing Indian citizens' data"
+                ],
+                correct: 1,
+                explanation: "The Central Government designates certain Data Fiduciaries as 'Significant' based on factors like data volume, sensitivity, risk to Data Principals, or impact on sovereignty/security. They face additional obligations like mandatory DPO appointment and data audits."
+            },
+            {
+                type: "predict-output",
+                question: "What does this deletion queue check return?",
+                code: "const deadline = new Date('2024-03-15T10:00:00Z');\nconst now = new Date('2024-03-17T10:00:00Z');\nconst overdue = now > deadline;\nconst hoursOverdue = Math.round((now - deadline) / (1000 * 60 * 60));\nconsole.log(`Overdue: ${overdue}, by ${hoursOverdue} hours`);",
+                answer: "Overdue: true, by 48 hours",
+                explanation: "The DPDP Act requires account deletion to complete within a reasonable timeframe. This code checks if a deletion request has passed its deadline. 2 days = 48 hours overdue. In Token's implementation, the deadline is 72 hours from request."
+            },
+            {
+                type: "order-steps",
+                question: "Order the data breach notification steps as required by the DPDP Act:",
+                steps: [
+                    "Contain the breach (patch vulnerability, revoke compromised credentials)",
+                    "Assess what personal data was affected and which Data Principals",
+                    "Notify the Data Protection Board of India",
+                    "Notify affected Data Principals (users)",
+                    "Document the breach, timeline, and remediation steps"
+                ],
+                correctOrder: [0, 1, 2, 3, 4],
+                explanation: "First contain to stop ongoing damage. Then assess scope to know who to notify. Then notify the DPBI (mandatory). Then notify affected users. Finally document everything for compliance records. The Act requires notification 'without unreasonable delay'."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the consent_records table constraint ensuring one consent record per purpose per user:",
+                code: "CREATE TABLE consent_records (\n  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n  user_id UUID NOT NULL REFERENCES users(id),\n  purpose VARCHAR(50) NOT NULL,\n  granted BOOLEAN NOT NULL,\n  granted_at TIMESTAMPTZ NOT NULL,\n  withdrawn_at TIMESTAMPTZ,\n  ___(user_id, purpose)\n);",
+                answer: "UNIQUE",
+                explanation: "UNIQUE(user_id, purpose) ensures each user has exactly one consent record per purpose. If they re-consent, you UPDATE the existing row rather than inserting a duplicate. This prevents ambiguous consent states."
+            },
+            {
+                type: "spot-the-bug",
+                question: "What DPDP compliance issue exists in this registration flow?",
+                code: "const schema = z.object({\n  username: z.string(),\n  password: z.string(),\n  agreeToTerms: z.literal(true),\n  email: z.string().email(),\n  phoneNumber: z.string(),\n  fullName: z.string()\n});",
+                options: [
+                    "Lines 5-6 — collecting email AND phone violates data minimisation (Token doesn't need either)",
+                    "Line 4 — bundled consent ('agree to terms') is not granular",
+                    "Both A and B are violations"
+                ],
+                correct: 2,
+                explanation: "Two violations: (1) Token's core principle is that you DON'T need email or phone — collecting them violates data minimisation. (2) A single 'agree to terms' checkbox bundles all consent into one, violating the requirement for specific, granular consent per purpose."
+            },
+            {
+                type: "which-breaks",
+                question: "Which approach to the 'right to correction' is DPDP-compliant?",
+                variants: [
+                    "Users can edit their username and token labels via standard CRUD endpoints",
+                    "Users must email support and wait 30 days for corrections to be processed",
+                    "Corrections are only available during a monthly 'edit window'"
+                ],
+                correct: 0,
+                explanation: "The right to correction must be easily exercisable. Standard CRUD endpoints (PUT /me/username, PATCH /tokens/:id) satisfy this — the user can correct their data immediately. Forcing email-based processes or time windows makes it unreasonably difficult."
+            },
+            {
+                question: "What happens under the DPDP Act if a user withdraws consent for core data processing?",
+                options: [
+                    "Nothing — you can continue processing under 'legitimate interest'",
+                    "You must stop processing and may terminate the service for that user",
+                    "You have 1 year to comply with the withdrawal",
+                    "You can override the withdrawal if the data is important to your business"
+                ],
+                correct: 1,
+                explanation: "When consent is the lawful basis and it's withdrawn, you MUST stop processing. For Token, withdrawing core data processing consent means the account must be deleted. The Act explicitly states withdrawal must not affect the lawfulness of prior processing, but future processing must stop."
+            },
+            {
+                type: "predict-output",
+                question: "What does this consent UI logic display?",
+                code: "const items = [\n  { purpose: 'data_processing', required: true },\n  { purpose: 'push', required: false },\n  { purpose: 'analytics', required: false }\n];\n\nconst requiredCount = items.filter(i => i.required).length;\nconst optionalCount = items.filter(i => !i.required).length;\nconsole.log(`${requiredCount} required, ${optionalCount} optional`);",
+                answer: "1 required, 2 optional",
+                explanation: "In a DPDP-compliant consent UI, only truly essential processing is marked as required. Token needs data_processing to function at all (required), but push notifications and analytics are optional extras the user can decline without losing core functionality."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the data export response header that triggers a file download:",
+                code: "res.setHeader('Content-Disposition', '___; filename=\"token-data-export.json\"');",
+                answer: "attachment",
+                explanation: "Content-Disposition: attachment tells the browser to download the response as a file rather than displaying it inline. Combined with the filename parameter, the user gets a properly named JSON file of their personal data."
+            },
+            {
+                type: "order-steps",
+                question: "Order the steps for implementing a DPDP-compliant consent flow in Token:",
+                steps: [
+                    "Display each consent purpose with a clear description in plain language",
+                    "Allow user to toggle each optional purpose independently",
+                    "Record each consent decision with timestamp and app version",
+                    "Store consent records in the database (one per purpose per user)",
+                    "Show the 'required' consent with explanation of why it's needed"
+                ],
+                correctOrder: [0, 4, 1, 2, 3],
+                explanation: "First show all purposes clearly. Then explain required ones (transparency). Then let user decide on optional ones. Then record their decisions with full audit metadata. Finally persist to the database. This creates an informed, granular, recorded consent flow."
+            },
+            {
+                question: "How does Token's token revocation directly implement a DPDP Act right?",
+                options: [
+                    "Right to data portability — revoking exports the data",
+                    "Right to withdraw consent — revoking a token withdraws the holder's permission to contact",
+                    "Right to correction — revoking fixes incorrect data",
+                    "Right to be forgotten — revoking deletes all user data"
+                ],
+                correct: 1,
+                explanation: "Each Token represents the user's consent for a specific holder to contact them. Revoking a token is literally withdrawing consent for that communication channel. The product's core feature IS the DPDP right to withdraw consent, implemented as a privacy primitive."
+            },
+            {
+                type: "spot-the-bug",
+                question: "What DPDP violation exists in this account deletion implementation?",
+                code: "router.delete('/me', auth, async (req, res) => {\n  await db.query(\n    'UPDATE users SET deleted = true, username = NULL WHERE id = $1',\n    [req.user.id]\n  );\n  // Keep messages and tokens for 'audit purposes'\n  res.json({ deleted: true });\n});",
+                options: [
+                    "Line 2 — uses UPDATE instead of DELETE (soft-delete retains the row)",
+                    "Line 5 — comment reveals messages and tokens are retained after 'deletion'",
+                    "Both — soft-delete AND retaining associated data violates right to erasure"
+                ],
+                correct: 2,
+                explanation: "The DPDP Act right to erasure requires actual deletion of personal data. Soft-deleting the user row still retains the record in the database. Keeping messages and tokens 'for audit' retains personal data beyond the purpose. Both must be hard-deleted."
+            },
+            {
+                type: "which-breaks",
+                question: "Which cross-border data transfer scenario could violate the DPDP Act?",
+                variants: [
+                    "VPS in Singapore (not on the restricted list) with data encrypted at rest",
+                    "Server in a country blacklisted by the Central Government for data transfers",
+                    "Push tokens sent to Expo (US-based) for notification delivery only"
+                ],
+                correct: 1,
+                explanation: "The DPDP Act allows cross-border transfer EXCEPT to countries specifically restricted by the Central Government. Singapore and the US are not restricted. A blacklisted country would make the transfer illegal regardless of encryption or purpose."
+            },
+            {
+                type: "predict-output",
+                question: "What does this children's data check return?",
+                code: "const userAge = 16;\nconst MIN_AGE = 18;\nconst needsParentalConsent = userAge < MIN_AGE;\nconst canProceed = !needsParentalConsent;\nconsole.log(`Needs parental consent: ${needsParentalConsent}`);\nconsole.log(`Can proceed without guardian: ${canProceed}`);",
+                answer: "Needs parental consent: true\nCan proceed without guardian: false",
+                explanation: "Under the DPDP Act, anyone under 18 is considered a child. Processing their data requires verifiable parental consent. Token's approach (declaring the app 18+) avoids this complexity, but if a known minor signs up, you must obtain guardian consent or block registration."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the SQL migration that ensures consent records are cascade-deleted when a user is deleted:",
+                code: "CREATE TABLE consent_records (\n  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n  user_id UUID NOT NULL REFERENCES users(id) ON DELETE ___,\n  purpose VARCHAR(50) NOT NULL\n);",
+                answer: "CASCADE",
+                explanation: "ON DELETE CASCADE automatically deletes consent_records rows when the referenced user is deleted. This ensures that when you exercise the right to erasure (DELETE FROM users), all related consent records are cleaned up in a single transaction without foreign key violations."
+            },
         ]);
     </script>
 </body>

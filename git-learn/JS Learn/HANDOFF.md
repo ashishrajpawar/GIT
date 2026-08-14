@@ -209,3 +209,37 @@ migration (`.sql` for SQL lessons, `.js`/`.ts` for Node lessons).
 23. ~~**Write B10 — Security & Compliance** (2 lessons)~~ — DONE
 24. ~~**Write A11 — Polish & Publish** (5 lessons)~~ — DONE
 25. ~~Phase 7 completes the course.~~ — COURSE COMPLETE
+
+---
+
+## 9. Quiz expansion — 5 → 25 questions per lesson
+
+Expanding all lesson quizzes from 5 to 25 questions with a mix of types
+(multiple-choice, predict-output, spot-the-bug, fill-blank, which-breaks, order-steps).
+
+| Module | Lessons | Status |
+|--------|---------|--------|
+| 01 — JavaScript Fundamentals | 12 | ✅ Done (prior session) |
+| 02 — React Native | 14 | ✅ Done (prior session) |
+| X1 — Git & Dev Environment | 3 | ✅ Done |
+| A2 — TypeScript | 3 | ✅ Done |
+| X2 — Debugging | 2 | ✅ Done |
+| B1 — SQL Fundamentals | 4 | ⬜ Pending |
+| B2 — Schema Design | 3 | ⬜ Pending |
+| B3 — Node & HTTP Server | 4 | ⬜ Pending |
+| B4 — Auth Server | 3 | ⬜ Pending |
+| A3 — API Consumption | 4 | ⬜ Pending |
+| A4 — Auth on the Client | 3 | ⬜ Pending |
+| A5 — Core Token Features | 5 | ⬜ Pending |
+| B5 — WebSocket Server | 3 | ⬜ Pending |
+| A6 — Chat & Real-time | 3 | ⬜ Pending |
+| B6 — WebRTC Signalling | 2 | ⬜ Pending |
+| A7 — Voice & Video | 5 | ⬜ Pending |
+| A8 — Redemption Web Page | 4 | ⬜ Pending |
+| A9 — Deep Linking & Routing | 2 | ⬜ Pending |
+| B7 — Token Engine | 3 | ⬜ Pending |
+| B8 — Push Notifications | 1 | ⬜ Pending |
+| A10 — Device Security | 2 | ⬜ Pending |
+| B9 — Docker & Deployment | 3 | ⬜ Pending |
+| B10 — Security & Compliance | 2 | ⬜ Pending |
+| A11 — Polish & Publish | 5 | ⬜ Pending |

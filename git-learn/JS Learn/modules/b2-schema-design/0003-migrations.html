@@ -356,6 +356,252 @@ DATABASE_URL=postgres://localhost:5432/token_dev node migrate.js
         ],
         correct: 1,
         explanation: "DROP TABLE destroys all data in the table permanently. In production with real users, this erases everything. The other two are safe: adding a nullable column or adding a column with a default doesn't affect existing data."
+      },
+      // --- Questions 6–25 ---
+      {
+        question: "What is the purpose of the schema_migrations table?",
+        options: [
+          "It stores a backup of every table's schema",
+          "It records which migration files have already been applied to the database",
+          "It locks the database during migrations",
+          "It stores the SQL source code of each migration"
+        ],
+        correct: 1,
+        explanation: "The schema_migrations table acts as a ledger. Each row records a filename (and usually a timestamp) of a migration that has been applied. The runner checks this table before applying anything — if a file is listed, it's skipped."
+      },
+      {
+        type: "predict-output",
+        question: "What does this query return after running migrations 001, 002, and 003?",
+        code: "SELECT COUNT(*) FROM schema_migrations;",
+        answer: "3",
+        explanation: "Each successfully applied migration inserts one row into schema_migrations. After three migrations, the count is 3. This is how the runner knows which files to skip on the next run."
+      },
+      {
+        type: "fill-blank",
+        question: "Wrap a migration in a transaction so it either fully applies or fully rolls back:",
+        code: "___;\nALTER TABLE tokens ADD COLUMN expires_at TIMESTAMPTZ;\nALTER TABLE tokens ADD COLUMN max_uses INTEGER;\nCOMMIT;",
+        answer: "BEGIN",
+        explanation: "BEGIN starts a transaction block. If any statement inside fails, you can ROLLBACK and nothing is committed. COMMIT finalizes all changes atomically. This prevents half-applied migrations."
+      },
+      {
+        type: "which-breaks",
+        question: "Which statement CANNOT be run inside a transaction in PostgreSQL?",
+        variants: [
+          "ALTER TABLE tokens ADD COLUMN label TEXT;",
+          "CREATE INDEX CONCURRENTLY idx_tokens_code ON tokens(code);",
+          "UPDATE tokens SET label = 'default' WHERE label IS NULL;"
+        ],
+        correct: 1,
+        explanation: "CREATE INDEX CONCURRENTLY cannot run inside a transaction block — PostgreSQL requires it to run outside BEGIN/COMMIT. It builds the index without locking writes, but that mechanism is incompatible with transactions. You must run this migration without BEGIN/COMMIT wrapping."
+      },
+      {
+        type: "order-steps",
+        question: "What is the correct order for safely adding a NOT NULL column to a table with existing data?",
+        steps: [
+          "Add the column as nullable: ADD COLUMN label TEXT",
+          "Backfill existing rows: UPDATE tokens SET label = 'Unknown' WHERE label IS NULL",
+          "Add the NOT NULL constraint: ALTER COLUMN label SET NOT NULL",
+          "Deploy code that always provides label on INSERT"
+        ],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "You must add nullable first (safe, no constraint check), backfill so no NULLs remain, then set NOT NULL. Deploying code that provides the value ensures future inserts don't violate the new constraint."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This migration is meant to create a unique index without blocking writes. What's wrong?",
+        code: "-- 005_unique_token_code.sql\nBEGIN;\nCREATE INDEX CONCURRENTLY idx_tokens_code_unique ON tokens(code);\nCOMMIT;",
+        options: [
+          "CONCURRENTLY is not a valid keyword",
+          "You can't create an index on a column that has duplicates",
+          "CREATE INDEX CONCURRENTLY cannot be inside a transaction (BEGIN/COMMIT)",
+          "You need to specify UNIQUE before INDEX"
+        ],
+        correct: 2,
+        explanation: "PostgreSQL forbids CREATE INDEX CONCURRENTLY inside a transaction block. Remove BEGIN and COMMIT — this migration must run as a single statement outside any transaction. The runner should detect this and skip transaction wrapping for this file."
+      },
+      {
+        question: "What is the recommended naming convention for migration files?",
+        options: [
+          "Random UUID followed by the description",
+          "Sequential number prefix followed by a descriptive snake_case name (e.g. 004_add_token_expiry.sql)",
+          "Date-only prefix like 20250101.sql",
+          "The table name as the filename (e.g. tokens.sql)"
+        ],
+        correct: 1,
+        explanation: "Sequential numbering (001_, 002_, ...) ensures migrations run in order. The descriptive name tells you what it does at a glance. This convention makes it easy to sort files and identify what each migration changes without opening it."
+      },
+      {
+        type: "predict-output",
+        question: "What happens when you run this migration on a table where some rows have NULL in the 'label' column?",
+        code: "BEGIN;\nALTER TABLE tokens ALTER COLUMN label SET NOT NULL;\nCOMMIT;",
+        answer: "ERROR: column \"label\" of relation \"tokens\" contains null values",
+        explanation: "PostgreSQL checks all existing rows when you add NOT NULL. If any row has NULL in that column, the entire ALTER fails. You must backfill NULLs first (UPDATE ... SET label = 'default' WHERE label IS NULL) before adding the constraint."
+      },
+      {
+        type: "fill-blank",
+        question: "Record that a migration was applied so it won't run again:",
+        code: "INSERT INTO schema_migrations (filename, applied_at)\nVALUES ($1, ___);",
+        answer: "NOW()",
+        explanation: "NOW() records the current timestamp when the migration was applied. This gives you an audit trail — you can see not just which migrations ran, but when they ran. The filename ensures the runner skips this file next time."
+      },
+      {
+        type: "order-steps",
+        question: "What is the correct deployment order for a migration that adds a new required column used by new code?",
+        steps: [
+          "Run the migration (add column as nullable, backfill, set NOT NULL)",
+          "Deploy the new application code that reads/writes the column",
+          "Verify the application works correctly",
+          "Remove any temporary backfill defaults in the next migration"
+        ],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "Always migrate BEFORE deploying code. If you deploy code first, it tries to read/write a column that doesn't exist yet — instant errors. Migrate first ensures the schema is ready when the new code arrives."
+      },
+      {
+        type: "which-breaks",
+        question: "Which down-migration is unsafe if the column contained user data?",
+        variants: [
+          "ALTER TABLE tokens DROP COLUMN notes;",
+          "ALTER TABLE tokens RENAME COLUMN notes TO notes_old;",
+          "ALTER TABLE tokens ALTER COLUMN notes DROP NOT NULL;"
+        ],
+        correct: 0,
+        explanation: "DROP COLUMN permanently destroys all data in that column. If users have stored notes, they're gone forever. Renaming preserves the data (you can rename it back). Dropping NOT NULL is non-destructive — it loosens a constraint without removing data."
+      },
+      {
+        question: "When should you use a 'down' migration (rollback script)?",
+        options: [
+          "Always — every migration must have a down script",
+          "Never — just write a new forward migration to fix problems",
+          "During development when the schema is still changing frequently; in production, prefer forward-only fixes",
+          "Only for CREATE TABLE statements"
+        ],
+        correct: 2,
+        explanation: "Down migrations are useful during development — you might need to undo and redo schema changes as you iterate. In production, rolling back is risky (you might lose data). Most teams prefer writing a new forward migration that fixes the issue instead of rolling back."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This CI pipeline runs migrations. What's the critical issue?",
+        code: "# ci-deploy.sh\nnpm run build\ndocker push api:latest\nkubectl rollout restart deployment/api\nnode api/migrate.js  # <-- runs AFTER deploy",
+        options: [
+          "npm run build should come after docker push",
+          "Migrations run AFTER the new code is deployed — the new code may reference columns that don't exist yet",
+          "kubectl is not a valid command",
+          "migrate.js can't run in CI"
+        ],
+        correct: 1,
+        explanation: "The migration runs AFTER the new code is already deployed and serving traffic. If the new code references a column that the migration adds, users get errors until the migration finishes. Always run migrations BEFORE deploying the new code."
+      },
+      {
+        type: "predict-output",
+        question: "Two developers both create migration 004. Dev A: 004_add_expiry.sql. Dev B: 004_add_notes.sql. What happens when both are merged and you run migrate.js?",
+        code: "// migrate.js reads files sorted by name:\n// 004_add_expiry.sql\n// 004_add_notes.sql\n// Both have the same prefix number...",
+        answer: "Both run successfully in alphabetical order (004_add_expiry.sql first, then 004_add_notes.sql), but the ordering is fragile and may cause conflicts.",
+        explanation: "Most runners sort by filename — so both run, but in alphabetical order rather than intended order. This can cause subtle bugs if one depends on the other. Solution: use timestamps (20250812_143000_add_expiry.sql) or coordinate numbering. Some teams use a linear sequence enforced by CI."
+      },
+      {
+        type: "fill-blank",
+        question: "Make this migration idempotent so it doesn't fail if the column already exists:",
+        code: "ALTER TABLE tokens ADD COLUMN ___ notes TEXT;",
+        answer: "IF NOT EXISTS",
+        explanation: "IF NOT EXISTS makes the ADD COLUMN a no-op if the column already exists. This makes the migration safe to run multiple times — useful if a migration was partially applied or if you're running it across environments that may be in different states."
+      },
+      {
+        type: "order-steps",
+        question: "Order these steps for a safe backfill migration on a table with 5 million rows:",
+        steps: [
+          "Add the column as nullable (fast, no table rewrite)",
+          "Backfill in batches: UPDATE tokens SET new_col = value WHERE id BETWEEN $1 AND $2",
+          "Add a NOT NULL constraint after confirming zero NULLs remain",
+          "Monitor for lock contention during the backfill"
+        ],
+        correctOrder: [0, 1, 3, 2],
+        explanation: "Add nullable column first (instant in Postgres). Then backfill in batches to avoid locking the whole table — and monitor for lock contention while batches run. Only after you've confirmed all rows are filled (SELECT COUNT(*) WHERE new_col IS NULL = 0) do you add NOT NULL."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This migration is supposed to be idempotent. What's the problem?",
+        code: "-- 006_add_audit_log.sql\nBEGIN;\nCREATE TABLE audit_log (\n  id SERIAL PRIMARY KEY,\n  action TEXT NOT NULL,\n  performed_at TIMESTAMPTZ DEFAULT NOW()\n);\nINSERT INTO schema_migrations (filename) VALUES ('006_add_audit_log.sql');\nCOMMIT;",
+        options: [
+          "SERIAL is deprecated in PostgreSQL",
+          "If the table already exists, CREATE TABLE fails and the whole transaction rolls back — including the INSERT into schema_migrations",
+          "You can't INSERT inside a transaction",
+          "performed_at should use TIMESTAMP, not TIMESTAMPTZ"
+        ],
+        correct: 1,
+        explanation: "Without 'IF NOT EXISTS', CREATE TABLE fails if the table exists. Since it's in a transaction, the INSERT into schema_migrations also rolls back — so the runner will try again next time and fail again in an infinite loop. Use CREATE TABLE IF NOT EXISTS for idempotent migrations."
+      },
+      {
+        question: "What is a 'data-only' migration?",
+        options: [
+          "A migration that only creates tables without inserting data",
+          "A migration that modifies data (INSERT, UPDATE, DELETE) without changing the schema structure",
+          "A migration that exports data to a CSV file",
+          "A migration that only runs in the test environment"
+        ],
+        correct: 1,
+        explanation: "Data-only migrations change the contents of tables without altering their structure. Example: backfilling a new column, correcting bad data, or seeding reference data. They're still tracked in schema_migrations like any other migration — the runner doesn't distinguish between schema and data changes."
+      },
+      {
+        type: "which-breaks",
+        question: "Which migration strategy causes downtime during deployment?",
+        variants: [
+          "Add nullable column, deploy new code, backfill later",
+          "Rename column from 'name' to 'display_name' in one migration, then deploy code that uses 'display_name'",
+          "Add new column, write to both old and new columns during transition, drop old column after full rollout"
+        ],
+        correct: 1,
+        explanation: "Renaming a column immediately breaks any running code that references the old name. Between the migration running and the new code deploying, all queries using 'name' fail. The expand-contract pattern (option C) avoids this — add the new column, transition writes, then remove the old one in a later migration."
+      },
+      {
+        type: "predict-output",
+        question: "You run a migration that takes an ACCESS EXCLUSIVE lock on the tokens table. Meanwhile, your app is handling requests. What do users experience?",
+        code: "-- 007_rebuild_tokens.sql\nALTER TABLE tokens ADD COLUMN category TEXT;\n-- This takes ACCESS EXCLUSIVE lock on a table with 2M rows",
+        answer: "All queries (SELECT, INSERT, UPDATE) on the tokens table are blocked until the ALTER completes. Users see timeouts or hanging requests.",
+        explanation: "ACCESS EXCLUSIVE lock blocks ALL other operations on the table — even SELECTs. On a large table, this can take seconds or longer. During that time, every user request that touches the tokens table queues up. In PostgreSQL, adding a nullable column without a default is nearly instant, but adding one WITH a default on older PG versions rewrites the table (PG 11+ is instant for defaults too)."
+      },
+      {
+        type: "fill-blank",
+        question: "Check that a migration file hasn't been tampered with by storing a hash:",
+        code: "CREATE TABLE schema_migrations (\n  filename TEXT PRIMARY KEY,\n  applied_at TIMESTAMPTZ DEFAULT NOW(),\n  ___ TEXT NOT NULL\n);",
+        answer: "checksum",
+        explanation: "Storing a checksum (SHA-256 hash of the file contents) lets the runner detect if a migration was edited after being applied. On each run, it hashes the file and compares — if they differ, it warns that a previously-applied migration has been modified, which is a dangerous situation."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This migration runner has a subtle concurrency bug. What is it?",
+        code: "async function runMigrations() {\n  const applied = await db.query('SELECT filename FROM schema_migrations');\n  const files = fs.readdirSync('./migrations').sort();\n  for (const file of files) {\n    if (!applied.rows.find(r => r.filename === file)) {\n      const sql = fs.readFileSync(`./migrations/${file}`, 'utf8');\n      await db.query(sql);\n      await db.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [file]);\n    }\n  }\n}",
+        options: [
+          "readdirSync should be async",
+          "If two instances run simultaneously, both see the same 'applied' list and both try to apply the same migration — causing duplicate execution or errors",
+          "The sort() method doesn't work on filenames",
+          "find() should be filter()"
+        ],
+        correct: 1,
+        explanation: "There's no advisory lock. If two servers start simultaneously (common in container deployments), both read schema_migrations before either writes to it. Both see the same pending migrations and both try to apply them. Solution: acquire an advisory lock (SELECT pg_advisory_lock(1)) before reading the migration state."
+      },
+      {
+        question: "How should you test migrations before running them in production?",
+        options: [
+          "Just run them directly in production — PostgreSQL transactions will protect you",
+          "Run them against a staging database that's a recent copy of production data, verify the schema matches expectations, then apply to production",
+          "Test them only with an empty database in CI",
+          "Read the SQL carefully — that's sufficient"
+        ],
+        correct: 1,
+        explanation: "Testing against production-like data catches issues that empty databases miss: NOT NULL violations on existing rows, slow operations on large tables, constraint conflicts with real data. CI with an empty database catches syntax errors but misses data-dependent failures."
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps for the expand-contract pattern when renaming a column from 'name' to 'display_name':",
+        steps: [
+          "Migration: ADD COLUMN display_name TEXT",
+          "Migration: Backfill display_name FROM name",
+          "Deploy code that writes to BOTH name and display_name",
+          "Deploy code that reads from display_name only",
+          "Migration: DROP COLUMN name"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Expand-contract avoids downtime. First expand the schema (add new column, backfill). Then transition the code (write to both, then read from new). Finally contract (drop old column). Each step is independently safe — if something goes wrong, you can stop without data loss."
       }
     ]);
   </script>

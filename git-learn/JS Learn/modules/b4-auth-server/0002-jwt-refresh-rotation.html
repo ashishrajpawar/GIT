@@ -370,6 +370,204 @@ curl -X POST http://localhost:3000/api/auth/logout \\
         ],
         correct: 2,
         explanation: "AsyncStorage on React Native is an unencrypted JSON file. Any app with root access (or a backup extraction) can read it. Refresh tokens MUST go in secure storage (iOS Keychain, Android Keystore via expo-secure-store). Access tokens in memory are fine — they're short-lived and disappear when the app closes."
+      },
+      // --- Questions 6–25 ---
+      {
+        question: "A JWT has three parts separated by dots. What are they?",
+        options: [
+          "Username, password, signature",
+          "Header, payload, signature",
+          "Token ID, expiry, hash",
+          "Algorithm, claims, secret key"
+        ],
+        correct: 1,
+        explanation: "A JWT is structured as header.payload.signature — the header specifies the algorithm (e.g. HS256), the payload contains claims (sub, iat, exp, etc.), and the signature proves the token hasn't been tampered with."
+      },
+      {
+        question: "Why is JWT authentication called 'stateless'?",
+        options: [
+          "The server doesn't store session data — all info is in the token itself",
+          "The token changes state on every request",
+          "The client doesn't store anything",
+          "The database has no tables for auth"
+        ],
+        correct: 0,
+        explanation: "Stateless means the server doesn't need to look up a session in a database to validate a request. The JWT carries all necessary info (user ID, expiry, permissions) and the server just verifies the signature. This makes horizontal scaling easy — any server can validate the token independently."
+      },
+      {
+        type: "predict-output",
+        question: "What does this token payload tell you about when the token expires?",
+        code: "const payload = {\n  sub: 'user_42',\n  iat: 1700000000,\n  exp: 1700000900\n};\nconsole.log((payload.exp - payload.iat) / 60 + ' minutes');",
+        answer: "15 minutes",
+        explanation: "exp - iat = 900 seconds = 15 minutes. This is the standard access token lifetime for the Token app. Short-lived access tokens limit the damage window if one is stolen — the attacker has at most 15 minutes before it expires."
+      },
+      {
+        type: "fill-blank",
+        question: "Create a JWT access token with a 15-minute expiry:",
+        code: "const token = jwt.sign({ sub: userId }, process.env.JWT_SECRET, { ___: '15m' });",
+        answer: "expiresIn",
+        explanation: "The expiresIn option tells jsonwebtoken to automatically set the 'exp' claim relative to the current time. You can pass strings like '15m', '1h', '7d' or a number of seconds. Never omit expiry on access tokens — a token without exp never expires."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this auth middleware?",
+        code: "function authenticate(req, res, next) {\n  const token = req.headers.authorization;\n  const payload = jwt.verify(token, process.env.JWT_SECRET);\n  req.user = payload;\n  next();\n}",
+        options: [
+          "Should use req.body instead of headers",
+          "Missing 'Bearer ' prefix stripping — the header value is 'Bearer <token>', not the raw token",
+          "jwt.verify doesn't return a payload",
+          "next() should be called before req.user assignment"
+        ],
+        correct: 1,
+        explanation: "The Authorization header format is 'Bearer eyJhbG...'. If you pass the entire string (including 'Bearer ') to jwt.verify, it will fail with a malformed token error. You must split: const token = req.headers.authorization?.split(' ')[1];"
+      },
+      {
+        type: "which-breaks",
+        question: "Which JWT signing approach is dangerous for production?",
+        variants: [
+          "jwt.sign(payload, process.env.JWT_SECRET, { algorithm: 'HS256' })",
+          "jwt.sign(payload, 'my-secret-key-123', { expiresIn: '15m' })",
+          "jwt.sign(payload, privateKey, { algorithm: 'RS256', expiresIn: '15m' })"
+        ],
+        correct: 1,
+        explanation: "Hardcoding the secret in source code is a critical vulnerability. If your repo is public (or leaked), anyone can forge valid JWTs for any user. Always use environment variables. The HS256 and RS256 approaches are both fine — what matters is that the secret/key isn't embedded in code."
+      },
+      {
+        type: "predict-output",
+        question: "A user's access token expired 2 seconds ago. They make an API request. What does the middleware return?",
+        code: "try {\n  const payload = jwt.verify(expiredToken, secret);\n  console.log('Authenticated:', payload.sub);\n} catch (err) {\n  console.log(err.name);\n}",
+        answer: "TokenExpiredError",
+        explanation: "jwt.verify() checks the exp claim against the current time. If the token is expired — even by 1 second — it throws a TokenExpiredError. The client should catch 401 responses and use the refresh token to get a new access token, then retry the original request."
+      },
+      {
+        type: "order-steps",
+        question: "Put the refresh token rotation steps in order (server-side, after receiving a refresh request):",
+        steps: ["Hash the incoming refresh token", "Look up the hash in the database", "Check if the token is revoked or expired", "Generate new access + refresh token pair", "Mark the old refresh token as revoked", "Store hash of new refresh token", "Return new tokens to client"],
+        correctOrder: [0, 1, 2, 3, 4, 5, 6],
+        explanation: "The server never stores raw tokens — it hashes first, then looks up. After validation, it generates a fresh pair, revokes the old one (so it can't be reused), stores the new hash, and returns the new tokens. This ensures every refresh token is single-use."
+      },
+      {
+        question: "Why do we hash refresh tokens before storing them in the database?",
+        options: [
+          "To make them shorter and save storage space",
+          "To speed up database lookups with indexing",
+          "So a database breach doesn't give attackers usable tokens",
+          "Because PostgreSQL can't store long strings"
+        ],
+        correct: 2,
+        explanation: "If an attacker gains read access to your database (SQL injection, backup leak, insider threat), they see hashes — not usable tokens. They can't reverse SHA-256 to get the original token. Without hashing, a DB breach = complete account takeover for every user with an active refresh token."
+      },
+      {
+        type: "fill-blank",
+        question: "Extract the token from the Authorization header:",
+        code: "const token = req.headers.authorization?.split(' ')[___];",
+        answer: "1",
+        explanation: "The Authorization header value is 'Bearer eyJhbG...'. Splitting by space gives ['Bearer', 'eyJhbG...']. Index 0 is 'Bearer', index 1 is the actual token. Always use optional chaining (?.) in case the header is missing entirely."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this refresh token schema?",
+        code: "CREATE TABLE refresh_tokens (\n  id SERIAL PRIMARY KEY,\n  user_id INTEGER REFERENCES users(id),\n  token_hash TEXT NOT NULL,\n  created_at TIMESTAMPTZ DEFAULT NOW()\n);",
+        options: [
+          "SERIAL should be UUID",
+          "Missing revoked_at and expires_at columns — can't revoke or expire tokens",
+          "user_id should be TEXT not INTEGER",
+          "created_at should not have a default"
+        ],
+        correct: 1,
+        explanation: "Without a revoked_at column, you can't mark tokens as revoked (needed for rotation detection and logout). Without expires_at, tokens live forever unless you delete rows. A proper schema needs: token_hash, user_id, expires_at, revoked_at, and optionally a family_id to group rotation chains."
+      },
+      {
+        question: "What is the 'sub' claim in a JWT payload?",
+        options: [
+          "The subscription plan of the user",
+          "The subject — typically the user ID the token was issued for",
+          "A subtoken used for refresh",
+          "The subdomain the token is valid for"
+        ],
+        correct: 1,
+        explanation: "'sub' is a registered claim meaning 'subject' — it identifies who the token is about. In Token app, this is the user's ID (e.g. 'user_42'). Other standard claims: 'iat' (issued at), 'exp' (expires), 'iss' (issuer), 'aud' (audience)."
+      },
+      {
+        type: "predict-output",
+        question: "The JWT_SECRET is compromised and leaked publicly. What can an attacker do?",
+        code: "// Attacker knows: JWT_SECRET = 'leaked-secret-value'\nconst forgedToken = jwt.sign(\n  { sub: 'any_user_id', role: 'admin' },\n  'leaked-secret-value',\n  { expiresIn: '24h' }\n);\n// Attacker sends this token to your API...",
+        answer: "The server will accept it as valid — the attacker can impersonate ANY user with ANY role",
+        explanation: "If the secret is compromised, anyone can forge valid tokens. The server can't distinguish between tokens it issued and tokens forged with the same secret. This is a catastrophic breach — you must immediately rotate the secret (which invalidates ALL existing tokens, forcing all users to re-login)."
+      },
+      {
+        type: "which-breaks",
+        question: "Which error handling approach in auth middleware will cause security issues?",
+        variants: [
+          "catch (err) { return res.status(401).json({ error: 'Invalid token' }); }",
+          "catch (err) { return res.status(401).json({ error: err.message, stack: err.stack }); }",
+          "catch (err) { console.error('Auth failed:', err.name); return res.status(401).json({ error: 'Unauthorized' }); }"
+        ],
+        correct: 1,
+        explanation: "Exposing err.message and err.stack to the client leaks internal details — the algorithm used, the secret length hint in some errors, file paths from stack traces. Always return generic error messages ('Unauthorized', 'Invalid token') to clients and log details server-side only."
+      },
+      {
+        question: "What is the difference between HS256 and RS256 for JWT signing?",
+        options: [
+          "HS256 uses a shared secret (symmetric); RS256 uses a private/public key pair (asymmetric)",
+          "HS256 is more secure than RS256",
+          "RS256 doesn't use signatures",
+          "HS256 is for refresh tokens, RS256 is for access tokens"
+        ],
+        correct: 0,
+        explanation: "HS256 (HMAC + SHA-256) uses one secret for both signing and verifying — both parties need the same secret. RS256 (RSA + SHA-256) uses a private key to sign and a public key to verify — services can verify tokens without knowing the signing key. For a single-server Token app, HS256 is simpler. RS256 shines in microservices where many services need to verify but shouldn't be able to forge tokens."
+      },
+      {
+        type: "fill-blank",
+        question: "Hash a refresh token before storing it in the database:",
+        code: "const crypto = require('crypto');\nconst tokenHash = crypto.createHash('___').update(refreshToken).digest('hex');",
+        answer: "sha256",
+        explanation: "SHA-256 is a one-way hash — fast to compute, impossible to reverse. We hash the refresh token and store only the hash. When the client sends the token back, we hash it again and look up the hash in the database. This way, even if the DB is compromised, the raw tokens remain secret."
+      },
+      {
+        type: "order-steps",
+        question: "Put the client-side token refresh flow in order (when an API call returns 401):",
+        steps: ["API request returns 401 (access token expired)", "Read refresh token from expo-secure-store", "POST to /api/auth/refresh with the refresh token", "Store new refresh token in expo-secure-store", "Store new access token in memory", "Retry the original API request with new access token"],
+        correctOrder: [0, 1, 2, 3, 4, 5],
+        explanation: "The client detects a 401, retrieves the refresh token from secure storage, exchanges it for a new pair, securely stores the new refresh token, keeps the access token in memory for immediate use, then retries the failed request. This should be transparent to the user — they never see the token refresh happening."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this JWT payload for the Token app?",
+        code: "const payload = {\n  sub: userId,\n  email: user.email,\n  phone: user.phone,\n  role: 'user',\n  tokenCodes: user.tokens.map(t => t.code),\n  exp: Math.floor(Date.now() / 1000) + 900\n};",
+        options: [
+          "exp calculation is wrong",
+          "sub should be a number, not userId",
+          "Payload is bloated with sensitive data (email, phone) and mutable data (tokenCodes) that will be stale within 15 min",
+          "role should be an array"
+        ],
+        correct: 2,
+        explanation: "JWTs should carry minimal claims. Putting email and phone in every token violates Token's privacy-first principle and leaks PII if the token is intercepted. tokenCodes will be stale the moment a user creates/revokes a token — the JWT can't update until refresh. Keep it to: sub, iat, exp. Fetch mutable data from the DB per-request."
+      },
+      {
+        question: "Why should the Token app use short-lived access tokens (15 minutes) rather than long-lived ones (30 days)?",
+        options: [
+          "Short tokens use less bandwidth",
+          "Short tokens limit the damage window — a stolen token is useless after 15 minutes without the refresh token",
+          "Long tokens are invalid after a server restart",
+          "The JWT spec requires tokens under 1 hour"
+        ],
+        correct: 1,
+        explanation: "If an access token is intercepted (network sniffing, log leak, XSS), the attacker has a maximum 15-minute window. With a 30-day token, they'd have persistent access for a month. Short access tokens + rotated refresh tokens balance security (limited damage) with UX (users don't re-login constantly)."
+      },
+      {
+        type: "predict-output",
+        question: "What happens when you decode (not verify) an expired JWT?",
+        code: "const jwt = require('jsonwebtoken');\nconst expired = jwt.sign({ sub: 'u1' }, 'secret', { expiresIn: '-1s' });\n\n// decode() vs verify()\nconst decoded = jwt.decode(expired);\nconst verified = (() => { try { return jwt.verify(expired, 'secret'); } catch(e) { return e.name; } })();\nconsole.log(typeof decoded, '|', verified);",
+        answer: "object | TokenExpiredError",
+        explanation: "jwt.decode() NEVER checks the signature or expiry — it just base64-decodes the payload. It returns the payload object regardless of validity. jwt.verify() checks both signature and expiry, throwing TokenExpiredError for expired tokens. NEVER use decode() for authentication — it provides zero security guarantees."
+      },
+      {
+        type: "fill-blank",
+        question: "Revoke all refresh tokens for a user on logout:",
+        code: "await pool.query(\n  'UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS ___',\n  [userId]\n);",
+        answer: "NULL",
+        explanation: "On logout, we revoke ALL active (non-revoked) refresh tokens for the user. The WHERE condition 'revoked_at IS NULL' targets only tokens that haven't already been revoked. Setting revoked_at = NOW() timestamps the revocation. This ensures no existing refresh token can be used to get new access tokens."
       }
     ]);
   </script>

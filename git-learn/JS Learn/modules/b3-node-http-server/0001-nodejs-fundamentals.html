@@ -365,6 +365,248 @@ curl http://localhost:3000/nonexistent
         ],
         correct: 2,
         explanation: "require() is CommonJS syntax. In an ES module project (\"type\": \"module\" in package.json), you must use import statements. Mixing require() and import causes a runtime error."
+      },
+      // --- Questions 6–25 ---
+      {
+        type: "predict-output",
+        question: "What does this print?",
+        code: "setTimeout(() => console.log('1'), 0);\nsetImmediate(() => console.log('2'));\nPromise.resolve().then(() => console.log('3'));\nprocess.nextTick(() => console.log('4'));",
+        answer: "4, 3, 1, 2",
+        explanation: "process.nextTick runs before all other async callbacks. Then microtasks (Promise.then) run. Then macrotasks: setTimeout(0) fires in the timers phase, and setImmediate fires in the check phase. The order between setTimeout(0) and setImmediate can vary outside I/O callbacks, but nextTick and Promise always come first."
+      },
+      {
+        question: "In the Node.js event loop, what is the correct priority order from highest to lowest?",
+        options: [
+          "setTimeout → setImmediate → Promise.then → process.nextTick",
+          "process.nextTick → Promise.then → setTimeout → setImmediate",
+          "Promise.then → process.nextTick → setImmediate → setTimeout",
+          "setImmediate → setTimeout → process.nextTick → Promise.then"
+        ],
+        correct: 1,
+        explanation: "process.nextTick has the highest priority (runs after current operation, before anything else). Then microtasks (Promise.then). Then macrotasks: timers (setTimeout) fire in the timers phase, and setImmediate fires in the check phase."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this environment variable usage in the Token API?",
+        code: "const port = process.env.PORT || 3000;\nconst dbUrl = process.env.DATABASE_URL || 'postgres://localhost/token';\nconst jwtSecret = process.env.JWT_SECRET || 'dev-secret-123';",
+        options: [
+          "PORT should not have a fallback",
+          "DATABASE_URL must be a number",
+          "JWT_SECRET must never have a hardcoded fallback — it silently runs with a guessable secret in production",
+          "You can't use || with environment variables"
+        ],
+        correct: 2,
+        explanation: "If JWT_SECRET is not set in production, the code silently uses 'dev-secret-123' — a value anyone can guess. Attackers can forge tokens. Security-critical env vars must throw an error if missing, never fall back to a default."
+      },
+      {
+        type: "fill-blank",
+        question: "Read a file asynchronously in an ES module:",
+        code: "import { ___ } from 'fs/promises';\nconst config = await ___(\'./config.json\', 'utf8');",
+        answer: "readFile",
+        explanation: "fs/promises exports readFile which returns a Promise. In an ES module with top-level await, you can await it directly. This is non-blocking — it does not freeze the event loop like readFileSync would."
+      },
+      {
+        type: "which-breaks",
+        question: "Which of these file path constructions will break on Windows?",
+        variants: [
+          "import path from 'path';\nconst file = path.join(process.cwd(), 'data', 'tokens.json');",
+          "const file = process.cwd() + '/data/tokens.json';",
+          "import { fileURLToPath } from 'url';\nconst __dirname = path.dirname(fileURLToPath(import.meta.url));"
+        ],
+        correct: 1,
+        explanation: "String concatenation with '/' breaks on Windows where the separator is '\\'. path.join() handles platform differences automatically. Always use path.join or path.resolve for cross-platform compatibility."
+      },
+      {
+        type: "order-steps",
+        question: "Order these steps for a graceful shutdown of the Token API server:",
+        steps: [
+          "Close the HTTP server (stop accepting new connections)",
+          "Register SIGTERM/SIGINT signal handlers",
+          "Drain existing connections (let in-flight requests finish)",
+          "Close database pool connections",
+          "Call process.exit(0)"
+        ],
+        correctOrder: [1, 0, 2, 3, 4],
+        explanation: "First register handlers (at startup). When the signal arrives: stop accepting new connections, let existing requests finish, close DB connections (cleanup resources), then exit cleanly with code 0."
+      },
+      {
+        type: "predict-output",
+        question: "What does this code output?",
+        code: "import crypto from 'crypto';\nconst a = crypto.randomBytes(4).toString('hex');\nconst b = crypto.randomBytes(4).toString('hex');\nconsole.log(a === b);\nconsole.log(a.length);",
+        answer: "false, 8",
+        explanation: "randomBytes(4) produces 4 random bytes. toString('hex') converts each byte to 2 hex chars, so 4 bytes = 8 characters. Two calls to randomBytes will almost certainly produce different values (probability of collision is 1 in 2^32)."
+      },
+      {
+        question: "Why does Token use crypto.randomBytes instead of Math.random() for generating token codes?",
+        options: [
+          "Math.random() is slower",
+          "Math.random() uses a PRNG seeded from a predictable source — an attacker could predict future token codes",
+          "Math.random() only generates integers",
+          "crypto.randomBytes() uses less memory"
+        ],
+        correct: 1,
+        explanation: "Math.random() uses a pseudo-random number generator that is NOT cryptographically secure. An attacker who observes some outputs could predict future values. crypto.randomBytes uses the OS entropy source (e.g., /dev/urandom) which is unpredictable."
+      },
+      {
+        type: "fill-blank",
+        question: "Handle a missing required environment variable at startup:",
+        code: "const dbUrl = process.env.DATABASE_URL;\nif (!dbUrl) {\n  console.error('DATABASE_URL is required');\n  process.exit(___);\n}",
+        answer: "1",
+        explanation: "process.exit(1) signals an error condition. Exit code 0 means success, any non-zero code means failure. Orchestrators like Docker and systemd use this to know whether to restart the process. A missing required config is a fatal error."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's the bug in this ES module file (package.json has \"type\": \"module\")?",
+        code: "// src/utils/generateCode.ts\nexport function generateCode() {\n  return crypto.randomBytes(6).toString('hex');\n}\n\n// src/server.ts\nimport { generateCode } from './utils/generateCode';",
+        options: [
+          "export should be module.exports",
+          "In ESM with tsx/ts-node the .ts extension may be needed depending on loader, but at runtime in plain Node ESM you must specify the file extension in import paths",
+          "You can't import from subdirectories",
+          "generateCode should be a default export"
+        ],
+        correct: 1,
+        explanation: "Node.js ES modules require explicit file extensions in import paths (unlike CommonJS which tries .js, .json, etc.). With TypeScript compilers like tsx this is often handled, but in pure ESM Node.js, omitting the extension causes ERR_MODULE_NOT_FOUND."
+      },
+      {
+        type: "predict-output",
+        question: "What's the output?",
+        code: "async function fetchToken() {\n  throw new Error('DB connection failed');\n}\n\nfetchToken();\nconsole.log('Server started');",
+        answer: "Server started, then UnhandledPromiseRejection",
+        explanation: "An async function returns a Promise. Calling it without await or .catch() means the rejection is unhandled. 'Server started' prints first (synchronous), then Node emits an UnhandledPromiseRejectionWarning. In Node 15+, this crashes the process."
+      },
+      {
+        type: "which-breaks",
+        question: "Which of these approaches to reading process.env.PORT will cause a type error when used with http.listen()?",
+        variants: [
+          "const port = parseInt(process.env.PORT || '3000', 10);",
+          "const port = Number(process.env.PORT) || 3000;",
+          "const port = process.env.PORT ?? 3000;"
+        ],
+        correct: 2,
+        explanation: "process.env.PORT is always a string (or undefined). The ?? operator returns the string '3000' if PORT is set. http.listen() accepts a number or string, but TypeScript will flag this as potentially wrong. More importantly, if PORT is set to a non-numeric string, no conversion happens. Always parse explicitly."
+      },
+      {
+        type: "order-steps",
+        question: "Order the event loop phases that Node.js cycles through:",
+        steps: [
+          "timers (setTimeout, setInterval callbacks)",
+          "poll (I/O callbacks, incoming connections)",
+          "check (setImmediate callbacks)",
+          "close callbacks (socket.on('close'))"
+        ],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "The event loop cycles: timers → pending callbacks → idle/prepare → poll → check → close callbacks. Timers fire first if their delay has elapsed, then poll handles I/O, then check runs setImmediate, then close callbacks run."
+      },
+      {
+        question: "What happens when you run a CPU-intensive synchronous loop (e.g., computing a hash 10 million times) in a Node.js request handler?",
+        options: [
+          "Node.js spawns a new thread automatically",
+          "Only that one request is affected",
+          "The entire server is blocked — no other requests can be processed until the loop finishes",
+          "The OS kernel handles it in the background"
+        ],
+        correct: 2,
+        explanation: "Node.js runs JavaScript on a single thread. A synchronous CPU-heavy operation blocks the event loop entirely. All other clients — even those with simple requests — must wait. This is why Token's API must avoid sync operations and offload heavy work to worker threads."
+      },
+      {
+        type: "fill-blank",
+        question: "Use top-level await to load config before the server starts:",
+        code: "// config.ts (ES module)\nimport { readFile } from 'fs/promises';\n\nconst raw = ___ readFile('./config.json', 'utf8');\nexport const config = JSON.parse(raw);",
+        answer: "await",
+        explanation: "Top-level await is allowed in ES modules (\"type\": \"module\"). It pauses module evaluation until the Promise resolves. This ensures config is loaded before any importing module uses it. CommonJS does NOT support top-level await."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this stream usage in a Token API file-download endpoint?",
+        code: "import { createReadStream } from 'fs';\n\napp.get('/export', (req, res) => {\n  const stream = createReadStream('/data/export.csv');\n  stream.pipe(res);\n});",
+        options: [
+          "createReadStream doesn't exist",
+          "You can't pipe to a response",
+          "No error handling — if the file doesn't exist, the server crashes or hangs without sending an error response",
+          "pipe() is deprecated"
+        ],
+        correct: 2,
+        explanation: "If the file doesn't exist, the stream emits an 'error' event. Without a handler, this crashes the process (or in Express, leaves the response hanging). Always add stream.on('error', ...) to send a proper error response."
+      },
+      {
+        type: "predict-output",
+        question: "What does this output?",
+        code: "const buf = Buffer.from('Token', 'utf8');\nconsole.log(buf.length);\nconsole.log(buf.toString('hex'));",
+        answer: "5, 546f6b656e",
+        explanation: "Buffer.from('Token', 'utf8') creates a buffer with 5 bytes (one per ASCII character). toString('hex') converts each byte to its 2-character hex representation: T=54, o=6f, k=6b, e=65, n=6e."
+      },
+      {
+        type: "which-breaks",
+        question: "Which approach to running a background task will block the Token API's event loop?",
+        variants: [
+          "import { Worker } from 'worker_threads';\nconst worker = new Worker('./hash-worker.js');",
+          "import { execFile } from 'child_process';\nexecFile('ffmpeg', ['-i', 'input.wav', 'output.mp3']);",
+          "while (Date.now() - start < 5000) { /* compute hash */ }"
+        ],
+        correct: 2,
+        explanation: "A synchronous while loop runs on the main thread and blocks everything for 5 seconds. Worker threads and child processes run in separate threads/processes, so the event loop stays free to handle requests."
+      },
+      {
+        type: "order-steps",
+        question: "Order these steps for safely loading environment variables in the Token API:",
+        steps: [
+          "Import and call dotenv.config() at the top of the entry file",
+          "Define a schema/validation for required env vars",
+          "Read process.env values into typed config object",
+          "Throw an error if any required variable is missing",
+          "Export the validated config for use by other modules"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "First load .env into process.env (dotenv). Then define what you expect (schema). Read values out and validate. Crash early if something is missing — don't let the server start in a broken state. Finally export the validated, typed config."
+      },
+      {
+        question: "What does adding \"type\": \"module\" to package.json do?",
+        options: [
+          "Enables TypeScript support",
+          "Makes all .js files in the package treated as ES modules instead of CommonJS",
+          "Allows importing JSON files",
+          "Enables top-level error handling"
+        ],
+        correct: 1,
+        explanation: "By default, Node.js treats .js files as CommonJS. Adding \"type\": \"module\" to package.json flips the default — all .js files become ES modules (import/export syntax). To use CommonJS in such a project, you must rename files to .cjs."
+      },
+      {
+        type: "fill-blank",
+        question: "Register a signal handler for graceful shutdown:",
+        code: "process.on('___', async () => {\n  console.log('Shutting down gracefully...');\n  await server.close();\n  await pool.end();\n  process.exit(0);\n});",
+        answer: "SIGTERM",
+        explanation: "SIGTERM is the standard signal sent by orchestrators (Docker, Kubernetes, systemd) to request a graceful shutdown. The handler should stop accepting connections, drain existing ones, close resources, then exit. SIGKILL cannot be caught."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's the problem with this async error handling in a Token API route?",
+        code: "app.get('/tokens/:id', async (req, res) => {\n  try {\n    const token = await db.query('SELECT * FROM tokens WHERE id = $1', [req.params.id]);\n    res.json(token.rows[0]);\n  } catch (err) {\n    console.log(err);\n  }\n});",
+        options: [
+          "You can't use async with Express routes",
+          "The catch block logs the error but never sends a response — the client hangs forever waiting",
+          "db.query doesn't return rows",
+          "req.params.id needs parseInt()"
+        ],
+        correct: 1,
+        explanation: "When the catch block only logs without calling res.status(500).json(...), the client never receives a response. The connection stays open until it times out. Always send an error response in catch blocks."
+      },
+      {
+        type: "predict-output",
+        question: "What's the output?",
+        code: "console.log('1');\n\nawait new Promise(resolve => setTimeout(resolve, 0));\n\nconsole.log('2');\n\nprocess.nextTick(() => console.log('3'));",
+        answer: "1, 2, 3",
+        explanation: "Top-level await pauses execution. '1' prints, then await yields to the event loop. When setTimeout fires, execution resumes and '2' prints. process.nextTick schedules '3' to run after the current operation completes, so it prints last. The key insight: await actually waits, unlike bare Promise calls."
+      },
+      {
+        type: "which-breaks",
+        question: "Which of these will fail when importing a JSON file in an ES module?",
+        variants: [
+          "import config from './config.json' with { type: 'json' };",
+          "import { readFile } from 'fs/promises';\nconst config = JSON.parse(await readFile('./config.json', 'utf8'));",
+          "import config from './config.json';"
+        ],
+        correct: 2,
+        explanation: "In ES modules, importing JSON without an import attribute (with { type: 'json' }) fails with ERR_IMPORT_ASSERTION_TYPE_MISSING in Node 20+. You must either use the import attribute syntax or read the file manually with fs and JSON.parse."
       }
     ]);
   </script>

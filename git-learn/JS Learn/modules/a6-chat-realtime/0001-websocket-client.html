@@ -471,6 +471,241 @@ console.log('Jitter prevents thundering herd on server restart');`);
         ],
         correctOrder: [0, 1, 2, 3, 4],
         explanation: "The lifecycle is auth-driven: login triggers connect, the server authenticates during upgrade, and the connection lives until the OS or logout kills it. Reconnection is automatic and invisible to the user."
+      },
+
+      // --- Questions 6–25 ---
+
+      {
+        question: "What is the correct WebSocket URL scheme for a production Token API over TLS?",
+        options: [
+          "http://api.tokn.app/ws",
+          "ws://api.tokn.app/ws",
+          "wss://api.tokn.app/ws",
+          "https://api.tokn.app/ws"
+        ],
+        correct: 2,
+        explanation: "wss:// is WebSocket Secure — WebSocket over TLS (like https:// is HTTP over TLS). ws:// is unencrypted and must only be used in local development. Sending a JWT over an unencrypted ws:// connection in production would expose the token to anyone on the network."
+      },
+
+      {
+        type: "predict-output",
+        question: "What does this code log when a WebSocket is first created but not yet open?",
+        code: "const ws = new WebSocket('wss://api.tokn.app/ws?token=abc');\nconsole.log(ws.readyState);",
+        answer: "0",
+        explanation: "readyState 0 = CONNECTING. The WebSocket constructor starts the connection attempt immediately but asynchronously. The four states are: 0 (CONNECTING), 1 (OPEN), 2 (CLOSING), 3 (CLOSED). You can also use the constants WebSocket.CONNECTING, WebSocket.OPEN, WebSocket.CLOSING, WebSocket.CLOSED."
+      },
+
+      {
+        type: "fill-blank",
+        question: "Complete the guard that prevents sending when the socket is not ready:",
+        code: "export function send(type, payload) {\n  if (ws?.readyState === WebSocket.___) {\n    ws.send(JSON.stringify({ type, payload }));\n  }\n}",
+        answer: "OPEN",
+        explanation: "WebSocket.OPEN equals 1. Only when readyState is OPEN is the connection fully established and ready to transmit data. Attempting to send on a CONNECTING (0), CLOSING (2), or CLOSED (3) socket will throw or silently fail depending on the environment."
+      },
+
+      {
+        type: "spot-the-bug",
+        question: "A Token developer wrote this useEffect to connect on mount. What is the bug?",
+        code: "useEffect(() => {\n  const ws = new WebSocket(`wss://api.tokn.app/ws?token=${token}`);\n  ws.onmessage = (event) => {\n    const msg = JSON.parse(event.data);\n    handleMessage(msg);\n  };\n}, []);",
+        options: [
+          "The token is passed in the URL but should be in a header",
+          "There is no cleanup — the WebSocket is never closed when the component unmounts",
+          "JSON.parse should be JSON.stringify",
+          "WebSocket is not available in React Native"
+        ],
+        correct: 1,
+        explanation: "Every useEffect that creates a resource must return a cleanup function. Without cleanup, when the component unmounts (e.g. during navigation), the WebSocket stays open and onmessage still fires, causing state updates on an unmounted component and memory leaks. Fix: return () => ws.close(1000, 'Component unmounted');"
+      },
+
+      {
+        type: "which-breaks",
+        question: "Which of these approaches to sending the auth token is NOT valid for a React Native WebSocket?",
+        variants: [
+          "new WebSocket('wss://api.tokn.app/ws?token=JWT')",
+          "ws.onopen = () => ws.send(JSON.stringify({ type: 'auth', token: 'JWT' }))",
+          "new WebSocket('wss://api.tokn.app/ws', [], { headers: { Authorization: 'Bearer JWT' } })",
+          "Encoding the token in a custom subprotocol string passed as second argument"
+        ],
+        correct: 2,
+        explanation: "React Native's WebSocket implementation does not support custom headers in the constructor. The browser WebSocket API also has no way to set arbitrary headers. The two practical approaches are: (1) query parameter in the URL, or (2) send an auth message in the onopen handler before doing anything else. Custom subprotocols (option 3) are a workaround but awkward."
+      },
+
+      {
+        type: "predict-output",
+        question: "What does this log when the server sends back: {\"type\":\"chat:message\",\"payload\":{\"text\":\"Hello\"}}",
+        code: "ws.onmessage = (event) => {\n  const { type, payload } = JSON.parse(event.data);\n  console.log(type);\n  console.log(payload.text);\n};",
+        answer: "chat:message\nHello",
+        explanation: "event.data contains the raw string sent by the server. JSON.parse turns it into a JS object. Destructuring extracts type and payload. type is 'chat:message' and payload.text is 'Hello'. This is the standard message envelope pattern used throughout the Token codebase."
+      },
+
+      {
+        type: "fill-blank",
+        question: "To prevent a stale handler closure in useWsMessage, store the handler in a ___:",
+        code: "export function useWsMessage(type, handler) {\n  const handlerRef = useRef(handler);\n  handlerRef.___ = handler;\n\n  useEffect(() => {\n    return subscribe((msgType, payload) => {\n      if (msgType === type) handlerRef.current(payload);\n    });\n  }, [type]);\n}",
+        answer: "current",
+        explanation: "useRef returns a mutable object { current: ... }. By updating handlerRef.current = handler on every render, the subscribe callback always calls the latest version of the handler even though it was created when the effect first ran. Without this, the handler would close over stale state values from the first render."
+      },
+
+      {
+        type: "order-steps",
+        question: "Put the exponential backoff reconnect sequence in the correct order:",
+        steps: [
+          "onclose fires — intentionalClose is false",
+          "scheduleReconnect() is called",
+          "delay = Math.min(1000 * 2^attempt, 30000) + jitter is calculated",
+          "reconnectAttempts is incremented",
+          "setTimeout fires → connect() is called → new WebSocket created"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "The sequence: onclose triggers scheduleReconnect, which calculates the delay first (using the current attempt count), then increments the counter, then sets the timer. Incrementing before calculating would cause off-by-one: attempt 0 would wait 2 seconds instead of 1. The order matters."
+      },
+
+      {
+        type: "spot-the-bug",
+        question: "This heartbeat implementation has a critical flaw. What is it?",
+        code: "export function connect() {\n  ws = new WebSocket(WS_URL);\n\n  ws.onopen = () => {\n    setInterval(() => {\n      ws.send(JSON.stringify({ type: 'ping' }));\n    }, 30000);\n  };\n\n  ws.onclose = () => scheduleReconnect();\n}",
+        options: [
+          "ping messages should be called heartbeat",
+          "setInterval returns a timer ID that is never stored — the interval runs forever even after disconnection and reconnects, leaking a new interval on every reconnect",
+          "The interval period should be 10000ms not 30000ms",
+          "ws.send should be send() from the module"
+        ],
+        correct: 1,
+        explanation: "Each call to connect() creates a new setInterval that is never cleared. After 5 reconnects, 5 intervals are firing. Each fires even when ws is null or closed. Fix: store the interval ID, clear it in onclose (and in disconnect()), and only create a new one in onopen. const heartbeat = setInterval(...); then clearInterval(heartbeat) on close."
+      },
+
+      {
+        type: "multiple-choice",
+        question: "What does WebSocket close code 1000 mean?",
+        options: [
+          "An unexpected server error occurred",
+          "Normal closure — the connection was closed intentionally",
+          "The client went offline",
+          "Authentication failed"
+        ],
+        correct: 1,
+        explanation: "1000 is the standard 'normal closure' code — both sides agreed to close. Other common codes: 1001 (going away, e.g. server restart), 1006 (abnormal — no close frame sent, e.g. network drop), 1011 (unexpected server error). In Token, we send ws.close(1000, 'User logged out') during intentional logout so the server knows it was clean."
+      },
+
+      {
+        type: "predict-output",
+        question: "The connect() function is called when ws is already CONNECTING. What happens?",
+        code: "// ws.readyState === 0 (CONNECTING)\nif (ws?.readyState === WebSocket.OPEN ||\n    ws?.readyState === WebSocket.CONNECTING) {\n  return;\n}\n// ... create new WebSocket\nconsole.log('new socket created');",
+        answer: "(nothing — function returns early)",
+        explanation: "The guard at the top of connect() returns early if the socket is OPEN or CONNECTING. This prevents creating duplicate connections. Without this guard, a race condition could create two sockets: one still connecting and one newly created. Both would authenticate and receive messages, causing duplicate message handling."
+      },
+
+      {
+        type: "fill-blank",
+        question: "Complete the cleanup in useEffect to avoid a memory leak when the component unmounts:",
+        code: "useEffect(() => {\n  connect();\n  const unsub = subscribe((type, payload) => {\n    setConnectionState('connected');\n  });\n  const sub = AppState.addEventListener('change', handleAppState);\n\n  return () => {\n    ___();\n    sub.remove();\n  };\n}, []);",
+        answer: "unsub",
+        explanation: "subscribe() returns an unsubscribe function that removes the handler from the listeners Set. Calling unsub() in the cleanup prevents the handler from firing after the component unmounts. Without it, setConnectionState would be called on an unmounted component, causing a React warning and potential memory leak."
+      },
+
+      {
+        type: "which-breaks",
+        question: "Which of these will cause the reconnect loop to never stop after logout?",
+        variants: [
+          "Setting intentionalClose = true before calling ws.close()",
+          "Calling ws.close() without setting intentionalClose = true first",
+          "Clearing the reconnectTimer before closing the socket",
+          "Setting ws = null after closing"
+        ],
+        correct: 1,
+        explanation: "ws.close() triggers onclose, and onclose calls scheduleReconnect() if intentionalClose is false. If you call close() before setting intentionalClose = true, the onclose handler fires with intentionalClose still false, schedules a reconnect, and the loop begins. Always set the flag first, then close."
+      },
+
+      {
+        type: "spot-the-bug",
+        question: "What is wrong with this connection state function?",
+        code: "export function getConnectionState() {\n  if (ws.readyState === WebSocket.OPEN) return 'connected';\n  if (ws.readyState === WebSocket.CONNECTING) return 'connecting';\n  return 'disconnected';\n}",
+        options: [
+          "The function should return 'open' not 'connected'",
+          "ws could be null when the socket hasn't been created yet, causing a TypeError",
+          "WebSocket.OPEN is not a valid constant in React Native",
+          "The function needs to be async"
+        ],
+        correct: 1,
+        explanation: "If ws is null (before first connect() or after disconnect()), accessing ws.readyState throws: TypeError: Cannot read property 'readyState' of null. Fix: add a null check first: if (!ws) return 'disconnected'; — or use optional chaining throughout: ws?.readyState."
+      },
+
+      {
+        type: "predict-output",
+        question: "What does this backoff calculation produce for attempt 6?",
+        code: "const attempt = 6;\nconst delay = Math.min(1000 * Math.pow(2, attempt), 30000);\nconsole.log(delay);",
+        answer: "30000",
+        explanation: "2^6 = 64, so 1000 * 64 = 64000ms. But Math.min(64000, 30000) = 30000. The cap kicks in at attempt 5 where 2^5 = 32000 > 30000. All subsequent attempts wait 30 seconds (plus jitter). Without the cap, the 10th attempt would wait over 17 minutes."
+      },
+
+      {
+        type: "order-steps",
+        question: "Put the steps for handling an incoming chat message in useWsMessage in the correct order:",
+        steps: [
+          "Server sends JSON string over the WebSocket",
+          "ws.onmessage fires — event.data contains the raw string",
+          "JSON.parse extracts { type, payload }",
+          "All subscribers in the listeners Set are called with (type, payload)",
+          "useWsMessage subscriber checks if type matches — calls handlerRef.current(payload)"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Messages flow from the network through the socket event, get parsed, fan out to all subscribers, and each subscriber filters to its own message type. The handlerRef pattern ensures the latest handler runs even if the component re-rendered since the effect was set up."
+      },
+
+      {
+        type: "fill-blank",
+        question: "In the Token app, the WebSocket URL in development should use ___ to connect to localhost:",
+        code: "const WS_URL = __DEV__\n  ? '___://localhost:3000/ws'\n  : 'wss://api.tokn.app/ws';",
+        answer: "ws",
+        explanation: "localhost does not have a TLS certificate, so you cannot use wss://. In development you use ws:// (unencrypted). __DEV__ is a React Native global that is true during metro dev server and false in production builds. This pattern ensures wss:// (TLS) in production and ws:// only in local development."
+      },
+
+      {
+        type: "multiple-choice",
+        question: "Why does the Token app use useRef to store the WebSocket singleton in a component hook, rather than useState?",
+        options: [
+          "useRef values are automatically persisted to AsyncStorage",
+          "useRef does not cause a re-render when its value changes — the socket reference changes without triggering unnecessary renders",
+          "useState cannot hold non-serializable objects like WebSocket",
+          "useRef is required for all network objects by React Native"
+        ],
+        correct: 1,
+        explanation: "useState triggers a re-render when its value changes. Storing the WebSocket in state would cause a re-render every time the socket is created or replaced — on every reconnect. useRef holds a mutable reference that persists across renders without causing re-renders. Only connectionState (the derived string) lives in useState because the UI actually needs to react to it."
+      },
+
+      {
+        type: "spot-the-bug",
+        question: "This AuthContext integration has a subtle problem. What is it?",
+        code: "useEffect(() => {\n  if (user) {\n    wsConnect();\n  } else {\n    wsDisconnect();\n  }\n}, [user, wsConnect, wsDisconnect]);",
+        options: [
+          "wsConnect and wsDisconnect are module-level functions, not from state/props, so listing them in deps causes the effect to re-run on every render if they are re-created",
+          "The condition is backwards — disconnect should run when user is truthy",
+          "useEffect cannot be used inside a context provider",
+          "user should be compared with === null instead of using truthiness"
+        ],
+        correct: 0,
+        explanation: "wsConnect and wsDisconnect are exported module functions — they never change identity. However, if they were defined inside the component or wrapped in useCallback incorrectly, adding them to deps would cause the effect to re-run unnecessarily. Best practice: since these are stable module-level exports, omit them from deps or wrap in useCallback with empty deps. The effect should only re-run when user changes."
+      },
+
+      {
+        type: "predict-output",
+        question: "The component mounts. connect() is called. The socket opens. What is connectionState after the onopen fires in this hook?",
+        code: "export function useWebSocket() {\n  const [connectionState, setConnectionState] = useState(getConnectionState());\n\n  useEffect(() => {\n    connect();\n    const unsub = subscribe((type, payload) => {\n      setConnectionState('connected');\n    });\n    return () => unsub();\n  }, []);\n\n  return { connectionState, send };\n}",
+        answer: "connecting (initially), then connected once the first message arrives",
+        explanation: "useState initializes with getConnectionState(). At mount, ws is still null or just created so it returns 'connecting' or 'disconnected'. The state only updates to 'connected' when a message arrives via the subscribe handler. If the server sends nothing immediately after connecting, the state stays as whatever getConnectionState() returned at mount. A more accurate implementation polls getConnectionState or adds an onopen callback."
+      },
+
+      {
+        type: "multiple-choice",
+        question: "In Token, why is jitter added to the exponential backoff delay?",
+        options: [
+          "To make the timing unpredictable so the server cannot be rate-limited",
+          "To desynchronize reconnection attempts from multiple clients so they don't all hit the server simultaneously after a restart",
+          "To comply with Apple's App Store guidelines for background networking",
+          "To reduce battery usage on Android"
+        ],
+        correct: 1,
+        explanation: "Without jitter, all clients that disconnected at the same time (e.g. server restart) would reconnect at identical intervals: 1s, 2s, 4s, 8s... This 'thundering herd' floods the server the moment it comes back up. Adding ±25% random jitter spreads the reconnection wave over time, giving the server a gradual ramp-up rather than an instant spike."
       }
     ]);
   </script>

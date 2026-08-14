@@ -398,6 +398,248 @@ export default router;`
         ],
         correct: 2,
         explanation: "Using GET for a destructive action violates REST. GET must be safe (no side effects) — browsers prefetch GET links, crawlers follow them. If deleting was a GET, a search engine could accidentally revoke your tokens. Use DELETE or POST for actions that change state."
+      },
+
+      // --- Questions 6–25 ---
+
+      {
+        question: "What HTTP status code should you return when a new token is successfully created?",
+        options: [
+          "200 OK",
+          "201 Created",
+          "204 No Content",
+          "202 Accepted"
+        ],
+        correct: 1,
+        explanation: "201 Created tells the client that a new resource was successfully created. 200 means success but doesn't distinguish creation from retrieval. The response should include the created resource and a Location header pointing to it."
+      },
+      {
+        question: "What is the difference between 401 Unauthorized and 403 Forbidden?",
+        options: [
+          "They are the same — both mean access denied",
+          "401 means not authenticated (who are you?); 403 means not authorized (you can't do this)",
+          "401 is for expired tokens; 403 is for invalid tokens",
+          "403 is more severe than 401"
+        ],
+        correct: 1,
+        explanation: "401 means the server doesn't know who you are — you haven't provided credentials or they're invalid. 403 means the server knows who you are but you don't have permission. A logged-in user trying to access another user's tokens gets 403, not 401."
+      },
+      {
+        question: "Why should REST endpoints use plural nouns (e.g., /tokens) instead of verbs (e.g., /getTokens)?",
+        options: [
+          "Plural nouns are shorter",
+          "The HTTP method already provides the verb — the URL names the resource, not the action",
+          "Browsers require plural nouns",
+          "Verbs cause CORS errors"
+        ],
+        correct: 1,
+        explanation: "REST separates the action (HTTP method) from the resource (URL). GET /tokens means 'retrieve the tokens collection.' POST /tokens means 'create a new token.' The verb is in the method, not the URL. Using /getTokens or /createToken conflates action and resource."
+      },
+      {
+        type: "predict-output",
+        question: "What does this cursor pagination helper produce?",
+        code: "const cursor = { id: 42, created_at: '2025-03-15T10:00:00Z' };\nconst encoded = Buffer.from(JSON.stringify(cursor)).toString('base64url');\nconsole.log(typeof encoded, encoded.includes('{')); ",
+        answer: "string false",
+        explanation: "The cursor object is serialized to JSON, then base64url-encoded into an opaque string. The client never sees the raw JSON — it just passes the opaque string back. base64url encoding removes the curly braces and other JSON characters, so includes('{') is false."
+      },
+      {
+        type: "predict-output",
+        question: "What HTTP status code does this middleware send?",
+        code: "class ApiError extends Error {\n  constructor(status, message) {\n    super(message);\n    this.status = status;\n  }\n}\n\nfunction errorHandler(err, req, res, next) {\n  const status = err.status || 500;\n  res.status(status).json({ success: false, error: err.message });\n}\n\n// Route throws:\nthrow new ApiError(409, 'Token code already exists');\n// What status does the client receive?",
+        answer: "409",
+        explanation: "The ApiError is constructed with status 409 (Conflict). The error handler reads err.status (which is 409) and sends it. 409 Conflict is correct when the client tries to create a resource that already exists — like generating a token code that collides with an existing one."
+      },
+      {
+        type: "predict-output",
+        question: "What does this response envelope look like?",
+        code: "function sendSuccess(res, data, status = 200) {\n  res.status(status).json({ success: true, data });\n}\n\nsendSuccess(res, { code: 'MERC-8GH2', active: true }, 201);\n// What JSON does the client receive?",
+        answer: "{\"success\":true,\"data\":{\"code\":\"MERC-8GH2\",\"active\":true}}",
+        explanation: "The response envelope wraps every successful response in { success: true, data: ... }. This gives the client a consistent shape to check — if success is true, data exists. If success is false, error exists. The status code is 201 (in the HTTP header), but the JSON body follows the envelope pattern."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This PATCH handler has a bug. Which line causes incorrect behavior?",
+        code: "app.patch('/api/tokens/:code', async (req, res) => {\n  const { code } = req.params;\n  const updates = req.body;\n  // Line A: Replace entire token with request body\n  await db.query('UPDATE tokens SET label=$1, rules=$2, active=$3 WHERE code=$4',\n    [updates.label, updates.rules, updates.active, code]);\n  // Line B: Return updated token\n  const result = await db.query('SELECT * FROM tokens WHERE code=$1', [code]);\n  res.json({ success: true, data: result.rows[0] });\n});",
+        options: [
+          "Line B — should not query again after update",
+          "Line A — PATCH should partially update, but this replaces ALL fields (acts like PUT)",
+          "The route path — should use /api/token/:code (singular)",
+          "The response — should return 204 No Content"
+        ],
+        correct: 1,
+        explanation: "PATCH means partial update — only the fields the client sends should change. This code overwrites ALL fields (label, rules, active) even if the client only sent { label: 'new name' }. Unsent fields become NULL/undefined. A correct PATCH builds the SET clause dynamically from only the provided fields."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This cursor pagination has a subtle bug. Where is it?",
+        code: "app.get('/api/tokens', async (req, res) => {\n  const limit = req.query.limit || 20;\n  const cursor = req.query.cursor\n    ? JSON.parse(Buffer.from(req.query.cursor, 'base64url'))\n    : null;\n\n  let query = 'SELECT * FROM tokens WHERE owner_id = $1';\n  const params = [req.user.id];\n\n  if (cursor) {\n    query += ' AND created_at < $2';\n    params.push(cursor.created_at);\n  }\n\n  query += ' ORDER BY created_at DESC LIMIT $' + (params.length + 1);\n  params.push(limit);\n\n  const result = await db.query(query, params);\n  res.json({ success: true, data: result.rows });\n});",
+        options: [
+          "ORDER BY should be ASC not DESC",
+          "The limit value from query string is a string, not a number — SQL will receive '20' instead of 20",
+          "cursor.created_at could be forged by the client to access other users' tokens (but owner_id filter prevents it)",
+          "Missing the next_cursor in the response — client can't request the next page"
+        ],
+        correct: 3,
+        explanation: "The endpoint returns data but never sends the next cursor. Without a next_cursor in the response, the client has no way to request page 2. You must include the cursor for the last row in the response: next_cursor: encode({ created_at: lastRow.created_at, id: lastRow.id })."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This token creation endpoint has a security issue. Where?",
+        code: "app.post('/api/tokens', async (req, res) => {\n  const { code, label, owner_id } = req.body;\n  await db.query(\n    'INSERT INTO tokens (code, label, owner_id) VALUES ($1, $2, $3)',\n    [code, label, owner_id]\n  );\n  res.status(201).json({ success: true, data: { code, label } });\n});",
+        options: [
+          "Should return 200 not 201",
+          "The client supplies owner_id in the body — they could set it to any user's ID",
+          "The code should be auto-generated, not client-supplied",
+          "Both B and C are bugs"
+        ],
+        correct: 3,
+        explanation: "Both are bugs but the security issue is trusting owner_id from the body. A malicious client could send someone else's ID and create tokens owned by them. owner_id must come from the authenticated session (req.user.id). Additionally, letting clients choose the token code invites collisions and predictable codes — the server should generate it."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the response header that tells a rate-limited client when to retry.",
+        code: "res.status(429).set('___', '60').json({ success: false, error: 'Too many requests' });",
+        answer: "Retry-After",
+        explanation: "The Retry-After header tells the client how many seconds to wait before retrying. When you return 429 Too Many Requests, always include Retry-After so well-behaved clients can back off automatically instead of hammering your server."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the Content-Type header value for a JSON API response.",
+        code: "res.set('Content-Type', '___').send(JSON.stringify(data));",
+        answer: "application/json",
+        explanation: "APIs must set Content-Type: application/json so clients know how to parse the response. Express's res.json() does this automatically, but if you use res.send() with a stringified body, you must set it manually. Without it, clients may treat the response as plain text."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the status code for a successful DELETE that returns no body.",
+        code: "app.delete('/api/tokens/:code', async (req, res) => {\n  await db.query('DELETE FROM tokens WHERE code = $1 AND owner_id = $2',\n    [req.params.code, req.user.id]);\n  res.status(___).end();\n});",
+        answer: "204",
+        explanation: "204 No Content means the action succeeded but there's nothing to return. It's the standard response for DELETE — the resource is gone, so there's no body to send. Using 200 with an empty body works but 204 is more semantically correct and tells the client not to expect a response body."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the URL prefix for API versioning.",
+        code: "const router = express.Router();\napp.use('/api/___/tokens', router);",
+        answer: "v1",
+        explanation: "URL-prefix versioning (/api/v1/tokens) is the most common strategy. When you need breaking changes, you deploy /api/v2/tokens alongside v1. Clients upgrade on their own schedule. The alternative (Accept header versioning) is harder to test and debug — you can't just paste a URL in a browser."
+      },
+      {
+        type: "which-breaks",
+        question: "Which of these sub-resource URL patterns is incorrect?",
+        variants: [
+          "GET /api/tokens/MERC-8GH2/rules",
+          "POST /api/tokens/MERC-8GH2/rules",
+          "GET /api/rules?token=MERC-8GH2"
+        ],
+        correct: 2,
+        explanation: "Option C treats rules as a top-level resource filtered by query param. While it works, it breaks the ownership hierarchy — rules belong to a token, so they should be nested under it. /tokens/:code/rules makes the relationship explicit and lets you enforce authorization at the token level."
+      },
+      {
+        type: "which-breaks",
+        question: "Which response violates the envelope convention { success, data } or { success, error }?",
+        variants: [
+          "{ \"success\": true, \"data\": { \"code\": \"MERC-8GH2\" } }",
+          "{ \"success\": false, \"error\": \"Token not found\" }",
+          "{ \"code\": \"MERC-8GH2\", \"label\": \"Mechanic\" }"
+        ],
+        correct: 2,
+        explanation: "Option C returns raw data without wrapping it in the envelope. The client now has to guess: is this a success response? Is there an error field somewhere? Consistent envelopes let the client use one parsing path: check success, then read either data or error. Never mix wrapped and unwrapped responses."
+      },
+      {
+        type: "which-breaks",
+        question: "Which HTTP method is NOT idempotent?",
+        variants: [
+          "PUT /api/tokens/MERC-8GH2 — update with full body",
+          "DELETE /api/tokens/MERC-8GH2 — delete the token",
+          "POST /api/tokens — create a new token"
+        ],
+        correct: 2,
+        explanation: "POST is not idempotent — calling it twice creates two tokens. PUT and DELETE are idempotent: putting the same data twice results in the same state; deleting an already-deleted resource is a no-op (returns 404 or 204). This matters for retries — if a network timeout occurs, the client can safely retry PUT/DELETE but not POST."
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps for processing an authenticated API request.",
+        steps: [
+          "Parse the Authorization header and extract the JWT",
+          "Verify the JWT signature and check expiry",
+          "Attach req.user with the decoded payload",
+          "Execute the route handler",
+          "Return the response through the envelope helper"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Authentication middleware runs first: extract token, verify it, attach user info to the request. Only then does the route handler execute. Finally, the response is formatted through the envelope. If verification fails at step 2, you short-circuit with 401 — the route handler never runs."
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps for implementing cursor-based pagination.",
+        steps: [
+          "Decode the cursor from base64url to get { id, created_at }",
+          "Add WHERE clause: created_at < cursor.created_at OR (created_at = cursor.created_at AND id < cursor.id)",
+          "Execute query with ORDER BY created_at DESC, id DESC LIMIT n+1",
+          "If result has n+1 rows, pop the last and encode it as next_cursor",
+          "Return { data: rows, next_cursor } in the response"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Cursor pagination anchors to the last seen row. You decode the cursor, build a WHERE clause that fetches rows after that point, fetch one extra row to detect if there's a next page, then encode the last row as the new cursor. The tie-breaker (id) handles rows with identical timestamps."
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps for handling a bulk revoke operation (POST /api/tokens/bulk-revoke).",
+        steps: [
+          "Validate the request body contains an array of token codes",
+          "Verify each code belongs to the authenticated user",
+          "Execute UPDATE tokens SET active = false WHERE code = ANY($1) AND owner_id = $2",
+          "Return the count of actually revoked tokens and any codes that were not found",
+          "Log the bulk action for audit purposes"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Bulk operations must validate input shape first, then verify ownership (authorization), then execute the operation, return results (including partial failures), and log for auditability. Never skip the ownership check — a user could include other people's token codes in the array."
+      },
+      {
+        question: "When should you return 409 Conflict instead of 400 Bad Request?",
+        options: [
+          "When the request body is malformed JSON",
+          "When the request violates a uniqueness constraint — the data is valid but conflicts with existing state",
+          "When the user is not logged in",
+          "When the server is overloaded"
+        ],
+        correct: 1,
+        explanation: "400 means the request itself is malformed or invalid (bad syntax, missing fields). 409 means the request is well-formed but conflicts with the current state of the server — like trying to create a token with a code that already exists. The fix for 400 is to change your request; the fix for 409 might be to retry with a different code."
+      },
+      {
+        question: "What is the purpose of including HATEOAS links in API responses?",
+        options: [
+          "To make responses larger and more detailed",
+          "To let clients discover available actions without hardcoding URLs",
+          "To replace HTTP status codes",
+          "To authenticate requests"
+        ],
+        correct: 1,
+        explanation: "HATEOAS (Hypermedia as the Engine of Application State) includes links like { \"revoke\": \"/api/tokens/MERC-8GH2/revoke\", \"rules\": \"/api/tokens/MERC-8GH2/rules\" } in responses. The client doesn't need to construct URLs — it follows links. This decouples clients from URL structure and lets the API evolve without breaking clients."
+      },
+      {
+        question: "How should filtering and sorting be expressed in a REST API?",
+        options: [
+          "POST /api/tokens with filter criteria in the body",
+          "GET /api/tokens?status=active&sort=-created_at (query parameters with - prefix for descending)",
+          "GET /api/tokens/filter/active/sort/created_at",
+          "PUT /api/tokens/query with a JSON query object"
+        ],
+        correct: 1,
+        explanation: "Filtering and sorting belong in query parameters on a GET request. The - prefix convention (from JSON:API) indicates descending order. This keeps the URL readable, cacheable (GET requests can be cached), and bookmarkable. Putting filters in a POST body makes the request non-cacheable and non-idempotent."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This bulk create endpoint has a design flaw. What is it?",
+        code: "app.post('/api/tokens/bulk', async (req, res) => {\n  const { tokens } = req.body; // array of { label, rules }\n  const results = [];\n  for (const t of tokens) {\n    const code = generateCode();\n    await db.query('INSERT INTO tokens (code, label, rules, owner_id) VALUES ($1,$2,$3,$4)',\n      [code, t.label, JSON.stringify(t.rules), req.user.id]);\n    results.push({ code, label: t.label });\n  }\n  res.status(201).json({ success: true, data: results });\n});",
+        options: [
+          "Should use PUT instead of POST",
+          "No transaction — if the 5th insert fails, the first 4 are committed (partial success with no rollback or reporting)",
+          "generateCode() should be client-supplied",
+          "Should return 200 not 201"
+        ],
+        correct: 1,
+        explanation: "Without a database transaction, partial failures leave the system in an inconsistent state — some tokens created, some not, and the client gets a 500 with no idea which succeeded. Wrap bulk operations in BEGIN/COMMIT, or design the response to report per-item success/failure so the client can retry only the failures."
       }
     ]);
   </script>

@@ -724,6 +724,257 @@ console.log(formatTimeWindow({ days: [0, 6], start: '10:00', end: '20:00' }));`)
         ],
         correctOrder: [0, 1, 2, 3, 4],
         explanation: "The flow goes from viewing (no rules) → editing (modal) → enabling (toggle + defaults) → adjusting (auto-save) → viewing updated summary. Each step gives immediate feedback. Auto-save means the user never loses work by accidentally navigating away."
+      },
+
+      // --- Questions 6–25 ---
+
+      {
+        question: "Why does the TimeWindowSection store days as numbers (0-6) instead of strings like 'Monday'?",
+        options: [
+          "Numbers take less storage in the JSONB column and are language-independent",
+          "JavaScript Date.getDay() returns numbers, so it matches the native API for server-side enforcement",
+          "Both A and B — storage efficiency plus direct compatibility with Date.getDay()",
+          "Strings would cause SQL injection vulnerabilities"
+        ],
+        correct: 2,
+        explanation: "Numbers are compact for JSONB storage AND they match JavaScript's Date.getDay() (0=Sunday, 6=Saturday). When the server enforces the rule, it can compare new Date().getDay() directly against the days array without any string conversion. Language independence is a bonus — 'Monday' vs 'Lundi' would break for non-English locales."
+      },
+      {
+        type: "predict-output",
+        question: "What does this toggleDay function produce?",
+        code: "let days = [1, 2, 3, 4, 5];\n\nfunction toggleDay(days, day) {\n  return days.includes(day)\n    ? days.filter(d => d !== day)\n    : [...days, day].sort();\n}\n\nconsole.log(toggleDay(days, 3));\nconsole.log(toggleDay(days, 0));",
+        answer: "[1, 2, 4, 5]\n[0, 1, 2, 3, 4, 5]",
+        explanation: "toggleDay(days, 3) removes Wednesday (3 is already in the array), producing [1,2,4,5]. toggleDay(days, 0) adds Sunday (0 is not in the array), then sorts, producing [0,1,2,3,4,5]. The sort() ensures display order stays consistent regardless of which day was added last."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This time window validation has a subtle bug. Which line is wrong?",
+        code: "function validateTimeWindow(start, end) {\n  const [startH, startM] = start.split(':');\n  const [endH, endM] = end.split(':');\n  const startMinutes = startH * 60 + startM;\n  const endMinutes = endH * 60 + endM;\n  return endMinutes > startMinutes;\n}",
+        options: [
+          "split(':') doesn't work on time strings",
+          "startM and endM are strings — startH * 60 + startM does string concatenation instead of addition",
+          "The comparison should be >= not >",
+          "You need to handle midnight wraparound"
+        ],
+        correct: 1,
+        explanation: "split(':') returns strings. While startH * 60 coerces startH to a number (implicit multiplication), the + startM performs string concatenation because startM is still a string. For example, '09'*60 + '00' gives 540 + '00' = '54000' (a string). Fix: parseInt(startM, 10) or Number(startM). This is a classic JS coercion trap."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the optimistic update for toggling a rule's enabled state:",
+        code: "async function toggleRuleEnabled(ruleId, currentlyEnabled) {\n  // Optimistically update UI\n  setRules(prev => prev.map(r =>\n    r.id === ruleId ? { ...r, enabled: !currentlyEnabled } : r\n  ));\n\n  try {\n    await apiRequest('PATCH', `/tokens/${tokenId}/rules/${ruleId}`, {\n      enabled: !currentlyEnabled\n    });\n  } catch (err) {\n    // Revert on failure\n    setRules(prev => prev.___(\n      r => r.id === ruleId ? { ...r, enabled: currentlyEnabled } : r\n    ));\n  }\n}",
+        answer: "map",
+        explanation: "On failure, we revert by mapping over the rules array and restoring the original enabled value for the specific rule. map() creates a new array (immutable update) where only the matching rule is changed back. This is the standard optimistic update pattern: update UI immediately, revert if the API call fails."
+      },
+      {
+        question: "What is the advantage of using useReducer over multiple useState calls for the rule editor form?",
+        options: [
+          "useReducer is faster than useState for simple state",
+          "useReducer batches all state changes into one re-render and makes complex state transitions explicit through action types",
+          "useReducer automatically persists state to AsyncStorage",
+          "useState cannot handle objects or arrays"
+        ],
+        correct: 1,
+        explanation: "With multiple useState calls (days, start, end, enabled, saving, error), updating several at once can cause intermediate re-renders. useReducer processes a single action that can update multiple fields atomically. Action types like 'TOGGLE_DAY', 'SET_TIME_RANGE', 'SAVE_SUCCESS' make state transitions self-documenting and easier to debug."
+      },
+      {
+        type: "which-breaks",
+        question: "Which of these day-picker accessibility patterns is broken for screen reader users?",
+        variants: [
+          "<TouchableOpacity accessibilityRole='checkbox' accessibilityState={{checked: days.includes(idx)}} accessibilityLabel={`${name}, ${days.includes(idx) ? 'selected' : 'not selected'}`}>",
+          "<TouchableOpacity accessibilityRole='button' accessibilityLabel={name}>",
+          "<TouchableOpacity accessible={true} accessibilityRole='checkbox' accessibilityState={{checked: days.includes(idx)}} accessibilityLabel={name}>"
+        ],
+        correct: 1,
+        explanation: "Option B uses role='button' with no indication of checked/selected state. A screen reader user hears 'Mon, button' but has no way to know if Monday is currently selected. Options A and C use role='checkbox' with accessibilityState.checked, so the screen reader announces 'Mon, checkbox, checked' — giving the user the information they need to understand the toggle state."
+      },
+      {
+        type: "predict-output",
+        question: "What does this rule conflict detection output?",
+        code: "function detectConflicts(rules) {\n  const timeRules = rules.filter(r => r.rule_type === 'time_window' && r.enabled);\n  const channelRules = rules.filter(r => r.rule_type === 'channel_restrict' && r.enabled);\n  const conflicts = [];\n\n  if (timeRules.length > 0 && channelRules.length > 0) {\n    const channels = channelRules[0].payload.allowed;\n    if (channels.length === 0) {\n      conflicts.push('TIME_WINDOW_NO_CHANNELS');\n    }\n  }\n  if (timeRules.length > 1) {\n    conflicts.push('MULTIPLE_TIME_WINDOWS');\n  }\n  return conflicts;\n}\n\nconst rules = [\n  { rule_type: 'time_window', enabled: true, payload: { days: [1,2,3], start: '09:00', end: '17:00' } },\n  { rule_type: 'time_window', enabled: true, payload: { days: [4,5], start: '10:00', end: '16:00' } },\n  { rule_type: 'channel_restrict', enabled: true, payload: { allowed: ['text'], blocked: ['voice','video'] } }\n];\nconsole.log(detectConflicts(rules));",
+        answer: "[\"MULTIPLE_TIME_WINDOWS\"]",
+        explanation: "There are 2 enabled time_window rules, so 'MULTIPLE_TIME_WINDOWS' is pushed. The channel_restrict rule has allowed=['text'] which is not empty, so 'TIME_WINDOW_NO_CHANNELS' is not triggered. Only one conflict is detected."
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps for implementing a 'delete rule' operation with confirmation:",
+        steps: [
+          "User taps delete icon on a rule summary",
+          "Show Alert.alert with 'Delete this rule?' and Cancel/Delete buttons",
+          "On confirm: optimistically remove the rule from local state",
+          "Send DELETE request to /tokens/:tokenId/rules/:ruleId",
+          "On success: keep state as-is; on failure: re-insert the rule and show error toast"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Destructive actions always need confirmation (step 2). After confirmation, optimistic removal updates the UI instantly (step 3), then the API call fires (step 4). If the API fails, we revert by re-inserting the rule. This gives fast feedback while maintaining data integrity."
+      },
+      {
+        question: "Why does the ContactLimitSection store maxPerDay as a string in local state even though the API expects a number?",
+        options: [
+          "React Native TextInput value prop only accepts strings",
+          "Numbers cannot be stored in useState",
+          "It prevents the value from being negative",
+          "The API actually accepts strings too"
+        ],
+        correct: 0,
+        explanation: "React Native's TextInput requires value to be a string. If you pass a number, you get a type error. The pattern is: store as string for the input, then parseInt() or Number() when constructing the API payload. This is a controlled component pattern — the component controls the display format (string), and the save handler transforms it to the API format (number)."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the validation that prevents saving a time window where end is before start:",
+        code: "function isValidTimeRange(start, end) {\n  const toMinutes = (t) => {\n    const [h, m] = t.split(':').map(Number);\n    return h * 60 + m;\n  };\n  return toMinutes(end) ___ toMinutes(start);\n}",
+        answer: ">",
+        explanation: "The end time must be strictly greater than the start time (in minutes since midnight). toMinutes('18:00') = 1080 must be > toMinutes('09:00') = 540. Using >= would allow start === end (a zero-length window), which is technically valid but practically useless. Using > ensures at least one minute of availability."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This useEffect fetches rules when the token changes. What's the bug?",
+        code: "useEffect(() => {\n  let cancelled = false;\n\n  async function fetchRules() {\n    const res = await apiRequest('GET', `/tokens/${token.id}/rules`);\n    setRules(res.data);\n  }\n\n  fetchRules();\n\n  return () => { cancelled = true; };\n}, [token.id]);",
+        options: [
+          "The dependency array should be empty",
+          "The cancelled flag is set but never checked — stale responses can still update state",
+          "apiRequest should be awaited at the top level of useEffect",
+          "setRules should be inside a try/catch"
+        ],
+        correct: 1,
+        explanation: "The cleanup function sets cancelled = true, but fetchRules() never checks it before calling setRules(). If the user navigates away (or token.id changes) before the request completes, setRules will update unmounted/stale state. Fix: add 'if (!cancelled) setRules(res.data)' after the await. This is the classic async cleanup pattern in React effects."
+      },
+      {
+        type: "which-breaks",
+        question: "Which approach to saving rule changes will cause data loss?",
+        variants: [
+          "Auto-save each section independently when the user changes a toggle or input (debounced 500ms)",
+          "Single 'Save All' button at the bottom of the modal that sends all rules in one batch PUT request",
+          "Auto-save on section blur (when user scrolls to the next section)",
+          "Save button per section, disabled until the user makes a change"
+        ],
+        correct: 1,
+        explanation: "A single 'Save All' button at the bottom means if the user changes 3 rules then navigates away (back gesture, phone call, app crash) without tapping Save, ALL changes are lost. Auto-save approaches (A and C) and per-section save buttons (D) all preserve partial progress. The lesson's UX principle #5 states: 'Save on change — no Save All button. Reduces data loss if they back-navigate.'"
+      },
+      {
+        type: "predict-output",
+        question: "What does this reducer produce for the given action?",
+        code: "function rulesReducer(state, action) {\n  switch (action.type) {\n    case 'TOGGLE_DAY': {\n      const { day } = action;\n      const days = state.days.includes(day)\n        ? state.days.filter(d => d !== day)\n        : [...state.days, day].sort((a, b) => a - b);\n      return { ...state, days };\n    }\n    default:\n      return state;\n  }\n}\n\nlet state = { days: [1, 3, 5], start: '09:00', end: '17:00' };\nstate = rulesReducer(state, { type: 'TOGGLE_DAY', day: 2 });\nstate = rulesReducer(state, { type: 'TOGGLE_DAY', day: 3 });\nconsole.log(state.days);",
+        answer: "[1, 2, 5]",
+        explanation: "First action adds day 2: [1,3,5] does not include 2, so we spread and sort: [1,2,3,5]. Second action removes day 3: [1,2,3,5] includes 3, so we filter it out: [1,2,5]. The reducer handles both add and remove in a single action type, keeping the array sorted."
+      },
+      {
+        question: "When implementing optimistic updates for rule toggle, what should happen if the API returns a 409 Conflict?",
+        options: [
+          "Silently ignore the error and keep the optimistic state",
+          "Revert the toggle AND show a message explaining the conflict (e.g., 'Cannot enable — conflicts with another rule')",
+          "Delete the conflicting rule automatically",
+          "Retry the request until it succeeds"
+        ],
+        correct: 1,
+        explanation: "A 409 means the server detected a conflict (e.g., enabling two time windows that overlap). The correct response is: (1) revert the UI to the pre-toggle state so it matches the server truth, and (2) tell the user WHY it failed. Silently ignoring creates a UI/server mismatch. Auto-deleting is dangerous. Retrying won't fix a logical conflict."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the dynamic form field pattern for adding multiple time window rules:",
+        code: "function handleAddTimeWindow() {\n  setTimeWindows(prev => [\n    ...prev,\n    { id: Date.now(), days: [1,2,3,4,5], start: '09:00', end: '18:00' }\n  ]);\n}\n\nfunction handleRemoveTimeWindow(id) {\n  setTimeWindows(prev => prev.___(tw => tw.id !== id));\n}",
+        answer: "filter",
+        explanation: "filter() creates a new array containing only the time windows whose id does NOT match the one being removed. This is the standard immutable removal pattern in React — never splice or mutate the existing array. The functional updater (prev =>) ensures we always work with the latest state."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This contact limit input has a UX bug. What is it?",
+        code: "<TextInput\n  style={styles.limitInput}\n  value={maxPerDay}\n  onChangeText={text => setMaxPerDay(text)}\n  keyboardType=\"number-pad\"\n  maxLength={3}\n/>",
+        options: [
+          "maxLength={3} limits to 999 which is too high for a daily contact limit",
+          "No validation prevents '0' or empty string — user could set limit to 0 (blocking all contact) without a warning",
+          "keyboardType should be 'numeric' not 'number-pad'",
+          "value should use defaultValue instead for uncontrolled input"
+        ],
+        correct: 1,
+        explanation: "The input accepts '0' or empty string without any feedback. A limit of 0 effectively blocks all contact — equivalent to disabling the channel entirely. The UI should either: (a) validate on save and show an error, (b) set a minimum of 1, or (c) show a warning like the channel restriction does when allowed is empty. keyboardType='number-pad' is correct for positive integers."
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps for building a rule form with proper loading states:",
+        steps: [
+          "Show skeleton/placeholder UI while rules are loading",
+          "Fetch existing rules from GET /tokens/:tokenId/rules",
+          "Populate form fields with fetched rule data (or defaults if none exist)",
+          "User interacts with form — local state updates immediately",
+          "On save: show inline spinner on the save button, disable inputs until API responds"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "The flow ensures the user is never staring at a blank screen (skeleton first), data is loaded before interaction is allowed (fetch then populate), and the save operation gives clear feedback (spinner + disabled inputs prevent double-submission). Each step prevents a different class of UX problem."
+      },
+      {
+        question: "What React pattern should you use when a rule form needs to validate across multiple fields (e.g., start < end AND at least one day selected)?",
+        options: [
+          "Validate inside each field's onChange handler independently",
+          "Derive validation state from current form values during render — compute isValid from all fields together",
+          "Use a separate useEffect that watches all fields and sets an error state",
+          "Validate only on form submission"
+        ],
+        correct: 1,
+        explanation: "Cross-field validation (start < end, days.length > 0) depends on multiple values simultaneously. The cleanest pattern is to derive 'isValid' during render: const isValid = days.length > 0 && toMinutes(end) > toMinutes(start). This is always up-to-date, requires no effects, and can disable the save button reactively. useEffect for derived state is an anti-pattern (unnecessary extra render)."
+      },
+      {
+        type: "predict-output",
+        question: "What happens when toggleChannel is called on the last allowed channel?",
+        code: "function toggleChannel(allowed, channel) {\n  const next = allowed.includes(channel)\n    ? allowed.filter(c => c !== channel)\n    : [...allowed, channel];\n  return next;\n}\n\nlet allowed = ['text'];\nallowed = toggleChannel(allowed, 'text');\nconsole.log(allowed);\nconsole.log(allowed.length === 0 ? 'WARNING: No channels!' : 'OK');",
+        answer: "[]\nWARNING: No channels!",
+        explanation: "Toggling 'text' when it is the only item in allowed removes it, leaving an empty array. The UI should detect this (allowed.length === 0) and show a warning. The code works correctly — the question is whether the UX handles this edge case, which the ChannelRestrictSection does with its warning text."
+      },
+      {
+        type: "which-breaks",
+        question: "Which approach to the DateTimePicker for time selection will cause issues on both iOS and Android?",
+        variants: [
+          "Using @react-native-community/datetimepicker with mode='time' and separate pickers for start/end",
+          "Using a plain TextInput with a regex mask (HH:MM format) and manual validation",
+          "Using a custom modal with two ScrollView-based wheel pickers for hours and minutes",
+          "Using the native HTML <input type='time'> element inside a WebView"
+        ],
+        correct: 3,
+        explanation: "A WebView with HTML time input is problematic: it adds a heavy WebView dependency for one input, has different styling on each platform that clashes with your native UI, requires bridge communication for value changes, and may not respect the device's locale/24h settings. Options A (native picker), B (masked text), and C (custom wheels) all work natively without these issues."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the API integration that transforms local form state into the correct payload shape:",
+        code: "async function saveContactLimit(tokenId, ruleId, maxPerDay, type) {\n  const payload = {\n    max_per_day: ___(maxPerDay, 10),\n    type: type,\n  };\n\n  await apiRequest('PATCH', `/tokens/${tokenId}/rules/${ruleId}`, { payload });\n}",
+        answer: "parseInt",
+        explanation: "Since maxPerDay comes from a TextInput (always a string), we must convert it to a number before sending to the API. parseInt(maxPerDay, 10) converts '5' to 5. The second argument (10) specifies base-10 parsing to avoid edge cases with leading zeros. Without this conversion, the API receives {max_per_day: '5'} (a string) which may fail Zod validation or cause comparison bugs server-side."
+      },
+      {
+        question: "Why should the delete endpoint for rules NOT validate the payload before deleting?",
+        options: [
+          "Because DELETE requests don't have a body — there's nothing to validate except the ruleId and ownership",
+          "Because validation slows down the response time",
+          "Because the rule might have been created with a now-invalid schema version",
+          "Because zod cannot validate DELETE requests"
+        ],
+        correct: 0,
+        explanation: "A DELETE request only needs to identify WHAT to delete (ruleId from URL params) and verify WHO is deleting (token ownership check via requireAuth + user_id verification). There is no request body to validate. The server just needs: does this rule exist, does the user own the token it belongs to, then delete it. Any more validation is unnecessary for a destructive operation."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This rule update handler has a state management bug. What is it?",
+        code: "function updateRule(updated) {\n  const idx = rules.findIndex(r => r.id === updated.id);\n  if (idx >= 0) {\n    rules[idx] = updated;\n    setRules(rules);\n  } else {\n    rules.push(updated);\n    setRules(rules);\n  }\n}",
+        options: [
+          "findIndex returns -1 for not found, not undefined",
+          "Direct mutation of the rules array — React won't re-render because the reference is the same",
+          "push() doesn't work on state arrays",
+          "The else branch should use unshift instead of push"
+        ],
+        correct: 1,
+        explanation: "This directly mutates the existing state array (rules[idx] = updated, rules.push(updated)) then passes the SAME reference to setRules. React uses reference equality to detect changes — same reference means 'nothing changed', so no re-render occurs. Fix: create new arrays with spread: setRules([...prev.slice(0, idx), updated, ...prev.slice(idx+1)]) or use the functional updater from the lesson code."
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps for handling a timezone-aware time window rule:",
+        steps: [
+          "Store the user's timezone from their device: Intl.DateTimeFormat().resolvedOptions().timeZone",
+          "Save the timezone string in the rule payload alongside start/end times",
+          "Server receives the rule with timezone and stores it in JSONB",
+          "When enforcing: server converts current UTC time to the rule's timezone before comparing",
+          "Display time in the UI using the stored timezone (not the current device timezone)"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "The timezone is captured at creation time (step 1-2) because the user might be in IST when creating but the server runs in UTC. The server must convert to the rule's timezone for enforcement (step 4). The UI displays using the stored timezone (step 5) so the rule makes sense even if the user travels to a different timezone. Without explicit timezone handling, a user in IST who sets 9am-6pm would get 3:30am-12:30pm enforcement if the server naively uses UTC."
       }
     ]);
   </script>

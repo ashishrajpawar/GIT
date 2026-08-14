@@ -378,6 +378,230 @@ console.log('1 hour 5 min 30 sec:', formatDuration(3930));`);
         ],
         correctOrder: [0, 1, 2, 3, 4],
         explanation: "Audio mode first (so mic captures correctly). Create PC (configuration). Initialize (get media, set up WebRTC). Offer (start the negotiation). Timer starts when connected — not before, because the call might still be connecting or might fail."
+      },
+      // --- Questions 6–25 ---
+      {
+        question: "Why does InCallManager.start() route audio to the earpiece by default for voice calls?",
+        options: [
+          "It's a bug — speaker should be default",
+          "Phone calls are held against the ear; earpiece prevents everyone nearby from hearing",
+          "The earpiece uses less battery than the loudspeaker",
+          "WebRTC requires earpiece mode for echo cancellation to work"
+        ],
+        correct: 1,
+        explanation: "Voice calls mimic traditional phone behaviour — the user holds the device to their ear. Earpiece audio is private and activates the proximity sensor (screen off when near face). The user can explicitly switch to speaker if they want hands-free."
+      },
+      {
+        type: "predict-output",
+        question: "What happens when InCallManager.stop() is NOT called after navigating away from VoiceCallScreen?",
+        code: "// User hangs up, navigates back to chat\nfunction handleHangup() {\n  pcRef.current?.hangup();\n  // InCallManager.stop() is missing\n  navigation.goBack();\n}\n// What audio behaviour persists?",
+        answer: "Audio stays routed to earpiece, proximity sensor remains active, audio focus is not released (music apps stay paused)",
+        explanation: "InCallManager.stop() restores the audio system to normal media mode. Without it, the OS thinks a call is still active: proximity sensor keeps turning the screen off, other audio apps remain paused, and audio routes through the earpiece instead of the main speaker."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This call timer has a memory leak. Which line causes it?",
+        code: "useEffect(() => {\n  if (callState === 'connected') {\n    const timer = setInterval(() => {\n      setDuration(d => d + 1);\n    }, 1000);\n  }\n  // no cleanup return\n}, [callState]);",
+        options: [
+          "setDuration(d => d + 1) should be setDuration(duration + 1)",
+          "No cleanup — the interval is never cleared when callState changes or component unmounts",
+          "setInterval should be setTimeout in a recursive pattern",
+          "The dependency array should be empty"
+        ],
+        correct: 1,
+        explanation: "Without returning a cleanup function that calls clearInterval(timer), the interval runs forever — even after the component unmounts. If callState changes multiple times, multiple intervals stack up, incrementing duration faster and faster. Always return () => clearInterval(timer) from the effect."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the mute toggle inside TokenPeerConnection:",
+        code: "toggleMute(): boolean {\n  const track = this.localStream.getAudioTracks()[0];\n  track.___ = !track.___;\n  return !track.___;\n}",
+        answer: "enabled",
+        explanation: "audioTrack.enabled is the WebRTC property that controls whether the track sends real audio (true) or silence frames (false). Setting enabled to false mutes without removing the track from the connection — no renegotiation needed. The method returns the new muted state (which is the inverse of enabled)."
+      },
+      {
+        type: "which-breaks",
+        question: "Which approach to muting will break the call and require renegotiation?",
+        variants: [
+          "audioTrack.enabled = false",
+          "audioTrack.stop()",
+          "pcRef.current.toggleMute()",
+          "InCallManager.setMicrophoneMute(true)"
+        ],
+        correct: 1,
+        explanation: "audioTrack.stop() permanently ends the track — it cannot be restarted. The peer connection loses the audio track entirely, and you'd need to call getUserMedia again and renegotiate (new offer/answer). The other options send silence or mute at the system level without destroying the track."
+      },
+      {
+        question: "Why do we store the peer connection in useRef instead of useState?",
+        options: [
+          "useRef is faster than useState",
+          "useState would cause a re-render every time the PC object is assigned, and we don't render the PC — we just call methods on it",
+          "useState can't hold objects, only primitives",
+          "useRef persists across navigation, useState doesn't"
+        ],
+        correct: 1,
+        explanation: "useRef holds a mutable .current value that persists across renders without triggering re-renders when assigned. The peer connection is an imperative object we call methods on (createOffer, hangup, cleanup) — we never render it. useState would trigger unnecessary re-renders and the setter is async, which complicates imperative code."
+      },
+      {
+        type: "predict-output",
+        question: "What does formatDuration(3661) produce?",
+        code: "function formatDuration(seconds) {\n  const h = Math.floor(seconds / 3600);\n  const m = Math.floor((seconds % 3600) / 60);\n  const s = seconds % 60;\n  if (h > 0) return h + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');\n  return m + ':' + String(s).padStart(2, '0');\n}\nconsole.log(formatDuration(3661));",
+        answer: "1:01:01",
+        explanation: "3661 seconds = 1 hour (3600) + 1 minute (60) + 1 second. h=1, m=1, s=1. Since h > 0, format is h:mm:ss → '1:01:01'. The padStart(2, '0') ensures minutes and seconds are always two digits."
+      },
+      {
+        type: "order-steps",
+        question: "Order the call initiation flow from the caller's perspective:",
+        steps: [
+          "User taps the call button in MessageThreadScreen",
+          "send('call:initiate', { conversationId, type: 'voice' })",
+          "Server notifies callee, waits for response",
+          "Receive 'call:accepted' with callId",
+          "navigation.navigate('VoiceCall', { callId, isCaller: true, ... })"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "The caller taps the button, sends initiation via WebSocket, the server relays to the callee and waits. When the callee accepts, the server sends call:accepted back with a unique callId. Only then does the caller navigate to VoiceCallScreen where the actual WebRTC setup begins."
+      },
+      {
+        question: "What is the difference between 'call:reject' and 'call:hangup' in Token's signalling?",
+        options: [
+          "They are the same event with different names",
+          "call:reject means the callee declined before answering; call:hangup means either party ended an active call",
+          "call:reject is for server errors; call:hangup is for user actions",
+          "call:reject cancels the WebRTC offer; call:hangup closes the data channel"
+        ],
+        correct: 1,
+        explanation: "call:reject fires when the callee declines the incoming call before any WebRTC connection is established — no media was ever exchanged. call:hangup fires after the call was accepted and connected, meaning one party ended an active conversation. The UI handles them differently: reject shows 'Call declined', hangup triggers cleanup + navigation."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This timer uses duration directly instead of the functional updater. What goes wrong?",
+        code: "useEffect(() => {\n  if (callState === 'connected') {\n    timerRef.current = setInterval(() => {\n      setDuration(duration + 1);  // uses outer 'duration'\n    }, 1000);\n  }\n  return () => { if (timerRef.current) clearInterval(timerRef.current); };\n}, [callState]);",
+        options: [
+          "The interval fires every 2 seconds instead of 1",
+          "duration is always the value captured in the closure (0), so it stays at 1 forever",
+          "clearInterval doesn't work with timerRef",
+          "setDuration can't be called inside setInterval"
+        ],
+        correct: 1,
+        explanation: "The closure captures duration at its value when the effect runs (0 when callState first becomes 'connected'). Every tick sets duration to 0+1=1. It never advances beyond 1. The fix: setDuration(d => d + 1) — the functional updater always receives the latest state value, regardless of when the closure was created."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the speaker toggle handler:",
+        code: "function handleSpeaker() {\n  const newState = !speakerOn;\n  InCallManager.___(newState);\n  setSpeakerOn(newState);\n}",
+        answer: "setForceSpeakerphoneOn",
+        explanation: "InCallManager.setForceSpeakerphoneOn(true) routes audio to the loudspeaker; passing false routes back to earpiece. The React state (speakerOn) tracks the current mode for the UI toggle button."
+      },
+      {
+        type: "which-breaks",
+        question: "Which cleanup approach leaves the remote peer unaware that the call ended?",
+        variants: [
+          "pcRef.current.hangup(); pcRef.current.cleanup(); navigation.goBack();",
+          "pcRef.current.cleanup(); navigation.goBack();",
+          "navigation.goBack(); // relies on useEffect cleanup",
+          "pcRef.current.hangup(); InCallManager.stop(); navigation.goBack();"
+        ],
+        correct: 1,
+        explanation: "cleanup() releases local resources (closes PC, stops tracks) but does NOT send a hangup signal via WebSocket. The remote peer's ICE connection eventually fails (timeout) but they don't know immediately that the call ended. You must call hangup() first — it sends 'call:hangup' over signalling so the remote peer gets instant notification."
+      },
+      {
+        question: "What happens to the proximity sensor when InCallManager.start({ media: 'audio' }) is called?",
+        options: [
+          "Nothing — proximity must be enabled separately with setProximity(true)",
+          "It's automatically enabled on iOS but not Android",
+          "It's automatically enabled on both platforms for audio calls",
+          "It only activates when earpiece mode is active"
+        ],
+        correct: 2,
+        explanation: "InCallManager.start({ media: 'audio' }) activates the proximity sensor on both platforms as part of 'call mode'. When the phone is near the user's face, the screen turns off to prevent accidental taps. This is standard phone call behaviour. You can disable it explicitly with setProximity(false) if needed."
+      },
+      {
+        type: "predict-output",
+        question: "What does the subscribe callback receive when the callee is already on another call?",
+        code: "send('call:initiate', { conversationId, type: 'voice' });\nsubscribe((type, payload) => {\n  console.log(type, payload.reason);\n});",
+        answer: "call:busy User is on another call",
+        explanation: "When the callee is already in an active call, the server responds with 'call:busy' and a reason string. The caller's UI should show an alert ('Cannot call — User is on another call') and NOT navigate to VoiceCallScreen. The subscribe handler catches this before any WebRTC setup begins."
+      },
+      {
+        type: "order-steps",
+        question: "Order the cleanup sequence when a call ends normally:",
+        steps: [
+          "pcRef.current.hangup() — send call:hangup via signalling",
+          "pcRef.current.cleanup() — close RTCPeerConnection, stop local tracks",
+          "InCallManager.stop() — restore normal audio routing",
+          "clearInterval(timerRef.current) — stop the duration timer",
+          "navigation.goBack() — return to the message thread"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Signal first (so remote peer knows immediately), then release WebRTC resources, restore audio system, stop timer, and finally navigate away. If you navigate first, the cleanup might not run reliably (though useEffect cleanup is a safety net). Explicit ordering is more predictable."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This voice call screen has a race condition. What is it?",
+        code: "async function startCall() {\n  const pc = new TokenPeerConnection({ ... });\n  pcRef.current = pc;\n  await pc.initialize();\n  if (isCaller) await pc.createOffer();\n}\n\nfunction handleHangup() {\n  pcRef.current?.hangup();\n  navigation.goBack();\n}",
+        options: [
+          "handleHangup is async but not marked async",
+          "If the user taps hangup before initialize() resolves, pcRef.current exists but isn't fully set up — hangup might fail or send incomplete signals",
+          "createOffer should be called before initialize",
+          "pcRef.current should be set after createOffer completes"
+        ],
+        correct: 1,
+        explanation: "There's a window between pcRef.current = pc and await pc.initialize() completing. If the user (or remote party) triggers hangup during initialization, the peer connection is in a partially-initialized state. Fix: check callState before acting, or guard hangup with an 'initialized' flag set after initialize() resolves."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the remote hangup handler in TokenPeerConnection callbacks:",
+        code: "const pc = new TokenPeerConnection({\n  conversationId,\n  callId,\n  type: 'voice',\n  isCaller,\n  onRemoteStream: () => {},\n  onConnectionStateChange: (state) => setCallState(state),\n  onHangup: () => navigation.___(),\n});",
+        answer: "goBack",
+        explanation: "When the remote peer hangs up, the signalling server delivers a 'call:hangup' event. TokenPeerConnection's onHangup callback fires, and we call navigation.goBack() to return the user to the previous screen (message thread). The cleanup useEffect handles releasing resources when the screen unmounts."
+      },
+      {
+        question: "Why is timerRef (the interval ID) stored in useRef rather than a local variable inside useEffect?",
+        options: [
+          "Local variables inside useEffect are slower",
+          "useRef allows the cleanup function of one effect to clear an interval started by the same effect — but more importantly, handleHangup (outside the effect) also needs to clear it",
+          "useRef automatically clears the interval on unmount",
+          "setInterval doesn't return a value in React Native"
+        ],
+        correct: 1,
+        explanation: "The interval ID must be accessible from both the effect's cleanup AND from handleHangup (which is defined outside the effect). A local variable inside useEffect wouldn't be reachable from handleHangup. useRef provides a mutable container visible to the entire component without causing re-renders."
+      },
+      {
+        type: "which-breaks",
+        question: "Which scenario causes audio to NOT work on the voice call?",
+        variants: [
+          "InCallManager.start({ media: 'audio' }) is called before getUserMedia",
+          "InCallManager.start({ media: 'audio' }) is never called (skipped entirely)",
+          "InCallManager.setForceSpeakerphoneOn(false) is called at start",
+          "InCallManager.setProximity(true) is called during the call"
+        ],
+        correct: 1,
+        explanation: "Without InCallManager.start(), the system audio session isn't configured for a call. On iOS especially, audio routing may default to the wrong output and the app won't get audio focus — other apps may keep playing. On Android, audio focus isn't acquired so the stream might be ducked or silent. The other options are all valid configurations."
+      },
+      {
+        question: "On iOS, how does audio routing differ from Android when InCallManager.setForceSpeakerphoneOn(true) is called?",
+        options: [
+          "iOS uses AVAudioSession route override; Android uses AudioManager.setSpeakerphoneOn() — both achieve the same user-facing result",
+          "iOS doesn't support speaker routing during calls",
+          "Android requires a system permission for speaker; iOS doesn't",
+          "iOS routes to Bluetooth first; Android routes to speaker"
+        ],
+        correct: 0,
+        explanation: "Both platforms support earpiece/speaker switching, but the underlying APIs differ: iOS uses AVAudioSession with route override to speaker, Android uses AudioManager's setSpeakerphoneOn(). react-native-incall-manager abstracts this difference — you call one method and it handles the platform-specific implementation."
+      },
+      {
+        type: "predict-output",
+        question: "What value does handleMute set muted to on the first call (starting unmuted)?",
+        code: "// Initially: muted = false, audioTrack.enabled = true\nfunction handleMute() {\n  const isMuted = pcRef.current?.toggleMute();\n  // toggleMute: track.enabled = !track.enabled; return !track.enabled;\n  setMuted(isMuted ?? false);\n}\n// User taps mute button. What is `muted` after setState?",
+        answer: "true",
+        explanation: "toggleMute() flips track.enabled from true to false (now muted). It returns !track.enabled = !false = true. So isMuted = true, and setMuted(true). The UI now shows 'Unmute' because muted is true. The peer hears silence frames."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the InCallManager start call for a voice-only connection:",
+        code: "async function startCall() {\n  InCallManager.start({ media: '___' });\n  InCallManager.setForceSpeakerphoneOn(false);\n  // ... create peer connection\n}",
+        answer: "audio",
+        explanation: "InCallManager.start({ media: 'audio' }) tells the system this is a voice call — route to earpiece, enable proximity sensor, acquire audio focus. For video calls you'd pass 'video' which defaults to speaker output. The media parameter determines the initial audio routing behaviour."
       }
     ]);
   </script>

@@ -374,6 +374,241 @@ function doFetch(method: string, path: string, body?: unknown) {
         ],
         correct: 1,
         explanation: "Only option B is correct: the server explicitly rejected the refresh token (401 response from the refresh endpoint). Option A is a normal silent refresh. Option C is a network error — don't force logout, the token might still be valid when connectivity returns."
+      },
+
+      // --- Questions 6–25 ---
+
+      {
+        question: "Why does the interceptor use a refreshPromise singleton instead of calling refresh() independently for each 401?",
+        options: [
+          "It's faster to create one promise than multiple",
+          "Token rotation means only one refresh token is valid at a time — parallel refresh calls would invalidate each other",
+          "JavaScript only allows one fetch at a time",
+          "The server rate-limits refresh calls to once per minute"
+        ],
+        correct: 1,
+        explanation: "With token rotation, each refresh call consumes the current refresh token and issues a new one. If three 401s each independently call /auth/refresh, the first succeeds but invalidates the token for calls 2 and 3 — they'd fail and force logout. The singleton ensures only one refresh happens; all waiters share the result."
+      },
+      {
+        type: "predict-output",
+        question: "What is refreshPromise after a successful refresh completes?",
+        code: "let refreshPromise = null;\n\nasync function refresh() {\n  if (refreshPromise) return refreshPromise;\n  refreshPromise = doRefresh();\n  const result = await refreshPromise;\n  refreshPromise = null;  // .finally() equivalent\n  return result;\n}\n\n// After refresh() resolves, what is refreshPromise?",
+        answer: "null",
+        explanation: "After the refresh completes (success or failure), refreshPromise is reset to null. This allows future 401s to trigger a fresh refresh. If we never reset it, subsequent token expirations would await a stale, already-resolved promise and never actually refresh."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the Authorization header format:",
+        code: "const res = await fetch(url, {\n  headers: {\n    'Authorization': `___ ${accessToken}`,\n    'Content-Type': 'application/json'\n  }\n});",
+        answer: "Bearer",
+        explanation: "The Bearer scheme is the standard way to send JWT access tokens in HTTP headers. The server reads the token after 'Bearer ' (with a space). This is defined in RFC 6750 and is used by virtually all OAuth 2.0 implementations."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this refresh logic?",
+        code: "async function handleResponse(res) {\n  if (res.status === 401) {\n    const refreshed = await refresh();\n    if (refreshed) {\n      return handleResponse(await doFetch(/*...*/));\n    }\n  }\n  return res;\n}",
+        options: [
+          "handleResponse should not be async",
+          "No base case — if the retry also returns 401, it retries infinitely (stack overflow)",
+          "doFetch needs await twice",
+          "res.status should be res.statusCode"
+        ],
+        correct: 1,
+        explanation: "If the retried request also returns 401 (e.g., the new token expired instantly or was rejected), handleResponse calls itself again, refreshes again, retries again — infinite recursion. You need a flag like `isRetry` to ensure you only retry once."
+      },
+      {
+        question: "What should clearTokens() remove when force-logging out?",
+        options: [
+          "Only the access token from memory",
+          "Only the refresh token from SecureStore",
+          "Both the in-memory access token AND the refresh token from SecureStore",
+          "Only the user object from AsyncStorage"
+        ],
+        correct: 2,
+        explanation: "clearTokens() must remove the access token (stored in a module-level variable for speed) AND the refresh token (stored in SecureStore for persistence). Leaving either behind creates inconsistency: a stale access token causes 401s, a leftover refresh token might auto-login unexpectedly on next app launch."
+      },
+      {
+        type: "which-breaks",
+        question: "Which code correctly prevents infinite retry loops?",
+        variants: [
+          "if (res.status === 401 && !isRetry) {\n  const ok = await refresh();\n  if (ok) return doFetch(method, path, body, true);\n}",
+          "if (res.status === 401) {\n  const ok = await refresh();\n  if (ok) return doFetch(method, path, body);\n}",
+          "while (res.status === 401) {\n  await refresh();\n  res = await doFetch(method, path, body);\n}"
+        ],
+        correct: 0,
+        explanation: "Option A passes an `isRetry` flag so the second attempt won't trigger another refresh. Option B retries without a guard — if the retry returns 401, it refreshes again endlessly. Option C is a while-loop that will spin forever if the server keeps returning 401."
+      },
+      {
+        type: "predict-output",
+        question: "The refresh endpoint returns HTTP 401. What does the interceptor do?",
+        code: "const res = await fetch('/auth/refresh', {\n  method: 'POST',\n  body: JSON.stringify({ refreshToken })\n});\n// res.status === 401\nif (!res.ok) {\n  forceLogout();\n  return false;\n}",
+        answer: "forceLogout() is called, returns false",
+        explanation: "A 401 from the refresh endpoint means the server definitively rejected the refresh token — it's been revoked, expired, or used (rotation). This is the ONLY scenario that triggers force-logout. The user must re-authenticate. Returning false tells the original caller that retry is impossible."
+      },
+      {
+        question: "Why is the server-side logout call considered 'best effort'?",
+        options: [
+          "Because the server always succeeds",
+          "Because if the call fails (network error), we still clear local tokens — the user is logged out locally regardless",
+          "Because we retry it 5 times to guarantee success",
+          "Because logout doesn't need a server call at all"
+        ],
+        correct: 1,
+        explanation: "When force-logging out, we try to tell the server (so it can invalidate the refresh token server-side). But if that call fails (user is offline, server is down), we still clear local tokens. The user is logged out on-device either way. The server token will expire naturally or be cleaned up later."
+      },
+      {
+        type: "order-steps",
+        question: "Order the force-logout sequence correctly:",
+        steps: ["Attempt server-side logout (POST /auth/logout)", "Clear refresh token from SecureStore", "Clear access token from memory", "Set user state to null", "Navigate to Login screen"],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "First, best-effort server call. Then clear persistent storage (SecureStore), then in-memory token, then user context state. Finally, navigation resets to Login. The order ensures no stale state lingers — even if navigation fails, tokens are already gone."
+      },
+      {
+        type: "fill-blank",
+        question: "Register the force-logout handler in AuthContext:",
+        code: "useEffect(() => {\n  ___(async () => {\n    await SecureStore.deleteItemAsync('refreshToken');\n    setAccessToken(null);\n    setUser(null);\n  });\n}, []);",
+        answer: "setForceLogoutHandler",
+        explanation: "setForceLogoutHandler is called once on mount to register the logout callback. The API client module stores this reference and calls it when the refresh endpoint returns 401. This decouples the HTTP layer (api-client.ts) from React state (AuthContext) — the API client doesn't import React, it just calls the registered function."
+      },
+      {
+        question: "Why is the access token stored in a module-level variable (memory) rather than SecureStore?",
+        options: [
+          "SecureStore doesn't work on iOS",
+          "Reading SecureStore is async and slow — every API call would need await just to read the token, adding latency to every request",
+          "Module variables persist across app restarts",
+          "SecureStore has a 1KB size limit"
+        ],
+        correct: 1,
+        explanation: "SecureStore.getItemAsync() is asynchronous and involves native bridge calls. The access token is read on every single API request — storing it in a synchronous module variable (let accessToken = ...) avoids that overhead. The refresh token is in SecureStore because it's read rarely (only during refresh) and must survive app restarts."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this token rotation handling?",
+        code: "async function doRefresh() {\n  const res = await fetch('/auth/refresh', { ... });\n  const { accessToken } = await res.json();\n  setAccessToken(accessToken);\n  // don't update refresh token — it hasn't changed\n  return true;\n}",
+        options: [
+          "res.json() is not awaited",
+          "The refresh endpoint returns a NEW refresh token too (rotation) — not storing it means the next refresh will use the old (now-invalid) token",
+          "setAccessToken should be called before res.json()",
+          "The function should return the token, not true"
+        ],
+        correct: 1,
+        explanation: "With token rotation, each refresh call issues BOTH a new access token AND a new refresh token. The old refresh token is invalidated immediately. If you only store the new access token, the next refresh attempt will send the old (dead) refresh token and get a 401 — triggering force-logout when the user is still legitimately logged in."
+      },
+      {
+        type: "predict-output",
+        question: "A user is logged out on Device B. Device A makes an API call 2 minutes later. What happens?",
+        code: "// Device B: POST /auth/logout → server revokes refresh token\n// Device A (2 min later): GET /api/tokens → 401 (access token expired)\n// Device A: POST /auth/refresh → ???",
+        answer: "401 from refresh endpoint, force-logout on Device A",
+        explanation: "When Device B logs out, the server revokes the refresh token (or the entire session). Device A's access token still works until it expires (short-lived). Once it expires and Device A tries to refresh, the server rejects the revoked refresh token with 401. The interceptor calls forceLogout() — the user sees the Login screen on Device A too."
+      },
+      {
+        type: "fill-blank",
+        question: "Handle a 204 No Content response correctly:",
+        code: "async function doFetch(method, path, body) {\n  const res = await fetch(BASE_URL + path, { ... });\n  // handle 401, etc.\n  if (res.status === 204) return ___;\n  return res.json();\n}",
+        answer: "null",
+        explanation: "HTTP 204 means success with no response body. Calling res.json() on a 204 throws a SyntaxError (empty body isn't valid JSON). Return null (or undefined) to signal success-without-data. Common for DELETE endpoints and some PUT/PATCH operations."
+      },
+      {
+        question: "After the interceptor refreshes and retries, the retry also fails (non-401 error like 500). What should happen?",
+        options: [
+          "Refresh again and retry a third time",
+          "Force logout the user",
+          "Propagate the error to the calling component — it's not an auth problem",
+          "Silently swallow the error"
+        ],
+        correct: 2,
+        explanation: "A 500 after a successful refresh means the server has a bug or the resource is broken — it's not an authentication issue. The interceptor's job is done (token is fresh). Propagate the error up so the component can show an appropriate error message to the user. Never swallow errors silently."
+      },
+      {
+        type: "which-breaks",
+        question: "Which approach to the refresh singleton uses .finally() correctly?",
+        variants: [
+          "refreshPromise = doRefresh().finally(() => { refreshPromise = null; });",
+          "refreshPromise = doRefresh();\nrefreshPromise = null;",
+          "refreshPromise = doRefresh().then(() => { refreshPromise = null; });"
+        ],
+        correct: 0,
+        explanation: "Option A is correct: .finally() runs whether the promise resolves or rejects, always resetting the singleton. Option B resets immediately (synchronously) before doRefresh() completes — other callers would start duplicate refreshes. Option C only resets on success; if refresh fails, the singleton stays set forever and no future refresh can happen."
+      },
+      {
+        question: "Why shouldn't you just make access tokens long-lived (e.g., 30 days) to avoid the refresh complexity?",
+        options: [
+          "Long-lived tokens use more memory",
+          "If a long-lived token is stolen, the attacker has access for 30 days with no way to revoke it — short-lived tokens limit the blast radius",
+          "The JWT spec forbids tokens longer than 15 minutes",
+          "Long-lived tokens are larger in byte size"
+        ],
+        correct: 1,
+        explanation: "Short access tokens (5–15 min) limit damage from theft: even if intercepted, they expire quickly. The refresh token is stored securely and transmitted rarely (only to one endpoint). This two-token pattern gives you: revocability (via refresh token), short blast radius (via access token expiry), and good UX (silent refresh)."
+      },
+      {
+        type: "order-steps",
+        question: "Order what happens during the interceptor pattern for a normal (non-401) response:",
+        steps: ["Read access token from memory", "Attach Bearer token to Authorization header", "Send fetch request", "Check response status", "Return parsed JSON to calling code"],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "The interceptor wraps every API call: read the current token, attach it as a Bearer header, send the request, check the status (401 triggers refresh logic, other errors propagate), and return the data. The calling component never deals with tokens directly — it just calls doFetch('GET', '/tokens')."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this force-logout UX?",
+        code: "function forceLogout() {\n  clearTokens();\n  setUser(null);\n  navigation.navigate('Login');\n  Alert.alert('Session expired', 'Please log in again.');\n}",
+        options: [
+          "Alert should come before navigation so the user sees it on the current screen, not the Login screen",
+          "clearTokens is not awaited",
+          "setUser should be called before clearTokens",
+          "navigation.navigate should be navigation.replace to prevent going back"
+        ],
+        correct: 3,
+        explanation: "Using navigate('Login') means the user can press the back button and return to an authenticated screen with no valid session — seeing stale data or errors. navigation.replace('Login') or navigation.reset() clears the stack entirely, making Login the new root. There's no 'back' to go to."
+      },
+      {
+        type: "predict-output",
+        question: "What happens if setForceLogoutHandler is never called (forgot to wire it up in AuthContext)?",
+        code: "// api-client.ts\nlet forceLogoutHandler = null;\n\nexport function setForceLogoutHandler(fn) {\n  forceLogoutHandler = fn;\n}\n\n// During refresh failure:\nif (forceLogoutHandler) forceLogoutHandler();\n// ...what if forceLogoutHandler is null?",
+        answer: "Nothing happens — the user stays on the current screen with invalid tokens, and every subsequent API call fails with 401",
+        explanation: "The null check (if forceLogoutHandler) silently skips logout. The user is stuck: tokens are invalid, refresh fails, but the app never navigates to Login. Every API call returns 401 endlessly. This is why wiring up setForceLogoutHandler in a useEffect on mount is critical — without it, force-logout is silently broken."
+      },
+      {
+        type: "fill-blank",
+        question: "Ensure the retry uses the NEW access token, not the old one:",
+        code: "async function doFetch(method, path, body, isRetry = false) {\n  const token = ___();  // always read fresh\n  const res = await fetch(BASE_URL + path, {\n    headers: { 'Authorization': `Bearer ${token}` }\n  });\n  // ...\n}",
+        answer: "getAccessToken",
+        explanation: "getAccessToken() reads the current value of the module-level variable. After refresh() updates it, the retry call to doFetch reads the new token via getAccessToken(). If you captured the token at the top of the first call and reused it, the retry would send the old expired token and get another 401."
+      },
+      {
+        question: "In the context of testing the refresh interceptor, what's the best approach?",
+        options: [
+          "Test against the real server and wait for tokens to expire naturally",
+          "Mock fetch to return 401 on the first call, then success on retry — verify refresh was called exactly once and the retry used the new token",
+          "Skip testing the interceptor — it's too complex",
+          "Only test in production with real user sessions"
+        ],
+        correct: 1,
+        explanation: "Mock fetch responses to simulate the 401 → refresh → retry flow. Assert that: (1) refresh was called exactly once (deduplication works), (2) the retry included the new token in its Authorization header, (3) the caller received the final successful response. This is deterministic, fast, and covers the critical path without real network calls."
+      },
+      {
+        type: "which-breaks",
+        question: "Which offline handling strategy is correct when a request fails due to no network?",
+        variants: [
+          "Catch the TypeError (fetch throws on network failure), don't clear tokens, throw a NetworkError the component can handle",
+          "Catch the TypeError, clear all tokens, force logout",
+          "Catch the TypeError, retry the request immediately 10 times in a tight loop"
+        ],
+        correct: 0,
+        explanation: "fetch() throws a TypeError on network failure (not a Response). This is NOT a 401 — don't touch tokens. Throw a custom NetworkError so the UI can show 'No connection' instead of logging out. Option B destroys a valid session. Option C will fail 10 times instantly (still offline) and block the UI thread."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this token storage after refresh?",
+        code: "async function doRefresh() {\n  const res = await fetch('/auth/refresh', { ... });\n  const { accessToken, refreshToken } = await res.json();\n  setAccessToken(accessToken);\n  await SecureStore.setItemAsync('refreshToken', refreshToken);\n  return true;\n}",
+        options: [
+          "Nothing — this code is correct",
+          "Should store accessToken in SecureStore too",
+          "Should check res.ok before parsing JSON — if the server returned an error, res.json() might fail or parse an error body",
+          "refreshToken should be stored in memory, not SecureStore"
+        ],
+        correct: 2,
+        explanation: "If !res.ok (e.g., 401 or 500), the response body is likely an error message, not {accessToken, refreshToken}. Destructuring would get undefined values, and setAccessToken(undefined) corrupts the auth state. Always check res.ok first, handle errors, and only parse the success body when you know the response was successful."
       }
     ]);
   </script>

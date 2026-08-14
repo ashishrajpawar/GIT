@@ -377,6 +377,246 @@ export function MessageThread({ route }) {
         ],
         correct: 2,
         explanation: "onEndReachedThreshold is a ratio (0 to 1), not a pixel count. A value of 5 means 'fire when 5x the visible height of content remains' — it would fire immediately on every render, sending requests non-stop. Use 0.3-0.7 for sensible preloading."
+      },
+      // --- Questions 6–25 ---
+      {
+        type: "predict-output",
+        question: "What does setTokens produce after two successive page loads?",
+        code: "// After page 1:\nsetTokens(prev => [...prev, ...page1Items]); // page1Items = ['A','B']\n// After page 2:\nsetTokens(prev => [...prev, ...page2Items]); // page2Items = ['C','D']\n// What is tokens?",
+        answer: "['A', 'B', 'C', 'D']",
+        explanation: "Each call spreads the previous array and appends the new items. After page 1 we have ['A','B']. After page 2 we spread that and append ['C','D'], giving ['A','B','C','D']. This is the append pattern for infinite scroll — never replace, always accumulate."
+      },
+      {
+        question: "What is the main advantage of cursor pagination over offset pagination when new items are inserted at the top of the list?",
+        options: [
+          "Cursor pagination uses less memory on the client",
+          "Cursor pagination is always faster on the database",
+          "Cursor pagination is stable — new inserts don't cause duplicates or skipped items",
+          "Cursor pagination doesn't require a database index"
+        ],
+        correct: 2,
+        explanation: "With offset pagination, inserting a new item shifts all subsequent offsets — page 2 might repeat an item from page 1 or skip one. Cursor pagination says 'give me items after this specific ID/timestamp' — new inserts above that point don't affect the result set."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the FlatList prop that controls how early the next page fetch triggers:",
+        code: "<FlatList\n  data={tokens}\n  onEndReached={loadMore}\n  ___={0.5}\n/>",
+        answer: "onEndReachedThreshold",
+        explanation: "onEndReachedThreshold is a number between 0 and 1 that determines how far from the end of the list the onEndReached callback fires. 0.5 means it fires when the user has scrolled to within half a screen-height of the bottom."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This pull-to-refresh handler has a subtle bug. What is it?",
+        code: "async function handleRefresh() {\n  setLoading(true);\n  const res = await api.listTokens();\n  setTokens(res.data.items);\n  setCursor(res.data.cursor);\n  setLoading(false);\n}",
+        options: [
+          "setLoading should be called after the await",
+          "It never resets hasMore — after reaching the last page, refresh still thinks there's nothing more",
+          "listTokens() doesn't return data",
+          "setCursor should be called before setTokens"
+        ],
+        correct: 1,
+        explanation: "After a full scroll-through, hasMore is false. When the user pulls to refresh, this handler fetches page 1 again but never calls setHasMore(true) or resets it from the response. The user refreshes, sees 20 tokens, but can never scroll to load more because the stale hasMore=false blocks it."
+      },
+      {
+        type: "order-steps",
+        question: "Put the infinite scroll lifecycle in correct order for loading the next page of tokens:",
+        steps: [
+          "User scrolls near the bottom of the list",
+          "onEndReached fires",
+          "Guard checks: !loadingMore && hasMore && cursor",
+          "setLoadingMore(true) — show footer spinner",
+          "API call with current cursor",
+          "Append new items, update cursor, setLoadingMore(false)"
+        ],
+        correctOrder: [0, 1, 2, 3, 4, 5],
+        explanation: "The full cycle: scroll triggers onEndReached, the guard prevents duplicate calls, we set the loading flag (shows spinner), make the API call with the cursor, then merge results and clear the loading state. Each step depends on the previous one."
+      },
+      {
+        question: "What does getItemLayout do for a FlatList with pagination?",
+        options: [
+          "It makes the list items responsive to screen width",
+          "It tells FlatList the exact size of each item so it can skip measurement, improving scroll-to-index and reducing layout thrashing",
+          "It automatically fetches more items when layout changes",
+          "It limits how many items render on screen"
+        ],
+        correct: 1,
+        explanation: "getItemLayout returns {length, offset, index} for each item. When all items are the same height (like TokenCard rows), FlatList skips expensive measurement passes. This is critical for scrollToIndex() to work instantly and for smooth scroll performance on long lists."
+      },
+      {
+        type: "predict-output",
+        question: "What happens when this code runs?",
+        code: "const [loadingMore, setLoadingMore] = useState(false);\n\nfunction handleEndReached() {\n  if (loadingMore) return;\n  setLoadingMore(true);\n  api.listTokens(cursor).then(res => {\n    setTokens(prev => [...prev, ...res.data.items]);\n    // forgot setLoadingMore(false)\n  });\n}\n// User scrolls to bottom once",
+        answer: "First page loads, but all subsequent scroll attempts are blocked because loadingMore is permanently true",
+        explanation: "Without setLoadingMore(false) in the .then() (or finally), the guard check `if (loadingMore) return` will always short-circuit after the first load-more. The user sees the first extra page load but can never trigger another. Always reset loading flags in finally blocks."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the FlatList prop to show a pull-down refresh spinner:",
+        code: "<FlatList\n  data={tokens}\n  onRefresh={handleRefresh}\n  ___={loading}\n/>",
+        answer: "refreshing",
+        explanation: "The refreshing prop controls the pull-to-refresh spinner visibility. When true, the spinner shows. You set it to your loading state and clear it when the fresh data arrives. Without refreshing, FlatList doesn't know when to stop showing the spinner."
+      },
+      {
+        question: "When using an inverted FlatList for chat messages, where in the data array should the newest message be?",
+        options: [
+          "At the end (last index)",
+          "At the beginning (index 0)",
+          "It doesn't matter — inverted handles sorting automatically",
+          "In the middle for balanced rendering"
+        ],
+        correct: 1,
+        explanation: "An inverted FlatList renders from bottom to top. Index 0 appears at the bottom of the screen. So you put the newest message at index 0 — it shows at the bottom where the user expects it. The API returns messages newest-first, and you keep that order."
+      },
+      {
+        type: "which-breaks",
+        question: "Which approach to appending paginated tokens is broken?",
+        variants: [
+          "setTokens(prev => [...prev, ...newItems])",
+          "setTokens([...tokens, ...newItems])",
+          "tokens.push(...newItems); setTokens(tokens);"
+        ],
+        correct: 2,
+        explanation: "Option C mutates the existing state array with push(), then passes the same reference to setTokens. React won't re-render because it sees the same object reference. You must always create a new array. Option B also has a subtle issue (stale closure) but works in most cases. Option A is the safest — functional updater always has the latest state."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this cursor pagination API call?",
+        code: "async function loadTokens(page: number) {\n  const res = await fetch(`/api/tokens?offset=${page * 20}&limit=20`);\n  const data = await res.json();\n  setTokens(prev => [...prev, ...data.items]);\n}",
+        options: [
+          "fetch() can't be used in React Native",
+          "This uses offset pagination, not cursor pagination — it will produce duplicates if tokens are created between page loads",
+          "The limit should be in a header, not a query parameter",
+          "page * 20 will overflow for large page numbers"
+        ],
+        correct: 1,
+        explanation: "This is offset/limit pagination disguised as cursor pagination. If a new token is created after page 1 loads, page 2 will include an item that was already on page 1 (because everything shifted by one). Cursor pagination avoids this by anchoring to a specific item ID."
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps for handling a pull-to-refresh while a load-more is in progress:",
+        steps: [
+          "Cancel or ignore the pending load-more result",
+          "Reset cursor to null and hasMore to true",
+          "Set loading=true, loadingMore=false",
+          "Fetch page 1 from the API (no cursor)",
+          "Replace items with fresh page 1 data"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "When refresh interrupts a load-more: first prevent the stale load-more response from appending to the list, reset pagination state so we start fresh, show the refresh spinner, fetch page 1, then replace (not append) the list. Without step 1, the stale load-more response could corrupt the fresh list."
+      },
+      {
+        question: "What does the windowSize prop on FlatList control?",
+        options: [
+          "The number of items visible on screen at once",
+          "The number of screens-worth of items kept in memory above and below the viewport",
+          "The pixel width of the scroll window",
+          "How many API pages to prefetch"
+        ],
+        correct: 1,
+        explanation: "windowSize (default 21) determines how many screens-worth of content FlatList keeps rendered. A value of 5 means 2 screens above + current screen + 2 screens below. Lower values reduce memory usage but may show blanks during fast scrolling. For Token's conversation list with many items, tuning this helps performance."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the guard that prevents duplicate fetches:",
+        code: "function handleEndReached() {\n  if (___ || !hasMore || !cursor) return;\n  loadTokens(cursor);\n}",
+        answer: "loadingMore",
+        explanation: "The loadingMore flag is set to true when a fetch starts and false when it completes. Checking it first ensures that rapid onEndReached calls (which happen during momentum scrolling) don't fire multiple identical requests. This is the most common infinite-scroll bug."
+      },
+      {
+        type: "predict-output",
+        question: "What cursor value does the API return on the very last page?",
+        code: "// Request: GET /api/tokens?limit=20&cursor=abc123\n// Only 8 tokens remain\n// Response body:",
+        answer: "cursor: null (and hasMore: false)",
+        explanation: "When there are no more items after this page, the API returns cursor: null and hasMore: false. The client uses these signals to stop showing the loading footer and to short-circuit handleEndReached. If the API returned a cursor for an empty next page, you'd make one wasted request."
+      },
+      {
+        question: "What is maxToRenderPerBatch in FlatList and when should you adjust it for the Token conversation list?",
+        options: [
+          "It limits total items in state — use it to cap memory at 100 messages",
+          "It controls how many items render per scroll frame — increase it for shorter items to reduce blank flashes, decrease it for complex items to stay at 60fps",
+          "It sets the API page size — match it to your limit parameter",
+          "It determines how many items FlatList measures at mount time"
+        ],
+        correct: 1,
+        explanation: "maxToRenderPerBatch (default 10) is how many items FlatList renders in each frame during scroll. For simple TokenCard rows, you can increase it (e.g., 15) to fill the screen faster. For complex MessageBubble components with images, keep it low to avoid jank. It's a rendering optimization, not an API concern."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This keyExtractor will cause problems during pagination. Why?",
+        code: "<FlatList\n  data={tokens}\n  keyExtractor={(item, index) => String(index)}\n  onEndReached={loadMore}\n/>",
+        options: [
+          "String() doesn't work on numbers",
+          "Using array index as key causes items to unmount and remount when new pages are appended, breaking animations and causing flicker",
+          "keyExtractor must return a number, not a string",
+          "index is undefined in keyExtractor"
+        ],
+        correct: 1,
+        explanation: "When page 2 appends, item at index 0 is still 'token A' with key '0' — fine. But React uses keys to track identity. If you insert items or the list reorders, index-based keys cause React to remount components unnecessarily. Always use a stable unique ID like item.code or item.id."
+      },
+      {
+        type: "which-breaks",
+        question: "Which hook implementation for paginated fetching has a race condition?",
+        variants: [
+          "const load = async (c) => { setLoading(true); const r = await fetch(c); setItems(prev => [...prev, ...r.items]); setLoading(false); }",
+          "const load = async (c) => { if (abortRef.current) abortRef.current.abort(); abortRef.current = new AbortController(); const r = await fetch(c, { signal: abortRef.current.signal }); setItems(r.items); }",
+          "const load = async (c) => { const r = await fetch(c); setItems(prev => c ? [...prev, ...r.items] : r.items); setLoading(false); }"
+        ],
+        correct: 0,
+        explanation: "Option A always appends, even if the user refreshed (which should replace). If a refresh and a load-more are in flight simultaneously, the load-more response appends to the fresh data — duplicating items. Options B and C handle this: B aborts stale requests, C checks whether a cursor was passed to decide append vs. replace."
+      },
+      {
+        question: "Why should the Token app's API use an opaque cursor string (like base64-encoded JSON) instead of exposing the raw database ID?",
+        options: [
+          "Base64 is faster to transmit over HTTP",
+          "It hides internal implementation details — you can change the pagination strategy (e.g., from ID to timestamp) without breaking clients",
+          "Database IDs are too long for URL parameters",
+          "React Native can't parse integer cursors"
+        ],
+        correct: 1,
+        explanation: "An opaque cursor (e.g., base64 of {id: 42, created: '...'}) lets you change the underlying pagination key without a breaking API change. If clients send back 'eyJpZCI6NDJ9', you can decode it however you want server-side. Exposing raw IDs locks you into that specific ordering forever."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the FlatList prop that renders a spinner below the list during pagination:",
+        code: "<FlatList\n  data={tokens}\n  onEndReached={loadMore}\n  ___={loadingMore ? <ActivityIndicator /> : null}\n/>",
+        answer: "ListFooterComponent",
+        explanation: "ListFooterComponent renders a component below the last item. During pagination, you show an ActivityIndicator here while loadingMore is true. When the fetch completes and loadingMore becomes false, it disappears. This gives the user clear feedback that more items are loading."
+      },
+      {
+        type: "order-steps",
+        question: "Order the checks in the handleEndReached guard from most to least likely to short-circuit:",
+        steps: [
+          "Check if loadingMore is true (already fetching)",
+          "Check if hasMore is false (reached last page)",
+          "Check if cursor is null (no pagination token)"
+        ],
+        correctOrder: [0, 1, 2],
+        explanation: "loadingMore changes rapidly (true during every fetch), so it catches the most duplicate calls. hasMore only becomes false once (at the last page). cursor being null is equivalent to hasMore being false in most implementations. Ordering by frequency of short-circuit makes the guard efficient, though all three are O(1) checks."
+      },
+      {
+        type: "predict-output",
+        question: "What does onEndReachedThreshold={0} mean in practice?",
+        code: "<FlatList\n  data={tokens}\n  onEndReached={loadMore}\n  onEndReachedThreshold={0}\n/>",
+        answer: "onEndReached only fires when the user has scrolled to the very last pixel of the list",
+        explanation: "A threshold of 0 means zero distance from the end — the user must reach the absolute bottom before the callback fires. This creates a noticeable pause because the API call only starts after they've exhausted all rendered content. Values like 0.3-0.5 fire earlier, making pagination feel seamless."
+      },
+      {
+        question: "In the Token app, why is it important to use the functional updater form setTokens(prev => [...prev, ...newItems]) instead of setTokens([...tokens, ...newItems])?",
+        options: [
+          "The functional form is faster because React batches it",
+          "The closure captures a stale tokens value — if two pages resolve close together, one overwrites the other. The functional form always uses the latest state.",
+          "The spread operator doesn't work without prev",
+          "React requires functional updaters for arrays"
+        ],
+        correct: 1,
+        explanation: "If you call setTokens([...tokens, ...page2Items]) and tokens still references the pre-page-1 value (stale closure), you lose page 1's data. The functional form prev => [...prev, ...newItems] always receives the most current state, even if multiple updates queue up. This is critical for rapid sequential page loads."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the API response shape that the client expects from the paginated tokens endpoint:",
+        code: "// GET /api/tokens?limit=20&cursor=abc\n// Response:\n{\n  items: Token[],\n  ___: string | null,\n  hasMore: boolean\n}",
+        answer: "cursor",
+        explanation: "The response includes three fields: items (the page data), cursor (an opaque string pointing to the last item — null if no more pages), and hasMore (explicit boolean). The client stores the cursor and passes it back on the next request. This three-field contract is the standard cursor pagination shape."
       }
     ]);
   </script>

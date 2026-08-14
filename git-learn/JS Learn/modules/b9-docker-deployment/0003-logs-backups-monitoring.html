@@ -682,6 +682,206 @@ export default router;
                 ],
                 correctOrder: [0, 1, 2, 3, 4, 5],
                 explanation: "Structured logs with correlation IDs make step 3-4 fast. Without them, you'd be searching through megabytes of unstructured text. The health check at the end confirms the fix worked."
+            },
+            // --- Questions 6-25 ---
+            {
+                question: "What is the primary advantage of structured JSON logs over plain text logs?",
+                options: [
+                    "They use less disk space",
+                    "They can be parsed, filtered, and queried programmatically",
+                    "They are easier to read in the terminal",
+                    "They automatically redact sensitive data"
+                ],
+                correct: 1,
+                explanation: "JSON logs let you filter by field (e.g., level=error, userId=42) using tools like jq or log aggregation platforms. Plain text requires fragile regex parsing."
+            },
+            {
+                type: "predict-output",
+                question: "What does pino output for this child logger?",
+                code: "const pino = require('pino');\nconst logger = pino({ level: 'info' });\nconst child = logger.child({ service: 'token-engine' });\nchild.info({ tokenCode: 'MERC-8GH2' }, 'token issued');\n// What fields appear in the JSON output?",
+                answer: "level, time, service, tokenCode, msg",
+                explanation: "Child loggers inherit the parent's configuration and merge their bound context (service: 'token-engine') into every log line. The msg field comes from the second argument to .info()."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the pino configuration to suppress health check noise:",
+                code: "const logger = pino({\n  transport: { target: 'pino-pretty' },\n  level: 'info',\n  autoLogging: {\n    ___: ['/health/live', '/health/ready']\n  }\n});",
+                answer: "ignore",
+                explanation: "The autoLogging.ignore array tells pino-http to skip logging requests to those paths. Health checks hit every 10-30 seconds and would flood your logs with useless 200 OK entries."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This pino serializer is meant to redact sensitive fields. What's wrong?",
+                code: "const logger = pino({\n  serializers: {\n    req(req) {\n      return {\n        method: req.method,\n        url: req.url,\n        headers: req.headers\n      };\n    }\n  }\n});",
+                options: [
+                    "Line 4 — method should be req.raw.method",
+                    "Line 6 — logging all headers exposes Authorization and Cookie values",
+                    "Line 3 — serializer name should be 'request' not 'req'"
+                ],
+                correct: 1,
+                explanation: "Logging all headers exposes Authorization tokens, session cookies, and API keys. Whitelist only safe headers (content-type, user-agent) or strip sensitive ones explicitly."
+            },
+            {
+                question: "Which pino log level should you use when a token revocation fails due to a database constraint?",
+                options: [
+                    "trace — it's just detail",
+                    "debug — only needed during development",
+                    "warn — the operation failed but the system is still running",
+                    "error — a specific operation failed and needs attention",
+                    "fatal — the process should exit"
+                ],
+                correct: 3,
+                explanation: "A failed revocation is an error — the user's action didn't complete and may need a retry or alert. Use 'warn' for degraded-but-functioning states, 'fatal' only when the process cannot continue."
+            },
+            {
+                type: "predict-output",
+                question: "What correlation ID header does this middleware attach?",
+                code: "const crypto = require('crypto');\n\napp.use((req, res, next) => {\n  req.id = req.headers['x-request-id'] || crypto.randomUUID();\n  res.setHeader('x-request-id', req.id);\n  next();\n});\n\n// Client sends: GET /tokens (no x-request-id header)\n// What format is req.id?",
+                answer: "A UUID v4 string like 550e8400-e29b-41d4-a716-446655440000",
+                explanation: "When no x-request-id header is provided, crypto.randomUUID() generates a new UUID v4. This ID is attached to every log line for that request, letting you trace a single request across all services."
+            },
+            {
+                type: "which-breaks",
+                question: "Which pg_dump command will produce a corrupt or unusable backup?",
+                variants: [
+                    "pg_dump -U token -Fc token_prod > /backups/token_$(date +%Y%m%d).dump",
+                    "pg_dump -U token -Fc token_prod | gzip > /backups/token_$(date +%Y%m%d).dump.gz",
+                    "pg_dump -U token token_prod | pg_restore -d token_prod"
+                ],
+                correct: 2,
+                explanation: "Piping pg_dump output directly into pg_restore on the SAME database will try to restore while dumping, causing conflicts and potential data corruption. Dump to a file first, then restore to a separate database for testing."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the cron expression to run backups at 2:30 AM every day:",
+                code: "# minute hour day month weekday\n___ /opt/scripts/backup-token-db.sh >> /var/log/backup.log 2>&1",
+                answer: "30 2 * * *",
+                explanation: "Cron fields are: minute(30) hour(2) day-of-month(*) month(*) day-of-week(*). Running at 2:30 AM avoids peak traffic and gives the backup time to complete before business hours."
+            },
+            {
+                type: "order-steps",
+                question: "Order the steps to implement a reliable backup strategy with off-site copies:",
+                steps: [
+                    "Run pg_dump -Fc to create a custom-format backup file",
+                    "Verify the backup is not zero-bytes (sanity check)",
+                    "Upload to off-site storage with rclone or rsync",
+                    "Delete local backups older than retention period",
+                    "Log success/failure and send alert on failure"
+                ],
+                correctOrder: [0, 1, 2, 3, 4],
+                explanation: "Always verify before uploading — sending a corrupt or empty file off-site is worse than no backup because it creates false confidence. Alert on failure so you know immediately when backups break."
+            },
+            {
+                question: "What is the difference between a liveness probe and a readiness probe?",
+                options: [
+                    "Liveness checks if the process is alive; readiness checks if it can serve traffic",
+                    "Liveness checks the database; readiness checks the API",
+                    "They are the same thing with different names",
+                    "Liveness runs once at startup; readiness runs continuously"
+                ],
+                correct: 0,
+                explanation: "A liveness probe failing means the container is stuck and should be restarted. A readiness probe failing means the container is alive but not ready (e.g., DB connection lost) — stop sending it traffic but don't kill it."
+            },
+            {
+                type: "predict-output",
+                question: "What HTTP status does this readiness endpoint return?",
+                code: "app.get('/health/ready', async (req, res) => {\n  const dbOk = await checkDb();    // returns true\n  const redisOk = await checkRedis(); // returns false (Redis down)\n  const allOk = dbOk && redisOk;\n  res.status(allOk ? 200 : 503).json({\n    status: allOk ? 'ready' : 'degraded',\n    checks: { db: dbOk, redis: redisOk }\n  });\n});",
+                answer: "503",
+                explanation: "Since redisOk is false, allOk is false, and the endpoint returns 503. The orchestrator (Coolify/Traefik) stops routing traffic to this container until Redis recovers and the check returns 200."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This Docker daemon.json configures log rotation. What's the issue?",
+                code: "{\n  \"log-driver\": \"json-file\",\n  \"log-opts\": {\n    \"max-size\": \"100m\",\n    \"max-file\": 3\n  }\n}",
+                options: [
+                    "Line 2 — should be 'local' driver not 'json-file'",
+                    "Line 5 — max-file value must be a string, not a number",
+                    "Line 4 — 100m is too large, should be 10m"
+                ],
+                correct: 1,
+                explanation: "All log-opts values must be strings in daemon.json. Use \"3\" not 3. Docker will fail to start or ignore the option with a type mismatch. This is a common gotcha that's hard to debug."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the find command to delete backup files older than 7 days:",
+                code: "find /backups -name \"*.dump\" -mtime +___ -delete",
+                answer: "7",
+                explanation: "The -mtime +7 flag matches files modified more than 7 days ago. Combined with -name '*.dump', it only deletes backup files and leaves other files in the directory untouched."
+            },
+            {
+                type: "which-breaks",
+                question: "Which alert webhook payload will fail to deliver useful context?",
+                variants: [
+                    "{ \"text\": \"Token API health check FAILED at 2024-01-15T02:30:00Z on vps-1. /health/ready returned 503. DB check: timeout after 5s.\" }",
+                    "{ \"text\": \"ALERT: Something is wrong with the server.\" }",
+                    "{ \"text\": \"Token API: 5 failed requests in 60s. Affected endpoint: POST /tokens/revoke. Error: ECONNREFUSED on pg:5432. Last requestId: req-a8f3b2.\" }"
+                ],
+                correct: 1,
+                explanation: "A useful alert tells you WHAT failed, WHEN, WHERE, and ideally WHY. 'Something is wrong' gives no actionable information — you still need to SSH in and investigate from scratch."
+            },
+            {
+                type: "predict-output",
+                question: "What does this slow-request detection log?",
+                code: "app.use((req, res, next) => {\n  const start = Date.now();\n  res.on('finish', () => {\n    const duration = Date.now() - start;\n    if (duration > 2000) {\n      req.log.warn({ duration, method: req.method, url: req.url }, 'slow request');\n    }\n  });\n  next();\n});\n// Request to POST /tokens takes 3500ms\n// What level is logged?",
+                answer: "warn",
+                explanation: "3500ms exceeds the 2000ms threshold, so req.log.warn is called. Using 'warn' (not 'error') is correct — the request succeeded but was slow, indicating potential performance degradation that needs investigation."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the memory monitoring code to detect a potential leak:",
+                code: "setInterval(() => {\n  const used = process.memoryUsage();\n  const heapMB = used.heapUsed / 1024 / 1024;\n  if (heapMB > 512) {\n    logger.___({ heapMB: heapMB.toFixed(2) }, 'memory threshold exceeded');\n  }\n}, 30000);",
+                answer: "warn",
+                explanation: "High memory usage is a warning — the process is still running but may be heading toward an OOM kill. Log at 'warn' level so your alerting rules catch it before it becomes a 'fatal' crash."
+            },
+            {
+                type: "order-steps",
+                question: "Order the steps to test that your backup restore actually works:",
+                steps: [
+                    "Create a fresh empty database (e.g., token_restore_test)",
+                    "Run pg_restore -d token_restore_test /backups/latest.dump",
+                    "Run a count query to verify tables have expected row counts",
+                    "Run the application's health check against the restored database",
+                    "Drop the test database after verification"
+                ],
+                correctOrder: [0, 1, 2, 3, 4],
+                explanation: "Never restore into your production database. A separate test database lets you verify the backup is complete and the application can actually use it — untested backups are not backups."
+            },
+            {
+                question: "Why should you use pg_dump -Fc (custom format) instead of plain SQL for Token's production backups?",
+                options: [
+                    "Custom format is human-readable",
+                    "Custom format supports parallel restore, compression, and selective table restore",
+                    "Plain SQL doesn't support foreign keys",
+                    "Custom format is smaller because it skips indexes"
+                ],
+                correct: 1,
+                explanation: "The -Fc (custom) format is compressed by default, supports parallel restore with -j for faster recovery, and lets you restore individual tables. Plain SQL is useful for inspection but slower and larger for production backups."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This Uptime Kuma monitor checks Token's readiness endpoint. What will cause false alerts?",
+                code: "Monitor Configuration:\n  URL: https://tokn.app/health/ready\n  Interval: 60 seconds\n  Retries: 0\n  Accepted Status: 200\n  Timeout: 5 seconds",
+                options: [
+                    "Interval is too long — should be 10 seconds",
+                    "Retries is 0 — a single network blip triggers an alert",
+                    "Timeout is too short — should be 30 seconds"
+                ],
+                correct: 1,
+                explanation: "With 0 retries, a single dropped packet or momentary network issue triggers a false alert at 2 AM. Set retries to 2-3 so the monitor confirms the outage before waking you up. Interval of 60s is reasonable for external monitoring."
+            },
+            {
+                type: "order-steps",
+                question: "Order the log levels from MOST severe to LEAST severe in pino:",
+                steps: [
+                    "fatal",
+                    "error",
+                    "warn",
+                    "info",
+                    "debug",
+                    "trace"
+                ],
+                correctOrder: [0, 1, 2, 3, 4, 5],
+                explanation: "Pino's numeric levels: fatal=60, error=50, warn=40, info=30, debug=20, trace=10. Setting level='info' means info, warn, error, and fatal are logged. Debug and trace are suppressed in production to reduce volume."
             }
         ]);
     </script>

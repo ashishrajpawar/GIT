@@ -462,6 +462,224 @@ export default router;
         ],
         correctOrder: [0, 1, 2, 3, 4],
         explanation: "The API and coturn never talk directly — they share the same secret and the credential is self-validating. The client is just a messenger. coturn independently verifies by recomputing the HMAC with its own copy of the secret and checking the embedded expiry timestamp."
+      },
+
+      // --- Questions 6–25 ---
+      {
+        question: "What is the primary difference between a STUN server and a TURN server?",
+        options: [
+          "STUN encrypts traffic; TURN does not",
+          "STUN only discovers a peer's public IP address; TURN actually relays all media traffic between peers",
+          "STUN works on UDP; TURN only works on TCP",
+          "STUN is for video; TURN is for audio"
+        ],
+        correct: 1,
+        explanation: "STUN (Session Traversal Utilities for NAT) is a lightweight discovery protocol — it tells a client what its public IP:port looks like from outside. It does NOT relay any media. TURN (Traversal Using Relays around NAT) actually proxies all RTP/RTCP packets through the TURN server. STUN is nearly free (negligible bandwidth); TURN costs bandwidth equal to the full call bitrate."
+      },
+      {
+        question: "What type of NAT requires a TURN relay because STUN-discovered srflx candidates cannot receive inbound connections?",
+        options: [
+          "Full-cone NAT",
+          "Restricted-cone NAT",
+          "Symmetric NAT",
+          "Port-restricted NAT"
+        ],
+        correct: 2,
+        explanation: "Symmetric NAT maps each outbound (IP:port → destination) pair to a unique external port. A srflx candidate discovered via STUN is only valid for packets from that exact STUN server — a different peer cannot use it. Only relay (TURN) candidates work reliably through symmetric NAT. Carrier-grade NATs on Jio/Airtel in India are often symmetric, which is why TURN matters for Token."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the apt command to install coturn on Ubuntu/Debian:",
+        code: "sudo apt update\nsudo apt ___ coturn -y",
+        answer: "install",
+        explanation: "The standard package manager command is `apt install <package>`. After installation you also need `sudo systemctl enable coturn` to make it start on boot, and `sudo systemctl start coturn` to start it immediately."
+      },
+      {
+        type: "predict-output",
+        question: "The TURN username is constructed as 'timestamp:userId'. What is the username if userId is 42 and the credential should expire in exactly 24 hours from Unix time 1700000000?",
+        code: "const now = 1700000000; // current Unix time in seconds\nconst ttl = 86400;       // 24 hours in seconds\nconst userId = 42;\nconst username = (now + ttl) + ':' + userId;\nconsole.log(username);",
+        answer: "1700086400:42",
+        explanation: "The username embeds the expiry timestamp (now + TTL) so coturn can validate it without calling your API. 1700000000 + 86400 = 1700086400. coturn reads this timestamp from the username, checks it hasn't passed, then verifies the HMAC. This makes credentials self-expiring — coturn rejects them after the timestamp even if the shared secret hasn't changed."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What is wrong with this coturn configuration?",
+        code: "# turnserver.conf\nlistening-port=3478\ntls-listening-port=5349\nexternal-ip=10.0.0.5\nrealm=tokn.app\nuse-auth-secret\nstatic-auth-secret=abc123",
+        options: [
+          "The realm should not include a dot",
+          "external-ip is set to a private IP (10.0.0.5) instead of the VPS's public IP — clients on the internet cannot reach this address",
+          "The auth secret is too short",
+          "tls-listening-port should be 443"
+        ],
+        correct: 1,
+        explanation: "10.0.0.5 is a private RFC-1918 address. Clients outside your LAN will never be able to route to it. The external-ip in turnserver.conf must be the VPS's public (internet-facing) IP address, e.g. 203.0.113.10. This is the IP that WebRTC clients will use in TURN candidate addresses."
+      },
+      {
+        type: "which-breaks",
+        question: "Which RTCPeerConnection configuration correctly forces relay-only mode to protect user IP privacy in the Token app?",
+        variants: [
+          "new RTCPeerConnection({ iceServers, iceTransportPolicy: 'all' })",
+          "new RTCPeerConnection({ iceServers, iceTransportPolicy: 'relay' })",
+          "new RTCPeerConnection({ iceServers, iceTransportPolicy: 'relay-only' })",
+          "new RTCPeerConnection({ iceServers, relayOnly: true })"
+        ],
+        correct: 1,
+        explanation: "The only valid values for iceTransportPolicy are 'all' (default, tries direct and relay) and 'relay' (TURN only). 'relay-only' and relayOnly are not valid WebRTC API options — they would be silently ignored and the browser would fall back to default behavior, potentially leaking IPs."
+      },
+      {
+        type: "order-steps",
+        question: "Put the coturn installation steps in the correct order for a Coolify VPS deployment:",
+        steps: [
+          "Open firewall ports: 3478/udp, 3478/tcp, 5349/tcp, 49152-65535/udp",
+          "sudo apt install coturn -y",
+          "Write turnserver.conf with your VPS public IP, realm, and auth secret",
+          "sudo systemctl enable coturn && sudo systemctl start coturn",
+          "Test with Trickle ICE web tool — verify relay candidates appear"
+        ],
+        correctOrder: [1, 2, 0, 3, 4],
+        explanation: "You install first, then write the config (you need to know coturn's defaults before configuring it), then open the firewall (so the service can receive connections once started), then start and enable the service, then test. Testing last confirms the entire stack works end-to-end."
+      },
+      {
+        question: "What ports must be open on the VPS firewall for coturn to work completely? Select the most complete and correct answer.",
+        options: [
+          "80/tcp and 443/tcp only",
+          "3478/udp only",
+          "3478/tcp, 3478/udp, 5349/tcp, and the relay port range 49152-65535/udp",
+          "3478/tcp and 3478/udp only"
+        ],
+        correct: 2,
+        explanation: "coturn needs: 3478/udp (primary STUN/TURN over UDP), 3478/tcp (fallback for UDP-blocked networks), 5349/tcp (TURNS — TURN over TLS, for clients behind strict HTTPS-only firewalls), and 49152-65535/udp (the relay port range — each TURN session allocates one port from this range for the actual media relay). Missing the relay port range means sessions authenticate but media never flows."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the HMAC credential generation in Node.js (the output must match what coturn expects):",
+        code: "import { createHmac } from 'crypto';\nconst credential = createHmac('sha1', TURN_SECRET)\n  .update(username)\n  .digest('___');",
+        answer: "base64",
+        explanation: "coturn's TURN REST API spec requires the credential to be the HMAC-SHA1 digest encoded as base64. Using 'hex' would produce a valid HMAC but coturn would reject it because the encoding doesn't match. The username (timestamp:userId) is the HMAC input; the static-auth-secret is the HMAC key."
+      },
+      {
+        type: "predict-output",
+        question: "A user enables relay-only mode in Token settings. What ICE candidate types will appear in the WebRTC negotiation?",
+        code: "const pc = new RTCPeerConnection({\n  iceServers: await getIceServers(),\n  iceTransportPolicy: 'relay',\n});\npc.onicecandidate = e => {\n  if (e.candidate) console.log(e.candidate.type);\n};",
+        answer: "relay (only relay candidates are logged; host and srflx are suppressed)",
+        explanation: "With iceTransportPolicy: 'relay', the WebRTC stack gathers all candidate types internally but only exposes 'relay' candidates to the application. Host candidates (LAN) and srflx candidates (public IP via STUN) are silently discarded. This guarantees neither IP leaks to the remote peer — all media must travel through your TURN server."
+      },
+      {
+        type: "spot-the-bug",
+        question: "A developer caches TURN credentials incorrectly. What is the problem?",
+        code: "let cachedServers: IceServer[] | null = null;\nlet cacheExpiry = 0;\n\nexport async function getIceServers() {\n  if (cachedServers && Date.now() < cacheExpiry) {\n    return cachedServers;\n  }\n  const res = await apiRequest('GET', '/turn/credentials');\n  cachedServers = res.data.iceServers;\n  // Refresh at FULL TTL, not half TTL\n  cacheExpiry = Date.now() + (res.data.ttl * 1000);\n  return cachedServers;\n}",
+        options: [
+          "cachedServers should be a Map, not an array",
+          "The cache is set to expire at the FULL TTL — if a call starts just before expiry, credentials may expire mid-call. Should refresh at half TTL (ttl * 500).",
+          "apiRequest should use POST, not GET",
+          "Date.now() returns milliseconds but TTL is in seconds — multiplying by 1000 is wrong"
+        ],
+        correct: 1,
+        explanation: "Credentials valid for 24h should be refreshed after 12h (half TTL). If you cache until full expiry and a call starts at hour 23, the credentials expire during the call when WebRTC tries to reconnect via ICE restart. The fix from the lesson: cacheExpiry = Date.now() + (res.data.ttl * 500) — divides by 2 (500 instead of 1000) to refresh at half TTL. Note: ttl * 1000 would also be wrong since ttl is already in seconds."
+      },
+      {
+        question: "Why does coturn's Docker container need `network_mode: host` rather than the default bridge networking?",
+        options: [
+          "Host mode is required for TLS to work",
+          "Bridge networking adds NAT inside Docker, which confuses ICE candidate address discovery — TURN needs to bind to the real host public IP directly",
+          "Host mode is needed for the configuration file to be readable",
+          "coturn does not support IPv6 in bridge mode"
+        ],
+        correct: 1,
+        explanation: "Docker's default bridge mode puts containers behind another layer of NAT. coturn would discover the container's internal IP (172.17.x.x) as its address, not the host's public IP. ICE candidates would contain unreachable addresses. With network_mode: host, the container shares the host's network stack directly and sees (and binds to) the real public IP."
+      },
+      {
+        type: "which-breaks",
+        question: "Which of these turnserver.conf authentication modes is INSECURE for production use?",
+        variants: [
+          "use-auth-secret + static-auth-secret (TURN REST API — time-limited HMAC credentials)",
+          "lt-cred-mech with dynamically generated users stored in the DB",
+          "no-auth (no authentication required)",
+          "use-auth-secret with a 64-character random secret"
+        ],
+        correct: 2,
+        explanation: "no-auth disables all TURN authentication — anyone who discovers your TURN server IP can relay arbitrary traffic through it, using your bandwidth as a free anonymous proxy or VPN. Always use use-auth-secret (TURN REST API) for Token. lt-cred-mech with a database is also acceptable but more complex to manage than the HMAC approach."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the coturn config setting that prevents TURN from relaying to private networks (security hardening):",
+        code: "# Block RFC-1918 private IP ranges\n___=10.0.0.0-10.255.255.255\n___=172.16.0.0-172.31.255.255\n___=192.168.0.0-192.168.255.255",
+        answer: "denied-peer-ip",
+        explanation: "denied-peer-ip tells coturn to refuse relay allocations targeting those IP ranges. Without this, an attacker with valid TURN credentials could use your server as a pivot point to access internal services (databases, admin panels, other containers) that are otherwise unreachable from the internet."
+      },
+      {
+        type: "predict-output",
+        question: "How much bandwidth (approximately) does a 1-hour voice call consume on the TURN server when relay mode is active?",
+        code: "// From the bandwidth table in the lesson:\n// Voice (Opus) bitrate: ~32 kbps\n// 1 hour = 3600 seconds\n// TURN relays in BOTH directions (upload + download)\nconst bitrate = 32 * 1000; // bits per second\nconst seconds = 3600;\nconst bytesOneway = (bitrate / 8) * seconds;\nconst totalBytes = bytesOneway * 2; // bidirectional\nconsole.log(Math.round(totalBytes / (1024*1024)) + ' MB');",
+        answer: "28 MB",
+        explanation: "32 kbps = 4000 bytes/sec. 4000 * 3600 = 14,400,000 bytes = ~14 MB one-way. Bidirectional (TURN relays both directions): ~28 MB per hour of voice. This is manageable — a 1TB/month VPS can handle thousands of hours. Video at 500 kbps consumes ~225 MB/hour per direction, making relay-only mode expensive for video."
+      },
+      {
+        question: "A Token user in India on a Jio SIM cannot connect calls. Diagnostic logs show only host and srflx ICE candidates, no relay candidates. What is the most likely cause?",
+        options: [
+          "The user's phone does not support WebRTC",
+          "TURN server credentials are expired",
+          "The app is not calling GET /turn/credentials before creating RTCPeerConnection, so no TURN URLs are configured in iceServers",
+          "coturn's TLS certificate is invalid"
+        ],
+        correct: 2,
+        explanation: "Relay candidates only appear when RTCPeerConnection is configured with TURN server URLs (including username and credential). If no TURN server is in iceServers, WebRTC never attempts to gather relay candidates. The fix: always call getIceServers() before constructing RTCPeerConnection and ensure the result includes at least one turn: URL with valid credentials."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What is wrong with this ICE server configuration returned by the API?",
+        code: "res.json({\n  data: {\n    iceServers: [\n      {\n        urls: [\n          'stun:turn.tokn.app:3478',\n          'turn:turn.tokn.app:3478?transport=udp',\n        ],\n        // username and credential intentionally omitted\n      }\n    ]\n  }\n});",
+        options: [
+          "The URLs array should not mix stun: and turn: protocols",
+          "TURN entries without username and credential will be rejected by coturn — ICE will fall back to STUN only, so relay candidates will never form",
+          "stun: URLs should use port 19302",
+          "The data wrapper is unnecessary"
+        ],
+        correct: 1,
+        explanation: "coturn requires authentication (because use-auth-secret is set). TURN candidates from a URL without credentials will result in a 401 Unauthorized from coturn. WebRTC will log the failure and no relay candidates will form. The stun: URL in the same object is fine (STUN doesn't require auth), but the TURN URL is useless without credentials."
+      },
+      {
+        type: "order-steps",
+        question: "A developer is testing the TURN server using the Trickle ICE web tool. What is the correct sequence?",
+        steps: [
+          "Open https://webrtc.github.io/samples/src/content/peerconnection/trickle-ice/",
+          "Generate test credentials by calling your API's GET /turn/credentials endpoint",
+          "Enter turn:YOUR_VPS_IP:3478 as the ICE server URL along with the username and credential",
+          "Click 'Gather candidates'",
+          "Verify a candidate with type 'relay' appears in the results"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "You need the tool open before you can enter values. You need real credentials (not hardcoded ones) to authenticate with coturn. You enter the TURN URL and credentials, then gather, then verify. If only host/srflx appear but no relay, check: firewall rules, coturn is running, credentials are valid, and relay port range is open."
+      },
+      {
+        question: "What does the `realm` setting in turnserver.conf do?",
+        options: [
+          "It sets the domain used in coturn log entries and in the TURN authentication challenge sent to clients — it should match your domain (e.g. tokn.app)",
+          "It restricts which IP addresses can connect to the TURN server",
+          "It sets the TURN server's hostname for DNS resolution",
+          "It controls which WebRTC codec the relay supports"
+        ],
+        correct: 0,
+        explanation: "The realm is included in the TURN authentication challenge (WWW-Authenticate header). Clients include it in their credential request. It identifies your TURN server and is part of the HMAC verification context in some TURN authentication modes. Setting realm=tokn.app is correct for Token's deployment."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the turnserver.conf setting to cap each TURN session to 1 Mbps — preventing a single call from saturating your VPS network:",
+        code: "# Bandwidth cap per relay session (bits per second)\n___=1000000",
+        answer: "max-bps",
+        explanation: "max-bps limits bandwidth per TURN allocation (per call direction). 1000000 = 1 Mbps, which comfortably covers voice (32 kbps) and 480p video (500 kbps) while preventing abuse. Combined with total-quota=100 (max concurrent sessions), this protects your VPS from both per-session abuse and total overload."
+      },
+      {
+        type: "which-breaks",
+        question: "Token deploys coturn as a Docker container. Which of these docker-compose configurations will NOT work correctly for TURN?",
+        variants: [
+          "network_mode: host — container shares the host network stack, sees public IP",
+          "network_mode: bridge — Docker adds its own NAT layer, TURN cannot bind to the real public IP",
+          "Adding the coturn service with restart: unless-stopped for automatic restart",
+          "Mounting ./turnserver.conf as a read-only volume at /etc/turnserver.conf"
+        ],
+        correct: 1,
+        explanation: "Bridge mode puts coturn behind Docker's internal NAT (typically 172.17.0.0/16). coturn would report its internal container IP in ICE candidates, which is unreachable from the internet. TURN sessions would authenticate but then fail to actually relay media. network_mode: host is required so coturn can see and bind to the host's public IP directly."
       }
     ]);
   </script>

@@ -492,6 +492,256 @@ console.log('Failure: connecting → failed → closed');`);
         ],
         correctOrder: [0, 1, 2, 3, 4],
         explanation: "PC first (you need it to add tracks to). Media second (you need tracks before the offer). Add tracks third (the offer must describe them). Create offer fourth (now it includes the media). Send and wait for answer last (the negotiation completes)."
+      },
+      // --- Questions 6–25 ---
+      {
+        question: "Which ICE candidate type reveals the peer's actual local IP address?",
+        options: [
+          "relay",
+          "srflx (server reflexive)",
+          "host",
+          "prflx (peer reflexive)"
+        ],
+        correct: 2,
+        explanation: "A 'host' candidate contains the device's actual local IP address (e.g. 192.168.1.x or a public IP on the interface). 'srflx' reveals the public IP as seen by the STUN server. 'relay' only reveals the TURN server's IP. This is why Token uses iceTransportPolicy: 'relay' — it prevents host and srflx candidates from being generated, hiding the user's real IP entirely."
+      },
+      {
+        question: "What is the primary difference between a STUN server and a TURN server?",
+        options: [
+          "STUN relays media; TURN only discovers addresses",
+          "STUN discovers your public IP; TURN relays all media traffic through itself",
+          "STUN is encrypted; TURN is not",
+          "STUN is paid; TURN is free"
+        ],
+        correct: 1,
+        explanation: "STUN (Session Traversal Utilities for NAT) simply tells you your public IP:port — it's lightweight and free (Google runs public STUN servers). TURN (Traversal Using Relays around NAT) actually relays all media packets through itself, consuming bandwidth. Token self-hosts coturn for TURN because relay mode is essential for IP privacy."
+      },
+      {
+        question: "What role does the signalling server play in a WebRTC call?",
+        options: [
+          "It relays encrypted audio/video packets between peers",
+          "It exchanges SDP offers/answers and ICE candidates — it never sees media",
+          "It decrypts and re-encrypts media for quality monitoring",
+          "It stores call recordings for later playback"
+        ],
+        correct: 1,
+        explanation: "The signalling server (Token's own WebSocket server) only coordinates the connection setup: it passes SDP offers/answers and ICE candidates between peers. Once the peer-to-peer (or relay) connection is established, media flows directly between peers encrypted with DTLS-SRTP. The signalling server never sees or touches the actual audio/video data."
+      },
+      {
+        type: "predict-output",
+        question: "What does this log when the peer connection is first created?",
+        code: "const pc = new RTCPeerConnection({ iceServers: [] });\nconsole.log(pc.connectionState);\nconsole.log(pc.iceConnectionState);\nconsole.log(pc.signalingState);",
+        answer: "new\nnew\nstable",
+        explanation: "A freshly created RTCPeerConnection starts with connectionState 'new', iceConnectionState 'new', and signalingState 'stable'. The 'stable' signaling state means no offer/answer exchange is in progress. States change as the negotiation and ICE process proceed."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This callee code never establishes a connection. What's wrong?",
+        code: "// Callee receives offer via signalling\nasync function handleOffer(sdp) {\n  const answer = await pc.createAnswer();\n  await pc.setLocalDescription(answer);\n  send('call:answer', { callId, sdp: answer.sdp });\n}",
+        options: [
+          "createAnswer() is called before setRemoteDescription() — the PC doesn't know the offer yet",
+          "setLocalDescription should be called before createAnswer",
+          "The answer should use type: 'offer' not type: 'answer'",
+          "send() must be awaited"
+        ],
+        correct: 0,
+        explanation: "Before calling createAnswer(), you MUST call setRemoteDescription() with the received offer. The peer connection needs to know what the remote peer is proposing (codecs, media lines) before it can generate a compatible answer. Fix: await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp })); THEN createAnswer()."
+      },
+      {
+        type: "fill-blank",
+        question: "Configure the peer connection to only use relay candidates (hiding the user's IP):",
+        code: "const pc = new RTCPeerConnection({\n  iceServers: [{ urls: 'turn:turn.tokn.app:3478', username, credential }],\n  ___: 'relay',\n});",
+        answer: "iceTransportPolicy",
+        explanation: "Setting iceTransportPolicy: 'relay' forces the ICE agent to ONLY use relay (TURN) candidates. Host and srflx candidates are never gathered or sent, so the peer never learns your real IP address. This is critical for Token's privacy model — the trade-off is slightly higher latency since all media routes through the TURN server."
+      },
+      {
+        type: "which-breaks",
+        question: "Which getUserMedia constraint will throw an error?",
+        variants: [
+          "{ audio: true, video: { facingMode: 'user' } }",
+          "{ audio: { echoCancellation: true }, video: false }",
+          "{ audio: false, video: false }",
+          "{ audio: true, video: { width: { ideal: 1280 } } }"
+        ],
+        correct: 2,
+        explanation: "getUserMedia() requires at least one of audio or video to be true (or a constraints object). Passing { audio: false, video: false } requests no media at all, which throws a TypeError: 'At least one of audio and video must be requested'. The other options are all valid constraint configurations."
+      },
+      {
+        type: "order-steps",
+        question: "Put the callee's response flow in order after receiving an offer:",
+        steps: [
+          "setRemoteDescription with the received offer",
+          "createAnswer to generate a compatible SDP response",
+          "setLocalDescription with the answer",
+          "Send the answer SDP via signalling to the caller",
+          "Begin exchanging ICE candidates"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "The callee must first set the remote description (so the PC knows what was offered), then create an answer (compatible response), then set it as local description (starts ICE gathering), then send it to the caller. ICE candidates flow after local description is set — the icecandidate events fire as candidates are gathered."
+      },
+      {
+        type: "predict-output",
+        question: "What connectionState transition sequence does a successful call follow?",
+        code: "pc.onconnectionstatechange = () => {\n  console.log(pc.connectionState);\n};\n// ... full successful call setup happens ...\npc.close();",
+        answer: "connecting\nconnected\nclosed",
+        explanation: "A successful call transitions: 'new' (initial, before any negotiation) -> 'connecting' (ICE + DTLS handshake in progress) -> 'connected' (media flowing) -> 'closed' (after pc.close()). The 'new' state is the initial value and doesn't trigger the onconnectionstatechange event — only transitions do."
+      },
+      {
+        question: "What does DTLS-SRTP provide in a WebRTC connection?",
+        options: [
+          "NAT traversal for UDP packets",
+          "End-to-end encryption of media — even the TURN server cannot decrypt it",
+          "Compression of audio codecs to save bandwidth",
+          "Automatic reconnection when the network changes"
+        ],
+        correct: 1,
+        explanation: "DTLS (Datagram TLS) performs the key exchange, then SRTP (Secure Real-time Transport Protocol) encrypts every media packet with those keys. This is mandatory in WebRTC — you cannot disable it. Even when using a TURN relay, the server only sees opaque encrypted bytes. This is perfect for Token's privacy model."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This renegotiation code causes the call to drop. Why?",
+        code: "// User enables video mid-call\nasync function addVideoTrack() {\n  const videoStream = await mediaDevices.getUserMedia({ video: true });\n  const videoTrack = videoStream.getVideoTracks()[0];\n  pc.addTrack(videoTrack, videoStream);\n  // Done! Remote peer should see video now\n}",
+        options: [
+          "addTrack triggers 'negotiationneeded' — you must create a new offer and exchange SDPs again",
+          "getUserMedia can't be called twice",
+          "videoStream must be the same stream object as the original",
+          "addTrack doesn't exist on RTCPeerConnection"
+        ],
+        correct: 0,
+        explanation: "Adding a track mid-call changes the media description. WebRTC fires the 'negotiationneeded' event, signaling that you must create a new offer, send it via signalling, and complete a new offer/answer exchange. Without this renegotiation, the remote peer's SDP doesn't include the new video track and it will be silently dropped."
+      },
+      {
+        type: "fill-blank",
+        question: "Listen for the remote peer's audio/video arriving:",
+        code: "pc.___ = (event) => {\n  const remoteStream = event.streams[0];\n  setRemoteStream(remoteStream);\n};",
+        answer: "ontrack",
+        explanation: "The 'ontrack' event fires when the remote peer's media tracks arrive. event.streams[0] contains the MediaStream with their audio/video tracks. This fires after setRemoteDescription processes an SDP that describes remote media. Don't confuse it with 'onicecandidate' which is about network candidates, not media."
+      },
+      {
+        question: "Why must Token use EAS Build instead of Expo Go for voice/video calls?",
+        options: [
+          "Expo Go doesn't support TypeScript",
+          "react-native-webrtc contains native C++/Obj-C code that must be compiled into a custom binary",
+          "EAS Build is faster for development",
+          "Expo Go can't access the internet"
+        ],
+        correct: 1,
+        explanation: "react-native-webrtc wraps Google's native WebRTC library (written in C++ with platform-specific bindings). This native code must be compiled and linked into the app at build time. Expo Go is a pre-built binary that only supports JavaScript and pre-included native modules. EAS Build creates a custom development build with react-native-webrtc's native code compiled in."
+      },
+      {
+        type: "which-breaks",
+        question: "Which of these will cause addIceCandidate to throw?",
+        variants: [
+          "pc.addIceCandidate(new RTCIceCandidate(candidateJSON))",
+          "pc.addIceCandidate(null)",
+          "await pc.addIceCandidate(new RTCIceCandidate(candidateJSON)) // called before setRemoteDescription",
+          "pc.addIceCandidate(new RTCIceCandidate({ candidate: '', sdpMid: '0', sdpMLineIndex: 0 }))"
+        ],
+        correct: 2,
+        explanation: "addIceCandidate() throws an InvalidStateError if called before setRemoteDescription(). The peer connection needs to know the remote session description first to associate candidates with the correct media line. In Token's code, we buffer incoming ICE candidates if they arrive before the remote description is set."
+      },
+      {
+        type: "order-steps",
+        question: "Order the ICE candidate gathering process:",
+        steps: [
+          "setLocalDescription triggers ICE agent to start gathering",
+          "ICE agent checks local interfaces (host candidates)",
+          "ICE agent queries STUN server (srflx candidates)",
+          "ICE agent allocates TURN relay (relay candidates)",
+          "onicecandidate fires with null (gathering complete)"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "ICE gathering starts when setLocalDescription is called. The agent first finds local addresses (host), then contacts STUN to find the public-facing address (srflx), then allocates a TURN relay (relay). Each candidate fires onicecandidate as discovered. Finally, a null candidate signals gathering is complete. With iceTransportPolicy: 'relay', only step 3 produces candidates."
+      },
+      {
+        type: "predict-output",
+        question: "What is logged when toggling mute with this code?",
+        code: "const stream = await mediaDevices.getUserMedia({ audio: true });\nconst audioTrack = stream.getAudioTracks()[0];\nconsole.log('before:', audioTrack.enabled);\naudioTrack.enabled = !audioTrack.enabled;\nconsole.log('after:', audioTrack.enabled);",
+        answer: "before: true\nafter: false",
+        explanation: "Audio tracks from getUserMedia start with enabled: true (unmuted). Toggling .enabled to false mutes the track — the peer connection still sends packets but they contain silence. This is how mute works in WebRTC: the track stays in the connection, you just toggle whether it carries real audio or silence frames."
+      },
+      {
+        type: "spot-the-bug",
+        question: "Token users report the microphone stays active after hanging up. What's the bug?",
+        code: "function hangup() {\n  send('call:hangup', { callId });\n  pc.close();\n  pc = null;\n}",
+        options: [
+          "pc.close() doesn't stop media tracks — you must call track.stop() on each track in the local stream",
+          "pc.close() is async and needs await",
+          "You should set pc to undefined, not null",
+          "send() should be called after pc.close()"
+        ],
+        correct: 0,
+        explanation: "pc.close() closes the peer connection (stops sending/receiving) but does NOT stop the local media tracks. The microphone and camera remain active until you explicitly call track.stop() on each track. Fix: localStream.getTracks().forEach(t => t.stop()); THEN pc.close(). Token's cleanup() method does this correctly."
+      },
+      {
+        type: "fill-blank",
+        question: "Set the remote peer's SDP answer on the caller's peer connection:",
+        code: "await pc.___(\n  new RTCSessionDescription({ type: 'answer', sdp: remoteSdp })\n);",
+        answer: "setRemoteDescription",
+        explanation: "The caller uses setRemoteDescription() to apply the callee's answer. This completes the SDP exchange: the caller knows what media the callee will send/receive. After this, ICE connectivity checks proceed and the connection can be established. Don't confuse with setLocalDescription which sets YOUR OWN description."
+      },
+      {
+        question: "What is the difference between connectionState and iceConnectionState?",
+        options: [
+          "They are identical — just different names for the same property",
+          "connectionState reflects the overall DTLS+ICE state; iceConnectionState reflects only ICE transport connectivity",
+          "iceConnectionState is deprecated and always returns 'new'",
+          "connectionState only exists in react-native-webrtc, not in browsers"
+        ],
+        correct: 1,
+        explanation: "connectionState is the aggregate: it considers both ICE connectivity AND DTLS handshake completion. iceConnectionState only reflects ICE transport status. For example, ICE might be 'connected' but connectionState stays 'connecting' until DTLS finishes. Modern code should prefer connectionState as it gives a complete picture of the connection health."
+      },
+      {
+        type: "which-breaks",
+        question: "Which SDP field arrangement would cause a WebRTC call to fail?",
+        variants: [
+          "An offer with m=audio and m=video lines when the answerer only has audio",
+          "An offer with a=sendrecv indicating bidirectional media",
+          "An answer with a different session ID than the offer",
+          "An offer where the ICE ufrag/pwd don't match any gathered candidates' credentials"
+        ],
+        correct: 3,
+        explanation: "ICE ufrag (username fragment) and pwd (password) are used to authenticate ICE connectivity checks. If the ufrag/pwd in the SDP don't match the credentials used in STUN binding requests, connectivity checks fail and the call cannot connect. Option A works fine — the answerer marks the video line as 'inactive' or 'recvonly'. Option C is normal — offer and answer have different session IDs."
+      },
+      {
+        type: "fill-blank",
+        question: "Listen for ICE candidates to send via the Token signalling server:",
+        code: "pc.___ = (event) => {\n  if (event.candidate) {\n    send('call:ice', {\n      callId,\n      candidate: event.candidate.toJSON(),\n    });\n  }\n};",
+        answer: "onicecandidate",
+        explanation: "The onicecandidate event fires each time the ICE agent discovers a new candidate. You send each candidate to the remote peer via your signalling channel (Token's WebSocket). The null check is critical — the final event has candidate === null, indicating gathering is complete. Sending null to the remote peer would cause an error."
+      },
+      {
+        type: "predict-output",
+        question: "What happens when a user denies microphone permission?",
+        code: "try {\n  const stream = await mediaDevices.getUserMedia({ audio: true });\n  console.log('Got stream with', stream.getTracks().length, 'tracks');\n} catch (err) {\n  console.log(err.name);\n}",
+        answer: "NotAllowedError",
+        explanation: "When the user denies permission (or it was previously denied), getUserMedia throws a DOMException with name 'NotAllowedError'. Token should catch this and show a helpful message: 'Microphone access is required for voice calls. Please enable it in Settings.' On iOS, the permission dialog shows the string from the Expo config plugin."
+      },
+      {
+        type: "order-steps",
+        question: "Order the connection state transitions for a call that briefly loses network then reconnects:",
+        steps: [
+          "new",
+          "connecting",
+          "connected",
+          "disconnected",
+          "connected"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "The call starts as 'new', goes to 'connecting' during ICE/DTLS, reaches 'connected' when media flows. A network blip moves it to 'disconnected'. ICE automatically attempts reconnection (ICE restart or candidate pair switching), and if successful, the state returns to 'connected'. Token should show a 'Reconnecting...' UI during the disconnected state rather than immediately hanging up."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This TURN configuration doesn't work. What's wrong?",
+        code: "const pc = new RTCPeerConnection({\n  iceServers: [\n    { urls: 'stun:stun.l.google.com:19302' },\n    { urls: 'turn:turn.tokn.app:3478' },\n  ],\n  iceTransportPolicy: 'relay',\n});",
+        options: [
+          "TURN servers require username and credential — they're missing",
+          "You can't mix STUN and TURN in the same iceServers array",
+          "Port 3478 is only for STUN, not TURN",
+          "iceTransportPolicy should be 'turn' not 'relay'"
+        ],
+        correct: 0,
+        explanation: "TURN servers require authentication — you must provide username and credential fields. Without them, the TURN allocation request is rejected (401 Unauthorized). STUN doesn't need credentials. Fix: { urls: 'turn:turn.tokn.app:3478', username: 'tokenUser', credential: 'secret' }. In Token, these short-lived credentials come from the API server (TURN REST API)."
       }
     ]);
   </script>

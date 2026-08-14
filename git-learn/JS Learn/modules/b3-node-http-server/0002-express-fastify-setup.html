@@ -419,6 +419,238 @@ export const pool = new pg.Pool({
         ],
         correct: 1,
         explanation: "Middleware order matters. If the router runs BEFORE express.json(), req.body is undefined in your route handlers — the body hasn't been parsed yet. Always put body-parsing middleware before routes."
+      },
+      // --- Questions 6–25 ---
+      {
+        question: "What does express.Router() allow you to do?",
+        options: [
+          "Create a new Express application instance",
+          "Group related routes into a modular, mountable route handler",
+          "Automatically connect routes to a database",
+          "Replace the need for middleware entirely"
+        ],
+        correct: 1,
+        explanation: "express.Router() creates a mini-application that can have its own routes and middleware. You mount it on a path like app.use('/api/tokens', tokensRouter) to keep route files modular — essential when Token has separate routers for tokens.ts, messages.ts, and redeem.ts."
+      },
+      {
+        type: "predict-output",
+        question: "What does this route handler log when you POST to /api/tokens/MERC-8GH2 with body { \"label\": \"doctor\" }?",
+        code: "app.post('/api/tokens/:code', (req, res) => {\n  console.log(req.params.code, req.query.notify, req.body.label);\n  res.sendStatus(200);\n});\n// POST /api/tokens/MERC-8GH2?notify=true\n// Body: { \"label\": \"doctor\" }",
+        answer: "MERC-8GH2 true doctor",
+        explanation: "req.params.code comes from the :code URL segment. req.query.notify comes from the ?notify=true query string (as a string 'true'). req.body.label comes from the parsed JSON body. Each source serves a different purpose: params identify the resource, query modifies the request, body carries the payload."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This error handler never fires. Why?",
+        code: "app.use((err, req, res, next) => {\n  console.error(err.stack);\n  res.status(500).json({ error: 'Internal server error' });\n});\n\napp.use('/api/tokens', tokensRouter);\napp.use('/api/messages', messagesRouter);",
+        options: [
+          "The error handler has wrong parameter names",
+          "Error handlers must be registered AFTER all routes, not before them",
+          "You cannot use app.use for error handlers",
+          "res.status(500) is not valid Express syntax"
+        ],
+        correct: 1,
+        explanation: "Express processes middleware in registration order. An error handler placed BEFORE your routes will never catch their errors — Express hasn't reached the routes yet when it registers the handler. Always put error-handling middleware last, after all app.use() and route definitions."
+      },
+      {
+        type: "fill-blank",
+        question: "Define an error-handling middleware with the correct signature:",
+        code: "app.use((err, req, res, ___) => {\n  res.status(err.status || 500).json({ error: err.message });\n});",
+        answer: "next",
+        explanation: "Express identifies error-handling middleware by its 4-argument signature: (err, req, res, next). Even if you don't call next(), you MUST declare it so Express knows this is an error handler. With only 3 params, Express treats it as regular middleware and won't route errors to it."
+      },
+      {
+        type: "order-steps",
+        question: "Order the lifecycle of a POST request through Token's Express server:",
+        steps: ["CORS checks origin", "express.json() parses body", "Auth middleware verifies JWT", "Route handler creates token", "Response sent to client", "Error handler catches failures"],
+        correctOrder: [0, 1, 2, 3, 4, 5],
+        explanation: "The request flows through middleware in registration order: CORS first (reject bad origins fast), then body parsing (so later middleware has req.body), then auth (reject unauthorized), then the route handler does the work, sends the response, and if anything threw, the error handler at the end catches it."
+      },
+      {
+        question: "What happens when you call next() with NO arguments inside a middleware?",
+        options: [
+          "The request is terminated and a response is sent",
+          "Express moves to the next matching middleware or route handler",
+          "An error is thrown because next() requires an argument",
+          "The middleware restarts from the beginning"
+        ],
+        correct: 1,
+        explanation: "Calling next() without arguments tells Express: 'I'm done, pass control to the next middleware in the stack.' This is how the chain works — each middleware decides whether to respond or delegate. If you pass an argument like next(err), Express skips to the error handler instead."
+      },
+      {
+        type: "which-breaks",
+        question: "Which async route handler will crash the server on a database error?",
+        variants: [
+          "router.get('/:id', async (req, res, next) => {\n  try {\n    const result = await pool.query('SELECT * FROM tokens WHERE id = $1', [req.params.id]);\n    res.json(result.rows[0]);\n  } catch (err) {\n    next(err);\n  }\n});",
+          "router.get('/:id', async (req, res, next) => {\n  const result = await pool.query('SELECT * FROM tokens WHERE id = $1', [req.params.id]);\n  res.json(result.rows[0]);\n});",
+          "router.get('/:id', asyncHandler(async (req, res) => {\n  const result = await pool.query('SELECT * FROM tokens WHERE id = $1', [req.params.id]);\n  res.json(result.rows[0]);\n}));"
+        ],
+        correct: 1,
+        explanation: "Express does NOT catch rejected promises in route handlers (until Express 5). If pool.query throws and there's no try/catch, the promise rejects silently and the server may crash with an unhandled rejection. Wrap async handlers in try/catch + next(err), or use an asyncHandler wrapper."
+      },
+      {
+        type: "predict-output",
+        question: "What status code and body does the client receive?",
+        code: "app.get('/health', (req, res) => {\n  res.status(204).end();\n});",
+        answer: "204 with no body",
+        explanation: "res.status(204).end() sends a 204 No Content response with an empty body. 204 means 'success, but nothing to return.' This is common for health checks, DELETE responses, or any request where the client doesn't need data back. .end() finalizes the response without writing a body."
+      },
+      {
+        type: "fill-blank",
+        question: "Configure CORS to allow only the Token web client:",
+        code: "import cors from 'cors';\napp.use(cors({\n  ___: 'https://tokn.app'\n}));",
+        answer: "origin",
+        explanation: "The 'origin' option in cors() specifies which origins are allowed. Setting it to 'https://tokn.app' means only the Token redemption web page can make cross-origin requests to this API. Without it, cors() defaults to '*' which allows any origin — a security risk for Token's privacy-focused design."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This route never matches. What's wrong?",
+        code: "// In tokensRouter mounted at /api/tokens\nrouter.get('/api/tokens/:code', async (req, res) => {\n  const { code } = req.params;\n  const result = await pool.query('SELECT * FROM tokens WHERE code = $1', [code]);\n  res.json(result.rows[0]);\n});",
+        options: [
+          "req.params doesn't work with router.get",
+          "The path doubles up — router is already mounted at /api/tokens, so the full path becomes /api/tokens/api/tokens/:code",
+          "You can't destructure req.params",
+          "pool.query doesn't support $1 syntax"
+        ],
+        correct: 1,
+        explanation: "When you mount a router with app.use('/api/tokens', tokensRouter), the router's paths are RELATIVE to that mount point. router.get('/:code') matches /api/tokens/:code. Writing the full path again doubles it up to /api/tokens/api/tokens/:code — a common mistake when splitting routes into files."
+      },
+      {
+        question: "What does app.use('/api') match?",
+        options: [
+          "Only exactly /api",
+          "Only /api and /api/ (with trailing slash)",
+          "/api, /api/, /api/tokens, /api/anything/nested — any path starting with /api",
+          "Only paths that are exactly one level deep under /api"
+        ],
+        correct: 2,
+        explanation: "app.use() matches the beginning of the path. app.use('/api', handler) fires for /api, /api/, /api/tokens, /api/tokens/abc — anything whose path starts with /api. This is different from app.get('/api') which only matches the exact path. That's why mounting routers with app.use works for all sub-paths."
+      },
+      {
+        type: "which-breaks",
+        question: "Which pg Pool configuration has a problem for a production Token server?",
+        variants: [
+          "const pool = new Pool({\n  connectionString: process.env.DATABASE_URL,\n  max: 20,\n  idleTimeoutMillis: 30000\n});",
+          "const pool = new Pool({\n  connectionString: process.env.DATABASE_URL\n});\nprocess.on('SIGTERM', () => pool.end());",
+          "const pool = new Pool({\n  connectionString: process.env.DATABASE_URL\n});\n// In each request:\nconst client = await pool.connect();\nconst result = await client.query('SELECT 1');\n// never calls client.release()"
+        ],
+        correct: 2,
+        explanation: "Calling pool.connect() checks out a client from the pool. If you never call client.release(), that connection is permanently consumed. After max connections are checked out, pool.connect() will hang forever waiting for a free client — your server freezes. Always release clients, or better: use pool.query() which auto-releases."
+      },
+      {
+        type: "order-steps",
+        question: "Order how Express resolves which route handler to call for GET /api/tokens/active:",
+        steps: ["Check app.use('/api/tokens', tokensRouter)", "Enter tokensRouter middleware stack", "Skip router.get('/:code/revoke')", "Match router.get('/:code') with code='active'", "Execute matched handler"],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Express walks through middleware/routes in registration order. It enters the tokens router, then checks each route definition sequentially. '/:code' matches 'active' because :code is a wildcard segment. This is why you should put specific routes like '/active' BEFORE parameterized routes like '/:code' — otherwise the param route catches everything."
+      },
+      {
+        type: "predict-output",
+        question: "What does the client receive when calling this endpoint?",
+        code: "app.get('/api/status', (req, res) => {\n  res.json({ ok: true });\n  res.json({ ok: false });\n});",
+        answer: "{ ok: true } and an ERR_HTTP_HEADERS_SENT error logged on the server",
+        explanation: "res.json() sends the response AND ends it. Calling it again tries to write headers that are already sent, causing an 'ERR_HTTP_HEADERS_SENT' error. The client gets the first response { ok: true } successfully. This is why you should always return after sending a response, especially in if/else branches."
+      },
+      {
+        type: "fill-blank",
+        question: "Limit JSON request body size to prevent large payloads from crashing Token's API:",
+        code: "app.use(express.json({ ___: '100kb' }));",
+        answer: "limit",
+        explanation: "The 'limit' option controls the maximum request body size express.json() will accept. If a request exceeds this, Express responds with 413 Payload Too Large. For Token's API, 100kb is generous for JSON payloads (token creation, messages) while protecting against denial-of-service attacks with massive bodies."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This auth middleware doesn't protect the route. Why?",
+        code: "function authMiddleware(req, res, next) {\n  const token = req.headers.authorization;\n  if (!token) {\n    res.status(401).json({ error: 'No token' });\n  }\n  // verify token...\n  next();\n}\n\nrouter.get('/me', authMiddleware, (req, res) => {\n  res.json(req.user);\n});",
+        options: [
+          "authorization header is always undefined",
+          "After sending the 401 response, execution continues and next() is still called — the route handler runs anyway",
+          "authMiddleware needs to be async",
+          "You can't chain middleware in router.get()"
+        ],
+        correct: 1,
+        explanation: "After res.status(401).json(...), the function doesn't return. Execution falls through to next(), which passes control to the route handler even though a 401 was already sent. Fix: add 'return' before or after the res.status(401) call: if (!token) { return res.status(401).json({...}); }"
+      },
+      {
+        question: "What is the purpose of a CORS preflight request?",
+        options: [
+          "To download the response body in advance for caching",
+          "To send an OPTIONS request checking if the actual request method and headers are allowed",
+          "To establish a WebSocket connection before HTTP",
+          "To verify the server's SSL certificate"
+        ],
+        correct: 1,
+        explanation: "For non-simple requests (custom headers like Authorization, methods like PUT/DELETE, or JSON content-type), the browser sends an OPTIONS preflight first asking: 'Is this origin, method, and header combination allowed?' The server responds with Access-Control-Allow-* headers. Only if approved does the browser send the real request."
+      },
+      {
+        type: "fill-blank",
+        question: "Create a timing middleware that logs how long each request takes:",
+        code: "app.use((req, res, next) => {\n  const start = Date.now();\n  res.on('___', () => {\n    console.log(`${req.method} ${req.path} - ${Date.now() - start}ms`);\n  });\n  next();\n});",
+        answer: "finish",
+        explanation: "The 'finish' event fires on the response object when the response has been sent to the client. By listening to res.on('finish'), you can measure the total time from when the request entered this middleware to when the response completed — perfect for logging request duration in Token's API."
+      },
+      {
+        type: "which-breaks",
+        question: "Which route parameter pattern causes a problem?",
+        variants: [
+          "router.get('/tokens/:code', handler)  // matches /tokens/MERC-8GH2",
+          "router.get('/tokens/:code/messages/:msgId', handler)  // matches /tokens/ABC/messages/42",
+          "router.get('/tokens/:code', handler)\nrouter.get('/tokens/create', handler)  // 'create' is caught by :code first"
+        ],
+        correct: 2,
+        explanation: "Route order matters with parameterized paths. Since :code matches ANY string including 'create', the first route catches /tokens/create with code='create'. The literal '/tokens/create' route never fires. Fix: put specific literal routes BEFORE parameterized ones, or use a regex constraint on :code."
+      },
+      {
+        type: "predict-output",
+        question: "What does req.path return inside the router handler?",
+        code: "// Mounted: app.use('/api/v1', apiRouter)\n// Request: GET /api/v1/tokens?active=true\n\napiRouter.get('/tokens', (req, res) => {\n  console.log(req.path);\n  console.log(req.originalUrl);\n});",
+        answer: "/tokens\n/api/v1/tokens?active=true",
+        explanation: "Inside a mounted router, req.path is relative to the mount point — it strips the prefix. req.originalUrl preserves the full URL including the mount path and query string. This distinction matters when building pagination links or logging in Token's API — use req.originalUrl for full context."
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps to properly split Token's routes into separate files:",
+        steps: ["Create a new file tokens.ts with express.Router()", "Define routes on the router (router.get, router.post, etc.)", "Export the router as default", "Import the router in app.ts", "Mount with app.use('/api/tokens', tokensRouter)"],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Modular routing starts by creating a Router instance in its own file, defining all related routes on it, exporting it, then importing and mounting it at a base path in your main app file. Token uses this pattern for tokens.ts, messages.ts, and redeem.ts — each owning its own sub-path."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This CORS setup doesn't work for Token's web client. Why?",
+        code: "app.use(cors({\n  origin: 'https://tokn.app',\n  methods: ['GET', 'POST', 'PUT', 'DELETE']\n}));\n\n// Token web client sends:\n// Authorization: Bearer eyJhbG...\n// Content-Type: application/json",
+        options: [
+          "The methods array is missing PATCH",
+          "The origin should be an array",
+          "Missing allowedHeaders — the browser will reject Authorization header in preflight",
+          "cors() doesn't accept an options object"
+        ],
+        correct: 2,
+        explanation: "When a CORS request includes custom headers (like Authorization), the server must explicitly allow them via Access-Control-Allow-Headers. Without the 'allowedHeaders' (or 'credentials') option including 'Authorization' and 'Content-Type', the browser's preflight check fails and the request is blocked. Add: allowedHeaders: ['Content-Type', 'Authorization']."
+      },
+      {
+        question: "Why should you use pool.query() instead of pool.connect() + client.query() for simple queries?",
+        options: [
+          "pool.query() is faster because it skips the connection step",
+          "pool.query() automatically checks out a client, runs the query, and releases it back — no risk of connection leaks",
+          "pool.connect() doesn't support parameterized queries",
+          "pool.query() uses a different, more secure protocol"
+        ],
+        correct: 1,
+        explanation: "pool.query() is a convenience method that handles the full lifecycle: borrow a client from the pool, execute the query, return the client to the pool. With pool.connect(), YOU must remember to call client.release() — if you forget (especially in error paths), connections leak until the pool is exhausted and your server hangs."
+      },
+      {
+        type: "predict-output",
+        question: "What happens when this middleware chain runs?",
+        code: "app.use((req, res, next) => {\n  console.log('A');\n  next();\n  console.log('B');\n});\n\napp.use((req, res, next) => {\n  console.log('C');\n  res.send('done');\n});\n\n// GET /anything",
+        answer: "A\nC\nB",
+        explanation: "next() is NOT a return statement — code after next() still executes. Middleware A logs 'A', calls next() which enters middleware B (logs 'C', sends response), then control returns to A which logs 'B'. This 'unwinding' behavior is why you should usually return next() or put nothing after next() to avoid confusion."
+      },
+      {
+        type: "fill-blank",
+        question: "Make a route that matches both /api/tokens and /api/tokens/MERC-8GH2 using an optional parameter:",
+        code: "router.get('/___(code)', (req, res) => {\n  if (req.params.code) { /* single token */ }\n  else { /* list all tokens */ }\n});",
+        answer: ":code?",
+        explanation: "Appending ? to a route parameter makes it optional: '/:code?' matches both '/tokens' (code is undefined) and '/tokens/MERC-8GH2' (code is 'MERC-8GH2'). This is a shortcut but use it sparingly — separate GET / and GET /:code routes are usually clearer for Token's API because list vs. detail are different operations."
       }
     ]);
   </script>

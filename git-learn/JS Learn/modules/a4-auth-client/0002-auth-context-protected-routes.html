@@ -419,6 +419,221 @@ export function LoginScreen({ navigation }) {
         ],
         correct: 2,
         explanation: "Spreading user properties (...user) creates a new object on every render, even if user hasn't changed. React sees a new object reference and re-renders every consumer. Keep user as a single property: value={{ user, login, logout }}. The object reference only changes when user/login/logout actually change."
+      },
+      // --- Questions 6–25 ---
+      {
+        question: "What is the purpose of the default value passed to createContext()?",
+        options: [
+          "It sets the initial state when AuthProvider mounts",
+          "It provides a fallback shape used only when a component reads the context outside any Provider — mainly useful for TypeScript type inference",
+          "It overrides whatever value the Provider passes",
+          "It determines the context's display name for DevTools"
+        ],
+        correct: 1,
+        explanation: "The default value is used ONLY when useContext is called in a component that has no matching Provider above it in the tree. In practice, your app wraps everything in AuthProvider so the default is never used at runtime. However, it gives TypeScript the type shape and serves as documentation of the context's contract."
+      },
+      {
+        type: "predict-output",
+        question: "What does useAuth() return when called inside a component that is NOT wrapped in AuthProvider?",
+        code: "const AuthContext = createContext(null);\n\nexport function useAuth() {\n  const context = useContext(AuthContext);\n  if (!context) throw new Error('useAuth must be inside AuthProvider');\n  return context;\n}\n\n// Component renders OUTSIDE AuthProvider:\nfunction Orphan() {\n  const { user } = useAuth();\n  return <Text>{user?.name}</Text>;\n}",
+        answer: "Throws Error: 'useAuth must be inside AuthProvider'",
+        explanation: "Since no AuthProvider exists above Orphan, useContext returns the default value (null). The guard check fires immediately, throwing a clear error. Without this guard, you'd get a confusing 'Cannot destructure property user of null' later. Always include a null-check guard in custom context hooks."
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps that happen when the Token app launches and restores a saved session:",
+        steps: [
+          "App shows loading/splash screen (isLoading = true)",
+          "AuthProvider's useEffect calls restoreSession()",
+          "SecureStore.getItemAsync reads the refresh token",
+          "API call to /auth/refresh exchanges token for new access token + user data",
+          "setUser(userData) and setIsLoading(false)",
+          "Navigator re-renders — shows MainTabs because user is non-null"
+        ],
+        correctOrder: [0, 1, 2, 3, 4, 5],
+        explanation: "On mount, isLoading starts true (showing a splash screen so the user never sees the login flash). The effect reads the stored refresh token, hits the server to validate/refresh it, and on success sets the user. Only then does isLoading become false and the navigator renders with the correct screen."
+      },
+      {
+        type: "fill-blank",
+        question: "Prevent the login screen from flashing before session restore completes:",
+        code: "function RootNavigator() {\n  const { user, isLoading } = useAuth();\n\n  if (___) return <SplashScreen />;\n\n  return user ? <MainTabs /> : <AuthStack />;\n}",
+        answer: "isLoading",
+        explanation: "isLoading is true while restoreSession() is running. During this time, we show a splash/loading screen. Without this guard, the navigator sees user as null (initial state) and briefly shows the login screen before the async restore completes and sets the user — a jarring UX flash."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this AuthProvider?",
+        code: "export function AuthProvider({ children }) {\n  const [user, setUser] = useState(null);\n\n  async function restoreSession() {\n    const token = await SecureStore.getItemAsync('refreshToken');\n    if (token) {\n      const res = await api.refresh(token);\n      setUser(res.user);\n    }\n  }\n\n  useEffect(() => { restoreSession(); }, []);\n\n  return (\n    <AuthContext.Provider value={{ user, login, logout }}>\n      {children}\n    </AuthContext.Provider>\n  );\n}",
+        options: [
+          "useState(null) should be useState(undefined)",
+          "No isLoading state — the navigator will flash the login screen while restoreSession runs",
+          "useEffect dependency array should include restoreSession",
+          "SecureStore doesn't return promises"
+        ],
+        correct: 1,
+        explanation: "Without isLoading, the navigator immediately sees user === null and renders the login screen. A fraction of a second later, restoreSession finishes and sets user, flipping to MainTabs. The user sees a jarring flash. Add: const [isLoading, setIsLoading] = useState(true), set it false in a finally block, and expose it in the context value."
+      },
+      {
+        question: "Why is a custom useAuth() hook preferred over using useContext(AuthContext) directly in components?",
+        options: [
+          "useContext is deprecated in React 18",
+          "It provides a single import, adds the null guard, and hides the context implementation detail — components don't need to know AuthContext exists",
+          "Custom hooks are faster because React memoizes them automatically",
+          "useContext can only be called once per component"
+        ],
+        correct: 1,
+        explanation: "Encapsulating useContext inside useAuth() gives three benefits: (1) components import one thing instead of both useContext and AuthContext; (2) the null guard lives in one place; (3) you can refactor the underlying implementation (switch from Context to Zustand, add selectors) without touching consumers. It's an abstraction boundary."
+      },
+      {
+        type: "which-breaks",
+        question: "Which conditional navigator pattern will NOT work correctly for auth routing?",
+        variants: [
+          "{user ? <Stack.Screen name=\"Main\" component={MainTabs} /> : <Stack.Screen name=\"Login\" component={LoginScreen} />}",
+          "<Stack.Navigator>{user ? <Stack.Screen name=\"Main\" component={MainTabs} /> : <Stack.Screen name=\"Login\" component={LoginScreen} />}</Stack.Navigator>",
+          "<Stack.Navigator>\n  <Stack.Screen name=\"Login\" component={LoginScreen} />\n  {user && <Stack.Screen name=\"Main\" component={MainTabs} />}\n</Stack.Navigator>"
+        ],
+        correct: 2,
+        explanation: "Option C always includes LoginScreen — even when the user is logged in. React Navigation shows the first screen by default, so the user will always see LoginScreen first and would need to manually navigate to Main. The conditional rendering pattern must EXCLUDE auth screens when logged in, not just add screens conditionally."
+      },
+      {
+        type: "predict-output",
+        question: "With conditional rendering auth flow, what happens when the user is on a deep MainTabs screen and calls logout()?",
+        code: "// AuthProvider:\nasync function logout() {\n  await SecureStore.deleteItemAsync('refreshToken');\n  setUser(null);\n  // Note: no navigation.reset() call\n}\n\n// RootNavigator:\n{user ? <MainTabs /> : <AuthStack />}",
+        answer: "The entire MainTabs tree unmounts. AuthStack mounts showing the login screen. No back gesture or history remains.",
+        explanation: "With conditional rendering, React completely unmounts the MainTabs tree when user becomes null. All navigation state inside MainTabs is destroyed. AuthStack mounts fresh. This is why you don't need navigation.reset() — the declarative pattern handles it. The user cannot press 'back' to return to a protected screen."
+      },
+      {
+        type: "fill-blank",
+        question: "Store the refresh token securely on the device:",
+        code: "import * as SecureStore from 'expo-secure-store';\n\nasync function login(email, password) {\n  const res = await api.login(email, password);\n  await SecureStore.___(\"refreshToken\", res.refreshToken);\n  setUser(res.user);\n}",
+        answer: "setItemAsync",
+        explanation: "SecureStore.setItemAsync(key, value) stores sensitive data in the device's encrypted keychain (iOS Keychain / Android Keystore). Unlike AsyncStorage, the data is encrypted at rest and protected by device hardware. Perfect for refresh tokens which grant long-term access. The access token (short-lived) can stay in memory."
+      },
+      {
+        question: "Why should the access token live in memory (state) while the refresh token goes in SecureStore?",
+        options: [
+          "Access tokens are too large for SecureStore",
+          "Access tokens expire in minutes — losing them on app close costs one refresh call. Refresh tokens last weeks — if lost, the user must re-login. SecureStore persists through app restarts; memory does not.",
+          "SecureStore can only store one item at a time",
+          "The access token needs to be available synchronously, and SecureStore is async"
+        ],
+        correct: 1,
+        explanation: "Access tokens are short-lived (5–15 min). If the app closes and loses the in-memory token, the next launch just calls /auth/refresh with the persisted refresh token — one extra network call, no user disruption. The refresh token, however, is long-lived and valuable. Storing it in SecureStore means it survives app restarts AND is encrypted at rest."
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps for a login flow in the Token app:",
+        steps: [
+          "User enters email/password and taps Login",
+          "login() sets isLoading to true (shows spinner)",
+          "POST /auth/login sends credentials to the API",
+          "API returns { user, accessToken, refreshToken }",
+          "Refresh token stored in SecureStore, access token kept in memory",
+          "setUser(user) triggers re-render — navigator swaps to MainTabs"
+        ],
+        correctOrder: [0, 1, 2, 3, 4, 5],
+        explanation: "The login flow: user action → loading state → network request → receive tokens/user → persist refresh token securely → update state. The state update is last because it triggers the navigation swap. If we set user before storing the token, a crash at that moment would leave the user 'logged in' with no persisted session."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this login function's error handling?",
+        code: "async function login(email, password) {\n  setIsLoading(true);\n  const res = await fetch(API + '/auth/login', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ email, password }),\n  });\n  const json = await res.json();\n  await SecureStore.setItemAsync('refreshToken', json.refreshToken);\n  setUser(json.user);\n  setIsLoading(false);\n}",
+        options: [
+          "fetch should use GET instead of POST",
+          "No try/catch — a network error or 401 response will crash. Also doesn't check res.ok before reading json.refreshToken (which would be undefined on error)",
+          "setIsLoading should be called after setUser",
+          "JSON.stringify is not needed for POST bodies"
+        ],
+        correct: 1,
+        explanation: "Two bugs: (1) No try/catch means a network failure throws an unhandled promise rejection. (2) No res.ok check means a 401 response still tries to store json.refreshToken (undefined) and set json.user (undefined). Fix: wrap in try/catch, check res.ok, throw with the server's error message, and put setIsLoading(false) in a finally block."
+      },
+      {
+        type: "predict-output",
+        question: "What happens when two separate contexts (AuthContext and ThemeContext) are nested?",
+        code: "<AuthProvider>\n  <ThemeProvider>\n    <RootNavigator />\n  </ThemeProvider>\n</AuthProvider>\n\n// Inside a screen:\nfunction Profile() {\n  const { user } = useAuth();    // reads AuthContext\n  const { theme } = useTheme();  // reads ThemeContext\n  // When user changes, does Profile re-render?\n  // When theme changes, does Profile re-render?\n}",
+        answer: "Yes to both. Profile re-renders when EITHER context value changes because it subscribes to both via useContext.",
+        explanation: "Each useContext call subscribes the component to that context's value. Profile subscribes to both AuthContext and ThemeContext. A change in either triggers a re-render. This is independent — changing theme doesn't affect auth and vice versa. Nesting order of providers doesn't matter for subscription; it only matters for which provider a useContext finds first."
+      },
+      {
+        type: "fill-blank",
+        question: "Automatically log the user in after successful registration:",
+        code: "async function register(email, password, name) {\n  const res = await api.register(email, password, name);\n  await SecureStore.setItemAsync('refreshToken', res.refreshToken);\n  ___(res.user);\n  // Navigator automatically swaps to MainTabs\n}",
+        answer: "setUser",
+        explanation: "After a successful registration, the API returns tokens and user data (just like login). By calling setUser(res.user), the navigator's conditional rendering kicks in and swaps to MainTabs. The user doesn't need to manually log in after registering — a smoother UX. This is called 'auto-login after registration'."
+      },
+      {
+        question: "Why should AuthProvider be placed at the very top level (App.tsx), outside the NavigationContainer?",
+        options: [
+          "AuthProvider must be the first component in the tree or React throws an error",
+          "So that the NavigationContainer and all navigators can read auth state — if AuthProvider were inside a navigator, screens outside that navigator couldn't access it",
+          "Because AuthProvider uses navigation hooks and those must be at the root",
+          "React Native requires all Providers to be in App.tsx specifically"
+        ],
+        correct: 1,
+        explanation: "Context is available only to descendants. If AuthProvider wraps NavigationContainer, then all navigators, screens, and components inside them can call useAuth(). If it were placed inside a Stack.Screen, only that screen's children could access it. Root-level placement guarantees universal access. Note: AuthProvider itself should NOT use navigation hooks (it's above NavigationContainer)."
+      },
+      {
+        type: "which-breaks",
+        question: "Which approach to handling the auth loading state is broken?",
+        variants: [
+          "if (isLoading) return <ActivityIndicator />; before the conditional navigator",
+          "Using a SplashScreen.preventAutoHideAsync() that hides after restoreSession completes",
+          "Rendering both AuthStack and MainTabs simultaneously and hiding one with display: 'none'"
+        ],
+        correct: 2,
+        explanation: "React Navigation does not support hiding navigators with display: 'none'. Both navigators would mount, initialize their state, and fight over which screen is active. The correct approaches are: (A) return a loading indicator before the conditional, or (B) use Expo SplashScreen to keep the native splash visible until auth state is resolved."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this context value?",
+        code: "function AuthProvider({ children }) {\n  const [user, setUser] = useState(null);\n\n  function login(email, pw) { /* ... */ }\n  function logout() { /* ... */ }\n\n  return (\n    <AuthContext.Provider value={{\n      user,\n      login,\n      logout,\n      isAuthenticated: user !== null\n    }}>\n      {children}\n    </AuthContext.Provider>\n  );\n}",
+        options: [
+          "isAuthenticated is redundant but not a bug",
+          "login and logout are recreated on every render — without useCallback, every consumer re-renders even when only user changed",
+          "You can't pass functions through context value",
+          "The Provider needs a key prop"
+        ],
+        correct: 1,
+        explanation: "Every render of AuthProvider creates new function references for login and logout. Since the value object contains new references, React considers the context value changed and re-renders ALL consumers. Fix: wrap login and logout in useCallback (with appropriate deps) so their references are stable across renders."
+      },
+      {
+        type: "predict-output",
+        question: "What does navigation.reset() do versus navigation.replace() in an auth flow?",
+        code: "// Option A:\nnavigation.replace('Main');\n\n// Option B:\nnavigation.reset({ index: 0, routes: [{ name: 'Main' }] });\n\n// Option C (conditional rendering):\nsetUser(userData); // triggers: user ? <MainTabs /> : <AuthStack />",
+        answer: "replace() swaps current screen but keeps the stack. reset() wipes the entire navigation state and starts fresh. Conditional rendering (Option C) unmounts the whole navigator — no history remains at all.",
+        explanation: "replace() substitutes the current route but other routes in the stack's history may remain (back button might work). reset() wipes navigation state entirely — clean slate. But with conditional rendering, you don't need either: React unmounts the entire AuthStack and mounts MainTabs fresh. This is the simplest and most reliable pattern."
+      },
+      {
+        type: "fill-blank",
+        question: "Type the context with TypeScript so consumers get autocompletion:",
+        code: "type AuthContextType = {\n  user: User | null;\n  isLoading: boolean;\n  login: (email: string, password: string) => Promise<void>;\n  logout: () => Promise<void>;\n};\n\nconst AuthContext = createContext<___ | null>(null);",
+        answer: "AuthContextType",
+        explanation: "createContext<AuthContextType | null>(null) tells TypeScript that the context holds either AuthContextType (when inside Provider) or null (default). The | null forces consumers to handle the null case — which is exactly what the useAuth() guard does. After the guard, TypeScript narrows the type to AuthContextType with full autocompletion."
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps for testing a component that depends on useAuth():",
+        steps: [
+          "Create a mock AuthContext value: { user: mockUser, login: jest.fn(), logout: jest.fn(), isLoading: false }",
+          "Wrap the component in AuthContext.Provider with the mock value",
+          "Render the wrapped component with testing-library",
+          "Assert that the component displays expected data from the mock user",
+          "Simulate a user action (e.g., tap logout button)",
+          "Assert that the mock logout function was called"
+        ],
+        correctOrder: [0, 1, 2, 3, 4, 5],
+        explanation: "Testing context-dependent components requires providing the context. Instead of mounting the entire AuthProvider (which makes network calls), pass a mock value directly to AuthContext.Provider. This isolates the component under test. You control the auth state (logged in, logged out, loading) and verify interactions via jest.fn() mocks."
+      },
+      {
+        question: "In the Token app, what happens if a screen tries to call useAuth() but the developer forgot to wrap the app in AuthProvider?",
+        options: [
+          "React automatically creates a default AuthProvider",
+          "The app compiles fine but crashes at runtime with a null reference error (or a clear error if the guard is implemented)",
+          "TypeScript catches it at compile time and refuses to build",
+          "useContext returns an empty object {}"
+        ],
+        correct: 1,
+        explanation: "Forgetting to wrap in AuthProvider means useContext(AuthContext) returns the default value (null, since we passed null to createContext). Without a guard, user.name throws 'Cannot read properties of null'. With the guard (throw new Error('useAuth must be inside AuthProvider')), you get an immediate, descriptive error. TypeScript cannot catch missing providers — it's a runtime tree issue."
       }
     ]);
   </script>

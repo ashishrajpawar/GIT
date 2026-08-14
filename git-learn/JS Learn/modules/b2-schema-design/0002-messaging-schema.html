@@ -364,6 +364,200 @@ WHERE conversation_id = 1
         steps: ["Holder redeems token (redemption_event)", "Conversation created (holder_session_id)", "Holder sends first message", "Owner sees notification and replies", "Owner revokes token → conversations closed"],
         correctOrder: [0, 1, 2, 3, 4],
         explanation: "Redemption creates the session, which enables creating a conversation. Messages flow both ways until the owner decides to revoke — at which point the trigger closes everything."
+      },
+      // --- Questions 6–25 ---
+      {
+        type: "predict-output",
+        question: "What happens when you INSERT a message into a conversation that doesn't exist?",
+        code: "INSERT INTO messages (conversation_id, sender_type, content)\nVALUES (9999, 'holder', 'Hello!');",
+        answer: "ERROR: insert or update on table \"messages\" violates foreign key constraint — conversation_id 9999 does not exist in conversations",
+        explanation: "The REFERENCES conversations(id) foreign key prevents orphaned messages. Every message must belong to an existing conversation. This ensures data integrity — you can never have messages floating without context."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this conversation list query?",
+        code: "SELECT c.*, COUNT(m.id) AS unread\nFROM conversations c\nLEFT JOIN messages m ON m.conversation_id = c.id\nWHERE c.status = 'open'\nORDER BY c.last_message_at DESC;",
+        options: [
+          "LEFT JOIN should be INNER JOIN",
+          "Missing GROUP BY clause — COUNT with non-aggregated columns requires GROUP BY",
+          "You can't ORDER BY a nullable column",
+          "COUNT(m.id) should be COUNT(*)"
+        ],
+        correct: 1,
+        explanation: "When using COUNT() alongside non-aggregated columns (c.*), PostgreSQL requires GROUP BY on all non-aggregated columns. Without it, the query either fails or returns unexpected results. The fix: GROUP BY c.id (PostgreSQL allows this for primary keys, pulling in all columns of that table)."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the partial index for counting unread messages efficiently:",
+        code: "CREATE INDEX idx_messages_unread ON messages(conversation_id)\nWHERE sender_type = '___' AND read_at IS NULL;",
+        answer: "holder",
+        explanation: "The owner only cares about unread messages FROM holders (incoming messages). Messages the owner sent are never 'unread' from the owner's perspective. This partial index only includes holder messages that haven't been read yet — making badge count queries fast."
+      },
+      {
+        question: "Why does conversations use ON DELETE RESTRICT for token_id instead of CASCADE?",
+        options: [
+          "RESTRICT is always better than CASCADE",
+          "Conversations contain message history that shouldn't be silently destroyed when a token is deleted",
+          "CASCADE doesn't work with SERIAL primary keys",
+          "RESTRICT is required when using TIMESTAMPTZ columns"
+        ],
+        correct: 1,
+        explanation: "Conversations contain valuable message history. If you CASCADE-deleted them when removing a token, you'd lose all communication records silently. RESTRICT forces you to handle conversations explicitly — archive them, export them, or consciously delete them — before removing a token."
+      },
+      {
+        type: "which-breaks",
+        question: "Which INSERT into the messages table will the database reject?",
+        variants: [
+          "INSERT INTO messages (conversation_id, sender_type, content) VALUES (1, 'owner', 'Hello');",
+          "INSERT INTO messages (conversation_id, sender_type, content, content_type) VALUES (1, 'admin', 'Alert', 'system');",
+          "INSERT INTO messages (conversation_id, sender_type, content, content_type) VALUES (1, 'holder', 'Photo', 'image');"
+        ],
+        correct: 1,
+        explanation: "The CHECK constraint on sender_type only allows 'owner' or 'holder'. There is no 'admin' sender type in Token's schema. System messages still use sender_type = 'owner' with content_type = 'system' — the system speaks on behalf of the owner."
+      },
+      {
+        type: "predict-output",
+        question: "A user has 3 open conversations. They revoke the token. What does the trigger do?",
+        code: "-- Token has 3 open conversations and 1 already-closed conversation\nUPDATE tokens SET status = 'revoked', revoked_at = NOW()\nWHERE id = 7;",
+        answer: "The trigger closes all 3 open conversations (sets status='closed') and inserts a system message in each. The already-closed conversation is not affected.",
+        explanation: "The close_conversations_on_revoke trigger only targets conversations WHERE status = 'open'. It changes them to 'closed' and adds a system message. Conversations already in 'closed' or 'blocked' state are untouched — the trigger's WHERE clause filters them out."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the query to get the most recent message in each conversation:",
+        code: "SELECT DISTINCT ON (conversation_id) *\nFROM messages\nORDER BY conversation_id, created_at ___;",
+        answer: "DESC",
+        explanation: "DISTINCT ON (conversation_id) returns one row per conversation. Combined with ORDER BY conversation_id, created_at DESC, it picks the most recent message for each conversation. This is a PostgreSQL-specific feature that's perfect for 'latest message preview' in a chat list."
+      },
+      {
+        question: "Why is last_message_at stored directly on the conversations table instead of being computed from messages?",
+        options: [
+          "PostgreSQL can't compute MAX(created_at) from a related table",
+          "It's a denormalization for performance — the inbox query sorts by last activity without joining the messages table",
+          "Messages might be deleted, losing the timestamp",
+          "TIMESTAMPTZ columns can only exist on the parent table"
+        ],
+        correct: 1,
+        explanation: "The inbox shows conversations sorted by most recent activity. Without last_message_at on conversations, you'd need: SELECT c.*, MAX(m.created_at) FROM conversations c JOIN messages m ... GROUP BY ... ORDER BY max. With the denormalized column: SELECT * FROM conversations ORDER BY last_message_at DESC. Much simpler and faster."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this approach to marking messages as delivered?",
+        code: "-- Mark ALL messages in conversation as delivered\nUPDATE messages\nSET delivered_at = NOW()\nWHERE conversation_id = 42;",
+        options: [
+          "NOW() should be CURRENT_TIMESTAMP",
+          "This marks the owner's own messages as 'delivered' too — should only mark the other party's messages",
+          "delivered_at should be a BOOLEAN",
+          "You can't UPDATE multiple rows at once"
+        ],
+        correct: 1,
+        explanation: "Delivery receipts only make sense for incoming messages. The owner's messages shouldn't be marked as 'delivered to the owner' — they were sent BY the owner. The correct query filters: WHERE conversation_id = 42 AND sender_type = 'holder' AND delivered_at IS NULL."
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps for handling a new incoming message from a holder:",
+        steps: ["Validate the conversation is still open (status = 'open')", "INSERT the message into messages table", "UPDATE conversations SET last_message_at = NOW()", "Send push notification to the token owner", "Mark as delivered_at when owner's device confirms receipt"],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "First verify the conversation is open (blocked/closed conversations reject messages). Then insert the message, update the conversation's last_message_at for sorting, notify the owner, and finally mark delivery when the owner's device acknowledges receipt via WebSocket."
+      },
+      {
+        type: "predict-output",
+        question: "What does this query return when there are no unread messages?",
+        code: "SELECT COUNT(m.id) AS unread\nFROM messages m\nWHERE m.conversation_id = 42\n  AND m.sender_type = 'holder'\n  AND m.read_at IS NULL;",
+        answer: "A single row with unread = 0 (COUNT returns 0 for no matching rows, not NULL or empty result)",
+        explanation: "COUNT() always returns a number, even when no rows match. It returns 0, not NULL and not an empty result set. This is important for the UI — you can always display the badge count without null-checking."
+      },
+      {
+        type: "which-breaks",
+        question: "Which conversation INSERT violates the schema?",
+        variants: [
+          "INSERT INTO conversations (token_id, holder_session_id, holder_name) VALUES (1, 'sess_abc', 'Delivery Person');",
+          "INSERT INTO conversations (token_id, holder_session_id) VALUES (1, 'sess_abc');",
+          "INSERT INTO conversations (token_id, holder_session_id) VALUES (1, 'sess_abc');"
+        ],
+        correct: 2,
+        explanation: "The second and third variants are identical — and if the second succeeds, the third fails because holder_session_id has a UNIQUE constraint. Each holder session can only create ONE conversation. This prevents duplicate conversations from the same redemption session."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the trigger condition that only fires when a token transitions TO revoked:",
+        code: "IF NEW.status = 'revoked' AND ___.status != 'revoked' THEN",
+        answer: "OLD",
+        explanation: "OLD.status != 'revoked' ensures the trigger only fires on the transition to revoked — not on every update to an already-revoked token. Without this check, updating any other field on a revoked token would re-close conversations and insert duplicate system messages."
+      },
+      {
+        question: "What does content_type = 'system' represent in the messages table?",
+        options: [
+          "Messages from the system administrator",
+          "Automated messages (like 'token revoked' notifications) that appear in the chat but weren't typed by either party",
+          "Error messages from the database",
+          "Messages that are encrypted"
+        ],
+        correct: 1,
+        explanation: "System messages are automated notices inserted by triggers or application logic — like 'This token has been revoked. The conversation is closed.' They appear in the chat thread as informational messages. The sender_type is 'owner' because the system acts on behalf of the token owner."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's the problem with this inbox query?",
+        code: "SELECT c.id, c.holder_name, c.last_message_at\nFROM conversations c\nINNER JOIN tokens t ON c.token_id = t.id\nWHERE t.user_id = 1\nORDER BY c.last_message_at DESC;",
+        options: [
+          "INNER JOIN should be LEFT JOIN",
+          "Missing filter for c.status = 'open' — shows closed and blocked conversations too",
+          "ORDER BY DESC is wrong for a chat inbox",
+          "t.user_id should be c.user_id"
+        ],
+        correct: 1,
+        explanation: "Without filtering by status, this query returns ALL conversations — including closed (revoked tokens) and blocked holders. The inbox should only show open, active conversations. Add: AND c.status = 'open' to the WHERE clause."
+      },
+      {
+        type: "predict-output",
+        question: "What happens if you try to insert a message with content_type = 'video'?",
+        code: "INSERT INTO messages (conversation_id, sender_type, content, content_type)\nVALUES (1, 'holder', 'video_url_here', 'video');",
+        answer: "ERROR: new row violates check constraint — content_type must be one of 'text', 'image', 'file', 'system'",
+        explanation: "The CHECK constraint on content_type only allows four values: text, image, file, system. To add video support later, you'd write a migration: ALTER TABLE messages DROP CONSTRAINT messages_content_type_check; then ADD CONSTRAINT with the expanded list including 'video'."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the NULLS LAST clause for sorting conversations:",
+        code: "ORDER BY c.last_message_at DESC ___ LAST;",
+        answer: "NULLS",
+        explanation: "NULLS LAST ensures conversations that have never received a message (last_message_at IS NULL) appear at the bottom of the list, not the top. Without it, PostgreSQL puts NULLs first in DESC order by default, pushing brand-new empty conversations above active ones."
+      },
+      {
+        question: "Why does the messages table use ON DELETE CASCADE with conversations?",
+        options: [
+          "CASCADE is always the safest option",
+          "Messages have no meaning without their conversation — if a conversation is removed, its messages should go with it",
+          "It makes INSERT queries faster",
+          "PostgreSQL requires CASCADE for SERIAL columns"
+        ],
+        correct: 1,
+        explanation: "A message without a conversation is meaningless — you wouldn't know who it's from, what token it's associated with, or what context it belongs to. CASCADE ensures that if you explicitly delete a conversation (after archiving, for example), orphaned messages don't remain in the database."
+      },
+      {
+        type: "which-breaks",
+        question: "Which UPDATE to a conversation will the database reject?",
+        variants: [
+          "UPDATE conversations SET status = 'blocked' WHERE id = 1;",
+          "UPDATE conversations SET status = 'archived' WHERE id = 1;",
+          "UPDATE conversations SET status = 'closed', updated_at = NOW() WHERE id = 1;"
+        ],
+        correct: 1,
+        explanation: "The CHECK constraint on status only allows 'open', 'closed', or 'blocked'. There is no 'archived' state. If you want archiving, you'd need a migration to add it to the CHECK constraint. This prevents invalid states from creeping in through typos or application bugs."
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps for the owner blocking a holder:",
+        steps: ["Owner taps 'Block' in the conversation UI", "UPDATE conversations SET status = 'blocked'", "Insert system message: 'This conversation has been blocked'", "Future messages from this holder_session_id are rejected", "Holder sees 'You can no longer message this token'"],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Blocking is a user action that updates the conversation status. The system message provides an audit trail. Future messages check the conversation status before inserting — if blocked, the API returns an error and the holder's web page shows the block message."
+      },
+      {
+        type: "predict-output",
+        question: "What does this query return for a conversation with 10 messages (5 from holder, 5 from owner, all read)?",
+        code: "SELECT COUNT(m.id) FILTER (WHERE m.sender_type = 'holder' AND m.read_at IS NULL) AS unread\nFROM messages m\nWHERE m.conversation_id = 42;",
+        answer: "unread = 0 (all holder messages have been read, so the FILTER matches zero rows)",
+        explanation: "The FILTER clause only counts rows matching its condition. Since all holder messages have read_at set (not NULL), none pass the filter. The result is 0 — no unread messages. This is the badge count query: quick and accurate."
       }
     ]);
   </script>

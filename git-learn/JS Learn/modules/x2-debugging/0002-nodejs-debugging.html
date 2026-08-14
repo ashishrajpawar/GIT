@@ -333,6 +333,189 @@ app.get('/api/tokens/:code', async (req, res) => {
         steps: ["Check if the route is being hit (log request)", "Log the parameters being used", "Log the database query and results", "Check the response being sent"],
         correctOrder: [0, 1, 2, 3],
         explanation: "Follow the data flow: request arrives → params extracted → query runs → response sent. If you find the data is correct at step 2 but wrong at step 3, the bug is in the query or the response transformation."
+      },
+      // --- Questions 6–25 ---
+      {
+        type: "predict-output",
+        question: "What does this unhandled rejection warning tell you?",
+        code: "UnhandledPromiseRejectionWarning: Error: ECONNREFUSED 127.0.0.1:5432\n    at TCPConnectWrap.afterConnect",
+        answer: "The Node process tried to connect to PostgreSQL on port 5432 but nothing is listening — the database is not running",
+        explanation: "ECONNREFUSED means the target port refused the connection — nothing is listening there. Port 5432 is PostgreSQL's default. The fix: start the database (docker compose up db) or check if the connection string points to the right host/port."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the VS Code launch.json to debug the API server:",
+        code: "{\n  \"type\": \"node\",\n  \"request\": \"launch\",\n  \"program\": \"${workspaceFolder}/api/src/server.ts\",\n  \"runtimeExecutable\": \"___\"\n}",
+        answer: "tsx",
+        explanation: "tsx (TypeScript Execute) runs .ts files directly without a separate build step. In launch.json, setting runtimeExecutable to 'tsx' tells VS Code to use it instead of plain 'node', so you can debug TypeScript files with breakpoints."
+      },
+      {
+        type: "spot-the-bug",
+        question: "Why does this API endpoint return 200 OK but an empty response?",
+        code: "app.get('/api/tokens/:userId', async (req, res) => {\n  try {\n    const tokens = await db.query(\n      'SELECT * FROM tokens WHERE user_id = $1',\n      [req.params.user_id]\n    );\n    res.json(tokens.rows);\n  } catch (err) {\n    res.status(500).json({ error: 'Internal error' });\n  }\n});",
+        options: [
+          "db.query is not async",
+          "req.params.user_id is undefined — the route param is :userId (camelCase) but the code reads user_id (snake_case)",
+          "res.json can't handle arrays",
+          "The SQL query is invalid"
+        ],
+        correct: 1,
+        explanation: "Route params match the name in the path. :userId means req.params.userId. But the code reads req.params.user_id (which is undefined). The query runs with undefined as the parameter, matching no rows, returning an empty array — no error, just no data."
+      },
+      {
+        question: "What is the difference between node --inspect and node --inspect-brk?",
+        options: [
+          "They're identical",
+          "--inspect starts the debugger and continues running; --inspect-brk pauses at the first line, waiting for you to attach",
+          "--inspect-brk is for breakpoints, --inspect is for logging",
+          "--inspect-brk only works with Chrome"
+        ],
+        correct: 1,
+        explanation: "--inspect-brk pauses execution on the very first line of your script, giving you time to attach the debugger and set breakpoints before any code runs. Without -brk, the code might execute past your point of interest before you connect."
+      },
+      {
+        type: "predict-output",
+        question: "What does this error mean?",
+        code: "Error: listen EADDRINUSE: address already in use :::3001",
+        answer: "Port 3001 is already in use by another process — your server can't start because something else is listening there",
+        explanation: "EADDRINUSE means the port is occupied. Common causes: a previous instance of your server is still running, or another service uses that port. Fix: kill the old process (lsof -i :3001 then kill), or change the port."
+      },
+      {
+        type: "which-breaks",
+        question: "Which error handling pattern will swallow errors silently?",
+        variants: [
+          "app.get('/api/tokens', async (req, res) => {\n  try { ... } catch (err) { console.error(err); res.status(500).json({error: 'failed'}); }\n});",
+          "app.get('/api/tokens', async (req, res) => {\n  try { ... } catch (err) { /* TODO: handle later */ }\n});",
+          "app.get('/api/tokens', async (req, res) => {\n  const tokens = await getTokens().catch(err => { throw err; });\n  res.json(tokens);\n});"
+        ],
+        correct: 1,
+        explanation: "Variant B catches the error and does nothing — no log, no response. The client hangs forever (no response sent) and the developer never knows there was an error. At minimum: log the error and send a 500 response."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the log statement with useful context:",
+        code: "logger.error('Token redemption failed', {\n  tokenCode: code,\n  error: err.message,\n  ___: req.ip\n});",
+        answer: "ip",
+        explanation: "Structured logs should include context that helps you investigate: what token, what error, who was trying. The IP address helps identify whether it's a legitimate user or an attacker brute-forcing token codes."
+      },
+      {
+        type: "order-steps",
+        question: "Put the steps for debugging a 500 error in production order:",
+        steps: ["Check server logs for the error message and stack trace", "Identify the file and line from the stack trace", "Reproduce locally with the same input (request body, params)", "Set a breakpoint at that line and step through", "Fix and write a test to prevent regression"],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "In production you can't use a debugger directly — start with logs. Find the error location, reproduce it locally where you CAN debug, fix it, then add a test so this specific case never breaks again."
+      },
+      {
+        type: "predict-output",
+        question: "What's suspicious about this log output?",
+        code: "Incoming: POST /api/tokens/redeem\nBody: { code: 'MERC-8GH2' }\nDB query: SELECT * FROM tokens WHERE code = $1\nDB result: { rows: [{ code: 'MERC-8GH2', status: 'revoked' }] }\nResponse: 200 { success: true }",
+        answer: "The token is revoked but the server returns success — there's no check for token status before allowing redemption",
+        explanation: "The logs show the data flow clearly: the token exists and is fetched, but its status is 'revoked'. The server should reject the redemption (403 or 410) but instead returns 200 success. The bug: missing status check between DB result and response."
+      },
+      {
+        type: "spot-the-bug",
+        question: "Why does this async error crash the entire Node process?",
+        code: "setInterval(async () => {\n  const expiredTokens = await db.query(\n    'SELECT * FROM tokens WHERE expires_at < NOW()'\n  );\n  await notifyExpired(expiredTokens.rows);\n}, 60000);",
+        options: [
+          "setInterval can't use async callbacks",
+          "If the await throws, there's no try/catch — unhandled rejection in a setInterval crashes the process",
+          "The SQL query is wrong",
+          "60000 is too short an interval"
+        ],
+        correct: 1,
+        explanation: "setInterval runs the callback repeatedly, but async errors inside it are unhandled. If db.query or notifyExpired throws, it's an unhandled promise rejection. In Node 15+, this crashes the process. Always wrap interval callbacks in try/catch."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the process event that catches unhandled promise rejections:",
+        code: "process.on('___', (err) => {\n  logger.error('Unhandled rejection:', err);\n  process.exit(1);\n});",
+        answer: "unhandledRejection",
+        explanation: "The 'unhandledRejection' event fires when a Promise rejects and no .catch() or try/catch handles it. Logging the error and exiting cleanly (instead of letting the process crash messily) is the safety net for missed error handling."
+      },
+      {
+        question: "Why is it dangerous to use console.log(req.body) in production?",
+        options: [
+          "console.log is slow",
+          "It might log sensitive data like passwords, tokens, or personal information into log files accessible to operations staff",
+          "req.body doesn't exist in production",
+          "It will crash the server"
+        ],
+        correct: 1,
+        explanation: "req.body can contain passwords, API keys, or personal data. Logging it writes those secrets to log files, monitoring services, or stdout — where they're visible to anyone with log access. Only log safe fields explicitly, never dump entire bodies."
+      },
+      {
+        type: "predict-output",
+        question: "What does this tell you about the performance problem?",
+        code: "console.time('db-query');\nconst tokens = await db.query('SELECT * FROM tokens');\nconsole.timeEnd('db-query');\n// Output: db-query: 3847ms",
+        answer: "The database query takes 3.8 seconds — the query needs optimization (missing index, too much data, or N+1 problem)",
+        explanation: "3.8 seconds for a single query is extremely slow. Likely causes: no index on the filtered column, selecting all rows without LIMIT, or the query is actually many queries (N+1 pattern). Add an index, add pagination, or check if there's a JOIN missing."
+      },
+      {
+        type: "which-breaks",
+        question: "Which debugging approach is dangerous in production?",
+        variants: [
+          "Structured logging with severity levels (info, warn, error)",
+          "Adding node --inspect to the production start command (opens a debug port)",
+          "Health check endpoint that returns DB connection status"
+        ],
+        correct: 1,
+        explanation: "node --inspect opens port 9229 for debugger connections. In production, this is a security risk — anyone who can reach that port can execute arbitrary code, inspect memory (including secrets), and control the process. Never use --inspect in production."
+      },
+      {
+        type: "order-steps",
+        question: "Put the steps for setting up structured logging in the Token API:",
+        steps: ["Choose a logging library (pino, winston)", "Create a logger instance with JSON format", "Replace all console.log calls with logger.info/warn/error", "Add request context (requestId, userId) to each log line", "Configure log levels per environment (debug in dev, info in prod)"],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Start with a proper library, configure it for structured output, migrate away from console.log, add context so you can trace a request through the system, then tune verbosity per environment."
+      },
+      {
+        type: "spot-the-bug",
+        question: "Why does this endpoint sometimes return the wrong user's tokens?",
+        code: "let currentUserId;\n\napp.use((req, res, next) => {\n  currentUserId = req.headers['x-user-id'];\n  next();\n});\n\napp.get('/api/tokens', async (req, res) => {\n  const tokens = await db.query(\n    'SELECT * FROM tokens WHERE user_id = $1',\n    [currentUserId]\n  );\n  res.json(tokens.rows);\n});",
+        options: [
+          "The header name is wrong",
+          "currentUserId is a module-level variable shared across all requests — concurrent requests overwrite each other's userId",
+          "db.query returns a promise",
+          "res.json can't handle arrays"
+        ],
+        correct: 1,
+        explanation: "Module-level variables are shared across ALL requests. If User A's request sets currentUserId='A', then User B's request sets it to 'B' before A's query runs, User A gets User B's tokens. Always use req-scoped data (req.userId), never module globals."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the middleware that adds a request ID for tracing:",
+        code: "app.use((req, res, next) => {\n  req.id = req.headers['x-request-id'] || ___();\n  next();\n});",
+        answer: "crypto.randomUUID",
+        explanation: "crypto.randomUUID() generates a unique ID for each request. If the client sends an x-request-id header (common with load balancers), use that. Otherwise generate one. This ID goes in every log line so you can trace a request's journey through the system."
+      },
+      {
+        type: "predict-output",
+        question: "What does this environment variable bug cause?",
+        code: "// .env: DATABASE_URL=postgres://localhost:5432/token_dev\n// Code:\nconst db = new Pool({ connectionString: process.env.DB_URL });",
+        answer: "connectionString is undefined — the env var is DATABASE_URL but the code reads DB_URL",
+        explanation: "Environment variable names must match exactly. The .env file defines DATABASE_URL but the code reads DB_URL (different name). process.env.DB_URL is undefined, so the pool tries to connect with no connection string and fails. Always verify env var names match."
+      },
+      {
+        question: "What is an N+1 query problem and how do you spot it in logs?",
+        options: [
+          "A query that returns N+1 rows — too much data",
+          "One query fetches a list, then N additional queries fetch related data one-by-one — you see the same query pattern repeated dozens of times in logs",
+          "A query that uses N+1 JOINs",
+          "Running the same query N+1 times for retry logic"
+        ],
+        correct: 1,
+        explanation: "N+1: fetch 50 tokens (1 query), then for each token fetch its rules (50 more queries). In logs you see: SELECT tokens... followed by 50x SELECT rules WHERE token_id = $1. Fix: use a JOIN or WHERE token_id IN (...) to fetch all related data in one query."
+      },
+      {
+        type: "which-breaks",
+        question: "Which error response leaks sensitive information?",
+        variants: [
+          "res.status(500).json({ error: 'Internal server error' });",
+          "res.status(500).json({ error: err.message, stack: err.stack, query: sql });",
+          "res.status(500).json({ error: 'Token operation failed', requestId: req.id });"
+        ],
+        correct: 1,
+        explanation: "Variant B sends the full error message, stack trace, and SQL query to the client. An attacker learns your file structure, library versions, and database schema. Never expose internals — send a generic message and requestId so support can find the details in server logs."
       }
     ]);
   </script>

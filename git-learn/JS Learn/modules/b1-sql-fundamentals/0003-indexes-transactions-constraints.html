@@ -287,6 +287,204 @@ COMMIT;`
         steps: ["BEGIN", "SELECT ... FOR UPDATE (lock the row)", "INSERT redemption_event", "COMMIT"],
         correctOrder: [0, 1, 2, 3],
         explanation: "BEGIN starts the transaction. FOR UPDATE locks the row so no concurrent access can interfere. The INSERT records the event. COMMIT makes everything permanent. If anything fails between BEGIN and COMMIT, you ROLLBACK and nothing happened."
+      },
+      // --- Questions 6–25 ---
+      {
+        type: "predict-output",
+        question: "You create a UNIQUE constraint on tokens(code). What happens when you try to insert a duplicate?",
+        code: "INSERT INTO tokens (code, user_id, issued_to) VALUES ('MERC-8GH2-LP4X', 1, 'Shop A');\nINSERT INTO tokens (code, user_id, issued_to) VALUES ('MERC-8GH2-LP4X', 2, 'Shop B');",
+        answer: "ERROR: duplicate key value violates unique constraint",
+        explanation: "The UNIQUE constraint on code prevents two tokens from having the same code. The second INSERT fails with a constraint violation error. This is how Postgres guarantees token codes are never duplicated."
+      },
+      {
+        type: "fill-blank",
+        question: "Create a partial index that only indexes active tokens:",
+        code: "CREATE INDEX idx_active_tokens ON tokens(code) WHERE status = ___;",
+        answer: "'active'",
+        explanation: "A partial index includes only rows matching the WHERE condition. This is smaller and faster than indexing every row. Since most queries look for active tokens, a partial index on status = 'active' is ideal for Token's redemption path."
+      },
+      {
+        question: "What does a B-tree index NOT help with?",
+        options: [
+          "Exact match lookups (WHERE code = 'XYZ')",
+          "Range queries (WHERE created_at > '2024-01-01')",
+          "Pattern matching at the end (WHERE code LIKE '%LP4X')",
+          "ORDER BY on the indexed column"
+        ],
+        correct: 2,
+        explanation: "B-tree indexes work left-to-right, like a phone book. LIKE '%LP4X' (leading wildcard) can't use the index because it doesn't know where to start. LIKE 'MERC%' works fine. For suffix searches, you'd need a reverse index or trigram extension."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this composite index for the Token app?",
+        code: "CREATE INDEX idx_tokens_search ON tokens(status, user_id, code, issued_to, created_at, max_uses, revoked_at);",
+        options: [
+          "Syntax error — too many columns listed",
+          "Over-indexing: the index covers almost every column, making writes very slow for minimal read benefit",
+          "Composite indexes can only have 2 columns",
+          "You can't index TEXT columns"
+        ],
+        correct: 1,
+        explanation: "Every INSERT/UPDATE must also update this massive index. Since it includes nearly every column, the write cost is high. Instead, create targeted indexes for your actual query patterns — idx_tokens_user_id for listing by user, idx_tokens_status for filtering active tokens."
+      },
+      {
+        type: "which-breaks",
+        question: "Which transaction will leave the database in an inconsistent state?",
+        variants: [
+          "BEGIN;\nUPDATE tokens SET status = 'revoked' WHERE code = 'XYZ';\nINSERT INTO redemption_events (token_id) VALUES (1);\nCOMMIT;",
+          "BEGIN;\nUPDATE tokens SET status = 'revoked' WHERE code = 'XYZ';\nINSERT INTO redemption_events (token_id) VALUES (1);\nROLLBACK;",
+          "UPDATE tokens SET status = 'revoked' WHERE code = 'XYZ';\nINSERT INTO redemption_events (token_id) VALUES (1);"
+        ],
+        correct: 2,
+        explanation: "Without BEGIN/COMMIT, each statement runs in its own implicit transaction. If the first UPDATE succeeds but the second INSERT fails (e.g., network error), the token is revoked but no redemption event is recorded — inconsistent state. Always wrap related operations in a transaction."
+      },
+      {
+        type: "predict-output",
+        question: "What happens when a CHECK constraint is violated?",
+        code: "ALTER TABLE tokens ADD CONSTRAINT valid_status\n  CHECK (status IN ('active', 'paused', 'revoked'));\n\nUPDATE tokens SET status = 'deleted' WHERE code = 'MERC-8GH2-LP4X';",
+        answer: "ERROR: new row for relation \"tokens\" violates check constraint \"valid_status\"",
+        explanation: "CHECK constraints reject any INSERT or UPDATE that doesn't satisfy the condition. The database will never contain a token with status 'deleted' — even if your app code has a bug that tries to set it. This is defense in depth."
+      },
+      {
+        question: "What type of index does Postgres automatically create for a PRIMARY KEY?",
+        options: [
+          "Hash index",
+          "GIN index",
+          "B-tree index",
+          "BRIN index"
+        ],
+        correct: 2,
+        explanation: "Postgres automatically creates a unique B-tree index for PRIMARY KEY and UNIQUE constraints. B-tree is the default index type and handles equality checks, range queries, and ordering efficiently."
+      },
+      {
+        type: "fill-blank",
+        question: "Undo all changes since BEGIN if something goes wrong:",
+        code: "BEGIN;\nUPDATE tokens SET status = 'revoked' WHERE code = 'XYZ';\n-- Oh no, wrong token!\n___;",
+        answer: "ROLLBACK",
+        explanation: "ROLLBACK undoes everything since the last BEGIN. The UPDATE never happened — the token's status is unchanged. This is the safety net of transactions: you can always bail out if something goes wrong."
+      },
+      {
+        type: "order-steps",
+        question: "Put these index-related actions in order for optimizing a slow query:",
+        steps: ["Run EXPLAIN ANALYZE on the slow query", "Identify Seq Scan on a large table", "CREATE INDEX on the filtered column", "Run EXPLAIN ANALYZE again to confirm Index Scan"],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "First diagnose with EXPLAIN ANALYZE to see the query plan. Identify where Postgres is doing a sequential scan. Create a targeted index. Then verify with EXPLAIN ANALYZE again that the planner now uses the index."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This migration adds a NOT NULL column. What goes wrong on a table that already has rows?",
+        code: "ALTER TABLE tokens ADD COLUMN category TEXT NOT NULL;",
+        options: [
+          "ALTER TABLE can't add columns",
+          "TEXT type is not valid in Postgres",
+          "Existing rows have no value for category, violating NOT NULL — the ALTER fails",
+          "NOT NULL only works with INTEGER columns"
+        ],
+        correct: 2,
+        explanation: "If the table already has rows, they'd need a value for the new NOT NULL column. Since no DEFAULT is specified, Postgres can't fill in existing rows and rejects the ALTER. Fix: add a DEFAULT, or add the column as nullable, backfill, then set NOT NULL."
+      },
+      {
+        question: "What does a composite index on (user_id, status) help with?",
+        options: [
+          "Only queries filtering on user_id alone",
+          "Only queries filtering on status alone",
+          "Queries filtering on user_id, or on both user_id AND status",
+          "Any query mentioning either column in any combination"
+        ],
+        correct: 2,
+        explanation: "A composite B-tree index works left-to-right. It helps queries filtering on the leftmost column(s): user_id alone, or user_id + status together. It does NOT help queries filtering on status alone — for that you'd need a separate index on (status)."
+      },
+      {
+        type: "predict-output",
+        question: "What does FOR UPDATE do if another transaction already holds the lock?",
+        code: "-- Transaction A (started first, not yet committed):\nBEGIN;\nSELECT * FROM tokens WHERE code = 'XYZ' FOR UPDATE;\n\n-- Transaction B (runs now):\nBEGIN;\nSELECT * FROM tokens WHERE code = 'XYZ' FOR UPDATE;",
+        answer: "Transaction B blocks (waits) until Transaction A commits or rolls back",
+        explanation: "FOR UPDATE is a row-level lock. Only one transaction can hold it at a time. Transaction B doesn't get an error — it simply waits. Once A commits or rolls back, B proceeds with the current state of the row. This prevents race conditions in token redemption."
+      },
+      {
+        type: "fill-blank",
+        question: "Add a constraint ensuring max_uses is never negative:",
+        code: "ALTER TABLE tokens ADD CONSTRAINT positive_max_uses ___ (max_uses >= 0);",
+        answer: "CHECK",
+        explanation: "CHECK constraints enforce custom validation rules at the database level. CHECK (max_uses >= 0) ensures no application bug can ever set max_uses to -1. The database rejects the operation before it's written."
+      },
+      {
+        type: "which-breaks",
+        question: "Which constraint definition has an error?",
+        variants: [
+          "ALTER TABLE tokens ADD CONSTRAINT unique_code UNIQUE (code);",
+          "ALTER TABLE tokens ADD CONSTRAINT valid_status CHECK (status IN ('active', 'paused', 'revoked'));",
+          "ALTER TABLE tokens ADD CONSTRAINT unique_user UNIQUE (user_id, issued_to) WHERE status = 'active';"
+        ],
+        correct: 2,
+        explanation: "UNIQUE constraints don't support WHERE clauses. If you want a conditional unique constraint (only enforce uniqueness among active tokens), you need a unique partial INDEX instead: CREATE UNIQUE INDEX ... ON tokens(user_id, issued_to) WHERE status = 'active'."
+      },
+      {
+        question: "What happens to indexes when you DELETE rows?",
+        options: [
+          "Index entries are deleted immediately and space is reclaimed",
+          "Index entries are marked as dead — VACUUM eventually reclaims the space",
+          "Indexes are not affected by DELETE",
+          "You must manually REINDEX after every DELETE"
+        ],
+        correct: 1,
+        explanation: "Postgres uses MVCC — deleted rows are marked dead but not immediately removed. VACUUM (which runs automatically via autovacuum) reclaims space in both tables and indexes. You rarely need to worry about this, but heavy-delete workloads can cause index bloat if autovacuum can't keep up."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's the problem with this transaction for creating a token?",
+        code: "BEGIN;\nINSERT INTO tokens (code, user_id, issued_to) VALUES ('NEW1-XXXX-YYYY', 1, 'Vendor');\nINSERT INTO access_rules (token_id, rule_type, payload) VALUES (???, 'time_window', '{\"start\": 9}');\nCOMMIT;",
+        options: [
+          "You can't INSERT into two tables in one transaction",
+          "The second INSERT doesn't know the generated token_id — needs RETURNING or currval()",
+          "BEGIN and COMMIT are not needed here",
+          "JSONB values can't be inserted as strings"
+        ],
+        correct: 1,
+        explanation: "The token_id is generated by SERIAL on insert. The second INSERT needs that value. Use: INSERT INTO tokens ... RETURNING id, then use the returned id in the second INSERT. In Node.js: const { rows } = await client.query('INSERT ... RETURNING id'); then use rows[0].id."
+      },
+      {
+        type: "predict-output",
+        question: "What does EXPLAIN show for a query on an indexed column?",
+        code: "CREATE INDEX idx_tokens_user_id ON tokens(user_id);\nEXPLAIN SELECT * FROM tokens WHERE user_id = 42;",
+        answer: "Index Scan using idx_tokens_user_id on tokens",
+        explanation: "EXPLAIN shows the query plan without running the query. When an appropriate index exists and the table is large enough, Postgres uses an Index Scan — jumping directly to matching rows via the B-tree. On very small tables, it might still choose Seq Scan (faster for tiny data)."
+      },
+      {
+        type: "fill-blank",
+        question: "Create a unique composite constraint — one user can't issue two tokens to the same person:",
+        code: "ALTER TABLE tokens ADD CONSTRAINT one_token_per_recipient ___ (user_id, issued_to);",
+        answer: "UNIQUE",
+        explanation: "A composite UNIQUE constraint ensures the combination of (user_id, issued_to) is unique. User 1 can issue to 'Shop A' and 'Shop B', but can't issue two separate tokens both to 'Shop A'. This prevents accidental duplicates in the Token app."
+      },
+      {
+        question: "What's the key difference between ROLLBACK and just ending a transaction with an error?",
+        options: [
+          "There's no difference — both undo the transaction",
+          "ROLLBACK is explicit and controlled; an error aborts the transaction but may leave locks longer",
+          "Errors commit whatever succeeded; ROLLBACK undoes everything",
+          "ROLLBACK only works in Postgres, not standard SQL"
+        ],
+        correct: 0,
+        explanation: "Both explicit ROLLBACK and an unhandled error undo all changes since BEGIN. The practical difference is intent: ROLLBACK is your controlled decision (e.g., validation failed), while an error is unexpected. In both cases, no changes persist and locks are released."
+      },
+      {
+        type: "order-steps",
+        question: "Put these steps in order for safely adding a NOT NULL column to an existing table with data:",
+        steps: ["ADD COLUMN with a DEFAULT value (or nullable)", "UPDATE existing rows to fill in the value", "ALTER COLUMN SET NOT NULL", "CREATE INDEX on the new column if needed"],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "You can't add a NOT NULL column to a table with existing rows unless you provide a DEFAULT. The safe path: add nullable (or with default), backfill existing rows, then add the NOT NULL constraint. Finally, index if needed for your queries."
+      },
+      {
+        type: "which-breaks",
+        question: "Which index creation will fail?",
+        variants: [
+          "CREATE INDEX idx_tokens_code ON tokens(code);",
+          "CREATE INDEX idx_tokens_status ON tokens(status) WHERE status = 'active';",
+          "CREATE INDEX idx_tokens_json ON tokens(access_rules) USING BTREE;"
+        ],
+        correct: 2,
+        explanation: "B-tree indexes don't support JSONB columns directly — you can't sort arbitrary JSON. For JSONB, use a GIN index: CREATE INDEX ... USING GIN (column). B-tree works for scalar types like TEXT, INTEGER, TIMESTAMP where ordering makes sense."
       }
     ]);
   </script>

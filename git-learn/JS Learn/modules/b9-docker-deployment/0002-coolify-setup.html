@@ -470,6 +470,224 @@ runMigrations()
                 ],
                 correct: 2,
                 explanation: "Databases should only be accessible from the internal Docker network. Exposing them to the internet means anyone can attempt to connect — even with a password, this invites brute-force attacks and exploits against the database software itself."
+            },
+            // --- Questions 6-25 ---
+            {
+                question: "What is the minimum VPS requirement for running Coolify with the Token stack (API, web, Postgres, Redis)?",
+                options: [
+                    "1 vCPU, 512 MB RAM",
+                    "2 vCPU, 2 GB RAM",
+                    "4 vCPU, 8 GB RAM",
+                    "8 vCPU, 16 GB RAM"
+                ],
+                correct: 1,
+                explanation: "Coolify recommends at least 2 CPUs and 2 GB RAM for the control plane plus your services. For Token's modest stack (two Node containers, Postgres, Redis), 2 vCPU / 2 GB is the practical floor — though 4 GB gives breathing room for builds."
+            },
+            {
+                type: "order-steps",
+                question: "Order the steps to install Coolify on a fresh Ubuntu VPS:",
+                steps: [
+                    "SSH into your VPS as root",
+                    "Run the Coolify one-liner install script (curl | bash)",
+                    "Wait for Docker and Coolify containers to start",
+                    "Open port 8000 in your firewall",
+                    "Access the Coolify dashboard at http://VPS_IP:8000",
+                    "Create your admin account on first visit"
+                ],
+                correctOrder: [0, 1, 2, 3, 4, 5],
+                explanation: "Coolify installs Docker for you if missing, then runs itself as Docker containers. Port 8000 is the dashboard — you must allow it through the firewall before you can access the UI."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the DNS record that points tokn.app to your VPS:",
+                code: "Type: ___    Name: @    Value: 203.0.113.42    TTL: 300",
+                answer: "A",
+                explanation: "An A record maps a domain name to an IPv4 address. You need A records for both tokn.app (the web app) and api.tokn.app (the API). AAAA records are for IPv6."
+            },
+            {
+                type: "which-breaks",
+                question: "Which Coolify domain configuration will fail to get a TLS certificate?",
+                variants: [
+                    "Domain: https://tokn.app — DNS A record points to VPS IP",
+                    "Domain: https://tokn.app — DNS A record points to 127.0.0.1",
+                    "Domain: https://api.tokn.app — DNS A record points to VPS IP"
+                ],
+                correct: 1,
+                explanation: "Let's Encrypt validates domain ownership via HTTP-01 challenge — it makes a request to the domain. If the DNS points to 127.0.0.1 (localhost), the challenge request never reaches your server, and certificate issuance fails."
+            },
+            {
+                type: "predict-output",
+                question: "What happens when Traefik receives a request for an unknown domain?",
+                code: "// Request arrives: Host: unknown-site.com\n// Traefik routing rules:\n//   tokn.app → web container:5173\n//   api.tokn.app → api container:3000\n// No rule matches 'unknown-site.com'\nconsole.log('Status: 404 Not Found');",
+                answer: "Status: 404 Not Found",
+                explanation: "Traefik returns a 404 when no routing rule matches the incoming Host header. This is safe — random scanners hitting your IP won't reach your actual services."
+            },
+            {
+                question: "How does Coolify's auto-deploy from Git work?",
+                options: [
+                    "Coolify polls the repo every 60 seconds for changes",
+                    "A webhook fires on push and Coolify triggers a build",
+                    "The developer must click 'Deploy' in the dashboard after each push",
+                    "A cron job runs git pull inside the running container"
+                ],
+                correct: 1,
+                explanation: "Coolify registers a webhook with your Git provider (GitHub, GitLab, etc.). On every push to the configured branch, the provider sends a POST to Coolify, which triggers a new build and deploy cycle."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This Coolify service config for the Token API has a bug. Which line is wrong?",
+                code: "Service: api\nBuild: ./Dockerfile\nBase Directory: /\nPort: 3000\nDomain: http://api.tokn.app\nHealth Check: /health",
+                options: [
+                    "Build: ./Dockerfile — should be just Dockerfile",
+                    "Domain: http://api.tokn.app — should be https://",
+                    "Port: 3000 — should be 80",
+                    "Base Directory: / — should be /api"
+                ],
+                correct: 3,
+                explanation: "In a monorepo with app/, web/, api/, shared/ folders, the Base Directory must be set to /api so Coolify builds from the correct subfolder. Without this, it looks for the Dockerfile in the repo root."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the Traefik label that routes requests to the Token web container:",
+                code: "traefik.http.routers.web.rule=Host(`___`)",
+                answer: "tokn.app",
+                explanation: "Traefik uses the Host() matcher to route incoming requests to the correct container based on the domain name in the Host header. Each service gets its own router rule."
+            },
+            {
+                type: "predict-output",
+                question: "What does the health check endpoint return during a database migration?",
+                code: "// api/src/health.ts\napp.get('/health', async (req, res) => {\n  try {\n    await pool.query('SELECT 1');\n    res.status(200).json({ status: 'ok' });\n  } catch (err) {\n    res.status(503).json({ status: 'unavailable' });\n  }\n});\n\n// Timeline: migration locks the DB for 3 seconds\n// t=0s: container starts, runs migration (DB locked)\n// t=1s: health check fires, pool.query('SELECT 1') hangs\n// t=3s: migration completes, query returns\nconsole.log('Health check result: 200 ok (delayed, not failed)');",
+                answer: "Health check result: 200 ok (delayed, not failed)",
+                explanation: "SELECT 1 will wait (not error) while migrations hold locks. The health check appears slow but eventually returns 200. If it exceeds the timeout threshold, the check counts as failed — so keep migrations fast or run them before the server starts listening."
+            },
+            {
+                question: "What is the key cost advantage of Coolify on a VPS vs. managed PaaS like Heroku or Railway?",
+                options: [
+                    "Coolify has faster build times",
+                    "You pay only for VPS compute — no per-service or per-dyno markup",
+                    "Coolify includes free DDoS protection",
+                    "Managed PaaS doesn't support Docker containers"
+                ],
+                correct: 1,
+                explanation: "A $10-20/month VPS can run your entire Token stack (API, web, Postgres, Redis, Coolify). On Heroku, that's 4 dynos + 2 add-ons — easily $50-100/month. The trade-off: you manage the server yourself."
+            },
+            {
+                type: "which-breaks",
+                question: "Which environment variable approach will break the Token web app (Vite)?",
+                variants: [
+                    "In Coolify build variables: VITE_API_URL=https://api.tokn.app",
+                    "In Coolify runtime variables: API_URL=https://api.tokn.app (no VITE_ prefix)",
+                    "In web/.env.production: VITE_API_URL=https://api.tokn.app"
+                ],
+                correct: 1,
+                explanation: "Vite only embeds environment variables prefixed with VITE_ into the client bundle at build time. A runtime variable without the prefix is invisible to the browser code. Additionally, Vite env vars must be set at BUILD time, not runtime — the values are baked into the JS bundle."
+            },
+            {
+                type: "order-steps",
+                question: "Order the Let's Encrypt TLS certificate provisioning steps:",
+                steps: [
+                    "Coolify configures domain on Traefik",
+                    "Traefik requests certificate from Let's Encrypt",
+                    "Let's Encrypt sends HTTP-01 challenge token",
+                    "Traefik serves the token at /.well-known/acme-challenge/",
+                    "Let's Encrypt verifies the token via HTTP request",
+                    "Certificate issued and auto-configured on Traefik"
+                ],
+                correctOrder: [0, 1, 2, 3, 4, 5],
+                explanation: "The HTTP-01 challenge proves you control the domain by serving a specific token. This is why DNS must point to your VPS BEFORE you deploy — otherwise Let's Encrypt can't reach the challenge endpoint."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the Docker internal network hostname for the Postgres service:",
+                code: "// In Coolify, the Postgres service is named 'token-db'\n// The API connects using:\nconst pool = new Pool({\n  host: '___',\n  port: 5432,\n  database: 'token_prod'\n});",
+                answer: "token-db",
+                explanation: "On a Docker network, containers reach each other by service name. Coolify puts all project services on the same internal network, so the API container can connect to Postgres using just the service name as the hostname."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This Coolify deployment config has a problem that will cause downtime. Find it:",
+                code: "Deploy strategy: recreate\nHealth check: /health\nHealth check interval: 10s\nHealth check retries: 3\nPre-deploy command: node migrate.js",
+                options: [
+                    "Health check interval should be 5s",
+                    "Deploy strategy 'recreate' stops old container before starting new one",
+                    "Pre-deploy command should use npx",
+                    "Health check retries should be 5"
+                ],
+                correct: 1,
+                explanation: "The 'recreate' strategy stops the old container first, then starts the new one. During the gap (build + migration + health check), there's no container serving traffic. Use 'rolling' or Coolify's default blue-green approach for zero-downtime."
+            },
+            {
+                type: "predict-output",
+                question: "What happens when a deploy fails the health check?",
+                code: "// Deploy timeline:\n// t=0s: new container starts\n// t=10s: health check #1 → connection refused (app crashed)\n// t=20s: health check #2 → connection refused\n// t=30s: health check #3 → connection refused (3 retries exhausted)\nconsole.log('Deploy status: failed');\nconsole.log('Action: old container continues serving traffic');\nconsole.log('New container: removed');",
+                answer: "Deploy status: failed\nAction: old container continues serving traffic\nNew container: removed",
+                explanation: "This is the safety net of health checks + blue-green deploys. The old container never stops until the new one is verified healthy. A failed deploy is invisible to users — they keep hitting the old, working version."
+            },
+            {
+                question: "Why does Coolify run Traefik as its reverse proxy instead of Nginx?",
+                options: [
+                    "Nginx can't handle HTTPS",
+                    "Traefik auto-discovers containers and updates routes without restart or config reload",
+                    "Nginx is not open source",
+                    "Traefik is faster at serving static files"
+                ],
+                correct: 1,
+                explanation: "Traefik watches Docker events and automatically creates routes when containers start or stop. Nginx requires manual config changes and reload. For a dynamic environment where containers come and go during deploys, Traefik's auto-discovery is essential."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the command to view logs from the Token API container in Coolify's VPS:",
+                code: "docker logs --tail 100 -f ___",
+                answer: "coolify-api",
+                explanation: "Coolify names containers with a prefix (often 'coolify-' plus the service name). You can also check container names with 'docker ps'. The -f flag follows new output in real time, and --tail 100 shows the last 100 lines to avoid flooding your terminal."
+            },
+            {
+                type: "which-breaks",
+                question: "Which Redis configuration will prevent the Token API from connecting?",
+                variants: [
+                    "REDIS_URL=redis://token-redis:6379 (service on same Coolify project network)",
+                    "REDIS_URL=redis://:secretpass@token-redis:6379 (with password, matching Redis config)",
+                    "REDIS_URL=redis://token-redis:6380 (Redis container exposes default port 6379)"
+                ],
+                correct: 2,
+                explanation: "Redis listens on port 6379 by default. If the container hasn't been configured to use port 6380, the connection will be refused. Always match the port in your URL to the port the Redis container is actually listening on."
+            },
+            {
+                type: "order-steps",
+                question: "Order the steps to add a new environment variable to the Token API in Coolify:",
+                steps: [
+                    "Navigate to the API service in Coolify dashboard",
+                    "Go to the Environment Variables tab",
+                    "Add the key-value pair (e.g. TURN_SECRET=xyz)",
+                    "Mark it as 'Build' or 'Runtime' depending on when it's needed",
+                    "Trigger a redeploy for the change to take effect"
+                ],
+                correctOrder: [0, 1, 2, 3, 4],
+                explanation: "Environment variables in Coolify don't auto-deploy — you must trigger a new deployment. The Build vs Runtime distinction matters: Build variables are available during 'docker build' (for VITE_ vars), Runtime variables are injected when the container starts."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This DNS setup for the Token project has an error. Find it:",
+                code: "A    @              203.0.113.42   (tokn.app → VPS)\nA    api            203.0.113.42   (api.tokn.app → VPS)\nA    www            203.0.113.42   (www.tokn.app → VPS)\nA    db             203.0.113.42   (db.tokn.app → Postgres)",
+                options: [
+                    "The www record shouldn't exist",
+                    "The api record should be a CNAME",
+                    "The db record exposes the database to the internet",
+                    "All records should use different IPs"
+                ],
+                correct: 2,
+                explanation: "Creating a DNS record for db.tokn.app is dangerous — it signals where your database lives and implies it's internet-accessible. Postgres should ONLY be reachable on the internal Docker network. There should be no public DNS entry for it."
+            },
+            {
+                question: "What happens to TLS certificates when Let's Encrypt certificates expire after 90 days?",
+                options: [
+                    "You must manually renew them in the Coolify dashboard",
+                    "Traefik automatically renews them before expiry (typically at 60 days)",
+                    "The site goes down until you redeploy",
+                    "Coolify sends an email reminder but you must run a renewal command"
+                ],
+                correct: 1,
+                explanation: "Traefik handles renewal automatically — it requests a new certificate well before the 90-day expiry (usually around 30 days before). This is a major advantage of the Traefik + Let's Encrypt integration: zero manual certificate management."
             }
         ]);
     </script>

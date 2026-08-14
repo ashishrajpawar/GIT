@@ -462,6 +462,192 @@ async function propagateStatusChange(tokenId, newStatus) {
         ],
         correct: 1,
         explanation: "The close() call is before send(). Once a socket is closing, you cannot send data through it. Always send the notification message first, then close the connection."
+      },
+      // --- Questions 6-25 ---
+      {
+        type: "predict-output",
+        code: "const VALID_TRANSITIONS = {\n  active: ['paused', 'revoked'],\n  paused: ['active', 'revoked'],\n  revoked: []\n};\nconsole.log(VALID_TRANSITIONS['paused'].includes('active'));\nconsole.log(VALID_TRANSITIONS['paused'].includes('paused'));",
+        answer: "true\nfalse",
+        explanation: "A paused token can transition to 'active' (resume) but cannot transition to 'paused' again (it's already paused). The valid transitions from paused are only active and revoked."
+      },
+      {
+        type: "fill-blank",
+        code: "const VALID_TRANSITIONS = {\n  active: ['paused', 'revoked'],\n  paused: ['active', 'revoked'],\n  revoked: ___\n};",
+        answer: "[]",
+        explanation: "Revoked is a terminal state with no valid transitions. An empty array means once a token is revoked, it can never change status again — this is permanent and intentional."
+      },
+      {
+        type: "which-breaks",
+        variants: [
+          "if (!VALID_TRANSITIONS[currentStatus].includes(newStatus)) return res.status(400).json({error: 'Invalid transition'});",
+          "if (VALID_TRANSITIONS[currentStatus].indexOf(newStatus) === -1) return res.status(400).json({error: 'Invalid transition'});",
+          "if (!VALID_TRANSITIONS[newStatus].includes(currentStatus)) return res.status(400).json({error: 'Invalid transition'});"
+        ],
+        correct: 2,
+        explanation: "Variant C checks transitions backwards — it looks up what the NEW status can transition to and checks if current is in that list. This is semantically wrong. We need to check what the CURRENT status is allowed to transition TO, not what the target status transitions from."
+      },
+      {
+        type: "predict-output",
+        code: "const tokenSockets = new Map();\ntokenSockets.set(1, new Set(['ws1', 'ws2']));\ntokenSockets.set(2, new Set(['ws3']));\nconsole.log(tokenSockets.get(1).size);\ntokenSockets.get(1).delete('ws1');\nconsole.log(tokenSockets.get(1).size);",
+        answer: "2\n1",
+        explanation: "Token 1 starts with 2 sockets in its Set. After deleting 'ws1', the Set has 1 remaining socket. This mirrors how the registry shrinks as holders disconnect."
+      },
+      {
+        question: "Why does the PATCH endpoint use FOR UPDATE when fetching the token?",
+        options: [
+          "To prevent other queries from reading the token's status",
+          "To serialize concurrent status changes — two simultaneous revoke requests could otherwise both succeed",
+          "To improve query performance with row-level caching",
+          "It's required by PostgreSQL for any UPDATE operation"
+        ],
+        correct: 1,
+        explanation: "Without FOR UPDATE, two concurrent PATCH requests could both read 'active', both validate the transition is legal, and both attempt the update. The row lock ensures only one proceeds at a time, maintaining consistent state transitions."
+      },
+      {
+        type: "spot-the-bug",
+        code: "router.patch('/tokens/:id', authenticate, async (req, res) => {\n  const { id } = req.params;\n  const { status } = req.body;\n  await pool.query(\n    'UPDATE tokens SET status = $1 WHERE id = $2',\n    [status, id]\n  );\n  await propagateStatusChange(parseInt(id), status);\n  res.json({ success: true });\n});",
+        bugLine: 4,
+        options: [
+          "Line 4: No transition validation — any status can be set regardless of current state",
+          "Line 4: Missing user_id check — anyone can change any token's status",
+          "Both A and B: missing validation AND missing ownership check"
+        ],
+        correct: 2,
+        explanation: "Two critical bugs: (1) No check that the transition is valid (could go revoked -> active). (2) No WHERE user_id = $3 — any authenticated user could modify any token. Both validation and ownership must be enforced."
+      },
+      {
+        type: "fill-blank",
+        code: "await client.query(\n  `INSERT INTO revocation_events (token_id, previous_status, new_status, ___)\n   VALUES ($1, $2, $3, NOW())`,\n  [id, currentStatus, status]\n);",
+        answer: "created_at",
+        explanation: "The audit trail records when each status change occurred with a created_at timestamp. This provides a complete chronological history of the token's lifecycle for the user and any future dispute resolution."
+      },
+      {
+        type: "predict-output",
+        code: "const statuses = ['active', 'paused', 'revoked'];\nconst results = statuses.map(s => s === 'paused' || s === 'revoked');\nconsole.log(results);",
+        answer: "[false, true, true]",
+        explanation: "Both 'paused' and 'revoked' trigger propagation to active connections. Only 'active' does not need propagation because transitioning TO active means the token is being resumed — connections weren't active to disconnect."
+      },
+      {
+        type: "order-steps",
+        steps: [
+          "User taps 'Revoke' in the app",
+          "App sends PATCH /tokens/:id with { status: 'revoked' }",
+          "Server validates ownership and transition legality",
+          "Database UPDATE sets status to 'revoked'",
+          "Audit record inserted into revocation_events",
+          "Transaction committed",
+          "propagateStatusChange sends disconnect to all active holders",
+          "Active WebSocket connections receive notification and close",
+          "Any active calls terminated via signalling"
+        ],
+        correctOrder: [0, 1, 2, 3, 4, 5, 6, 7, 8],
+        explanation: "The full revocation flow from user action to complete disconnection. The database is committed before propagation — ensuring the revocation is persisted even if socket cleanup has issues."
+      },
+      {
+        question: "What is the difference between pause and revoke in terms of reversibility?",
+        options: [
+          "Both are reversible but revoke requires admin approval",
+          "Pause is reversible (can resume to active), revoke is permanent (terminal state)",
+          "Pause is temporary (auto-resumes after 24h), revoke is manual",
+          "There is no functional difference, only UI labeling"
+        ],
+        correct: 1,
+        explanation: "Pause is the user saying 'not right now' — they can resume the token later. Revoke is permanent — the token can never be reactivated. This is reflected in VALID_TRANSITIONS where revoked has an empty array."
+      },
+      {
+        type: "which-breaks",
+        variants: [
+          "for (const ws of sockets) { ws.send(message); ws.close(1000, reason); }",
+          "sockets.forEach(ws => { ws.send(message); ws.close(1000, reason); });",
+          "for (const ws of sockets) { ws.close(1000, reason); ws.send(message); }"
+        ],
+        correct: 2,
+        explanation: "Variant C calls close() before send(). After initiating closure, the WebSocket enters CLOSING state and send() will fail silently or throw. The holder never receives the notification message explaining why they were disconnected."
+      },
+      {
+        type: "predict-output",
+        code: "const registry = new Map();\nregistry.set(5, new Set());\nconsole.log(registry.get(5).size);\nconsole.log(registry.get(99) || new Set());",
+        answer: "0\nSet(0) {}",
+        explanation: "Token 5 has an empty Set (size 0). Token 99 doesn't exist in the map (returns undefined), so the || fallback provides a new empty Set. This is how getSocketsByTokenId safely returns an iterable even for tokens with no connections."
+      },
+      {
+        type: "fill-blank",
+        code: "export function getSocketsByTokenId(tokenId) {\n  return tokenSockets.get(tokenId) || new ___();\n}",
+        answer: "Set",
+        explanation: "If the token has no active connections, the Map returns undefined. The fallback new Set() ensures callers always get an iterable collection, avoiding null checks when iterating with for...of."
+      },
+      {
+        type: "spot-the-bug",
+        code: "async function propagateStatusChange(tokenId, newStatus) {\n  const sockets = getSocketsByTokenId(tokenId);\n  for (const ws of sockets) {\n    ws.send(JSON.stringify({ type: 'status_changed', status: newStatus }));\n    ws.close(1000, 'Token ' + newStatus);\n  }\n  removeTokenFromRegistry(tokenId);\n}",
+        bugLine: 3,
+        options: [
+          "Line 3: Missing readyState check — socket might already be closed",
+          "Line 7: Should call endCallByTokenId before removing from registry",
+          "Both A and B are issues in this code"
+        ],
+        correct: 2,
+        explanation: "Both issues exist. (A) Without checking ws.readyState === OPEN, sending to a closed socket throws an error. (B) Active calls must be terminated before cleanup — if you remove from registry first, endCallByTokenId might not find the sockets it needs."
+      },
+      {
+        type: "predict-output",
+        code: "const transitions = { active: ['paused', 'revoked'], paused: ['active', 'revoked'], revoked: [] };\nconst allowed = transitions['active'].includes('revoked');\nconst blocked = transitions['revoked'].includes('active');\nconsole.log(allowed, blocked);",
+        answer: "true false",
+        explanation: "Active can transition to revoked (allowed = true). Revoked cannot transition to active (blocked = false). The revoked state is permanent — its empty transitions array prevents any status change."
+      },
+      {
+        question: "Why does the socket registry use a Map of Sets rather than a simple array?",
+        options: [
+          "Sets use less memory than arrays",
+          "Map allows O(1) lookup by tokenId, and Set allows O(1) add/delete of individual sockets without searching",
+          "JavaScript requires Sets for WebSocket objects",
+          "Arrays cannot store WebSocket references"
+        ],
+        correct: 1,
+        explanation: "Map<tokenId, Set<WebSocket>> gives O(1) token lookup and O(1) socket add/remove. If we used an array, removing a specific disconnected socket would require searching through all sockets. With thousands of active connections, this performance matters."
+      },
+      {
+        type: "fill-blank",
+        code: "ws.on('close', () => {\n  const sockets = tokenSockets.get(tokenId);\n  if (sockets) {\n    sockets.___(ws);\n    if (sockets.size === 0) tokenSockets.delete(tokenId);\n  }\n});",
+        answer: "delete",
+        explanation: "Set.delete(value) removes the specific socket from the set. After deletion, if the set is empty (size === 0), the entire token entry is removed from the Map to prevent memory leaks from empty Sets accumulating."
+      },
+      {
+        type: "order-steps",
+        steps: [
+          "Send notification message to each active socket",
+          "Close each socket with code 1000",
+          "Call endCallByTokenId to terminate active calls",
+          "Remove the token from the socket registry"
+        ],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "Order matters: send first (socket must be open), close second (can't send after), end calls third (uses signalling), clean registry last. If you clean the registry first, you lose track of which sockets need notification."
+      },
+      {
+        type: "which-breaks",
+        variants: [
+          "await client.query('COMMIT'); await propagateStatusChange(id, status);",
+          "await propagateStatusChange(id, status); await client.query('COMMIT');",
+          "await client.query('COMMIT'); propagateStatusChange(id, status).catch(console.error);"
+        ],
+        correct: 1,
+        explanation: "Variant B propagates before committing. If propagation disconnects holders but the transaction then rolls back (due to a later error), the status change never persisted — but users are already disconnected from a phantom revocation. Always commit first, then propagate."
+      },
+      {
+        question: "What WebSocket close code is used when terminating connections due to revocation?",
+        options: [
+          "1001 — Going Away",
+          "1000 — Normal Closure",
+          "1008 — Policy Violation",
+          "1003 — Unsupported Data"
+        ],
+        correct: 1,
+        explanation: "Code 1000 (Normal Closure) indicates the connection was intentionally closed by the application. Even though revocation is forceful from the holder's perspective, it's a deliberate, clean closure from the server's point of view — not an error."
+      },
+      {
+        type: "predict-output",
+        code: "async function requireActiveToken(tokenId) {\n  const status = 'paused';\n  if (status === 'paused') throw new Error('Token paused');\n  if (status === 'revoked') throw new Error('Token revoked');\n}\n\ntry {\n  await requireActiveToken(1);\n  console.log('proceed');\n} catch(e) {\n  console.log(e.message);\n}",
+        answer: "Token paused",
+        explanation: "The function checks paused before revoked. Since status is 'paused', it throws 'Token paused' immediately. The catch block logs the error message. The 'proceed' line never executes because the throw interrupts the flow."
       }
     ]);
   </script>

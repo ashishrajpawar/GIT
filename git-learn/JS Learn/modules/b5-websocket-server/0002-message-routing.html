@@ -461,6 +461,220 @@ registerHandler('chat:delivered', async (ws, payload) => {
         ],
         correctOrder: [0, 1, 2, 3, 4],
         explanation: "Validate first (reject unauthorized messages before touching the DB). Store second (message is durable even if delivery fails). Then deliver — recipient first (that's the primary goal), sender's other devices next (sync), and finally acknowledge to the sender (they need the server ID)."
+      },
+
+      // --- Questions 6–25 ---
+      {
+        question: "What data structure does the Token server use to track connected clients?",
+        options: [
+          "An array of socket objects",
+          "A Map<userId, Set<WebSocket>> so one user can have multiple sockets",
+          "An object keyed by socket ID",
+          "A single WeakMap per connection"
+        ],
+        correct: 1,
+        explanation: "Map<userId, Set<WebSocket>> lets one user be connected from multiple devices simultaneously. Each device gets its own socket in the Set; fan-out iterates the Set. A plain array would require a linear scan to find a user's sockets; an object keyed by socket ID wouldn't group sockets by user."
+      },
+      {
+        type: "predict-output",
+        question: "What does the following fan-out loop print?",
+        code: "const clients = new Map();\nclients.set(3, new Set(['phone', 'tablet', 'laptop']));\n\nfunction deliverToUser(userId, msg) {\n  const sockets = clients.get(userId);\n  if (!sockets) {\n    console.log('offline');\n    return;\n  }\n  for (const s of sockets) {\n    console.log('sent to ' + s);\n  }\n}\n\ndeliverToUser(3, 'hello');\ndeliverToUser(9, 'hello');",
+        answer: "sent to phone\nsent to tablet\nsent to laptop\noffline",
+        explanation: "User 3 has three sockets, so the loop fires three times. User 9 has no entry in the Map, so `clients.get(9)` returns undefined, the guard triggers, and 'offline' is printed. Order within a Set reflects insertion order."
+      },
+      {
+        type: "fill-blank",
+        question: "When a new authenticated WebSocket connects, add their socket to the clients Map without removing existing sockets from other devices:",
+        code: "function registerClient(userId, ws) {\n  if (!clients.has(userId)) {\n    clients.set(userId, new Set());\n  }\n  clients.get(userId).___(ws);\n}",
+        answer: "add",
+        explanation: "Set.add() inserts an item if it isn't already present and does nothing if it is (idempotent). This safely handles reconnects or race conditions where the same socket somehow registers twice."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What is wrong with this cleanup handler when a socket disconnects?",
+        code: "ws.on('close', () => {\n  clients.delete(ws.userId);\n});",
+        options: [
+          "clients.delete does not exist — use clients.remove",
+          "This deletes ALL of the user's sockets, not just the one that disconnected",
+          "ws.userId may be undefined at close time",
+          "The close event fires before the socket is truly gone"
+        ],
+        correct: 1,
+        explanation: "clients.delete(ws.userId) removes the entire Set for that user. If they are connected from a second device, that socket is now orphaned — messages meant for the user will never arrive. The correct approach: get the Set, call Set.delete(ws), then remove the Map entry only if the Set is now empty."
+      },
+      {
+        type: "which-breaks",
+        question: "Which cleanup implementation correctly handles multi-device disconnect?",
+        variants: [
+          "clients.delete(ws.userId);",
+          "const s = clients.get(ws.userId); if (s) { s.delete(ws); if (s.size === 0) clients.delete(ws.userId); }",
+          "clients.get(ws.userId).clear();",
+          "clients.set(ws.userId, new Set());"
+        ],
+        correct: 1,
+        explanation: "Option B is correct: remove only the disconnected socket from the Set, then prune the Map entry if the Set becomes empty. Option A removes all devices. Option C empties the Set but leaves an empty Set in the Map. Option D replaces the Set with an empty one — same effect as C, loses all other device sockets."
+      },
+      {
+        type: "predict-output",
+        question: "What is the message envelope structure the Token WebSocket server uses?",
+        code: "// Server sends:\nconst envelope = {\n  type: 'chat:receive',\n  payload: {\n    id: 42,\n    conversationId: 7,\n    senderId: 5,\n    text: 'Hello',\n    sentAt: '2026-08-07T12:00:00Z'\n  }\n};\nws.send(JSON.stringify(envelope));\n\n// Client receives and parses:\nconst msg = JSON.parse(rawData);\nconsole.log(msg.type);\nconsole.log(msg.payload.text);",
+        answer: "chat:receive\nHello",
+        explanation: "All WebSocket messages in Token use a { type, payload } envelope. `type` is a namespaced string like 'chat:receive' that the client router dispatches on. `payload` carries the message-specific data. JSON.stringify and JSON.parse are required since WebSocket sends text, not objects."
+      },
+      {
+        type: "fill-blank",
+        question: "Parse an incoming WebSocket message safely, returning null if it isn't valid JSON:",
+        code: "function parseMessage(raw) {\n  try {\n    return ___(raw);\n  } catch {\n    return null;\n  }\n}",
+        answer: "JSON.parse",
+        explanation: "WebSocket messages arrive as strings. JSON.parse converts the string to an object. Wrapping it in try/catch guards against malformed data — a client bug, a proxy, or a fuzzer sending non-JSON should not crash the server. Returning null lets the caller reject the message gracefully."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This delivery receipt handler has a subtle problem. Find it.",
+        code: "export async function handleChatDelivered(ws, payload) {\n  const { messageId } = payload;\n\n  await db.query(\n    'UPDATE messages SET delivered_at = NOW() WHERE id = $1',\n    [messageId]\n  );\n\n  const msg = await db.query(\n    'SELECT sender_id FROM messages WHERE id = $1',\n    [messageId]\n  );\n\n  deliverToUser(msg.rows[0].sender_id, 'chat:delivery-receipt', {\n    messageId,\n    deliveredAt: new Date().toISOString(),\n  });\n}",
+        options: [
+          "delivered_at should use a parameter, not NOW()",
+          "The UPDATE does not check delivered_at IS NULL, so it overwrites an existing timestamp and a second device triggers a duplicate receipt",
+          "deliverToUser should be called before the SELECT",
+          "messageId should be validated as an integer before the query"
+        ],
+        correct: 1,
+        explanation: "Without `AND delivered_at IS NULL`, every device the recipient has open will fire a delivery receipt and each will update the timestamp, causing multiple 'delivered' notifications to the sender. Adding the guard ensures only the first receipt is processed."
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps for handling a client reconnect and fetching missed messages:",
+        steps: [
+          "Client WebSocket connection opens and authenticates",
+          "Client reads lastSeenAt timestamp from local storage",
+          "Client sends REST GET /conversations/:id/messages?after=<timestamp>",
+          "Server returns messages newer than the timestamp",
+          "Client renders missed messages in the thread UI"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Authentication must happen first (WebSocket or REST). The client then checks what it last received. It fetches the delta via REST (more reliable than replaying WebSocket events). The server queries by timestamp and returns the gap. The client inserts the missed messages into its local view."
+      },
+      {
+        type: "multiple-choice",
+        question: "Why does Token store messages in PostgreSQL before delivering them over WebSocket rather than the other way around?",
+        options: [
+          "PostgreSQL writes are faster than WebSocket sends",
+          "The message is durable once it is in the DB — if delivery fails or the recipient is offline, the message is not lost",
+          "WebSocket delivery requires the message ID which only exists after the INSERT",
+          "Both B and C are correct"
+        ],
+        correct: 3,
+        explanation: "Both reasons apply. The RETURNING clause gives the server the auto-generated message ID and server-side sentAt timestamp, which are included in the outgoing payload. More importantly, persistence-first means an offline recipient will still receive the message when they reconnect via REST — it was never held only in memory."
+      },
+      {
+        type: "predict-output",
+        question: "User 2 is the issuer and user 9 is the holder. User 2 sends a message. What is the recipientId?",
+        code: "const issuer_id = 2;\nconst holder_id = 9;\nconst ws = { userId: 2 }; // sender is the issuer\n\nconst recipientId = ws.userId === issuer_id ? holder_id : issuer_id;\nconsole.log(recipientId);",
+        answer: "9",
+        explanation: "The ternary checks: is the sender the issuer? Yes (ws.userId === 2 === issuer_id). So the recipient is the holder (9). If user 9 had sent the message, the condition would be false and the recipient would be the issuer (2). This ensures each participant always routes to the other."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the authorization query that confirms both the sender's participation AND that the token is active:",
+        code: "const result = await db.query(\n  `SELECT c.id\n   FROM conversations c\n   JOIN tokens t ON t.id = c.token_id\n   WHERE c.id = $1\n     AND (c.issuer_id = $2 OR c.holder_id = $2)\n     AND t.status = ___`,\n  [conversationId, userId]\n);",
+        answer: "'active'",
+        explanation: "Checking t.status = 'active' in a single JOIN query is efficient — one round-trip to the database instead of two separate queries. If the token is revoked or paused, status will not be 'active' and result.rows.length will be 0, causing the handler to reject the message."
+      },
+      {
+        type: "which-breaks",
+        question: "Which message envelope does NOT conform to the Token WebSocket protocol?",
+        variants: [
+          "{ \"type\": \"chat:send\", \"payload\": { \"conversationId\": 7, \"text\": \"Hi\" } }",
+          "{ \"event\": \"chat:send\", \"data\": { \"conversationId\": 7, \"text\": \"Hi\" } }",
+          "{ \"type\": \"chat:delivered\", \"payload\": { \"messageId\": 42 } }",
+          "{ \"type\": \"typing:start\", \"payload\": { \"conversationId\": 7 } }"
+        ],
+        correct: 1,
+        explanation: "The Token server router destructures { type, payload } from every message. Option B uses `event` and `data` instead, so `type` would be undefined and the handler lookup would fail. Options A, C, and D all use the correct { type, payload } envelope."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This handler crashes when the recipient has disconnected between the Map lookup and the send. Find the fix.",
+        code: "function deliverToUser(userId, type, payload) {\n  const sockets = getClients().get(userId);\n  if (sockets) {\n    for (const sock of sockets) {\n      sock.send(JSON.stringify({ type, payload }));\n    }\n  }\n}",
+        options: [
+          "sockets.size should be checked instead of the Set itself",
+          "sock.send can throw if the socket closed between the loop and the send — wrap in try/catch",
+          "JSON.stringify should be called outside the loop for performance",
+          "getClients() should be cached at module load, not called per message"
+        ],
+        correct: 1,
+        explanation: "A socket can close in the microseconds between getting the Set and calling send. Without try/catch, one broken socket crashes delivery to all remaining sockets in the loop. Wrapping sock.send in try/catch lets the loop continue to other devices even if one fails. Moving JSON.stringify outside the loop is also a good optimization but is not the crash bug."
+      },
+      {
+        type: "predict-output",
+        question: "What is logged when the server routes to a user who just went offline during the delivery?",
+        code: "const clients = new Map();\n// User 4 had two sockets but just disconnected both\n// (cleanup correctly removed the Map entry)\n\nfunction deliverToUser(userId, type, payload) {\n  const sockets = clients.get(userId);\n  if (!sockets || sockets.size === 0) {\n    console.log('no active sockets for user ' + userId);\n    return;\n  }\n  for (const s of sockets) {\n    console.log('sent to socket');\n  }\n}\n\ndeliverToUser(4, 'chat:receive', { text: 'Hi' });",
+        answer: "no active sockets for user 4",
+        explanation: "When a user disconnects and cleanup runs correctly, the Map entry is removed. clients.get(4) returns undefined, the guard triggers, and nothing is sent. This is not an error — the message is already in the database and the user will fetch it via REST on reconnect."
+      },
+      {
+        type: "fill-blank",
+        question: "Convert an outgoing envelope object to the wire format WebSocket expects:",
+        code: "function sendTo(ws, type, payload) {\n  const envelope = { type, payload };\n  ws.send(___(envelope));\n}",
+        answer: "JSON.stringify",
+        explanation: "WebSocket.send() requires a string (or Buffer). JSON.stringify converts the JavaScript object to a JSON string for transmission. The receiver calls JSON.parse to get the object back. This pattern is used for every message in the Token WebSocket protocol."
+      },
+      {
+        type: "order-steps",
+        question: "A token is revoked mid-conversation. Order the correct server-side steps:",
+        steps: [
+          "Receive a new chat:send message for the conversation",
+          "Run validateCanSend — check token status from DB",
+          "Find token status is 'revoked', not 'active'",
+          "Send error envelope to the sender: 'Token is not active'",
+          "Do not insert anything into the messages table"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Validate before writing. The handler receives the message, immediately checks authorization, discovers the token is revoked, and returns an error to the sender. Nothing is stored. The existing message history is untouched. The connection itself stays open — the user may have other active tokens in other conversations."
+      },
+      {
+        type: "multiple-choice",
+        question: "In a horizontally-scaled deployment (multiple API server instances), why does the simple in-process clients Map break?",
+        options: [
+          "Maps are not thread-safe in Node.js",
+          "A user's socket may be on Server A, but their recipient's socket is on Server B — Server A's Map does not contain Server B's sockets",
+          "PostgreSQL cannot handle concurrent inserts from multiple servers",
+          "WebSocket connections cannot span multiple processes"
+        ],
+        correct: 1,
+        explanation: "Each server instance has its own in-memory Map. If Alice is connected to Server A and Bob to Server B, when Alice sends a message, Server A looks up Bob in its local Map, finds nothing, and thinks Bob is offline. The fix is a shared pub/sub layer (Redis) where Server A publishes the message and Server B (which holds Bob's socket) delivers it."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This router dispatches incoming messages. What is the bug?",
+        code: "const handlers = new Map();\n\nfunction registerHandler(type, fn) {\n  handlers.set(type, fn);\n}\n\nwss.on('connection', (ws) => {\n  ws.on('message', (raw) => {\n    const { type, payload } = JSON.parse(raw);\n    const handler = handlers.get(type);\n    handler(ws, payload);\n  });\n});",
+        options: [
+          "JSON.parse is synchronous and will block the event loop",
+          "If no handler is registered for the type, handler is undefined and handler() throws a TypeError",
+          "handlers.get should use handlers[type] syntax instead",
+          "raw must be converted with raw.toString() before JSON.parse"
+        ],
+        correct: 1,
+        explanation: "If a client sends `{ type: 'unknown:event', payload: {} }`, handlers.get returns undefined. Calling undefined() throws TypeError: handler is not a function and crashes the message listener. Always guard: `if (!handler) { sendTo(ws, 'error', { message: 'Unknown message type' }); return; }`. Also: raw.toString() may be needed depending on the ws library version — but the crash bug is the missing guard."
+      },
+      {
+        type: "predict-output",
+        question: "How many database queries does a single chat:send message trigger in the full implementation shown in this lesson?",
+        code: "// Trace through handleChatSend:\n// 1. SELECT issuer_id, holder_id FROM conversations WHERE id = $1\n// 2. INSERT INTO messages ... RETURNING ...\n// Plus validateCanSend adds:\n// 3. SELECT c.id FROM conversations JOIN tokens WHERE ...\n// And handleChatDelivered (when recipient acks) adds:\n// 4. UPDATE messages SET delivered_at ...\n// 5. SELECT sender_id FROM messages WHERE id = $1",
+        answer: "3",
+        explanation: "handleChatSend itself triggers 3 queries: the participation check SELECT, the enhanced validateCanSend SELECT (which replaces the plain participation check in the full version), and the INSERT. The delivery receipt queries (UPDATE + SELECT) happen later in a separate message handler when the recipient's client sends chat:delivered — they are not part of the send flow."
+      },
+      {
+        type: "which-breaks",
+        question: "Which scenario causes a message to be permanently lost (never stored, never delivered)?",
+        variants: [
+          "Recipient is offline when the message is sent",
+          "Recipient has two devices and one disconnects during fan-out",
+          "The INSERT into messages throws a database error and the catch block only sends an error to the sender without retrying",
+          "The sender disconnects immediately after sending, before receiving chat:sent"
+        ],
+        correct: 2,
+        explanation: "Option C is the only scenario where the message is permanently lost. The INSERT failed, so nothing is in the database. The catch block tells the sender it failed, but does not retry or queue the message. The sender must retry. Options A and B: the message IS in the database — offline users fetch it later, and the other device still received it. Option D: the sender loses the acknowledgment but the message is already stored."
       }
     ]);
   </script>

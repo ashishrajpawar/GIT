@@ -610,7 +610,203 @@ export async function findOwned<T>(
                 ],
                 correctOrder: [0, 1, 2, 3, 4, 5],
                 explanation: "The dual-secret window ensures no user is logged out during rotation. Old tokens still verify against PREVIOUS while new tokens use the current secret. After old tokens expire naturally, you can remove the previous secret."
-            }
+            },
+            // --- Questions 6-25 ---
+            {
+                question: "Why should you return 404 (not 403) when a resource belongs to another user?",
+                options: [
+                    "404 is faster to process than 403",
+                    "It prevents attackers from discovering that a resource exists",
+                    "403 is reserved for unauthenticated requests",
+                    "The HTTP spec forbids 403 on GET requests"
+                ],
+                correct: 1,
+                explanation: "Returning 403 confirms the resource exists but is forbidden. Returning 404 for both 'not found' and 'not yours' prevents enumeration attacks — an attacker cannot distinguish between non-existent and inaccessible resources."
+            },
+            {
+                type: "predict-output",
+                question: "What does this parameterised query return?",
+                code: "const code = \"MERC'; DROP TABLE tokens; --\";\nconst result = await db.query(\n  'SELECT * FROM tokens WHERE code = $1',\n  [code]\n);\nconsole.log(result.rows.length);",
+                answer: "0",
+                explanation: "The parameterised query treats the malicious string as a literal value to search for. No token has that exact code, so 0 rows are returned. The DROP TABLE is never executed because it is data, not SQL."
+            },
+            {
+                type: "spot-the-bug",
+                question: "Find the security flaw in this CORS configuration:",
+                code: "const corsMiddleware = cors({\n  origin: (origin, cb) => {\n    if (origin.endsWith('.tokn.app')) cb(null, true);\n    else cb(new Error('blocked'));\n  },\n  credentials: true\n});",
+                options: [
+                    "Line 2 — origin can be undefined (mobile/server requests)",
+                    "Line 4 — should use includes() not endsWith()",
+                    "Line 5 — credentials: true is insecure"
+                ],
+                correct: 0,
+                explanation: "When requests come from mobile apps or server-to-server, origin is undefined. Calling .endsWith() on undefined throws a TypeError, crashing your middleware. Always check if (!origin) first."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the helmet CSP directive that blocks all content loading (API only serves JSON):",
+                code: "contentSecurityPolicy: {\n  directives: {\n    ___: [\"'none'\"],\n  },\n}",
+                answer: "defaultSrc",
+                explanation: "defaultSrc: [\"'none'\"] is the most restrictive CSP possible — it blocks scripts, styles, images, fonts, connections, and everything else. Perfect for a pure JSON API that never serves HTML pages."
+            },
+            {
+                type: "which-breaks",
+                question: "Which input validation is insufficient for preventing injection?",
+                variants: [
+                    "z.string().max(100).trim() with parameterised query",
+                    "z.string().regex(/^[A-Z0-9-]+$/) with parameterised query",
+                    "z.string().max(100) with template literal in db.query(`...${value}...`)"
+                ],
+                correct: 2,
+                explanation: "Zod validation limits input shape but does NOT prevent SQL injection on its own. If you concatenate even validated input into a query string with template literals, SQL injection is still possible with cleverly crafted strings within the allowed pattern. Always use parameterised queries."
+            },
+            {
+                type: "predict-output",
+                question: "What happens when this code runs?",
+                code: "const secrets = [\n  process.env.JWT_SECRET,\n  process.env.JWT_SECRET_PREVIOUS\n].filter(Boolean);\n\nconsole.log(secrets.length);\n// Assume JWT_SECRET is set, JWT_SECRET_PREVIOUS is undefined",
+                answer: "1",
+                explanation: "filter(Boolean) removes falsy values (undefined, null, empty string). Since JWT_SECRET_PREVIOUS is undefined, it gets filtered out, leaving only the current secret. This is how dual-secret rotation works — the array has 2 entries during rotation and 1 normally."
+            },
+            {
+                type: "order-steps",
+                question: "Order these steps when you discover a SQL injection vulnerability in production:",
+                steps: [
+                    "Fix the vulnerable query with parameterised placeholders",
+                    "Check logs for signs of exploitation",
+                    "Deploy the fix immediately",
+                    "Audit all other queries for the same pattern",
+                    "If exploited: rotate all secrets, notify affected users"
+                ],
+                correctOrder: [1, 0, 2, 3, 4],
+                explanation: "First assess the damage (check logs). Then fix and deploy the specific vulnerability. Then audit for similar issues across the codebase. Finally, if exploitation occurred, execute your incident response plan."
+            },
+            {
+                question: "What does the 'maxAge: 86400' option in CORS configuration do?",
+                options: [
+                    "Expires authentication tokens after 24 hours",
+                    "Tells browsers to cache preflight (OPTIONS) responses for 24 hours",
+                    "Sets the maximum session length to 24 hours",
+                    "Deletes CORS entries from the database after 24 hours"
+                ],
+                correct: 1,
+                explanation: "maxAge tells the browser how long to cache the result of a preflight (OPTIONS) request. 86400 seconds = 24 hours. This means the browser won't send a preflight request for the same endpoint within that period, reducing latency."
+            },
+            {
+                type: "spot-the-bug",
+                question: "Find the security vulnerability in this error handler:",
+                code: "app.use((err, req, res, next) => {\n  console.error(err);\n  res.status(500).json({\n    error: err.message,\n    stack: err.stack,\n    query: req.body\n  });\n});",
+                options: [
+                    "Line 2 — should not log errors",
+                    "Lines 4-6 — exposes stack trace, internal errors, and user input to the client",
+                    "Line 3 — should use 400 not 500"
+                ],
+                correct: 1,
+                explanation: "Sending err.stack reveals file paths, library versions, and internal structure. Sending err.message may reveal database errors or secret values. Sending req.body back could reflect injection payloads. In production, only send a generic error message."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the constant-time comparison to prevent timing attacks:",
+                code: "import { ___ } from 'crypto';\n\nfunction safeCompare(a: string, b: string): boolean {\n  if (a.length !== b.length) return false;\n  return ___(Buffer.from(a), Buffer.from(b));\n}",
+                answer: "timingSafeEqual",
+                explanation: "timingSafeEqual from Node's crypto module compares two buffers in constant time — it always takes the same amount of time regardless of where the first difference is. This prevents attackers from guessing API keys or token codes character by character."
+            },
+            {
+                type: "which-breaks",
+                question: "Which .gitignore entry is INSUFFICIENT for protecting secrets?",
+                variants: [
+                    ".env\n.env.local\n.env.production\n*.pem\n*.key",
+                    ".env\nconfig/secrets.json",
+                    ".env"
+                ],
+                correct: 2,
+                explanation: "Only ignoring .env misses .env.local, .env.production, .pem files, .key files, and any other secret-containing files. A comprehensive .gitignore should cover all variations and file types that could contain credentials."
+            },
+            {
+                type: "predict-output",
+                question: "What does this request size limit do?",
+                code: "app.use(express.json({ limit: '1mb' }));\n\n// Client sends a 5MB JSON body\n// What status code does Express return?",
+                answer: "413",
+                explanation: "Express returns HTTP 413 (Payload Too Large) when the request body exceeds the configured limit. This prevents denial-of-service attacks where an attacker sends enormous payloads to exhaust server memory."
+            },
+            {
+                question: "Why is `app.use(cors())` with no options dangerous in production?",
+                options: [
+                    "It disables CORS entirely, blocking all cross-origin requests",
+                    "It allows ALL origins to make authenticated requests to your API",
+                    "It breaks mobile app requests by requiring an Origin header",
+                    "It only allows GET requests, blocking POST/PUT/DELETE"
+                ],
+                correct: 1,
+                explanation: "cors() with no options defaults to allowing all origins. Combined with credentials (cookies, auth headers), any malicious website can make requests to your API on behalf of your logged-in users — a critical security vulnerability."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the ownership check pattern for updating a token:",
+                code: "const result = await db.query(\n  'UPDATE tokens SET label = $1 WHERE id = $2 AND ___ = $3',\n  [newLabel, tokenId, req.user.id]\n);",
+                answer: "user_id",
+                explanation: "Adding user_id to the WHERE clause ensures only the owner can update the token. If someone else's token ID is provided, the WHERE clause matches zero rows and nothing is updated — no error, no data leak."
+            },
+            {
+                type: "order-steps",
+                question: "Order the security checks for a new API endpoint (from design to deploy):",
+                steps: [
+                    "Add authenticateJWT middleware",
+                    "Validate input with zod schema",
+                    "Add ownership check (user_id in WHERE clause)",
+                    "Write parameterised SQL query",
+                    "Test with another user's resource ID (should get 404)"
+                ],
+                correctOrder: [0, 1, 2, 3, 4],
+                explanation: "Security is layered: first authenticate (who are you?), then validate input (is this well-formed?), then authorize (do you own this?), then query safely (parameterised), then verify with negative tests."
+            },
+            {
+                type: "spot-the-bug",
+                question: "What is wrong with this query that constructs a dynamic table name?",
+                code: "async function findOwned(table, id, userId) {\n  const result = await db.query(\n    `SELECT * FROM ${table} WHERE id = $1 AND user_id = $2`,\n    [id, userId]\n  );\n  return result.rows[0];\n}",
+                options: [
+                    "Line 3 — table name is interpolated, allowing SQL injection",
+                    "Line 4 — id should be $2 and userId should be $1",
+                    "Line 2 — should use single quotes not backticks for the query"
+                ],
+                correct: 0,
+                explanation: "Parameterised queries only protect VALUES ($1, $2). Table and column names cannot be parameterised — they must be validated against a whitelist. An attacker passing table = 'tokens; DROP TABLE users; --' would execute arbitrary SQL."
+            },
+            {
+                question: "What is the purpose of the Referrer-Policy: strict-origin-when-cross-origin header?",
+                options: [
+                    "Prevents the browser from sending any requests to other origins",
+                    "Hides the full URL path when navigating to third-party sites, sending only the origin",
+                    "Blocks all incoming referral traffic from external sites",
+                    "Encrypts the Referer header before sending it"
+                ],
+                correct: 1,
+                explanation: "strict-origin-when-cross-origin sends the full URL for same-origin requests but only the origin (e.g., https://tokn.app) for cross-origin requests. This prevents leaking sensitive URL paths (like /tokens/MERC-8GH2-LP4X) to third-party sites."
+            },
+            {
+                type: "which-breaks",
+                question: "Which secret generation method is insecure?",
+                variants: [
+                    "require('crypto').randomBytes(32).toString('hex')",
+                    "Math.random().toString(36).substring(2)",
+                    "require('crypto').randomUUID()"
+                ],
+                correct: 1,
+                explanation: "Math.random() is not cryptographically secure — its output is predictable if the internal state is known. For secrets, always use crypto.randomBytes() or crypto.randomUUID() which use the OS's cryptographic random number generator."
+            },
+            {
+                type: "predict-output",
+                question: "What does npm audit return for this scenario?",
+                code: "// Package 'old-lib' version 1.2.3 has a known critical vulnerability\n// It's a direct dependency in package.json\n// Running: npm audit --audit-level=high\n// What is the exit code?",
+                answer: "1",
+                explanation: "npm audit returns exit code 1 (failure) when vulnerabilities at or above the specified level are found. --audit-level=high means it fails on high and critical vulnerabilities. This is used in CI to block deployments with known vulnerabilities."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the X-Frame-Options header value that prevents ALL iframe embedding:",
+                code: "frameguard: { action: '___' }",
+                answer: "deny",
+                explanation: "X-Frame-Options: DENY prevents your page from being embedded in ANY iframe, including your own domain. This blocks clickjacking attacks where an attacker overlays an invisible iframe of your site on a malicious page to trick users into clicking."
+            },
         ]);
     </script>
 </body>

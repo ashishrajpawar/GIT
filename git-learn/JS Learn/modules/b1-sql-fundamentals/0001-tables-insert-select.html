@@ -322,6 +322,206 @@ WHERE id = (SELECT id FROM tokens ORDER BY created_at ASC LIMIT 1);`
         steps: ["CREATE TABLE users", "CREATE TABLE tokens (with REFERENCES users)", "INSERT INTO users", "INSERT INTO tokens"],
         correctOrder: [0, 1, 2, 3],
         explanation: "Tables with foreign keys must be created AFTER the table they reference. And you must insert a user before inserting tokens that reference that user — the foreign key constraint enforces this order."
+      },
+      // --- Questions 6–25 ---
+      {
+        type: "predict-output",
+        question: "How many rows does this INSERT add?",
+        code: "INSERT INTO tokens (code, user_id, issued_to) VALUES\n('ABCD-1111', 1, 'Ravi'),\n('EFGH-2222', 1, 'Meera'),\n('IJKL-3333', 1, 'Priya');",
+        answer: "3",
+        explanation: "A single INSERT with multiple value tuples inserts one row per tuple. This is more efficient than three separate INSERTs because it's a single round-trip to the database."
+      },
+      {
+        type: "spot-the-bug",
+        question: "Why does this CREATE TABLE fail?",
+        code: "CREATE TABLE tokens (\n  id SERIAL PRIMARY KEY,\n  code TEXT UNIQUE NOT NULL,\n  user_id INTEGER REFERENCES users(id)\n  issued_to TEXT NOT NULL,\n  created_at TIMESTAMP DEFAULT NOW()\n);",
+        options: [
+          "SERIAL is not a valid type",
+          "Missing comma after the user_id line",
+          "REFERENCES can't be inline",
+          "DEFAULT NOW() is invalid syntax"
+        ],
+        correct: 1,
+        explanation: "Each column definition must be separated by a comma. The line ending with REFERENCES users(id) is missing a comma before issued_to. A single missing comma causes the entire CREATE TABLE to fail."
+      },
+      {
+        type: "fill-blank",
+        question: "Retrieve tokens created in the last 7 days:",
+        code: "SELECT code, issued_to FROM tokens\nWHERE created_at > NOW() - ___ '7 days';",
+        answer: "INTERVAL",
+        explanation: "INTERVAL is PostgreSQL's way of expressing time durations. NOW() - INTERVAL '7 days' gives you the timestamp exactly 7 days ago. You can use days, hours, minutes, or combinations."
+      },
+      {
+        question: "What does SERIAL do in 'id SERIAL PRIMARY KEY'?",
+        options: [
+          "Creates a text column that stores serial numbers",
+          "Auto-generates incrementing integers — you don't supply id on INSERT",
+          "Stores the data in sorted order on disk",
+          "Makes the column read-only after initial insert"
+        ],
+        correct: 1,
+        explanation: "SERIAL is shorthand for creating an auto-incrementing integer column backed by a sequence. When you INSERT without specifying id, PostgreSQL generates the next number automatically."
+      },
+      {
+        type: "which-breaks",
+        question: "Which INSERT will fail if the tokens table has a UNIQUE constraint on code?",
+        variants: [
+          "INSERT INTO tokens (code, user_id) VALUES ('NEW1-AAAA', 1);",
+          "INSERT INTO tokens (code, user_id) VALUES ('NEW1-AAAA', 2);  -- same code, different user",
+          "INSERT INTO tokens (code, user_id) VALUES ('NEW2-BBBB', 1);"
+        ],
+        correct: 1,
+        explanation: "UNIQUE means no two rows can have the same value in that column. If 'NEW1-AAAA' already exists (from variant A), inserting it again with a different user_id still violates the constraint. The uniqueness is on the column value, not the combination."
+      },
+      {
+        type: "predict-output",
+        question: "What does SELECT return here?",
+        code: "SELECT issued_to FROM tokens WHERE status = 'revoked' ORDER BY created_at DESC LIMIT 1;",
+        answer: "The issued_to of the most recently created revoked token (or empty if none are revoked)",
+        explanation: "This filters to revoked tokens, sorts them newest-first (DESC), and takes only the top one. LIMIT 1 with ORDER BY gives you the 'most recent' or 'largest' pattern — very common in real queries."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This query intends to find tokens that have NOT been revoked. What's wrong?",
+        code: "SELECT code FROM tokens WHERE revoked_at != NULL;",
+        options: [
+          "!= is not valid SQL — use <>",
+          "NULL comparisons need IS NOT NULL, not != NULL",
+          "revoked_at should be in quotes",
+          "You can't use WHERE on timestamps"
+        ],
+        correct: 1,
+        explanation: "NULL is not a value — it's the absence of a value. Any comparison with = or != against NULL returns NULL (not true or false). Use IS NULL or IS NOT NULL. This query returns zero rows no matter what data exists."
+      },
+      {
+        type: "fill-blank",
+        question: "Delete all tokens belonging to a specific user:",
+        code: "___ FROM tokens WHERE user_id = 42;",
+        answer: "DELETE",
+        explanation: "DELETE FROM removes rows matching the WHERE condition. Without WHERE, it would delete every row in the table. Always double-check your WHERE clause before running DELETE in production."
+      },
+      {
+        question: "What happens if you INSERT into tokens without specifying created_at, and the column has DEFAULT NOW()?",
+        options: [
+          "The insert fails — all columns must be specified",
+          "created_at is set to NULL",
+          "created_at is automatically set to the current timestamp",
+          "created_at is set to '1970-01-01'"
+        ],
+        correct: 2,
+        explanation: "DEFAULT NOW() means if you omit the column from your INSERT, PostgreSQL fills it with the current timestamp. This is the standard pattern for created_at columns — you never supply it manually."
+      },
+      {
+        type: "order-steps",
+        question: "Order these clauses in a valid SELECT statement:",
+        steps: ["SELECT columns", "FROM table", "WHERE condition", "ORDER BY column", "LIMIT n"],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "SQL has a fixed clause order: SELECT, FROM, WHERE, GROUP BY, HAVING, ORDER BY, LIMIT. You can omit clauses but never reorder them. Writing WHERE before FROM is a syntax error."
+      },
+      {
+        type: "predict-output",
+        question: "How many rows are returned?",
+        code: "SELECT * FROM tokens WHERE status = 'active' AND status = 'revoked';",
+        answer: "0",
+        explanation: "A column cannot be two values simultaneously. AND means both conditions must be true for the same row. No row has status equal to both 'active' and 'revoked'. You probably meant OR."
+      },
+      {
+        type: "which-breaks",
+        question: "Which SELECT has invalid syntax?",
+        variants: [
+          "SELECT code, issued_to FROM tokens WHERE user_id = 1;",
+          "SELECT code issued_to FROM tokens WHERE user_id = 1;",
+          "SELECT * FROM tokens WHERE user_id = 1;"
+        ],
+        correct: 1,
+        explanation: "When selecting multiple columns, you must separate them with commas. 'SELECT code issued_to' is interpreted as 'SELECT code AS issued_to' — aliasing code to issued_to. You'd get one column, not two, and it's likely not what you intended."
+      },
+      {
+        type: "fill-blank",
+        question: "Count how many tokens each user has issued:",
+        code: "SELECT user_id, COUNT(*) AS token_count\nFROM tokens\n___ user_id;",
+        answer: "GROUP BY",
+        explanation: "GROUP BY collapses all rows with the same user_id into a single group. COUNT(*) then counts rows within each group. Without GROUP BY, COUNT would give a single total for the entire table."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This query should find tokens issued to names starting with 'A'. What's wrong?",
+        code: "SELECT * FROM tokens WHERE issued_to LIKE 'A';",
+        options: [
+          "LIKE needs double quotes around 'A'",
+          "Missing wildcard — should be 'A%' to match names starting with A",
+          "LIKE doesn't work on TEXT columns",
+          "Should use WHERE issued_to = 'A%'"
+        ],
+        correct: 1,
+        explanation: "LIKE 'A' matches only the exact string 'A'. The % wildcard means 'any characters'. LIKE 'A%' matches anything starting with A. Without the wildcard, LIKE behaves identically to =."
+      },
+      {
+        question: "What's the difference between TEXT and VARCHAR(100)?",
+        options: [
+          "TEXT is slower because it's unlimited",
+          "VARCHAR(100) rejects inserts longer than 100 characters; TEXT has no limit",
+          "TEXT stores data differently on disk",
+          "There's no practical difference in PostgreSQL — both are equally fast"
+        ],
+        correct: 3,
+        explanation: "In PostgreSQL specifically, TEXT and VARCHAR perform identically. VARCHAR(n) only adds a length check constraint. Many Postgres experts prefer TEXT + a CHECK constraint if you need length validation, because you can change the limit without rewriting the table."
+      },
+      {
+        type: "predict-output",
+        question: "What value does this return for a newly inserted token?",
+        code: "INSERT INTO tokens (code, user_id, issued_to)\nVALUES ('TEST-9999', 1, 'Unit Test')\nRETURNING id, created_at;",
+        answer: "The auto-generated id (e.g., 1) and the current timestamp",
+        explanation: "RETURNING gives you back the inserted row's values in the same query. This is crucial for APIs — after inserting a token, you immediately get the id and created_at without needing a separate SELECT."
+      },
+      {
+        type: "fill-blank",
+        question: "Make the code column case-insensitive unique (so 'ABCD' and 'abcd' can't coexist):",
+        code: "CREATE ___ INDEX tokens_code_unique ON tokens (LOWER(code));",
+        answer: "UNIQUE",
+        explanation: "A UNIQUE INDEX on LOWER(code) ensures that no two rows can have codes that differ only by case. This is important for Token — you don't want 'MERC-8GH2' and 'merc-8gh2' to be different tokens."
+      },
+      {
+        type: "which-breaks",
+        question: "Which statement fails if tokens has a NOT NULL constraint on issued_to?",
+        variants: [
+          "INSERT INTO tokens (code, user_id, issued_to) VALUES ('X', 1, 'Ashish');",
+          "INSERT INTO tokens (code, user_id, issued_to) VALUES ('Y', 1, '');",
+          "INSERT INTO tokens (code, user_id) VALUES ('Z', 1);"
+        ],
+        correct: 2,
+        explanation: "NOT NULL rejects NULL values, not empty strings. Variant B (empty string '') is technically allowed by NOT NULL — it's a value, just empty. Variant C omits issued_to entirely, so PostgreSQL tries to insert NULL, which violates the constraint."
+      },
+      {
+        type: "spot-the-bug",
+        question: "Why does this query not do what's intended?",
+        code: "SELECT * FROM tokens WHERE created_at > '2024-01-01' ORDER BY status;",
+        options: [
+          "You can't compare dates with strings",
+          "ORDER BY on a text column sorts alphabetically — 'active' comes before 'revoked', which may not be meaningful",
+          "The > operator doesn't work on dates",
+          "You must use AND between WHERE and ORDER BY"
+        ],
+        correct: 1,
+        explanation: "Sorting by status gives alphabetical order: active, paused, revoked. That's probably not meaningful for the user. ORDER BY is most useful on dates, numeric values, or columns where the sort order maps to something the user cares about."
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps to safely update a token's status in an API request handler:",
+        steps: ["Validate the input (is the new status a valid enum value?)", "Query: SELECT to verify the token exists and belongs to this user", "Query: UPDATE the status with WHERE clause", "Return the updated token to the client"],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "Always validate input first (defense in depth). Then confirm the token exists and belongs to the authenticated user (authorization). Only then perform the UPDATE. Finally return the result. Skipping the existence check or auth check creates security holes."
+      },
+      {
+        question: "What does LIMIT 10 OFFSET 20 return?",
+        options: [
+          "The first 10 rows, starting from row 1",
+          "Rows 21–30 (skip 20, take next 10)",
+          "The first 20 rows, then 10 more",
+          "10 random rows from the table"
+        ],
+        correct: 1,
+        explanation: "OFFSET skips rows, LIMIT caps how many you get. OFFSET 20 LIMIT 10 gives you rows 21–30 — this is basic pagination. Token's API uses this for paginating token lists and message history."
       }
     ]);
   </script>

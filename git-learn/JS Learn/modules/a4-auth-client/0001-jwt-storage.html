@@ -413,6 +413,193 @@ export function RootNavigator() {
         ],
         correct: 2,
         explanation: "If the network is offline but a refresh token exists, the user might still be authenticated — you just can't verify right now. Showing Login forces them to re-enter credentials they might not remember. Better: show the app with cached data, or show an offline state with a retry button."
+      },
+      // --- Questions 6–25 ---
+      {
+        type: "predict-output",
+        question: "What value does getAccessToken() return immediately after app launch (before any login or refresh)?",
+        code: "let accessToken: string | null = null;\n\nexport function getAccessToken() {\n  return accessToken;\n}\n// App just launched, no login yet",
+        answer: "null",
+        explanation: "The access token is stored in a plain JavaScript variable initialized to null. It only gets a value after a successful login or refresh. On app launch, before restoreSession() completes, it's always null."
+      },
+      {
+        question: "What is the maximum value size that expo-secure-store supports per key?",
+        options: [
+          "256 bytes",
+          "2048 bytes (2 KB)",
+          "Unlimited — same as AsyncStorage",
+          "It varies by platform but is typically around 2048 characters"
+        ],
+        correct: 3,
+        explanation: "expo-secure-store has platform-specific size limits. On iOS (Keychain) the practical limit is large, but on Android (Keystore) values are limited to about 2048 bytes. JWTs are typically under 1 KB, so this isn't usually a problem, but don't store large blobs in SecureStore."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this login handler?",
+        code: "async function handleLogin() {\n  const res = await fetch('/api/auth/login', {\n    method: 'POST',\n    body: JSON.stringify({ email, password }),\n  });\n  const json = await res.json();\n  setAccessToken(json.data.accessToken);\n  await setRefreshToken(json.data.refreshToken);\n}",
+        options: [
+          "Missing Content-Type header — server won't parse the JSON body",
+          "Should use GET instead of POST",
+          "json.data doesn't exist",
+          "await is not needed on setRefreshToken"
+        ],
+        correct: 0,
+        explanation: "Without the 'Content-Type': 'application/json' header, Express/Fastify won't run the JSON body parser. The request body arrives as undefined on the server. Always include headers: { 'Content-Type': 'application/json' } when sending JSON."
+      },
+      {
+        type: "fill-blank",
+        question: "Read a stored secret from the device's encrypted storage:",
+        code: "import * as SecureStore from 'expo-secure-store';\nconst refreshToken = await SecureStore.___('refreshToken');",
+        answer: "getItemAsync",
+        explanation: "SecureStore.getItemAsync(key) retrieves a previously stored value from the encrypted keychain/keystore. It returns null if the key doesn't exist. The 'Async' suffix indicates it returns a Promise."
+      },
+      {
+        type: "order-steps",
+        question: "Put the client-side login flow in the correct order:",
+        steps: ["User taps 'Sign In'", "POST credentials to /api/auth/login", "Check res.ok for errors", "Store access token in memory", "Store refresh token in SecureStore", "Navigate to Main screen"],
+        correctOrder: [0, 1, 2, 3, 4, 5],
+        explanation: "The user initiates login, credentials are sent to the server, the response is checked for errors, then tokens are stored (access in memory, refresh in SecureStore), and finally navigation occurs. The order matters — you must store tokens before navigating, otherwise the Main screen has no auth token for API calls."
+      },
+      {
+        question: "Why is the access token stored in memory instead of SecureStore?",
+        options: [
+          "SecureStore doesn't support access tokens",
+          "Access tokens are too large for SecureStore",
+          "Short-lived tokens (15 min) don't need persistence — reading from memory is faster and they're refreshed on every app launch anyway",
+          "In-memory storage is more secure than SecureStore"
+        ],
+        correct: 2,
+        explanation: "Access tokens expire in 15 minutes. If the app closes and reopens, the token is already expired — so persisting it buys nothing. Reading from a variable is synchronous and instant. On reopen, the refresh flow gets a fresh access token. This avoids unnecessary SecureStore reads on every API call."
+      },
+      {
+        type: "predict-output",
+        question: "What happens when you call SecureStore.getItemAsync with a key that was never stored?",
+        code: "const value = await SecureStore.getItemAsync('nonExistentKey');\nconsole.log(value);",
+        answer: "null",
+        explanation: "SecureStore.getItemAsync returns null (not undefined, not an error) when the key doesn't exist. This is how the SplashScreen detects a first-time user: if getItemAsync('refreshToken') returns null, there's no existing session."
+      },
+      {
+        type: "which-breaks",
+        question: "Which token storage approach creates a security vulnerability?",
+        variants: [
+          "Access token in a let variable, refresh token in SecureStore",
+          "Both tokens in SecureStore",
+          "Refresh token stored in AsyncStorage, access token in a global variable"
+        ],
+        correct: 2,
+        explanation: "AsyncStorage is unencrypted plaintext on disk. A rooted device or backup extraction exposes the refresh token, which grants 7-day account access. Options A and B are both secure — SecureStore uses hardware encryption. The trade-off of B is unnecessary I/O for the short-lived access token."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's the problem with this SplashScreen?",
+        code: "export function SplashScreen({ navigation }) {\n  async function checkSession() {\n    const rt = await getRefreshToken();\n    if (!rt) { navigation.replace('Login'); return; }\n    const res = await fetch('/api/auth/refresh', { ... });\n    if (res.ok) {\n      const json = await res.json();\n      setAccessToken(json.data.accessToken);\n      navigation.replace('Main');\n    }\n  }\n  checkSession();\n  return null;\n}",
+        options: [
+          "checkSession is called outside useEffect — it runs on every render, not just mount",
+          "navigation.replace doesn't work",
+          "getRefreshToken returns a string, not a promise",
+          "You can't return null from a component"
+        ],
+        correct: 0,
+        explanation: "Without useEffect, checkSession() runs every time the component re-renders. If a parent re-renders, this component calls the refresh endpoint again unnecessarily. Wrap it in useEffect(() => { checkSession(); }, []) to ensure it runs exactly once on mount."
+      },
+      {
+        type: "fill-blank",
+        question: "Delete the refresh token on logout:",
+        code: "export async function clearTokens() {\n  accessToken = null;\n  await SecureStore.___('token_refresh');\n}",
+        answer: "deleteItemAsync",
+        explanation: "SecureStore.deleteItemAsync(key) removes the encrypted value from the device keychain/keystore. Combined with nulling the in-memory access token, this ensures complete cleanup on logout."
+      },
+      {
+        question: "What does the 'hardware-backed' in 'hardware-backed encryption' mean for expo-secure-store?",
+        options: [
+          "The data is stored on an external hardware device",
+          "Encryption keys are managed by a dedicated security chip (Secure Enclave on iOS, Keystore hardware on Android) — the keys never leave the chip",
+          "The data is encrypted using the device's CPU",
+          "It only works on physical devices, not emulators"
+        ],
+        correct: 1,
+        explanation: "Hardware-backed means the encryption keys live inside a dedicated security chip that never exposes them to the main OS. Even if someone roots the device and dumps memory, they can't extract the raw encryption key. The chip performs encrypt/decrypt operations internally."
+      },
+      {
+        type: "predict-output",
+        question: "What happens if the server's /auth/refresh endpoint returns { accessToken, refreshToken } but the client only stores the accessToken?",
+        code: "const json = await res.json();\nsetAccessToken(json.data.accessToken);\n// forgot: await setRefreshToken(json.data.refreshToken);",
+        answer: "The app works now, but the next refresh attempt will fail because the old refresh token was already rotated (invalidated) on the server",
+        explanation: "Refresh token rotation means each refresh token is single-use. The server invalidates the old one and issues a new one. If the client doesn't store the new refresh token, the next time the access token expires and it tries to refresh with the old token, the server rejects it — forcing a login."
+      },
+      {
+        type: "order-steps",
+        question: "Order the SplashScreen decision tree:",
+        steps: ["Read refresh token from SecureStore", "If null → navigate to Login", "POST refresh token to /api/auth/refresh", "If 401 → navigate to Login", "Store new access token, navigate to Main"],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "First check if a refresh token exists locally. If not, there's no session. If it exists, validate it with the server. A 401 means it's expired/revoked. Success means the user is still authenticated — store the fresh access token and enter the app."
+      },
+      {
+        question: "Why does the Token app use navigation.replace() instead of navigation.navigate() after checking session?",
+        options: [
+          "replace is the only method that works from SplashScreen",
+          "replace removes Splash from the stack — the user can't 'back' into a loading screen",
+          "navigate would cause an infinite loop",
+          "replace is faster"
+        ],
+        correct: 1,
+        explanation: "The SplashScreen is a one-time gate. After it decides Login or Main, there's no reason to ever go back to it. Using replace() removes it from the navigation stack entirely. If you used navigate(), pressing back from Login would show a blank Splash screen."
+      },
+      {
+        type: "which-breaks",
+        question: "Which of these is safe to store in AsyncStorage?",
+        variants: [
+          "The user's refresh token (7-day lifetime)",
+          "The user's preferred theme ('dark' or 'light')",
+          "The API key for the backend"
+        ],
+        correct: 1,
+        explanation: "Theme preference is not sensitive — knowing someone uses dark mode doesn't compromise their account. Refresh tokens and API keys are credentials that grant access, so they must be in SecureStore. The rule: if leaking the value lets someone impersonate the user or access the API, it's a secret."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's the security issue in this registration flow?",
+        code: "async function handleRegister() {\n  const res = await fetch('/api/auth/register', { ... });\n  const json = await res.json();\n  if (res.ok) {\n    // Store tokens immediately from registration response\n    setAccessToken(json.data.accessToken);\n    await setRefreshToken(json.data.refreshToken);\n    navigation.replace('Main');\n  }\n}",
+        options: [
+          "Registration should never return tokens — the email might not be verified yet",
+          "setAccessToken should be called after setRefreshToken",
+          "navigation.replace doesn't accept 'Main' as a parameter",
+          "There is no bug — this is correct auto-login after registration"
+        ],
+        correct: 0,
+        explanation: "If the server returns auth tokens at registration without email verification, an attacker can create accounts with any email address and be immediately authenticated. Token's flow should require email verification first, then the user logs in manually. Registration returns a success message, not tokens."
+      },
+      {
+        type: "fill-blank",
+        question: "Send the access token with every API request:",
+        code: "const res = await fetch(url, {\n  headers: {\n    '___': `Bearer ${getAccessToken()}`\n  }\n});",
+        answer: "Authorization",
+        explanation: "The standard HTTP header for sending bearer tokens is 'Authorization'. The format is 'Bearer <token>'. The server's auth middleware reads this header, extracts the JWT after 'Bearer ', and verifies it."
+      },
+      {
+        type: "predict-output",
+        question: "The user logged in 2 hours ago and hasn't used the app. They open it now. What happens?",
+        code: "// Access token: 15 min lifetime (expired 1h45m ago)\n// Refresh token: 7 day lifetime (still valid)\n// SplashScreen calls restoreSession()",
+        answer: "SplashScreen reads the refresh token from SecureStore, sends it to /auth/refresh, gets a new access token, and navigates to Main — user is not asked to log in again",
+        explanation: "The refresh token is still valid (7 days > 2 hours). Even though the access token expired long ago, the refresh endpoint issues a fresh one. The user enters the app seamlessly. They'd only need to re-login if the refresh token itself expired (after 7 days) or was revoked."
+      },
+      {
+        question: "What happens to SecureStore data when the user uninstalls and reinstalls the app?",
+        options: [
+          "Data is always preserved across reinstalls on both platforms",
+          "On iOS, Keychain data may persist across reinstalls; on Android, Keystore data is deleted with the app",
+          "Data is always deleted on both platforms",
+          "Data is backed up to iCloud/Google Drive automatically"
+        ],
+        correct: 1,
+        explanation: "iOS Keychain items can survive app uninstall/reinstall (unless configured otherwise). Android Keystore data is tied to the app installation and is deleted when the app is removed. This means on iOS, a reinstall might auto-login the user (refresh token still in Keychain), while on Android they'll always need to log in fresh."
+      },
+      {
+        type: "order-steps",
+        question: "Order the complete auth lifecycle from install to session expiry:",
+        steps: ["Install app, open for first time", "No refresh token found → show Login", "User logs in → store access + refresh tokens", "Use app for 7 days, silent refresh keeps working", "Refresh token expires after 7 days", "Next API call fails, refresh fails → show Login"],
+        correctOrder: [0, 1, 2, 3, 4, 5],
+        explanation: "Fresh install has no tokens. User logs in and tokens are stored. For 7 days, the access token is silently refreshed every 15 minutes. After 7 days, the refresh token itself expires. The next silent refresh attempt fails, and the user must log in again. This is the full session lifecycle."
       }
     ]);
   </script>

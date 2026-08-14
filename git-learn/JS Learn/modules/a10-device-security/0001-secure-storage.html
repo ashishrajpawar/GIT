@@ -544,6 +544,199 @@ export const secureTokenStore = new SecureTokenStore();`
                 ],
                 correct: 0,
                 explanation: "AsyncStorage stores data as plaintext on disk. A JWT is a sensitive credential that should be stored in SecureStore where it gets hardware-backed encryption. The misleading log message on line 3 is bad practice too, but the real bug is the insecure storage mechanism."
+            },
+            // --- Questions 6-25 ---
+            {
+                type: "predict-output",
+                code: "const jwt = 'eyJhbGciOiJIUzI1NiJ9.payload.signature';\nconsole.log(jwt.length > 2048 ? 'needs splitting' : 'fits in one key');",
+                answer: "fits in one key",
+                explanation: "This short example JWT is well under 2048 bytes. In practice, most JWTs are 300-800 bytes. Only very large JWTs with many claims would exceed the iOS Keychain per-item limit."
+            },
+            {
+                type: "fill-blank",
+                code: "const token = await SecureStore.___('token_auth_jwt');\nif (!token) navigateToLogin();",
+                answer: "getItemAsync",
+                explanation: "getItemAsync retrieves a previously stored value by key. It returns null if the key does not exist or the Keychain is inaccessible, which means the user needs to log in again."
+            },
+            {
+                question: "What is the maximum value size per item in iOS Keychain when using expo-secure-store?",
+                options: [
+                    "512 bytes",
+                    "2048 bytes",
+                    "1 MB",
+                    "No limit"
+                ],
+                correct: 1,
+                explanation: "iOS Keychain limits each stored item to 2048 bytes when accessed through expo-secure-store. Larger values must be split across multiple keys or compressed before storage."
+            },
+            {
+                type: "order-steps",
+                question: "Order the steps for migrating sensitive data from AsyncStorage to SecureStore:",
+                steps: [
+                    "Check the migration flag in AsyncStorage",
+                    "Read each sensitive value from AsyncStorage",
+                    "Write the value to SecureStore with the new key",
+                    "Delete the plaintext copy from AsyncStorage",
+                    "Set the migration flag to 'done'"
+                ],
+                correctOrder: [0, 1, 2, 3, 4],
+                explanation: "Check the flag first to avoid re-running. Then for each key: read from AsyncStorage, write to SecureStore, delete the old copy. Finally mark migration as complete. This order ensures data is never lost even if the process crashes mid-way."
+            },
+            {
+                type: "which-breaks",
+                question: "Which SecureStore operation will throw an error?",
+                variants: [
+                    "await SecureStore.setItemAsync('key', JSON.stringify({ a: 1 }));",
+                    "await SecureStore.setItemAsync('key', 12345);",
+                    "await SecureStore.deleteItemAsync('nonexistent_key');"
+                ],
+                correct: 1,
+                explanation: "SecureStore.setItemAsync only accepts string values. Passing a number (12345) without converting it to a string first will throw a type error. deleteItemAsync on a nonexistent key is a no-op (no error)."
+            },
+            {
+                type: "spot-the-bug",
+                code: "async function restoreSession() {\n  const jwt = await SecureStore.getItemAsync('token_auth_jwt');\n  const user = decodeJWT(jwt);\n  setUser(user);\n}",
+                options: [
+                    "Line 2 — getItemAsync returns a promise that is not awaited",
+                    "Line 3 — jwt could be null, decodeJWT would crash",
+                    "Line 4 — setUser should be called inside a try/catch"
+                ],
+                correct: 1,
+                explanation: "getItemAsync returns null if the key does not exist or the Keychain is unavailable. Passing null to decodeJWT would throw an error. You must check if (jwt) before attempting to decode it."
+            },
+            {
+                type: "predict-output",
+                code: "const keys = ['token_auth_jwt', 'token_refresh_jwt', 'token_e2e_key'];\nconst sensitive = keys.filter(k => k.includes('token'));\nconsole.log(sensitive.length);",
+                answer: "3",
+                explanation: "All three keys contain the substring 'token', so all three pass the filter. In Token's storage architecture, all of these are secrets that belong in SecureStore, not AsyncStorage."
+            },
+            {
+                question: "What does the keychainAccessible option AFTER_FIRST_UNLOCK mean?",
+                options: [
+                    "The item can only be accessed after the user authenticates with biometrics",
+                    "The item is accessible any time after the device has been unlocked once since boot",
+                    "The item is locked until the app is opened for the first time",
+                    "The item requires the device to be connected to the internet"
+                ],
+                correct: 1,
+                explanation: "AFTER_FIRST_UNLOCK means the Keychain item becomes accessible once the user unlocks the device after a reboot. It remains accessible even when the screen is locked later. This is useful for background tasks that need credentials."
+            },
+            {
+                type: "fill-blank",
+                code: "export class SecureStorageError extends Error {\n  constructor(message: string, public readonly ___: string) {\n    super(message);\n    this.name = 'SecureStorageError';\n  }\n}",
+                answer: "key",
+                explanation: "The custom error class stores the key that caused the failure. This helps with debugging — when a SecureStore operation fails, you immediately know which key was involved without digging through stack traces."
+            },
+            {
+                type: "order-steps",
+                question: "Order the steps for the auth session restore flow using SecureStore:",
+                steps: [
+                    "App boots, AuthProvider mounts",
+                    "Read JWT from SecureStore with getItemAsync",
+                    "Call /api/me with the JWT to verify it",
+                    "If expired, read refresh token from SecureStore",
+                    "Call /api/refresh to get new tokens",
+                    "Save new tokens to SecureStore, set user state"
+                ],
+                correctOrder: [0, 1, 2, 3, 4, 5],
+                explanation: "On boot, try the access token first. If it is expired (API returns 401), use the refresh token to get new ones. Always save the new tokens back to SecureStore so the next boot has fresh credentials."
+            },
+            {
+                type: "predict-output",
+                code: "const serialized = JSON.stringify({ userId: 'u1', role: 'admin' });\nconsole.log(typeof serialized);",
+                answer: "string",
+                explanation: "JSON.stringify converts any JavaScript value to a string. Since SecureStore only accepts strings, you must serialize objects with JSON.stringify before storing and parse them back with JSON.parse on retrieval."
+            },
+            {
+                type: "which-breaks",
+                question: "Which storage decision is a security vulnerability in a privacy app?",
+                variants: [
+                    "Storing the UI theme preference ('dark') in AsyncStorage",
+                    "Storing the refresh token in SecureStore with WHEN_UNLOCKED",
+                    "Storing the end-to-end encryption key in AsyncStorage"
+                ],
+                correct: 2,
+                explanation: "An E2E encryption key in AsyncStorage is stored as plaintext on disk. Anyone with file system access (rooted device, backup extraction) can read it and decrypt all messages. This completely undermines the privacy guarantees of the app."
+            },
+            {
+                question: "Why does the secureStorage wrapper catch errors in the get() method and return null instead of throwing?",
+                options: [
+                    "SecureStore.getItemAsync never throws errors",
+                    "Throwing would crash the app on startup after a device restore",
+                    "Returning null is faster than throwing exceptions",
+                    "The TypeScript compiler requires it"
+                ],
+                correct: 1,
+                explanation: "After a device restore or factory reset, the Keychain may be inaccessible and throw errors. By catching and returning null, the app gracefully falls back to the login flow instead of crashing on startup."
+            },
+            {
+                type: "spot-the-bug",
+                code: "async function saveCredentials(access, refresh) {\n  await SecureStore.setItemAsync('auth', access);\n  await SecureStore.setItemAsync('refresh', refresh);\n  await AsyncStorage.setItem('has_session', 'true');\n  console.log('Saved:', access, refresh);\n}",
+                options: [
+                    "Line 4 — storing session flag in AsyncStorage is fine",
+                    "Line 5 — logging the actual token values is a security leak",
+                    "Line 2 — key name 'auth' is too generic"
+                ],
+                correct: 1,
+                explanation: "Logging actual JWT values to console is a security vulnerability. Console logs can be captured by debugging tools, crash reporters, or log aggregation services. Never log sensitive credentials — log only that the operation succeeded."
+            },
+            {
+                type: "fill-blank",
+                code: "if (value.length > ___) {\n  throw new SecureStorageError('Value exceeds iOS limit', key);\n}",
+                answer: "2048",
+                explanation: "The iOS Keychain per-item limit is 2048 bytes. Checking this before attempting storage gives a clear error message instead of a cryptic Keychain failure."
+            },
+            {
+                type: "predict-output",
+                code: "const raw = null;\ntry {\n  const parsed = JSON.parse(raw);\n  console.log(parsed);\n} catch (e) {\n  console.log('parse failed');\n}",
+                answer: "parse failed",
+                explanation: "JSON.parse(null) throws a SyntaxError because null is not valid JSON. The getJSON helper must check if the raw value is null before attempting to parse, which is why it returns null early when get() returns null."
+            },
+            {
+                question: "On Android, what backs the encryption for expo-secure-store?",
+                options: [
+                    "A software-based AES implementation in the app",
+                    "The Android Keystore system (hardware-backed on most devices)",
+                    "The app's private directory with file permissions",
+                    "Google Play Services encryption library"
+                ],
+                correct: 1,
+                explanation: "On Android API 23+, expo-secure-store uses EncryptedSharedPreferences backed by the Android Keystore. On devices with hardware security modules (most modern phones), keys are stored in dedicated hardware and never leave it."
+            },
+            {
+                type: "order-steps",
+                question: "Order the steps for handling a SecureStore write that exceeds 2048 bytes:",
+                steps: [
+                    "Check if value.length exceeds MAX_ITEM_SIZE",
+                    "Calculate the number of chunks needed",
+                    "Store metadata (chunk count) in a __meta key",
+                    "Loop through and store each chunk in a numbered key",
+                    "When reading, check for __meta first and reassemble chunks"
+                ],
+                correctOrder: [0, 1, 2, 3, 4],
+                explanation: "The chunking strategy: detect oversized values, calculate chunks, store metadata for reassembly, write each chunk. On read, check for metadata first — if present, reassemble; otherwise read the single value directly."
+            },
+            {
+                type: "which-breaks",
+                question: "Which keychainAccessible setting is inappropriate for Token's auth token?",
+                variants: [
+                    "SecureStore.WHEN_UNLOCKED — only accessible when device is unlocked",
+                    "SecureStore.ALWAYS — accessible even when device is locked",
+                    "SecureStore.AFTER_FIRST_UNLOCK — accessible after first unlock since boot"
+                ],
+                correct: 1,
+                explanation: "ALWAYS means the credential can be read even when the device is locked, which defeats much of the security purpose. For a privacy app like Token, auth tokens should only be accessible when the device is unlocked (WHEN_UNLOCKED) to prevent extraction from a locked stolen device."
+            },
+            {
+                type: "spot-the-bug",
+                code: "async function migrate() {\n  const jwt = await AsyncStorage.getItem('@token/jwt');\n  if (jwt) {\n    await secureStorage.set('token_auth_jwt', jwt);\n  }\n  await AsyncStorage.setItem(MIGRATION_FLAG, 'done');\n}",
+                options: [
+                    "Line 4 — secureStorage.set is not the correct method name",
+                    "Line 5 — the old plaintext copy in AsyncStorage is never deleted",
+                    "Line 6 — migration flag should be set before moving data"
+                ],
+                correct: 1,
+                explanation: "After copying the JWT to SecureStore, the original plaintext copy in AsyncStorage must be deleted with AsyncStorage.removeItem('@token/jwt'). Leaving it means the secret still exists unencrypted on disk, defeating the purpose of the migration."
             }
         ]);
     </script>

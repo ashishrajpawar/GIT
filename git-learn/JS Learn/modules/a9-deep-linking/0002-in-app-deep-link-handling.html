@@ -602,6 +602,208 @@ export function RootNavigator() {
         ],
         correct: 2,
         explanation: "The addEventListener callback receives an EVENT object with a .url property, not the URL string directly. The correct form is: (event) => handleDeepLink(event.url). Passing the whole event object to handleDeepLink would result in trying to parse '[object Object]' as a URL."
+      },
+      {
+        type: "predict-output",
+        question: "What does Linking.parse() return for this custom scheme URL?",
+        code: "import * as Linking from 'expo-linking';\nconst result = Linking.parse('tokn://t/ABCD-1234-WXYZ');\nconsole.log(result.hostname);",
+        answer: "null",
+        explanation: "For custom scheme URLs (not https://), Linking.parse() returns null for hostname. The hostname field is only populated for standard URLs like https://tokn.app/... For custom schemes, the path is everything after the ://."
+      },
+      {
+        type: "fill-blank",
+        question: "Get the URL that launched the app on cold start:",
+        code: "const url = await Linking.___();",
+        answer: "getInitialURL",
+        explanation: "Linking.getInitialURL() is the async method that returns the URL that launched the app, or null if the app was opened from the home screen icon. This only works for cold starts — it returns the URL that was pending when the app first launched."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this auth gate implementation?",
+        code: "useEffect(() => {\n  if (isAuthenticated && pendingDeepLink) {\n    Linking.openURL(pendingDeepLink);\n    // Missing: clear pendingDeepLink\n  }\n}, [isAuthenticated]);",
+        options: [
+          "Linking.openURL is not a valid method",
+          "The pendingDeepLink is never cleared, causing an infinite redirect loop when isAuthenticated or other state changes trigger a re-render",
+          "useEffect cannot call async functions",
+          "isAuthenticated should not be in the dependency array"
+        ],
+        correct: 1,
+        explanation: "Without setting pendingDeepLink to null after processing, every time the component re-renders and isAuthenticated is still true, it will call Linking.openURL again. This causes an infinite loop of navigation. Always clear the pending link after processing it."
+      },
+      {
+        type: "order-steps",
+        question: "Arrange the steps for handling a deep link on COLD START (app not running):",
+        steps: [
+          "User taps https://tokn.app/t/CODE link",
+          "OS launches the app (cold start)",
+          "NavigationContainer mounts and calls getInitialURL()",
+          "React Navigation parses URL against config.screens",
+          "TokenRedeemScreen mounts with route.params.code"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "On cold start: the OS launches the app fresh, React Navigation's NavigationContainer calls getInitialURL() to get the launch URL, parses it against the screen mapping config, and navigates directly to the matching screen with the extracted params."
+      },
+      {
+        type: "predict-output",
+        question: "What does the path extraction return for this edge case?",
+        code: "function parseTokenUrl(url) {\n  const path = url.split('://')[1]?.split('/').slice(1).join('/') || '';\n  if (path.startsWith('t/')) {\n    return path.replace('t/', '');\n  }\n  return null;\n}\nconsole.log(parseTokenUrl('tokn://t/'));",
+        answer: "",
+        explanation: "When the URL is 'tokn://t/' — the path after t/ is an empty string. The code returns '' (empty string) because path.replace('t/', '') on 't/' gives ''. This is why you should check for empty strings: return tokenCode || null would catch this and return null instead."
+      },
+      {
+        question: "What HTTP status code should the API return for a token that was revoked by its owner?",
+        options: [
+          "404 Not Found",
+          "403 Forbidden",
+          "410 Gone",
+          "401 Unauthorized"
+        ],
+        correct: 2,
+        explanation: "410 Gone is the correct HTTP status for a resource that once existed but has been permanently removed. A revoked token existed at one point but the owner deliberately removed access. 404 means it never existed, 403 means access is denied (e.g., max uses reached), and 401 means authentication is needed."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the React Navigation linking config to map /t/:code to the TokenRedeem screen inside nested navigators:",
+        code: "config: {\n  screens: {\n    Main: {\n      screens: {\n        Tokens: {\n          screens: {\n            ___: 't/:code',\n          },\n        },\n      },\n    },\n  },\n}",
+        answer: "TokenRedeem",
+        explanation: "The screen name in the config must exactly match the name prop given to the Screen component in your navigator. React Navigation traverses the nesting: Main > Tokens > TokenRedeem, and maps the URL path 't/:code' to that screen, passing code as a route param."
+      },
+      {
+        type: "which-breaks",
+        question: "Which subscribe implementation for the linking config has a memory leak?",
+        variants: [
+          "subscribe(listener) {\n  const sub = Linking.addEventListener('url', ({ url }) => listener(url));\n  return () => sub.remove();\n}",
+          "subscribe(listener) {\n  Linking.addEventListener('url', ({ url }) => listener(url));\n  return () => {};\n}",
+          "subscribe(listener) {\n  const sub = Linking.addEventListener('url', (event) => {\n    if (event.url) listener(event.url);\n  });\n  return () => sub.remove();\n}"
+        ],
+        correct: 1,
+        explanation: "The second variant adds an event listener but never removes it. The returned cleanup function is empty — () => {}. When NavigationContainer unmounts or re-subscribes, the old listener stays active, causing duplicate handling and a memory leak. Always return a cleanup that calls sub.remove()."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this TokenRedeemScreen?",
+        code: "export function TokenRedeemScreen() {\n  const route = useRoute();\n  const { code } = route.params as { code: string };\n  const [token, setToken] = useState(null);\n\n  async function loadToken() {\n    const result = await api.tokens.getByCode(code);\n    setToken(result);\n  }\n  loadToken();\n\n  return <View><Text>{token?.label}</Text></View>;\n}",
+        options: [
+          "useRoute() is not a valid hook",
+          "The API call is made directly in the render body without useEffect, causing an infinite fetch loop on every re-render",
+          "route.params cannot be type-cast",
+          "useState(null) should be useState(undefined)"
+        ],
+        correct: 1,
+        explanation: "Calling loadToken() directly in the component body means it runs on EVERY render. When setToken(result) updates state, it triggers a re-render, which calls loadToken() again — infinite loop. The fetch must be wrapped in useEffect with [code] as the dependency array."
+      },
+      {
+        type: "predict-output",
+        question: "What happens when this code runs?",
+        code: "const linkingConfig = {\n  prefixes: ['https://tokn.app', 'tokn://'],\n  config: { screens: { Main: { screens: { Tokens: { screens: { TokenRedeem: 't/:code' } } } } } }\n};\n\n// Simulating React Navigation URL parse\nconst url = 'https://tokn.app/t/MERC-8GH2-LP4X';\nconst path = url.replace('https://tokn.app/', '');\nconst match = 't/:code'.match(/^t\\/(.+)$/);\nconst params = match ? { code: path.replace('t/', '') } : {};\nconsole.log(JSON.stringify(params));",
+        answer: "{\"code\":\"MERC-8GH2-LP4X\"}",
+        explanation: "After stripping the prefix 'https://tokn.app/' from the URL, the remaining path is 't/MERC-8GH2-LP4X'. The regex matches and path.replace('t/', '') extracts 'MERC-8GH2-LP4X'. This simulates how React Navigation internally parses the URL against the screen config to extract route params."
+      },
+      {
+        type: "order-steps",
+        question: "Arrange the steps for handling a deep link when the user is NOT logged in:",
+        steps: [
+          "Deep link URL arrives (cold or warm start)",
+          "Auth gate detects user is not authenticated",
+          "Pending URL is saved to state/ref",
+          "Login/Register screen is shown",
+          "After successful auth, pending URL is processed via Linking.openURL()",
+          "Navigation resolves to TokenRedeemScreen"
+        ],
+        correctOrder: [0, 1, 2, 3, 4, 5],
+        explanation: "The auth gate intercepts the deep link before navigation occurs. It saves the URL, shows auth screens, and only after successful login does it re-process the saved URL. This ensures the user authenticates before accessing any token content."
+      },
+      {
+        question: "What does Linking.createURL('/') return in a development Expo build?",
+        options: [
+          "https://tokn.app/",
+          "null",
+          "The Expo development scheme URL (e.g., 'tokn://')",
+          "localhost:19000/"
+        ],
+        correct: 2,
+        explanation: "Linking.createURL('/') generates the URL prefix for the current environment. In a development build with a custom scheme configured, it returns something like 'tokn://'. This is why it's included in the prefixes array — so deep links work during development testing."
+      },
+      {
+        type: "fill-blank",
+        question: "Clean up the deep link listener when the component unmounts:",
+        code: "useEffect(() => {\n  const subscription = Linking.addEventListener('url', handler);\n  return () => subscription.___();\n}, []);",
+        answer: "remove",
+        explanation: "subscription.remove() is the cleanup method for Expo Linking event listeners. Returning it from useEffect's cleanup function ensures the listener is removed when the component unmounts, preventing memory leaks and ghost handlers that could cause navigation bugs."
+      },
+      {
+        type: "which-breaks",
+        question: "Which URL parsing approach will fail for the URL 'https://tokn.app/t/MERC-8GH2-LP4X'?",
+        variants: [
+          "const parsed = Linking.parse(url);\nconst code = parsed.path?.replace('t/', '');",
+          "const parsed = new URL(url);\nconst code = parsed.pathname.split('/t/')[1];",
+          "const code = url.split('/t/')[1]?.split('?')[0];"
+        ],
+        correct: 0,
+        explanation: "Linking.parse() for an https URL returns a parsed object where the path does NOT include a leading slash — it would be 't/MERC-8GH2-LP4X'. However the issue is that parsed.path?.replace('t/', '') only replaces the FIRST occurrence. If the token code itself contained 't/' (unlikely but possible), it would break. More critically, Linking.parse() hostname-based URLs return path without the leading slash, which actually makes variant A work correctly here. The real danger with variant A is that replace() is not anchored — if path were 'settings/t/code', it would incorrectly match. Variants B and C both split on '/t/' which is more precise."
+      },
+      {
+        type: "predict-output",
+        question: "What does this auth gate code log?",
+        code: "const isAuthenticated = false;\nconst pendingUrl = { current: null };\n\nasync function getInitialURL() {\n  const url = 'https://tokn.app/t/TEST-CODE';\n  if (url && !isAuthenticated) {\n    pendingUrl.current = url;\n    return null;\n  }\n  return url;\n}\n\nconst result = await getInitialURL();\nconsole.log('Navigate to:', result);\nconsole.log('Saved:', pendingUrl.current);",
+        answer: "Navigate to: null\nSaved: https://tokn.app/t/TEST-CODE",
+        explanation: "Since isAuthenticated is false, the auth gate saves the URL to pendingUrl.current and returns null. Returning null tells React Navigation there's no URL to handle right now — so it shows the default screen (login). The URL is preserved for later, after the user authenticates."
+      },
+      {
+        question: "Why does the auth gate use setTimeout with a delay before calling Linking.openURL(pendingUrl)?",
+        options: [
+          "Linking.openURL is rate-limited by the OS",
+          "To give the NavigationContainer time to mount the authenticated navigator tree before processing the deep link",
+          "setTimeout is needed to make the call asynchronous",
+          "To prevent duplicate URL events"
+        ],
+        correct: 1,
+        explanation: "After isAuthenticated becomes true, React needs a render cycle to mount MainTabs (which contains the Tokens navigator and TokenRedeemScreen). If you call Linking.openURL immediately, the target screen might not exist yet in the navigation tree. The short delay ensures the navigator structure is ready to receive the navigation action."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's the problem with this linking config's prefixes?",
+        code: "const linkingConfig = {\n  prefixes: [\n    'https://tokn.app/',\n    'tokn://',\n  ],\n  config: { screens: { /* ... */ } },\n};",
+        options: [
+          "You cannot have more than one prefix",
+          "The trailing slash on 'https://tokn.app/' can cause URL matching to fail — prefixes should not end with a slash",
+          "tokn:// is not a valid URI scheme",
+          "prefixes must all use the same protocol"
+        ],
+        correct: 1,
+        explanation: "React Navigation strips the prefix from the incoming URL before matching against config.screens. If the prefix is 'https://tokn.app/' (with trailing slash) and the URL is 'https://tokn.app/t/CODE', stripping the prefix gives 't/CODE' correctly. But if the URL somehow lacks the slash (e.g., 'https://tokn.app?redirect=...'), the prefix won't match. Best practice: omit the trailing slash from prefixes."
+      },
+      {
+        type: "fill-blank",
+        question: "Access the token code from route params in the TokenRedeemScreen:",
+        code: "const route = useRoute();\nconst { code } = route.___ as { code: string };",
+        answer: "params",
+        explanation: "route.params contains the parameters passed to the screen. For deep links, React Navigation automatically extracts named segments (like :code in 't/:code') and places them in route.params. The 'as' assertion gives TypeScript the shape of the params object."
+      },
+      {
+        type: "order-steps",
+        question: "Arrange the steps for how React Navigation internally handles the linking prop:",
+        steps: [
+          "NavigationContainer mounts with linking prop",
+          "Calls getInitialURL() for cold start check",
+          "Subscribes to URL events via subscribe() for warm start",
+          "When URL arrives, strips matching prefix from URL",
+          "Matches remaining path against config.screens tree",
+          "Dispatches navigation action with extracted params"
+        ],
+        correctOrder: [0, 1, 2, 3, 4, 5],
+        explanation: "React Navigation handles deep linking in this order: first it checks for a launch URL (cold start), then sets up the listener (warm start). When any URL arrives (from either path), it strips the prefix, walks the config.screens tree to find a match, and dispatches a navigation action to that screen with the URL segments as params."
+      },
+      {
+        question: "What is the purpose of the fallback prop on NavigationContainer when using deep linking?",
+        options: [
+          "It specifies a fallback screen when no deep link matches",
+          "It shows a loading UI while React Navigation resolves the initial deep link URL (getInitialURL is async)",
+          "It handles navigation errors",
+          "It provides a default URL when getInitialURL returns null"
+        ],
+        correct: 1,
+        explanation: "The fallback prop renders a component (usually a loading spinner) while NavigationContainer waits for the async getInitialURL() to resolve. Without it, the app might briefly flash the wrong screen before navigating to the deep link target. It's purely a UX improvement for the cold-start deep link case."
       }
     ]);
   </script>

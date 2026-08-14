@@ -418,6 +418,200 @@ COMMIT;
         ],
         correct: 1,
         explanation: "The CHECK constraint says: max_uses = 0 OR use_count <= max_uses. With max_uses = 3 and use_count = 5, use_count exceeds max_uses — the database rejects this. It's impossible to have a token used more times than its limit allows."
+      },
+      // --- Questions 6–25 ---
+      {
+        type: "predict-output",
+        question: "What happens when you try to DELETE a user who has tokens?",
+        code: "DELETE FROM users WHERE id = 1;\n-- User 1 has 3 tokens in the tokens table",
+        answer: "ERROR: update or delete on table \"users\" violates foreign key constraint — tokens references this row with ON DELETE RESTRICT",
+        explanation: "ON DELETE RESTRICT on tokens.user_id prevents deleting a user who still has tokens. You must explicitly delete or reassign their tokens first. This protects against accidentally orphaning token records."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this tokens table design for a privacy-first app?",
+        code: "CREATE TABLE tokens (\n  id SERIAL PRIMARY KEY,\n  code TEXT NOT NULL UNIQUE,\n  user_id INTEGER NOT NULL REFERENCES users(id),\n  holder_email TEXT,\n  holder_phone TEXT,\n  label TEXT NOT NULL\n);",
+        options: [
+          "SERIAL is not the right type for id",
+          "Storing holder_email and holder_phone defeats Token's privacy model — holders should remain anonymous",
+          "The code column should not be UNIQUE",
+          "user_id should be TEXT, not INTEGER"
+        ],
+        correct: 1,
+        explanation: "Token's entire value proposition is that holders never reveal their identity. Storing their email or phone in the tokens table directly contradicts the deny-by-default privacy model. Holders are identified only by a session_id, never by personal contact details."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the CHECK constraint that ensures max_uses is never negative:",
+        code: "max_uses INTEGER NOT NULL DEFAULT 0\n  CHECK (max_uses ___ 0),",
+        answer: ">=",
+        explanation: "CHECK (max_uses >= 0) ensures you can never insert a negative usage limit. Combined with the default of 0 (meaning unlimited), this constraint guarantees the column always holds a sensible value."
+      },
+      {
+        question: "Why does the tokens table store use_count as a separate column instead of counting redemption_events each time?",
+        options: [
+          "PostgreSQL can't count rows in a related table",
+          "It's a performance optimization — reading one integer is faster than COUNT(*) on every request",
+          "redemption_events might not exist yet",
+          "use_count stores a different value than the actual count"
+        ],
+        correct: 1,
+        explanation: "Counting redemption_events with COUNT(*) on every token lookup would require a join and aggregation. Storing use_count directly on the tokens table means the main token list query reads a single integer — O(1) instead of O(n). You increment use_count in the same transaction that inserts the redemption_event."
+      },
+      {
+        type: "order-steps",
+        question: "Put these steps in the correct order for creating the Token schema:",
+        steps: ["Create the users table", "Create the tokens table (references users)", "Create access_rules table (references tokens)", "Create redemption_events table (references tokens)", "Create indexes"],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Tables must be created in dependency order. users first (no dependencies), then tokens (references users), then access_rules and redemption_events (both reference tokens). Indexes come last because they reference existing tables and columns."
+      },
+      {
+        type: "predict-output",
+        question: "What happens when you INSERT two tokens with the same code?",
+        code: "INSERT INTO tokens (code, user_id, label) VALUES ('MERC-8GH2-LP4X', 1, 'First');\nINSERT INTO tokens (code, user_id, label) VALUES ('MERC-8GH2-LP4X', 2, 'Second');",
+        answer: "The second INSERT fails with ERROR: duplicate key value violates unique constraint on column \"code\"",
+        explanation: "The UNIQUE constraint on code ensures every token has a globally unique identifier. This is enforced at the database level — even if your application code has a bug that generates duplicates, the database rejects them."
+      },
+      {
+        type: "which-breaks",
+        question: "Which access_rules INSERT violates the schema constraints?",
+        variants: [
+          "INSERT INTO access_rules (token_id, rule_type, payload) VALUES (1, 'time_window', '{\"start_hour\": 9}');",
+          "INSERT INTO access_rules (token_id, rule_type, payload) VALUES (1, 'time_window', '{\"start_hour\": 18}');",
+          "INSERT INTO access_rules (token_id, rule_type, payload) VALUES (1, 'cooldown', '{\"min_minutes\": 30}');"
+        ],
+        correct: 1,
+        explanation: "The UNIQUE(token_id, rule_type) constraint allows only one rule of each type per token. The first INSERT creates a time_window rule for token 1. The second INSERT tries to create another time_window for the same token — violating the unique constraint. Use UPSERT (INSERT ... ON CONFLICT ... DO UPDATE) to modify an existing rule."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the foreign key clause that prevents accidental user deletion:",
+        code: "user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE ___;",
+        answer: "RESTRICT",
+        explanation: "ON DELETE RESTRICT means PostgreSQL will refuse to delete a user row if any tokens still reference it. This forces explicit cleanup — you must handle tokens before removing a user, preventing data integrity issues."
+      },
+      {
+        question: "What is the purpose of JSONB for the access_rules payload column?",
+        options: [
+          "JSONB is faster than TEXT for all operations",
+          "Each rule_type has different fields (hours, limits, categories) — JSONB handles variable structure without multiple tables",
+          "JSONB automatically validates the JSON structure",
+          "PostgreSQL requires JSONB for columns with CHECK constraints"
+        ],
+        correct: 1,
+        explanation: "A time_window rule needs start_hour/end_hour/days. A call_limit rule needs max_per_day/max_per_week. A category rule needs allowed/blocked lists. JSONB stores this variable structure in one column. The alternative — one table per rule type — would mean 4+ tables and complex joins for a simple feature."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this trigger function?",
+        code: "CREATE OR REPLACE FUNCTION update_updated_at()\nRETURNS TRIGGER AS $$\nBEGIN\n  OLD.updated_at = NOW();\n  RETURN OLD;\nEND;\n$$ LANGUAGE plpgsql;",
+        options: [
+          "The function name is too long",
+          "Should assign to NEW.updated_at and RETURN NEW — OLD is the row before the update and cannot be modified",
+          "NOW() is not available inside triggers",
+          "LANGUAGE plpgsql is deprecated"
+        ],
+        correct: 1,
+        explanation: "In a BEFORE UPDATE trigger, NEW represents the row being written and OLD represents the previous value. You must modify NEW and return it. Assigning to OLD has no effect — the database writes NEW to disk, so updated_at would never change."
+      },
+      {
+        type: "predict-output",
+        question: "What does the partial index idx_tokens_active actually store?",
+        code: "CREATE INDEX idx_tokens_active ON tokens(user_id)\nWHERE status = 'active';\n\n-- Table has 1000 tokens: 800 active, 100 paused, 100 revoked",
+        answer: "The index contains only 800 entries (the active tokens), not all 1000",
+        explanation: "A partial index only includes rows matching the WHERE clause. Since most queries filter for active tokens, this index is 20% smaller than a full index. Smaller index = fits in memory better = faster lookups. Queries for paused or revoked tokens use a full table scan or a different index."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the CHECK constraint ensuring token status can only be one of three values:",
+        code: "status TEXT NOT NULL DEFAULT 'active'\n  CHECK (status IN ('active', '___', 'revoked')),",
+        answer: "paused",
+        explanation: "Token has exactly three states: active (can be redeemed), paused (temporarily disabled, can be reactivated), and revoked (permanently disabled). The CHECK constraint prevents any other string from being stored — even if your API code has a typo like 'pausd', the database rejects it."
+      },
+      {
+        question: "Why does the tokens table have both expires_at and revoked_at columns?",
+        options: [
+          "They serve the same purpose and one is redundant",
+          "expires_at is automatic (time-based) while revoked_at is manual (user-initiated) — different mechanisms, different timestamps",
+          "expires_at is for the user and revoked_at is for the admin",
+          "PostgreSQL requires separate columns for nullable timestamps"
+        ],
+        correct: 1,
+        explanation: "expires_at means 'this token auto-disables after this date' — set once at creation. revoked_at means 'the user manually killed this token at this moment.' A token can expire without being revoked (natural end), or be revoked before its expiry (user action). These are distinct events that happen for different reasons."
+      },
+      {
+        type: "which-breaks",
+        question: "Which query will fail against the Token schema?",
+        variants: [
+          "SELECT * FROM tokens WHERE user_id = 1 AND status = 'active';",
+          "INSERT INTO tokens (code, user_id, label, max_uses) VALUES ('X', 999, 'Test', 0);",
+          "UPDATE tokens SET use_count = use_count + 1 WHERE id = 1 AND (max_uses = 0 OR use_count < max_uses);"
+        ],
+        correct: 1,
+        explanation: "If user_id = 999 doesn't exist in the users table, the foreign key constraint rejects the INSERT. The REFERENCES users(id) clause means every token must belong to an existing user. This prevents orphaned tokens that reference non-existent users."
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps for safely revoking a token:",
+        steps: ["Set revoked_at = NOW()", "Set status = 'revoked'", "Verify CHECK constraint passes (status='revoked' AND revoked_at IS NOT NULL)", "Increment is blocked (use_count cannot exceed max_uses on a dead token)"],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "You must set revoked_at before or simultaneously with setting status to 'revoked' — the CHECK constraint requires revoked_at IS NOT NULL when status = 'revoked'. In practice, you do both in one UPDATE statement: UPDATE tokens SET status = 'revoked', revoked_at = NOW() WHERE id = X."
+      },
+      {
+        type: "predict-output",
+        question: "What happens when you delete a token that has access_rules?",
+        code: "DELETE FROM tokens WHERE id = 5;\n-- Token 5 has 3 access_rules rows",
+        answer: "ERROR: update or delete on table \"tokens\" violates foreign key constraint — redemption_events references this token with ON DELETE RESTRICT",
+        explanation: "Even though access_rules uses ON DELETE CASCADE (rules would be auto-deleted), redemption_events uses ON DELETE RESTRICT. If token 5 has ANY redemption events, the delete is blocked. You'd need to handle redemption history explicitly before deleting a token."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this index strategy?",
+        code: "CREATE INDEX idx_tokens_everything ON tokens(id, code, user_id, label, status, max_uses, use_count, expires_at, created_at, revoked_at, updated_at);",
+        options: [
+          "You can't create an index on more than 5 columns",
+          "An index on every column is pointless — it's as large as the table itself and slows down writes without targeted query benefit",
+          "PostgreSQL doesn't support composite indexes",
+          "The column order is wrong"
+        ],
+        correct: 1,
+        explanation: "Indexes speed up reads but slow down writes (every INSERT/UPDATE must update the index). An index on all columns is effectively a copy of the entire table — it doesn't help the query planner target specific lookups. Design indexes for specific queries: idx_tokens_user_id for 'my tokens', the UNIQUE on code for 'lookup by code'."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the constraint ensuring revoked tokens always have a timestamp:",
+        code: "CHECK (\n  (status != 'revoked') OR (___ IS NOT NULL)\n)",
+        answer: "revoked_at",
+        explanation: "This CHECK constraint uses logical OR: either the status is NOT 'revoked' (in which case revoked_at can be anything), OR revoked_at must exist. The result: every revoked token must record WHEN it was revoked. This prevents a state where a token shows as revoked but nobody knows when."
+      },
+      {
+        question: "What is the advantage of TIMESTAMPTZ over TIMESTAMP in PostgreSQL?",
+        options: [
+          "TIMESTAMPTZ uses less storage space",
+          "TIMESTAMPTZ stores the timezone offset, preventing confusion when the server or client changes timezone",
+          "TIMESTAMP cannot store dates before 2000",
+          "TIMESTAMPTZ is required for DEFAULT NOW()"
+        ],
+        correct: 1,
+        explanation: "TIMESTAMPTZ (timestamp with time zone) stores the value in UTC internally and converts to the session's timezone on display. Plain TIMESTAMP stores the literal value without timezone awareness — if your server moves to a different timezone, all your times shift. Always use TIMESTAMPTZ for real-world times."
+      },
+      {
+        type: "predict-output",
+        question: "What's the result of this UPDATE on a token with max_uses = 5 and use_count = 5?",
+        code: "UPDATE tokens SET use_count = use_count + 1 WHERE id = 1;",
+        answer: "ERROR: new row violates check constraint — use_count (6) exceeds max_uses (5)",
+        explanation: "The CHECK (max_uses = 0 OR use_count <= max_uses) constraint fires on every UPDATE. With max_uses = 5, use_count cannot exceed 5. The database blocks the increment, ensuring a token can never be used more times than its limit — even if application code forgets to check."
+      },
+      {
+        type: "which-breaks",
+        question: "Which tokens table definition has a fatal flaw?",
+        variants: [
+          "code TEXT NOT NULL UNIQUE",
+          "status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'revoked'))",
+          "user_id INTEGER REFERENCES users(id) ON DELETE CASCADE"
+        ],
+        correct: 2,
+        explanation: "ON DELETE CASCADE on user_id means deleting a user silently deletes ALL their tokens — and if those tokens have redemption_events with ON DELETE RESTRICT, it creates a cascade conflict. More importantly, silently destroying a user's tokens (and their audit trail) violates Token's design. RESTRICT forces explicit handling."
       }
     ]);
   </script>

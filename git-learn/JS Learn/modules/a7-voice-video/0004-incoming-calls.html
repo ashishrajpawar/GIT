@@ -411,6 +411,252 @@ for (const [platform, info] of Object.entries(platforms)) {
         ],
         correctOrder: [0, 1, 2, 3, 4],
         explanation: "The VoIP push is the wake-up trigger. iOS guarantees the app process launches (or resumes) to handle it. The handler reports to CallKit, which shows the native UI. User interaction on the native UI fires JavaScript events. The app then sets up WebRTC as normal."
+      },
+      // --- Questions 6–25 ---
+      {
+        question: "Why does iOS kill WebSocket connections after the app moves to the background?",
+        options: [
+          "A bug in React Native's WebSocket implementation",
+          "iOS aggressively suspends background processes to save battery — network connections are dropped after ~30 seconds",
+          "WebSocket protocol requires a foreground window to stay open",
+          "Apple blocks all non-HTTPS connections in the background"
+        ],
+        correct: 1,
+        explanation: "iOS suspends apps shortly after they enter the background (typically within 30 seconds). Suspended processes cannot maintain network connections, so WebSockets are dropped. This is why push notifications are essential for waking the app when a call arrives."
+      },
+      {
+        question: "What is the difference between a VoIP push notification and a regular push notification on iOS?",
+        options: [
+          "VoIP pushes are encrypted; regular pushes are not",
+          "VoIP pushes wake the app immediately and guarantee process launch, even if the app was terminated; regular pushes may just show a banner",
+          "VoIP pushes don't require an Apple Developer account",
+          "Regular pushes are faster than VoIP pushes"
+        ],
+        correct: 1,
+        explanation: "VoIP pushes have special privileges on iOS: they always wake the app process (even from a terminated state), are delivered immediately without batching, and trigger a dedicated handler where you must report the call to CallKit. Regular pushes may only display a banner without waking the app."
+      },
+      {
+        type: "predict-output",
+        question: "What APNs topic suffix must a VoIP push use?",
+        code: "const notification = {\n  topic: 'com.tokn.app' + ???,\n  pushType: 'voip',\n  priority: 10,\n};\n// What is the correct suffix?",
+        answer: ".voip",
+        explanation: "iOS VoIP pushes must use the app's bundle identifier with '.voip' appended as the APNs topic. So if your bundle ID is 'com.tokn.app', the topic is 'com.tokn.app.voip'. Without this suffix, APNs rejects the push or delivers it as a regular notification."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this Android notification channel for incoming calls?",
+        code: "await Notifications.setNotificationChannelAsync('calls', {\n  name: 'Incoming Calls',\n  importance: Notifications.AndroidImportance.DEFAULT,\n  vibrationPattern: [0, 500, 200, 500],\n  sound: 'ringtone.wav',\n});",
+        options: [
+          "The channel name should be 'incoming_calls'",
+          "vibrationPattern format is wrong",
+          "importance must be MAX for full-screen intent to work — DEFAULT won't show heads-up or full-screen notifications",
+          "sound should be null for calls"
+        ],
+        correct: 2,
+        explanation: "For a full-screen notification to appear (and for heads-up display), Android requires the notification channel to have MAX or HIGH importance. With DEFAULT importance, the notification silently appears in the shade — the user never sees or hears the incoming call."
+      },
+      {
+        question: "What Android permission is required to show a full-screen incoming call UI on the lock screen?",
+        options: [
+          "WAKE_LOCK",
+          "FOREGROUND_SERVICE",
+          "USE_FULL_SCREEN_INTENT",
+          "SYSTEM_ALERT_WINDOW"
+        ],
+        correct: 2,
+        explanation: "USE_FULL_SCREEN_INTENT allows your notification to launch a full-screen activity when the device is locked. Without it, the notification just appears as a heads-up banner. On Android 14+, this permission requires user approval in settings for most apps."
+      },
+      {
+        type: "fill-blank",
+        question: "Start playing the system ringtone when an incoming call arrives:",
+        code: "import InCallManager from 'react-native-incall-manager';\n\nuseEffect(() => {\n  InCallManager.___('_DEFAULT_');\n  return () => InCallManager.stopRingtone();\n}, []);",
+        answer: "startRingtone",
+        explanation: "InCallManager.startRingtone('_DEFAULT_') plays the device's default ringtone sound. The '_DEFAULT_' argument tells it to use the system ringtone. Always pair it with stopRingtone() in the cleanup — otherwise the ringtone keeps playing after the screen unmounts."
+      },
+      {
+        type: "which-breaks",
+        question: "Which FCM message priority will reliably wake an Android device for an incoming call?",
+        variants: [
+          "priority: 'normal' — delivered when convenient, may be batched by Doze mode",
+          "priority: 'high' — delivered immediately, wakes the device from Doze",
+          "priority: 'low' — same as normal but with no notification",
+          "priority: 'critical' — not a valid FCM priority level"
+        ],
+        correct: 1,
+        explanation: "FCM high-priority messages bypass Doze mode and are delivered immediately. Normal-priority messages may be deferred for minutes or hours when the device is in Doze. For incoming calls, you must use high priority — a delayed ring is useless."
+      },
+      {
+        type: "order-steps",
+        question: "Put the user's ACCEPT flow in order (Android, app in background):",
+        steps: [
+          "FCM high-priority data message arrives",
+          "Background handler shows full-screen notification with ringtone",
+          "User taps Accept button on the notification/IncomingCall screen",
+          "InCallManager.stopRingtone() is called",
+          "App navigates to VoiceCall or VideoCall screen"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "The flow starts with FCM waking the app, then showing the call UI. When the user accepts, you must stop the ringtone before navigating — otherwise the ringtone continues playing underneath the call screen."
+      },
+      {
+        type: "predict-output",
+        question: "What happens when the server's 30-second ring timeout expires and the callee hasn't answered?",
+        code: "// Server-side ring timeout logic:\nsetTimeout(() => {\n  if (callState === 'ringing') {\n    deliverToUser(callerId, 'call:timeout', { callId });\n    deliverToUser(calleeId, 'call:timeout', { callId });\n    deleteCallState(callId);\n  }\n}, 30000);\n// What state is the call in after 30s with no answer?",
+        answer: "The call is terminated. Both parties receive call:timeout and the server deletes the call state.",
+        explanation: "The 30-second timeout is a safety net. Without it, a call to an unreachable device would hang forever — the caller stuck on the 'Ringing...' screen indefinitely. The server cleans up by notifying both parties and removing the call record."
+      },
+      {
+        question: "In react-native-callkeep, what does the 'selfManaged' option do on Android?",
+        options: [
+          "It disables all native call management",
+          "It tells Android that your app manages its own call UI instead of using the system Telecom UI, while still integrating with the ConnectionService API",
+          "It forces the app to use the iOS-style native call UI on Android",
+          "It prevents other apps from detecting that a call is active"
+        ],
+        correct: 1,
+        explanation: "selfManaged: true tells Android's Telecom framework that your app handles its own call UI. You get the benefits of ConnectionService (audio routing, Bluetooth, Do Not Disturb integration) without being forced to use the system's default call screen. This is the correct mode for VoIP apps on Android."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this reject handler?",
+        code: "function handleReject() {\n  navigation.goBack();\n  send('call:reject', { callId });\n  InCallManager.stopRingtone();\n}",
+        options: [
+          "navigation.goBack() should be navigation.pop()",
+          "The order is wrong — stopRingtone should be called first, then send reject, then navigate away",
+          "send should be await send",
+          "callId should be callUUID"
+        ],
+        correct: 1,
+        explanation: "Navigating away before stopping the ringtone causes the ringtone to keep playing (the component unmounts so the cleanup might race). The correct order is: stop the ringtone first (immediate audio feedback), send the rejection to the server (so the caller knows), then navigate away."
+      },
+      {
+        question: "What is the minimum Apple Developer Program cost required for VoIP push notifications?",
+        options: [
+          "Free — VoIP pushes don't require a paid account",
+          "$99/year — the standard Apple Developer Program membership",
+          "$299/year — the Enterprise Developer Program",
+          "$25 one-time — same as Google Play"
+        ],
+        correct: 1,
+        explanation: "VoIP push notifications require APNs certificates, which are only available through the Apple Developer Program ($99/year). There's no free tier for push notifications on iOS. This is a fixed annual cost for any iOS app that needs incoming call support."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the server's decision for how to reach the callee:",
+        code: "// In handleCallInitiate:\nif (calleeSockets && calleeSockets.size > 0) {\n  // Callee is ONLINE — send via WebSocket\n  deliverToUser(calleeId, 'call:incoming', payload);\n} else {\n  // Callee is OFFLINE — wake them via ___\n  await sendPushNotification(calleeId, payload);\n}",
+        answer: "push",
+        explanation: "The server checks if the callee has an active WebSocket connection. If yes, deliver the call event directly over the socket (instant). If no sockets exist, the callee's app is in the background or terminated, so the server must use push notifications to wake it up."
+      },
+      {
+        type: "which-breaks",
+        question: "Which push payload is correct for waking an iOS app with a VoIP call?",
+        variants: [
+          "{ alert: 'Incoming call', sound: 'ringtone.wav', badge: 1 }",
+          "{ callId: 'abc-123', callerName: 'Amazon Delivery', type: 'video', aps: {} }",
+          "{ content-available: 1 }",
+          "{ mutable-content: 1, alert: 'Incoming call' }"
+        ],
+        correct: 1,
+        explanation: "A VoIP push payload contains custom data fields (callId, callerName, type) that your app uses to call RNCallKeep.displayIncomingCall(). The first option is a regular alert push. The third is a silent push (throttled and won't wake the app reliably). VoIP pushes carry your custom data and the system handles the wake-up."
+      },
+      {
+        type: "predict-output",
+        question: "What happens if two people call user B simultaneously?",
+        code: "// User A calls B → server sends push → CallKit shows call from A\n// User C calls B at the same time → server sends push → CallKit shows call from C\n// What does user B see?",
+        answer: "CallKit queues the second call and shows 'Call Waiting' UI — user B can choose to answer the second call or ignore it.",
+        explanation: "CallKit natively supports multiple calls and call waiting, just like regular phone calls. Each call has a unique UUID. The user can hold one call and answer another, or decline the waiting call. On Android with selfManaged mode, your app must implement this logic yourself."
+      },
+      {
+        question: "How does CallKit integrate with Do Not Disturb (DND) mode on iOS?",
+        options: [
+          "CallKit ignores DND — all calls ring normally",
+          "CallKit respects DND settings: calls are silenced unless the caller is in the user's Favorites or the call comes through twice within 3 minutes",
+          "CallKit blocks all VoIP calls when DND is active",
+          "DND only affects regular phone calls, not VoIP"
+        ],
+        correct: 1,
+        explanation: "CallKit integrates VoIP calls into the same system as regular phone calls, including Do Not Disturb. When DND is active, incoming calls follow the user's DND settings (Favorites, repeated calls, etc.). This is a major benefit of CallKit — your VoIP app behaves exactly like a real phone call."
+      },
+      {
+        type: "order-steps",
+        question: "Put the REJECT flow in order (user declines an incoming call):",
+        steps: [
+          "InCallManager.stopRingtone() — silence the device immediately",
+          "send('call:reject', { callId }) — notify the server",
+          "Server delivers 'call:rejected' to the caller",
+          "navigation.goBack() — dismiss the incoming call screen",
+          "Caller's UI shows 'Call declined' and navigates back"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "The reject flow prioritizes immediate feedback: stop the ringtone first (user hears silence), then tell the server (so the caller knows), then clean up the UI. The server relays the rejection to the caller, whose UI updates accordingly."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this VoIP push configuration?",
+        code: "const notification = {\n  topic: 'com.tokn.app',\n  payload: {\n    callId: 'abc-123',\n    callerName: 'Amazon Delivery',\n    type: 'video',\n  },\n  pushType: 'alert',\n  priority: 5,\n};",
+        options: [
+          "The payload is missing an 'aps' key",
+          "pushType must be 'voip' (not 'alert') and topic must end in '.voip' — also priority should be 10 for immediate delivery",
+          "callerName should be callerId",
+          "priority 5 is fine for VoIP"
+        ],
+        correct: 1,
+        explanation: "Three errors: (1) pushType must be 'voip' to trigger the VoIP push handler, (2) topic must be 'com.tokn.app.voip' (with the .voip suffix), and (3) priority should be 10 for immediate delivery. With pushType 'alert' and priority 5, this is a low-priority regular notification — it won't wake the app or trigger CallKit."
+      },
+      {
+        type: "fill-blank",
+        question: "Navigate to the correct call screen after accepting:",
+        code: "function handleAccept() {\n  InCallManager.stopRingtone();\n  const screen = type === 'video' ? 'VideoCall' : 'VoiceCall';\n  navigation.___(screen, {\n    callId,\n    conversationId,\n    isCaller: false,\n    tokenLabel: callerName,\n  });\n}",
+        answer: "replace",
+        explanation: "navigation.replace() is used instead of navigate() because you don't want the user to go 'back' to the IncomingCall screen after accepting. Replace removes the current screen from the stack and puts the call screen in its place. If you used navigate(), pressing back during the call would show the ringing screen again."
+      },
+      {
+        question: "Why does the IncomingCallScreen pass isCaller: false to the call screen?",
+        options: [
+          "It's a TypeScript requirement for the route params type",
+          "The call screen uses isCaller to decide who creates the WebRTC offer — the callee waits for the offer instead of creating one",
+          "It determines which color theme to use on the call screen",
+          "It controls whether the mute button is shown"
+        ],
+        correct: 1,
+        explanation: "In WebRTC, one peer creates the offer and the other creates the answer. By convention, the caller creates the offer. The isCaller flag tells the call screen whether to create an offer (caller) or wait for one (callee). Getting this wrong means both sides wait for an offer and the call never connects."
+      },
+      {
+        type: "which-breaks",
+        question: "Which scenario would cause the incoming call to fail silently on Android?",
+        variants: [
+          "FCM data message with priority 'high' and notification channel with MAX importance",
+          "FCM notification message (not data) with priority 'normal' and no notification channel configured",
+          "FCM data message with custom background handler that calls displayIncomingCall",
+          "FCM data message with priority 'high' and a foreground service notification"
+        ],
+        correct: 1,
+        explanation: "A normal-priority FCM notification message (not data) without a configured channel will be silently dropped in Doze mode or shown without sound/vibration. For incoming calls you need: (1) data message (to trigger your background handler), (2) high priority (to bypass Doze), and (3) a MAX importance channel (for full-screen intent and sound)."
+      },
+      {
+        question: "What does the server store in call state while waiting for the callee to wake up via push?",
+        options: [
+          "Nothing — the push contains all the information needed",
+          "Only the callId for logging purposes",
+          "The full call record: callId, callerId, calleeId, type, status ('ringing'), and a 30-second timeout reference",
+          "Just the WebRTC SDP offer from the caller"
+        ],
+        correct: 2,
+        explanation: "The server must maintain the call state so that when the callee's app wakes up and connects via WebSocket, the server can match them to the pending call. It also needs the timeout reference to clean up if the callee never answers. Without this state, the server wouldn't know a call is in progress."
+      },
+      {
+        type: "predict-output",
+        question: "What happens on iOS if your VoIP push handler does NOT call reportIncomingCall()?",
+        code: "// VoIP push arrives, handler runs, but:\nfunction handleVoIPPush(payload) {\n  console.log('Call received:', payload.callId);\n  // Forgot to call RNCallKeep.displayIncomingCall()\n}\n// What does iOS do?",
+        answer: "iOS will terminate the app. Apple requires that every VoIP push must result in a CallKit call report — failing to do so causes the system to kill your app and may stop delivering future VoIP pushes.",
+        explanation: "This is a strict iOS rule: if you receive a VoIP push and don't report a call to CallKit, iOS considers your app to be abusing VoIP pushes (using them as silent background wake-ups). It will terminate the process and may throttle or stop delivering VoIP pushes to your app entirely."
+      },
+      {
+        type: "fill-blank",
+        question: "Complete the RNCallKeep event listener for when the user answers from the native iOS call UI:",
+        code: "RNCallKeep.addEventListener('___', ({ callUUID }) => {\n  navigateToCallScreen(callUUID);\n});",
+        answer: "answerCall",
+        explanation: "The 'answerCall' event fires when the user taps Accept on the native CallKit UI (or slides to answer on the lock screen). The corresponding event for declining is 'endCall'. These events bridge the native call UI actions back to your JavaScript code."
       }
     ]);
   </script>

@@ -628,6 +628,206 @@ httpServer.listen(3000, () => console.log('HTTP + WS on port 3000'));`
         ],
         correctOrder: [0, 1, 2, 3, 4],
         explanation: "It starts as HTTP, authenticates during the upgrade, switches protocol with 101, becomes bidirectional, and heartbeat maintains it. If auth fails at step 2, the server sends 401 and destroys the socket — no WebSocket connection is ever established."
+      },
+
+      // --- Questions 6–25 ---
+
+      {
+        question: "Which HTTP header in the upgrade request tells the server the client wants WebSocket?",
+        options: [
+          "Connection: keep-alive",
+          "Upgrade: websocket",
+          "Content-Type: application/websocket",
+          "Accept: text/event-stream"
+        ],
+        correct: 1,
+        explanation: "The client sends 'Upgrade: websocket' (along with 'Connection: Upgrade') to request protocol switching. The server confirms with 101 Switching Protocols and the same Upgrade header. Without this header, the server treats it as a plain HTTP request."
+      },
+      {
+        type: "fill-blank",
+        question: "When creating a WebSocket server that needs to intercept the upgrade for auth, use this option:",
+        code: "const wss = new WebSocketServer({ ___: true });",
+        answer: "noServer",
+        explanation: "noServer: true tells the ws library not to handle upgrades automatically. You then manually call wss.handleUpgrade() inside httpServer.on('upgrade', ...), giving you full control to authenticate before completing the handshake."
+      },
+      {
+        type: "predict-output",
+        question: "A user connects to Token's WS server without a token query param. What happens?",
+        code: "httpServer.on('upgrade', async (request, socket, head) => {\n  try {\n    const userId = await verifyWsToken(request); // throws if no token\n    wss.handleUpgrade(request, socket, head, (ws) => { ... });\n  } catch (err) {\n    socket.write('HTTP/1.1 401 Unauthorized\\r\\n\\r\\n');\n    socket.destroy();\n  }\n});",
+        answer: "HTTP/1.1 401 Unauthorized",
+        explanation: "verifyWsToken throws when the token query param is missing. The catch block writes a raw HTTP 401 response to the TCP socket and destroys it. The client never gets a WebSocket — the handshake is rejected at the HTTP level before ws protocol starts."
+      },
+      {
+        type: "spot-the-bug",
+        question: "Find the bug in this heartbeat setup:",
+        code: "export function setupHeartbeat(wss) {\n  const interval = setInterval(() => {\n    wss.clients.forEach((ws) => {\n      if (!ws.isAlive) {\n        ws.terminate();\n        return;\n      }\n      ws.ping();       // send ping\n      ws.isAlive = false; // reset AFTER ping\n    });\n  }, 30000);\n}",
+        options: [
+          "terminate() should be called after ping(), not before",
+          "isAlive should be set to false BEFORE calling ping(), not after",
+          "The interval should be 5000ms not 30000ms",
+          "wss.clients.forEach is not a valid method"
+        ],
+        correct: 1,
+        explanation: "isAlive must be reset to false BEFORE sending the ping. The sequence is: (1) reset isAlive=false, (2) send ping. When pong arrives, set isAlive=true. On the NEXT interval, if still false, terminate. Setting it false after ping creates a race: if pong arrives between ping() and isAlive=false assignment, we'd reset to false right after it was set to true."
+      },
+      {
+        type: "which-breaks",
+        question: "Which connect URL correctly passes a JWT to Token's WebSocket server?",
+        variants: [
+          "new WebSocket('wss://api.tokn.app/ws', { headers: { Authorization: 'Bearer eyJ...' } })",
+          "new WebSocket('wss://api.tokn.app/ws?token=eyJ...')",
+          "new WebSocket('wss://api.tokn.app/ws', ['Bearer', 'eyJ...'])",
+          "new WebSocket('wss://api.tokn.app/ws#token=eyJ...')"
+        ],
+        correct: 0,
+        explanation: "Browser's WebSocket API does not support custom headers — option 0 would silently ignore the headers object. Option 1 (query param) is the correct approach. Option 2 uses the subprotocol array (not for auth). Option 3 uses a URL fragment which never reaches the server."
+      },
+      {
+        type: "fill-blank",
+        question: "In the pong handler, mark the connection as still alive:",
+        code: "ws.on('pong', () => {\n  ws.___ = true;\n});",
+        answer: "isAlive",
+        explanation: "When the server receives a pong frame, it means the client is still there. Setting isAlive=true prevents termination on the next heartbeat interval. This custom property is defined on the AuthenticatedSocket interface alongside userId."
+      },
+      {
+        question: "Close code 1001 means which of the following?",
+        options: [
+          "Normal closure — the connection was used and is now cleanly finished",
+          "Going away — an endpoint is leaving (e.g. server shutting down)",
+          "Protocol error — the server received invalid data",
+          "Internal error — an unexpected server condition"
+        ],
+        correct: 1,
+        explanation: "WebSocket close codes: 1000 = normal closure (no reconnect needed), 1001 = going away (server restart — client should reconnect after a short delay), 1006 = abnormal closure (no close frame received — network failure), 1008 = policy violation (e.g. auth failed), 1011 = unexpected server condition (server bug)."
+      },
+      {
+        type: "predict-output",
+        question: "What does this connection state check print when a socket has begun closing?",
+        code: "const states = { 0: 'CONNECTING', 1: 'OPEN', 2: 'CLOSING', 3: 'CLOSED' };\n\n// ws.readyState is 2\nconsole.log(states[ws.readyState]);",
+        answer: "CLOSING",
+        explanation: "readyState 2 means CLOSING — the close handshake has started (one side sent a close frame) but the TCP connection hasn't been torn down yet. Attempting to send in this state is an error. The 4 states are CONNECTING(0), OPEN(1), CLOSING(2), CLOSED(3)."
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps for reconnecting after a Token WebSocket disconnect:",
+        steps: [
+          "Detect disconnect via onclose event",
+          "Check the close code — is this a recoverable disconnect?",
+          "Wait with exponential backoff (e.g. 1s, 2s, 4s…)",
+          "Fetch a fresh access token if it may have expired",
+          "Call connect() again with the new token"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "First detect the disconnect, then decide if reconnection makes sense (code 1008 = auth failure, don't retry without re-login; code 1001 = server restart, do retry). Apply backoff to avoid hammering a struggling server. Refresh the token before reconnecting since the original may have expired during the outage."
+      },
+      {
+        type: "fill-blank",
+        question: "Calculate exponential backoff delay with jitter to avoid thundering herd:",
+        code: "function getBackoffDelay(attempt) {\n  const base = Math.min(1000 * Math.pow(2, attempt), 30000);\n  return base + Math.random() * ___;\n}",
+        answer: "1000",
+        explanation: "Jitter adds a random offset (0–1000ms here) to the exponential delay. Without jitter, all clients that lost connection simultaneously would reconnect at exactly the same time — thundering herd. With jitter, reconnections are spread out. Cap is 30 seconds so you don't wait forever."
+      },
+      {
+        type: "spot-the-bug",
+        question: "Find the memory leak in this disconnection cleanup:",
+        code: "wss.on('connection', (ws) => {\n  clients.set(ws.userId, ws); // single socket per user\n\n  ws.on('close', () => {\n    console.log(`User ${ws.userId} disconnected`);\n    // cleanup done\n  });\n});",
+        options: [
+          "clients.set() should use clients.get() first",
+          "The close handler does not remove the socket from the clients Map",
+          "ws.userId is not available in the close handler",
+          "console.log should be removed from production code"
+        ],
+        correct: 1,
+        explanation: "The close handler logs the disconnect but never calls clients.delete(ws.userId). Every disconnected user stays in the Map forever, leaking memory. Fix: add clients.delete(ws.userId) inside the close handler. With multi-device support (Set per userId), you'd also need to remove the specific socket from the Set."
+      },
+      {
+        type: "which-breaks",
+        question: "Token's server sends a message to a user. Which sendTo() implementation is safe?",
+        variants: [
+          "function sendTo(ws, type, payload) { ws.send(JSON.stringify({ type, payload })); }",
+          "function sendTo(ws, type, payload) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type, payload })); }",
+          "function sendTo(ws, type, payload) { try { ws.send(JSON.stringify({ type, payload })); } catch {} }",
+          "function sendTo(ws, type, payload) { if (ws.readyState !== WebSocket.CLOSED) ws.send(JSON.stringify({ type, payload })); }"
+        ],
+        correct: 0,
+        explanation: "Option 0 crashes if the socket is CLOSING or CLOSED — ws.send() throws. Option 1 is correct — only send when OPEN. Option 2 silently swallows errors (acceptable but hides bugs). Option 3 is wrong: CLOSING state also throws on send, so checking '!== CLOSED' isn't enough."
+      },
+      {
+        type: "predict-output",
+        question: "How many WebSocket connections are in the clients Map after this sequence?",
+        code: "// User 42 connects on phone → clients.get(42).size = 1\n// User 42 connects on laptop → clients.get(42).size = 2\n// User 42's phone disconnects (close event fires, cleanup runs)\n// User 42's laptop disconnects (close event fires, cleanup runs)\n\nconsole.log(clients.has(42));",
+        answer: "false",
+        explanation: "After both connections close, the cleanup code deletes the entire userId entry from the Map when the Set size reaches 0. So clients.has(42) returns false — the key no longer exists. This keeps the Map clean and avoids indefinitely growing memory."
+      },
+      {
+        question: "Why does Token use short-lived access tokens (15 min) for WebSocket auth instead of refresh tokens?",
+        options: [
+          "Refresh tokens are too long to fit in a URL query parameter",
+          "If the token is logged by the server (URL appears in access logs), a short-lived token limits the exposure window",
+          "The ws library cannot validate long JWT strings",
+          "Refresh tokens don't contain the user's sub claim"
+        ],
+        correct: 1,
+        explanation: "The JWT in the WebSocket URL appears in server access logs. A stolen refresh token (valid for weeks) would let an attacker impersonate the user indefinitely. A 15-minute access token limits the damage window. If the access token expires mid-session, the server can request re-auth over the live WebSocket channel."
+      },
+      {
+        type: "fill-blank",
+        question: "In graceful shutdown, send a 'going away' close frame with the correct close code:",
+        code: "process.on('SIGTERM', () => {\n  wss.clients.forEach((ws) => {\n    ws.close(___, 'Server shutting down');\n  });\n});",
+        answer: "1001",
+        explanation: "Close code 1001 means 'going away' — the server is intentionally shutting down and the client should reconnect after a brief delay. Using 1000 (normal closure) would imply no reconnection needed. Using no code at all defaults to 1005 (no status received) which makes reconnect logic ambiguous."
+      },
+      {
+        type: "spot-the-bug",
+        question: "This reconnect logic has a bug that causes infinite fast reconnects:",
+        code: "function connect() {\n  const ws = new WebSocket(`wss://api.tokn.app/ws?token=${getToken()}`);\n\n  ws.onclose = (event) => {\n    if (event.code !== 1008) {  // don't retry auth failures\n      connect();               // reconnect immediately\n    }\n  };\n}",
+        options: [
+          "event.code should be compared with === not !==",
+          "There is no delay before reconnecting — instant retry hammers the server",
+          "getToken() cannot be called inside the WebSocket URL string",
+          "ws.onclose should be ws.addEventListener('close', ...)"
+        ],
+        correct: 1,
+        explanation: "Calling connect() directly inside onclose retries immediately with no delay. If the server is down, this creates hundreds of connection attempts per second — a denial-of-service against your own backend. Add exponential backoff: setTimeout(connect, getBackoffDelay(attempt)) where attempt increments each retry."
+      },
+      {
+        type: "order-steps",
+        question: "Order the steps for handling an incoming WebSocket message in Token's router:",
+        steps: [
+          "Receive raw Buffer/string from ws 'message' event",
+          "JSON.parse the raw data — send error if it throws",
+          "Check that message.type is a non-empty string",
+          "Look up the handler in the handlers Map",
+          "Call handler(ws, message.payload)"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Parse first (catch malformed JSON), validate structure (catch missing type), then dispatch. This layered validation means each error returns a descriptive error message rather than crashing. Never trust client input — a malicious client might send a binary blob, null, or a message with type: null."
+      },
+      {
+        type: "predict-output",
+        question: "What is logged when a second device connects for the same user?",
+        code: "wss.on('connection', (ws) => {\n  if (!clients.has(ws.userId)) {\n    clients.set(ws.userId, new Set());\n  }\n  clients.get(ws.userId).add(ws);\n  console.log(`User ${ws.userId} connected (${clients.get(ws.userId).size} devices)`);\n});\n\n// User 7 connects on phone (first connection)\n// User 7 connects on tablet (second connection)",
+        answer: "User 7 connected (2 devices)",
+        explanation: "On the second connection for user 7, the Set already exists with 1 socket. Adding the tablet socket makes size=2. The log prints '2 devices'. This multi-device tracking is essential — Token messages must be delivered to all the user's active devices, not just one."
+      },
+      {
+        type: "which-breaks",
+        question: "Which approach correctly integrates the WebSocket server with Express?",
+        variants: [
+          "const app = express(); app.listen(3000); createWsServer(app);",
+          "const app = express(); const httpServer = createServer(app); createWsServer(httpServer); httpServer.listen(3000);",
+          "const app = express(); const httpServer = app.listen(3000); createWsServer(httpServer);",
+          "const wss = new WebSocketServer({ port: 3000 }); // separate from Express"
+        ],
+        correct: 0,
+        explanation: "Option 0 passes the Express app object to createWsServer — but app doesn't emit 'upgrade' events, only the HTTP server does. Option 1 is correct: createServer(app) gives an httpServer reference before listening. Option 2 looks close but app.listen() returns a net.Server, not the same reference as needed. Option 3 runs WebSocket on a different port (no shared HTTP)."
+      },
+      {
+        type: "fill-blank",
+        question: "To send a message to ALL of a user's connected devices in Token:",
+        code: "function broadcastToUser(userId, type, payload) {\n  const userSockets = clients.get(userId);\n  if (!userSockets) return;\n  userSockets.___(ws => {\n    if (ws.readyState === WebSocket.OPEN) {\n      ws.send(JSON.stringify({ type, payload }));\n    }\n  });\n}",
+        answer: "forEach",
+        explanation: "clients is a Map<userId, Set<AuthenticatedSocket>>. A user can have multiple sockets (phone + laptop). Iterating with forEach sends to each active socket. This multi-device delivery is critical for Token — if a user issued a token from their phone but is viewing messages on their laptop, they need to receive new messages on both."
       }
     ]);
   </script>

@@ -397,6 +397,138 @@ export default router;`
         ],
         correct: 2,
         explanation: "Using && with max_uses fails when max_uses is 0 (falsy). A token with max_uses = 0 would skip the check entirely. Use !== null instead: if (token.max_uses !== null && count >= token.max_uses)."
+      },
+      // --- Questions 6-25 ---
+      {
+        type: "predict-output",
+        code: "const bytes = Buffer.from([255, 0, 128]);\nconst CHARSET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';\nconsole.log(bytes[0] % 32, bytes[1] % 32, bytes[2] % 32);",
+        answer: "31 0 0",
+        explanation: "255 % 32 = 31, 0 % 32 = 0, 128 % 32 = 0. The modulo operation maps each random byte to a valid index in the 32-character charset."
+      },
+      {
+        question: "Why does the CHARSET exclude the characters 0, O, 1, I, and L?",
+        options: ["They are too common in English words", "They look visually similar and cause transcription errors when spoken aloud or handwritten", "They are reserved characters in URLs", "JavaScript cannot handle them in string operations"],
+        correct: 1,
+        explanation: "0/O, 1/I/L are easily confused when reading codes aloud, writing them down, or viewing in certain fonts. Excluding them reduces human error during manual token entry."
+      },
+      {
+        type: "fill-blank",
+        code: "import ___ from 'crypto';\nconst bytes = ___.randomBytes(4);",
+        answer: "crypto",
+        explanation: "Node's built-in crypto module provides cryptographically secure random bytes. Unlike Math.random(), crypto.randomBytes uses the OS entropy pool, making codes unpredictable."
+      },
+      {
+        type: "predict-output",
+        code: "const SEGMENT_LENGTH = 4;\nconst SEGMENT_COUNT = 3;\nconst totalChars = SEGMENT_LENGTH * SEGMENT_COUNT;\nconst keyspace = Math.pow(32, totalChars);\nconsole.log(totalChars, keyspace > 1e12);",
+        answer: "12 true",
+        explanation: "4 chars x 3 segments = 12 characters total. 32^12 = 1,099,511,627,776 which is greater than 1 trillion (1e12), making brute-force infeasible."
+      },
+      {
+        type: "spot-the-bug",
+        code: "function randomSegment() {\n  let segment = '';\n  for (let i = 0; i < 4; i++) {\n    const index = Math.floor(Math.random() * 32);\n    segment += CHARSET[index];\n  }\n  return segment;\n}",
+        options: ["Line 2: segment should be an array, not a string", "Line 4: Math.random() is not cryptographically secure", "Line 5: CHARSET[index] could be undefined"],
+        correct: 1,
+        explanation: "Math.random() uses a PRNG that is predictable. An attacker who knows the seed can predict future tokens. crypto.randomBytes() must be used for security-critical code generation."
+      },
+      {
+        type: "order-steps",
+        steps: ["Generate random bytes with crypto.randomBytes()", "Map each byte to a charset index using modulo", "Concatenate characters into a 4-char segment", "Repeat for 3 segments", "Join segments with hyphens"],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Token generation flows from raw entropy to formatted code: get random bytes, map to characters, form segments, repeat, then join with dashes to get XXXX-XXXX-XXXX."
+      },
+      {
+        type: "which-breaks",
+        variants: [
+          "const code = segments.join('-');",
+          "const code = segments.join('');",
+          "const code = `${segments[0]}-${segments[1]}-${segments[2]}`;"
+        ],
+        correct: 1,
+        explanation: "Variant B joins without a separator, producing 'ABCD1234EFGH' instead of 'ABCD-1234-EFGH'. The format XXXX-XXXX-XXXX requires hyphens between segments for readability and validation."
+      },
+      {
+        question: "What HTTP status code should the redemption endpoint return when a token's max_uses has been reached?",
+        options: ["400 Bad Request", "401 Unauthorized", "403 Forbidden", "404 Not Found"],
+        correct: 2,
+        explanation: "403 Forbidden is correct — the token exists and the request is understood, but the server refuses to allow redemption because a business rule (max uses) has been violated."
+      },
+      {
+        type: "fill-blank",
+        code: "const { rows } = await pool.query(\n  'INSERT INTO conversations (token_id, holder_name, created_at) VALUES ($1, $2, NOW()) ___',\n  [token.id, holder_name.trim()]\n);",
+        answer: "RETURNING id",
+        explanation: "RETURNING id tells PostgreSQL to return the newly inserted row's id without needing a separate SELECT query. This is a PostgreSQL-specific feature essential for getting the conversation ID to include in the holder JWT."
+      },
+      {
+        type: "predict-output",
+        code: "const token = { status: 'active', expires_at: '2020-01-01', max_uses: null };\nconst expired = token.expires_at && new Date(token.expires_at) < new Date();\nconsole.log(expired);",
+        answer: "true",
+        explanation: "The expires_at is '2020-01-01' which is in the past. new Date('2020-01-01') < new Date() evaluates to true. The && short-circuit first confirms expires_at is truthy, then checks the date comparison."
+      },
+      {
+        type: "spot-the-bug",
+        code: "router.post('/tokens/:code/redeem', async (req, res) => {\n  const { code } = req.params;\n  const { rows } = await pool.query(\n    'SELECT * FROM tokens WHERE code = $1',\n    [code]\n  );\n  if (rows.length === 0) return res.status(404).json({ error: 'Not found' });\n  const token = rows[0];\n  // ... check status, expiry, max_uses ...\n  await createConversation(token.id);\n});",
+        options: ["Line 3: Missing FOR UPDATE — race condition with concurrent redemptions", "Line 4: Should use $2 instead of $1", "Line 7: Should return 403 instead of 404 for missing tokens"],
+        correct: 0,
+        explanation: "Without FOR UPDATE, two simultaneous redemption requests could both pass the max_uses check before either creates a conversation. The row lock prevents this race condition."
+      },
+      {
+        question: "What is the purpose of the holder JWT in the Token system?",
+        options: ["To identify the holder's real name to the token owner", "To give the holder access to all tokens from the same user", "To scope the holder's access to a single conversation without requiring a user account", "To encrypt messages between holder and user"],
+        correct: 2,
+        explanation: "The holder JWT is scoped to one conversation. It lets anonymous holders interact through a specific token's conversation without creating a user account, maintaining their privacy."
+      },
+      {
+        type: "fill-blank",
+        code: "export function signHolderToken(payload) {\n  return jwt.sign(\n    { ...payload, role: 'holder' },\n    process.env.JWT_SECRET,\n    { expiresIn: '___' }\n  );\n}",
+        answer: "7d",
+        explanation: "The holder JWT expires in 7 days. This is long enough for a conversation to conclude but short enough to limit exposure if the token is leaked. The holder can always re-redeem if their JWT expires."
+      },
+      {
+        type: "order-steps",
+        steps: ["Validate holder_name is present and non-empty", "Fetch token by code with FOR UPDATE lock", "Check token status is 'active'", "Check token has not expired", "Check max_uses not exceeded", "Create conversation row", "Sign and return holder JWT"],
+        correctOrder: [0, 1, 2, 3, 4, 5, 6],
+        explanation: "Redemption follows a strict validation sequence: input validation first (cheapest), then fetch with lock, then business rule checks from simplest to most expensive, then create resources, then respond."
+      },
+      {
+        type: "which-breaks",
+        variants: [
+          "if (!holder_name || holder_name.trim().length === 0) return res.status(400).json({});",
+          "if (holder_name === undefined) return res.status(400).json({});",
+          "if (typeof holder_name !== 'string' || holder_name.trim() === '') return res.status(400).json({});"
+        ],
+        correct: 1,
+        explanation: "Variant B only checks for undefined. If holder_name is null, an empty string '', or whitespace '   ', the check passes. Variants A and C both handle falsy values and whitespace-only strings correctly."
+      },
+      {
+        type: "predict-output",
+        code: "const MAX_RETRIES = 5;\nlet attempts = 0;\nfor (let i = 0; i < MAX_RETRIES; i++) {\n  attempts++;\n  if (i === 2) break;\n}\nconsole.log(attempts);",
+        answer: "3",
+        explanation: "The loop runs for i=0, i=1, i=2, then breaks at i===2 after incrementing. Three iterations complete, simulating a collision retry where the third attempt succeeds."
+      },
+      {
+        question: "Why does createUniqueCode() throw an error after 5 retries instead of continuing indefinitely?",
+        options: ["JavaScript has a limit on loop iterations", "If 5 collisions occur consecutively, the database likely has a systemic issue worth investigating", "The pool.query function can only be called 5 times", "Infinite loops crash the Node.js event loop immediately"],
+        correct: 1,
+        explanation: "With ~1.1 trillion possible codes, 5 consecutive collisions is astronomically unlikely under normal conditions. If it happens, something is wrong (DB full, code space exhausted, bug) and should surface as an error."
+      },
+      {
+        type: "spot-the-bug",
+        code: "router.post('/tokens', authenticate, async (req, res) => {\n  const { label, expires_at, max_uses, rules } = req.body;\n  const code = await createUniqueCode();\n  const { rows } = await pool.query(\n    `INSERT INTO tokens (user_id, code, label, status)\n     VALUES ($1, $2, $3, 'active') RETURNING *`,\n    [code, label]\n  );\n  res.status(201).json({ token: rows[0] });\n});",
+        options: ["Line 7: Parameters are in wrong order — user_id should be $1 but code is passed first", "Line 3: createUniqueCode() does not need await", "Line 5: Should use RETURNING id instead of RETURNING *"],
+        correct: 0,
+        explanation: "The SQL expects $1=user_id, $2=code, $3=label, but the parameter array passes [code, label] — missing userId entirely and code is in the user_id position. It should be [req.user.id, code, label]."
+      },
+      {
+        type: "fill-blank",
+        code: "// Collision probability with 1M active tokens:\n// P = active_tokens / keyspace\nconst probability = 1_000_000 / Math.pow(___, 12);\nconsole.log(probability < 0.000001); // true",
+        answer: "32",
+        explanation: "The charset has 32 characters, and codes are 12 characters long (3 segments of 4). 32^12 gives the total keyspace of ~1.1 trillion, making collision probability with 1M tokens roughly 0.00000091."
+      },
+      {
+        question: "What does the FOR UPDATE clause in the redemption query prevent?",
+        options: ["It prevents the token from being deleted while being read", "It locks the row so concurrent redemption requests are serialized, preventing double-redemption past max_uses", "It automatically updates the use count", "It triggers a database event when the row changes"],
+        correct: 1,
+        explanation: "FOR UPDATE acquires a row-level exclusive lock. If two requests try to redeem simultaneously, the second one waits until the first commits or rolls back, ensuring max_uses is checked against the correct count."
       }
     ]);
   </script>

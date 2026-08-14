@@ -307,6 +307,185 @@ ORDER BY r.redeemed_at DESC;`
         ],
         correct: 1,
         explanation: "When you use an aggregate function (COUNT) alongside a non-aggregated column (t.code), you MUST include a GROUP BY for that column. The second query uses COUNT with t.code but has no GROUP BY — Postgres rejects this."
+      },
+      // --- Questions 6–25 ---
+      {
+        type: "predict-output",
+        question: "A user has 3 tokens, each redeemed twice. How many rows does this return?",
+        code: "SELECT t.code, r.holder_name\nFROM tokens t\nINNER JOIN redemption_events r ON r.token_id = t.id\nWHERE t.user_id = 1;",
+        answer: "6 rows (3 tokens × 2 redemptions each)",
+        explanation: "JOINs multiply rows when there are multiple matches. Each token has 2 redemptions, so each token appears in 2 result rows. 3 tokens × 2 redemptions = 6 rows total. This is the fundamental behavior of one-to-many JOINs."
+      },
+      {
+        type: "fill-blank",
+        question: "Get all tokens and their rules, including tokens with no rules:",
+        code: "SELECT t.code, r.type, r.value\nFROM tokens t\n___ JOIN access_rules r ON r.token_id = t.id;",
+        answer: "LEFT",
+        explanation: "LEFT JOIN keeps every row from the left table (tokens) even if there's no matching row in the right table (access_rules). Tokens without rules still appear — their rule columns are NULL. INNER JOIN would hide those tokens."
+      },
+      {
+        type: "spot-the-bug",
+        question: "Why does this query show duplicate token codes?",
+        code: "SELECT t.code, t.status\nFROM tokens t\nJOIN access_rules a ON a.token_id = t.id\nJOIN redemption_events r ON r.token_id = t.id;",
+        options: [
+          "You can't join three tables",
+          "Each token appears once per combination of its rules and redemptions — a cartesian product between the two joined tables",
+          "The ON clauses are wrong",
+          "SELECT needs DISTINCT to work"
+        ],
+        correct: 1,
+        explanation: "Joining tokens to BOTH access_rules and redemption_events creates a cross-product between rules and redemptions for each token. If a token has 3 rules and 4 redemptions, it appears 12 times. Fix: use subqueries or separate the queries."
+      },
+      {
+        question: "What is the difference between WHERE and ON in a LEFT JOIN?",
+        options: [
+          "They're identical — use either",
+          "ON defines the join relationship; WHERE filters the final result (and can turn a LEFT JOIN into an INNER JOIN if it filters on the right table's columns)",
+          "ON is for primary keys, WHERE is for other columns",
+          "WHERE runs first, ON runs second"
+        ],
+        correct: 1,
+        explanation: "With LEFT JOIN: conditions in ON determine which right-table rows match (NULLs for non-matches). Conditions in WHERE filter the combined result — filtering on a right-table column (WHERE r.status = 'X') removes NULL rows, effectively making it an INNER JOIN."
+      },
+      {
+        type: "predict-output",
+        question: "What does COALESCE do here?",
+        code: "SELECT t.code, COALESCE(COUNT(r.id), 0) AS redemption_count\nFROM tokens t\nLEFT JOIN redemption_events r ON r.token_id = t.id\nGROUP BY t.code;",
+        answer: "Returns 0 instead of NULL for tokens with no redemptions",
+        explanation: "COALESCE returns the first non-NULL value. For tokens with no redemptions, COUNT(r.id) is actually 0 (not NULL — COUNT never returns NULL), so COALESCE is redundant here. But for SUM or AVG on empty groups, COALESCE(SUM(...), 0) IS needed."
+      },
+      {
+        type: "order-steps",
+        question: "Put the SQL execution order for a JOIN query:",
+        steps: ["FROM — identify tables", "JOIN — combine rows based on ON condition", "WHERE — filter combined rows", "GROUP BY — group remaining rows", "HAVING — filter groups", "SELECT — pick columns and compute expressions", "ORDER BY — sort final result"],
+        correctOrder: [0, 1, 2, 3, 4, 5, 6],
+        explanation: "SQL executes in this logical order regardless of how you write it. This is why you can't use a SELECT alias in WHERE (SELECT runs after WHERE), but you CAN use it in ORDER BY (runs last)."
+      },
+      {
+        type: "fill-blank",
+        question: "Find users who have NEVER created a token:",
+        code: "SELECT u.username\nFROM users u\nLEFT JOIN tokens t ON t.user_id = u.id\nWHERE t.id IS ___;",
+        answer: "NULL",
+        explanation: "LEFT JOIN keeps all users. Users without tokens have NULL for all token columns. WHERE t.id IS NULL filters to ONLY those users — ones where the join found no matching token. This is the 'anti-join' pattern."
+      },
+      {
+        type: "predict-output",
+        question: "How many rows does this return if there are 5 users and 3 tokens total?",
+        code: "SELECT u.username, t.code\nFROM users u\nCROSS JOIN tokens t;",
+        answer: "15 rows (5 users × 3 tokens — every possible combination)",
+        explanation: "CROSS JOIN produces the cartesian product — every row from the left paired with every row from the right. No ON condition. 5 × 3 = 15 rows. Rarely useful, but important to understand because accidental cross joins cause performance disasters."
+      },
+      {
+        type: "spot-the-bug",
+        question: "Why does this self-join return too many rows?",
+        code: "SELECT a.code AS token_a, b.code AS token_b\nFROM tokens a\nJOIN tokens b ON a.user_id = b.user_id;",
+        options: [
+          "You can't join a table to itself",
+          "It matches each token with itself AND with every other token by the same user — including duplicates (A,B) and (B,A)",
+          "The aliases a and b are invalid",
+          "user_id is not a valid join condition"
+        ],
+        correct: 1,
+        explanation: "The self-join matches every token with every other token by the same user — including itself (A,A) and reversed pairs (A,B) and (B,A). Add WHERE a.id < b.id to get unique pairs and exclude self-matches."
+      },
+      {
+        type: "which-breaks",
+        question: "Which query correctly counts messages per conversation?",
+        variants: [
+          "SELECT c.id, COUNT(m.id) AS msg_count FROM conversations c LEFT JOIN messages m ON m.conversation_id = c.id GROUP BY c.id;",
+          "SELECT c.id, COUNT(m.id) AS msg_count FROM conversations c LEFT JOIN messages m ON m.conversation_id = c.id;",
+          "SELECT c.id, (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) AS msg_count FROM conversations c;"
+        ],
+        correct: 1,
+        explanation: "Variant B uses COUNT with c.id but no GROUP BY — SQL error. Variant A uses LEFT JOIN + GROUP BY correctly. Variant C uses a correlated subquery which is also valid (and sometimes clearer), though potentially slower on large datasets."
+      },
+      {
+        type: "fill-blank",
+        question: "Get conversations where the user is a participant:",
+        code: "SELECT c.id, c.created_at\nFROM conversations c\n___ participants p ON p.conversation_id = c.id\nWHERE p.user_id = $1;",
+        answer: "JOIN",
+        explanation: "INNER JOIN (or just JOIN) returns only conversations where the user IS a participant. You don't need LEFT JOIN here because you only want matching rows — conversations the user belongs to. LEFT JOIN would add conversations they're NOT in (with NULL participant data)."
+      },
+      {
+        type: "predict-output",
+        question: "User 1 has 2 tokens. User 2 has 0 tokens. What does this query return?",
+        code: "SELECT u.username, COUNT(t.id) AS token_count\nFROM users u\nLEFT JOIN tokens t ON t.user_id = u.id\nGROUP BY u.username;",
+        answer: "Two rows: User 1 with count 2, User 2 with count 0",
+        explanation: "LEFT JOIN keeps User 2 even with no tokens. COUNT(t.id) counts non-NULL values — for User 2, t.id is NULL so COUNT is 0. If you used COUNT(*), User 2 would show 1 (counts the row itself). Always COUNT a specific column from the joined table."
+      },
+      {
+        type: "order-steps",
+        question: "Put the steps for designing a many-to-many relationship (users ↔ conversations):",
+        steps: ["Create the users table", "Create the conversations table", "Create a junction table (participants) with foreign keys to both", "Add user_id and conversation_id columns to the junction table", "Add a composite unique constraint on (user_id, conversation_id)"],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Many-to-many requires a junction (bridge) table. It has foreign keys pointing to both sides. The composite unique constraint prevents duplicate entries (a user can't join the same conversation twice)."
+      },
+      {
+        question: "What does a foreign key constraint actually enforce?",
+        options: [
+          "It creates an index automatically",
+          "It ensures the referenced row EXISTS in the parent table — you can't insert a token with a user_id that doesn't exist in users",
+          "It makes queries faster",
+          "It prevents NULL values"
+        ],
+        correct: 1,
+        explanation: "A foreign key is a referential integrity constraint. It guarantees that every token.user_id points to a real row in users. Insert a token with user_id=999 when no such user exists? Postgres rejects it. This prevents orphaned data."
+      },
+      {
+        type: "spot-the-bug",
+        question: "Why does this DELETE fail?",
+        code: "DELETE FROM users WHERE id = 1;\n-- Error: update or delete on table 'users' violates foreign key constraint on 'tokens'",
+        options: [
+          "DELETE syntax is wrong",
+          "You can't delete by id",
+          "User 1 has tokens referencing them — the foreign key prevents deleting a parent that still has children",
+          "The WHERE clause is missing quotes"
+        ],
+        correct: 2,
+        explanation: "Foreign keys prevent orphans in both directions. You can't create a child without a parent (insert check) AND you can't delete a parent that has children (delete check). Delete or reassign the tokens first, or use ON DELETE CASCADE."
+      },
+      {
+        type: "fill-blank",
+        question: "Automatically delete all tokens when a user is deleted:",
+        code: "CREATE TABLE tokens (\n  id SERIAL PRIMARY KEY,\n  user_id INTEGER REFERENCES users(id) ON DELETE ___\n);",
+        answer: "CASCADE",
+        explanation: "ON DELETE CASCADE means: when the parent row is deleted, automatically delete all child rows. Deleting a user would automatically delete all their tokens. Use carefully — in Token, you might prefer ON DELETE RESTRICT to prevent accidental data loss."
+      },
+      {
+        type: "predict-output",
+        question: "What does ON DELETE SET NULL do in this scenario?",
+        code: "-- tokens.user_id REFERENCES users(id) ON DELETE SET NULL\n-- User 5 has 3 tokens. Then:\nDELETE FROM users WHERE id = 5;\n-- What happens to the 3 tokens?",
+        answer: "The 3 tokens remain in the table but their user_id becomes NULL",
+        explanation: "ON DELETE SET NULL keeps the child rows but sets the foreign key column to NULL. The tokens still exist (with their codes, rules, etc.) but are no longer linked to any user. Useful when you want to keep historical data but the parent is gone."
+      },
+      {
+        type: "which-breaks",
+        question: "Which ON DELETE behavior is most appropriate for Token's access_rules table?",
+        variants: [
+          "ON DELETE CASCADE — rules are deleted when the token is deleted",
+          "ON DELETE SET NULL — rules keep existing with NULL token_id",
+          "ON DELETE RESTRICT — prevent token deletion if rules exist"
+        ],
+        correct: 0,
+        explanation: "Access rules only make sense in the context of their token. If a token is deleted, its rules should go too — they serve no purpose alone. CASCADE is correct here. SET NULL would create orphaned rules. RESTRICT would force manual rule deletion before every token delete."
+      },
+      {
+        type: "predict-output",
+        question: "What's the difference between these two queries' results?",
+        code: "-- Query A:\nSELECT t.code FROM tokens t WHERE t.user_id = 1;\n\n-- Query B:\nSELECT t.code FROM tokens t JOIN users u ON u.id = t.user_id WHERE u.id = 1;",
+        answer: "Same result — both return the same token codes for user 1",
+        explanation: "When you only need data from one table and are filtering by a foreign key, you don't need the JOIN. Query A is simpler and performs better. JOIN is needed when you want columns from BOTH tables or need to filter on the joined table's non-key columns."
+      },
+      {
+        question: "You need the last message in each conversation. Which approach is correct?",
+        options: [
+          "SELECT * FROM messages ORDER BY created_at DESC LIMIT 1",
+          "Use a lateral join or a subquery with DISTINCT ON (conversation_id) ordered by created_at DESC",
+          "GROUP BY conversation_id and SELECT all columns",
+          "JOIN messages to itself"
+        ],
+        correct: 1,
+        explanation: "You need the latest message PER conversation — LIMIT 1 only gives one message total. DISTINCT ON (conversation_id) with ORDER BY conversation_id, created_at DESC gives the most recent message for each conversation. GROUP BY won't work because you can't SELECT non-grouped columns."
       }
     ]);
   </script>

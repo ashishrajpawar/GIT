@@ -666,6 +666,226 @@ console.log('(status updates happen async — see below)');`);
         ],
         correctOrder: [0, 1, 2, 3, 4],
         explanation: "Clear input immediately (prevents double-send). Add to UI (instant feedback). Send to server. Server acknowledges with the real ID. Client reconciles. The user never sees a delay — the message appears the instant they tap Send."
+      },
+
+      // --- Questions 6–25 ---
+      {
+        question: "In a chat UI, why is FlatList often used with inverted={true}?",
+        options: [
+          "It renders items faster by reversing the draw order in GPU",
+          "It makes the list start from the bottom so the newest messages appear at the bottom without manual scrolling, and onEndReached fires when the user scrolls up to load older messages",
+          "It automatically sorts messages by timestamp in descending order",
+          "It prevents duplicate renders of the same message"
+        ],
+        correct: 1,
+        explanation: "An inverted FlatList flips the rendering direction so index 0 renders at the bottom. This means you can append new messages to the end of your array and they appear at the bottom naturally. As a bonus, onEndReached fires when the user scrolls up (toward the logical 'end' of the inverted list), making it easy to load older history."
+      },
+      {
+        type: "predict-output",
+        question: "The API returns messages newest-first. What does this code produce?",
+        code: "const apiMessages = [\n  { id: 3, text: 'Third' },\n  { id: 2, text: 'Second' },\n  { id: 1, text: 'First' },\n];\n\nconst uiMessages = apiMessages.reverse();\nconsole.log(uiMessages.map(m => m.text).join(', '));",
+        answer: "First, Second, Third",
+        explanation: "The API returns messages newest-first (id 3, 2, 1). .reverse() mutates the array and returns it oldest-first (id 1, 2, 3). The chat UI displays oldest messages at the top, newest at the bottom, so this ordering matches FlatList's top-to-bottom rendering."
+      },
+      {
+        type: "fill-blank",
+        question: "A message with a string localId like 'local-1720000000000' arrives in the list alongside messages with numeric server IDs. Complete the keyExtractor so both types work without errors:",
+        code: "keyExtractor={item => item.id.___()}",
+        answer: "toString",
+        explanation: "keyExtractor must return a string. Server IDs are numbers; local IDs are already strings. Calling .toString() on either type produces a valid string key. Without it, numeric IDs would cause React Native to warn about non-string keys, and mixing types could cause keying bugs."
+      },
+      {
+        type: "spot-the-bug",
+        question: "Token's message thread shows duplicate messages when returning to a conversation. What causes it?",
+        code: "// In MessageThreadScreen:\nuseWsMessage('chat:receive', (payload) => {\n  if (payload.conversationId === conversationId) {\n    const incoming = { id: payload.id, text: payload.text,\n      senderId: payload.senderId, status: 'delivered' };\n    setMessages(prev => [...prev, incoming]);\n  }\n});\n\nuseEffect(() => {\n  loadHistory(); // loads last 50 messages from REST API\n}, [conversationId]);",
+        options: [
+          "useEffect re-runs on every render because conversationId is not stable",
+          "A message can arrive via WebSocket while history is loading, then also appear in the history response — the same message ends up in the array twice",
+          "loadHistory() and the WebSocket listener both call setMessages which causes a race condition that doubles the array",
+          "useWsMessage registers a new listener each render, so each message is processed multiple times"
+        ],
+        correct: 1,
+        explanation: "The race: history request is in-flight, a new message arrives via WS and is appended, then history finishes and it includes that same message. Fix: after loading history, deduplicate by ID before setting state — or track the latest message ID from history and ignore WS messages already included."
+      },
+      {
+        type: "which-breaks",
+        question: "Which renderItem implementation will cause unnecessary re-renders of every MessageBubble when any single message's status changes?",
+        variants: [
+          "const renderMessage = useCallback(({ item }) => <MessageBubble message={item} isMine={item.senderId === user.id} />, [user.id]);",
+          "function renderMessage({ item }) { return <MessageBubble message={item} isMine={item.senderId === user.id} />; }",
+          "const renderMessage = ({ item }) => <MessageBubble message={item} isMine={item.senderId === user.id} />;",
+          "Options B and C both cause unnecessary re-renders"
+        ],
+        correct: 3,
+        explanation: "Functions defined inside the component body (options B and C) are recreated on every render. FlatList sees a new renderItem function reference and re-renders all visible items. Wrapping with useCallback and providing stable dependencies (just user.id) means the function reference is stable, so FlatList can bail out of re-rendering unchanged items."
+      },
+      {
+        type: "order-steps",
+        question: "Put the message deduplication flow in order when loading history while a WebSocket message could arrive simultaneously:",
+        steps: [
+          "New message arrives via WebSocket, append to messages state with its server ID",
+          "History API response arrives with an array of messages",
+          "Merge: filter out any history messages whose IDs already exist in state",
+          "Set state to [...existingMessages, ...newHistoryMessages] preserving correct chronological order",
+          "Start loading history from REST API"
+        ],
+        correctOrder: [4, 0, 1, 2, 3],
+        explanation: "First start the request, then the WS message may arrive and get appended. When history lands, filter out duplicates before merging so the WS message is not doubled. Finally set the deduplicated combined state in chronological order."
+      },
+      {
+        type: "predict-output",
+        question: "What does formatTime produce for this ISO timestamp?",
+        code: "function formatTime(iso) {\n  const date = new Date(iso);\n  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });\n}\n\n// Note: result depends on locale/timezone, but the structure is:\nconsole.log(typeof formatTime('2024-01-15T14:05:00.000Z'));",
+        answer: "string",
+        explanation: "toLocaleTimeString() always returns a string. The exact value (e.g. '14:05' or '2:05 PM') depends on the device's locale setting, but the type is always string. In the MessageBubble we render this inside a <Text> component which expects a string — if formatTime returned something else (like undefined), React Native would throw."
+      },
+      {
+        type: "fill-blank",
+        question: "On the failed-send timeout, we only want to mark a message as failed if it's STILL in 'sending' state (it might have succeeded just before the timeout fires). Complete the condition:",
+        code: "setTimeout(() => {\n  setMessages(prev =>\n    prev.map(m =>\n      m.id === localId && m.status === '___'\n        ? { ...m, status: 'failed' }\n        : m\n    )\n  );\n}, 10000);",
+        answer: "sending",
+        explanation: "If the server acknowledgment arrived just before the 10s timeout, the message status is already 'sent' (or 'delivered'). The guard m.status === 'sending' prevents overwriting a successfully delivered message with 'failed'. Always guard status transitions to avoid race conditions between async events."
+      },
+      {
+        type: "spot-the-bug",
+        question: "A user is reading old messages in the Token thread. Every time the other person sends a message, the list jumps to the bottom. The developer added this guard but it still jumps. What's wrong?",
+        code: "const isNearBottom = useRef(false); // starts false\n\n<FlatList\n  onScroll={(e) => {\n    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;\n    const dist = contentSize.height - contentOffset.y - layoutMeasurement.height;\n    isNearBottom.current = dist < 100;\n  }}\n  onContentSizeChange={() => {\n    if (isNearBottom.current) {\n      flatListRef.current?.scrollToEnd({ animated: true });\n    }\n  }}\n/>",
+        options: [
+          "useRef does not trigger a re-render, so onScroll changes are not seen by onContentSizeChange",
+          "onContentSizeChange fires BEFORE onScroll updates the ref for the initial load, and when history first loads the list auto-scrolls to bottom — but thereafter it works correctly",
+          "The initial value of isNearBottom is false but when the conversation first opens the user IS at the bottom, so new messages that arrive before the user scrolls will not auto-scroll. The initial value should be true.",
+          "onScroll has a default throttle so the ref update is always 300ms behind"
+        ],
+        correct: 2,
+        explanation: "When the screen first mounts and history loads, the user is effectively at the bottom. isNearBottom starts as false, so when the first new message arrives the guard blocks auto-scroll even though the user never scrolled away. Initialize isNearBottom to true so the first batch of messages auto-scrolls to bottom."
+      },
+      {
+        type: "predict-output",
+        question: "The chat:sent acknowledgment arrives. What is the messages array after this handler runs?",
+        code: "const messages = [\n  { id: 'local-111', text: 'Hi', status: 'sending' },\n  { id: 5, text: 'Hello', status: 'delivered' },\n];\n\nconst payload = { localId: 'local-111', id: 42, sentAt: '2024-01-01T10:00:00Z' };\n\nconst next = messages.map(m =>\n  m.id === payload.localId\n    ? { ...m, id: payload.id, sentAt: payload.sentAt, status: 'sent' }\n    : m\n);\n\nconsole.log(next[0].id + ' ' + next[0].status);",
+        answer: "42 sent",
+        explanation: "The map finds the message whose id matches payload.localId ('local-111'), spreads it, and overwrites id with 42 (the server ID) and status with 'sent'. The second message (id 5) passes through unchanged. next[0].id is 42 and next[0].status is 'sent'."
+      },
+      {
+        type: "multiple-choice",
+        question: "Why should StatusIcon only appear on messages where isMine is true?",
+        options: [
+          "React Native crashes if StatusIcon receives an undefined status",
+          "Delivery status (sent/delivered/read) is meaningful only to the sender — the recipient does not need to see whether their own messages were read by the other person in this UI pattern",
+          "The recipient's messages always have status 'delivered' so the icon would always show ✓✓ which is misleading",
+          "Showing status on both sides doubles the component count and slows FlatList"
+        ],
+        correct: 1,
+        explanation: "In WhatsApp-style chat UIs, delivery ticks are shown only on the sender's side. The recipient can see that their message was received by the fact that the conversation continues. Showing ticks on the recipient's messages would be confusing — whose delivery are we tracking? Status data on incoming messages from the server typically reflects delivery to the current user, not the sender's desired information."
+      },
+      {
+        type: "fill-blank",
+        question: "To group messages by date in the thread, you need to insert date separator rows between messages from different days. Complete the function that detects when the date changes:",
+        code: "function needsDateSeparator(messages, index) {\n  if (index === 0) return true;\n  const prev = new Date(messages[index - 1].sentAt);\n  const curr = new Date(messages[index].sentAt);\n  return prev.___() !== curr.___();\n}",
+        answer: "toDateString",
+        explanation: "toDateString() returns a locale-independent date string like 'Mon Jan 15 2024'. Comparing it for two adjacent messages tells you if they're on the same calendar day. If the strings differ, render a date separator (e.g. 'Today', 'Yesterday', or 'Jan 15') before the current message bubble."
+      },
+      {
+        type: "order-steps",
+        question: "A Token message fails to send (no network). The user taps Retry. Put the retry flow in order:",
+        steps: [
+          "Update the message's status back to 'sending' in state",
+          "User taps the Retry button on the failed message bubble",
+          "Call send() via WebSocket with the same localId and text",
+          "Check if WebSocket is connected; if not, immediately set status back to 'failed'",
+          "On chat:sent acknowledgment, update status to 'sent' with the server ID"
+        ],
+        correctOrder: [1, 0, 3, 2, 4],
+        explanation: "First the user taps Retry. Immediately update status to 'sending' so the UI shows the spinner. Then check connectivity — if still offline, short-circuit to 'failed' immediately. If connected, send via WebSocket. When the acknowledgment arrives, finalize to 'sent'."
+      },
+      {
+        type: "which-breaks",
+        question: "Which keyExtractor implementation will cause a warning or keying bug when messages include both optimistic (string) IDs and server (number) IDs?",
+        variants: [
+          "keyExtractor={item => item.id.toString()}",
+          "keyExtractor={item => String(item.id)}",
+          "keyExtractor={item => item.id}",
+          "keyExtractor={item => `msg-${item.id}`}"
+        ],
+        correct: 2,
+        explanation: "keyExtractor must return a string. Options A, B, and D all coerce the id to a string. Option C returns the raw id value — a number for server messages and a string for local messages. React Native will issue a warning when a non-string key is returned, and mixed types can cause rendering inconsistencies in the VirtualizedList internals."
+      },
+      {
+        type: "spot-the-bug",
+        question: "The ConversationList screen shows stale unreadCount after the user reads a conversation. What is missing?",
+        code: "// ConversationListScreen\nuseWsMessage('chat:receive', (payload) => {\n  setConversations(prev =>\n    prev.map(c =>\n      c.id === payload.conversationId\n        ? { ...c, lastMessage: payload, unreadCount: c.unreadCount + 1 }\n        : c\n    )\n  );\n});\n\n// MessageThreadScreen — when user views a conversation:\nuseWsMessage('chat:receive', (payload) => {\n  if (payload.conversationId === conversationId) {\n    setMessages(prev => [...prev, incoming]);\n    send('chat:read', { messageId: payload.id });\n  }\n});",
+        options: [
+          "chat:read should be sent from ConversationList, not MessageThread",
+          "When the user opens MessageThread, ConversationList should reset unreadCount to 0 for that conversation — but there is no mechanism to do this. The badge stays until the app restarts.",
+          "useWsMessage cannot be used in two different screens simultaneously",
+          "The sort is missing from the ConversationList update so the order is wrong, making the badge appear on the wrong row"
+        ],
+        correct: 1,
+        explanation: "The ConversationList increments unreadCount when messages arrive, but never decrements it when the user reads them. When MessageThread mounts (user opens the conversation), you should emit an event — via context, navigation param, or a reset API call — that sets unreadCount to 0 for that conversation in the list. A simple approach: on MessageThread focus, call setConversations to zero out the unread badge."
+      },
+      {
+        type: "predict-output",
+        question: "What is logged when two messages arrive 50ms apart and both get the same timestamp-based localId?",
+        code: "// Simulated — both messages sent nearly simultaneously\nconst id1 = 'local-' + 1720000000000;\nconst id2 = 'local-' + 1720000000000; // same ms\n\nconst messages = [];\nmessages.push({ id: id1, text: 'A', status: 'sending' });\nmessages.push({ id: id2, text: 'B', status: 'sending' });\n\n// chat:sent arrives for 'A' with localId = id1\nconst acked = messages.map(m =>\n  m.id === id1 ? { ...m, id: 100, status: 'sent' } : m\n);\n\nconsole.log(acked.map(m => m.id + ':' + m.text).join(', '));",
+        answer: "100:A, local-1720000000000:B",
+        explanation: "Even though both messages have the same localId, the .map() only replaces the FIRST occurrence because map iterates all items but the replacement creates a new object for every matching item. In practice with React state, both would be updated — this reveals the real bug: if two messages share the same localId, BOTH would get replaced by the server ID for message A, corrupting message B. The fix is to use a cryptographically unique ID or a counter, not Date.now() alone."
+      },
+      {
+        type: "fill-blank",
+        question: "To prevent the renderItem function from being recreated on every render (and causing FlatList to re-render all visible bubbles), wrap it with the correct React hook:",
+        code: "const renderMessage = ___(({ item }) => {\n  const isMine = item.senderId === user.id;\n  return <MessageBubble message={item} isMine={isMine} />;\n}, [user.id]);",
+        answer: "useCallback",
+        explanation: "useCallback memoizes the function reference. When user.id does not change between renders, renderMessage is the same function object, so FlatList can skip re-rendering items whose data hasn't changed (especially effective when combined with React.memo on MessageBubble). Without useCallback, renderMessage is a new reference every render, forcing FlatList to re-render all visible items."
+      },
+      {
+        type: "multiple-choice",
+        question: "In Token's thread, you receive a chat:delivery-receipt from the server. Which messages should you update?",
+        options: [
+          "All messages in the conversation that currently have status 'sent'",
+          "Only the specific message whose ID matches payload.messageId",
+          "The last message in the array regardless of ID",
+          "All messages sent by the current user in the last 5 minutes"
+        ],
+        correct: 1,
+        explanation: "Delivery receipts are per-message. The server sends { messageId: 42 } meaning specifically message 42 was delivered to the recipient's device. Update only that message. If you updated all 'sent' messages, you'd prematurely mark messages delivered before their own receipts arrive, which corrupts the status display."
+      },
+      {
+        type: "order-steps",
+        question: "Put the steps to add a date separator ('Today', 'Yesterday', dates) between message groups in order:",
+        steps: [
+          "In renderItem, check if the previous message was on a different day using the helper",
+          "Render a DateSeparator component above the bubble if a separator is needed",
+          "Create a helper function needsDateSeparator(messages, index) that compares adjacent message dates",
+          "Pass the index to renderItem via FlatList's renderItem callback",
+          "Format the separator label: if today show 'Today', if yesterday show 'Yesterday', else show 'Jan 15 2024'"
+        ],
+        correctOrder: [2, 3, 0, 4, 1],
+        explanation: "First build the helper. Then ensure FlatList passes the index (it does via the { item, index } argument). In renderItem use the helper to check if a separator is needed. Format the date label. Finally conditionally render the DateSeparator component before the bubble."
+      },
+      {
+        type: "spot-the-bug",
+        question: "The message input in Token's thread grows correctly but the send button drifts to the top as the TextInput expands past 3 lines. What CSS/style fix is needed?",
+        code: "const styles = StyleSheet.create({\n  inputRow: {\n    flexDirection: 'row',\n    paddingHorizontal: 12,\n    paddingVertical: 8,\n    borderTopWidth: 1,\n    borderTopColor: '#e2e8f0',\n  },\n  sendButton: {\n    marginLeft: 8,\n    backgroundColor: '#2563eb',\n    borderRadius: 20,\n    paddingHorizontal: 16,\n    paddingVertical: 10,\n  },\n});",
+        options: [
+          "The TextInput needs flex: 1 so it does not push the button off screen",
+          "inputRow is missing alignItems: 'flex-end' — without it the default is stretch/flex-start, so the send button aligns to the top of the row as the input grows",
+          "sendButton needs position: 'absolute' and bottom: 8 to stay anchored",
+          "flexDirection: 'row' should be 'column' for multiline inputs"
+        ],
+        correct: 1,
+        explanation: "When a flexDirection: 'row' container grows in height (because the multiline TextInput expands), children default to aligning at the top (flex-start). Adding alignItems: 'flex-end' makes the Send button stick to the bottom of the row — it appears next to the last line of text rather than the first, which matches the expected chat-input appearance."
+      },
+      {
+        type: "multiple-choice",
+        question: "In Token, why is it important to send a 'chat:read' receipt only when the user is actively viewing the MessageThread screen, not from the ConversationList?",
+        options: [
+          "WebSocket connections are per-screen in React Native so only MessageThread has access to the socket",
+          "Sending a read receipt from the list would mark the message read before the user has actually read the full text — on small screens the preview is truncated, so the sender would see 'read' even though the recipient only saw a snippet",
+          "The ConversationList does not have access to individual messageIds",
+          "Read receipts can only be sent once per session due to server-side rate limiting"
+        ],
+        correct: 1,
+        explanation: "A read receipt signals that the recipient has seen the message content. The conversation list shows only a preview (numberOfLines={1}). If you send 'chat:read' from the list, the sender sees the blue double-tick but the recipient may not have read the full message. Only mark as read when the user is inside the MessageThread screen with the full message visible — this matches user expectation and is the behaviour users expect from apps like WhatsApp."
       }
     ]);
   </script>

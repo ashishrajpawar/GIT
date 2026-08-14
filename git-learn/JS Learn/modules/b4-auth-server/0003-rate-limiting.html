@@ -352,6 +352,248 @@ app.use('/api/auth/register', registerLimiter);
         steps: ["Rate limiter (block excessive requests)", "Input validation (reject malformed data)", "Account lockout check (is this account locked?)", "Password verification (argon2.verify)"],
         correctOrder: [0, 1, 2, 3],
         explanation: "Rate limiting is cheapest — reject without any processing. Validation is next (no DB queries yet). Lockout requires one DB read. Password verification is the most expensive (deliberately slow argon2). Order from cheapest to most expensive."
+      },
+
+      // --- Questions 6–25 ---
+
+      {
+        question: "What does HTTP status code 429 mean?",
+        options: [
+          "Unauthorized — invalid credentials",
+          "Forbidden — you don't have permission",
+          "Too Many Requests — rate limit exceeded",
+          "Service Unavailable — server is down"
+        ],
+        correct: 2,
+        explanation: "429 Too Many Requests tells the client they've sent too many requests in a given time window. It's the standard way servers communicate rate limiting. The response should include a Retry-After header telling the client when to try again."
+      },
+      {
+        type: "predict-output",
+        question: "What response headers does express-rate-limit send with each response?",
+        code: "// express-rate-limit with windowMs: 900000, max: 5\n// After 3 requests in this window:\n// RateLimit-Limit: ???\n// RateLimit-Remaining: ???\n// RateLimit-Reset: ???",
+        answer: "RateLimit-Limit: 5, RateLimit-Remaining: 2, RateLimit-Reset: (seconds until window resets)",
+        explanation: "express-rate-limit sends standardized headers: RateLimit-Limit (max requests allowed), RateLimit-Remaining (how many left), and RateLimit-Reset (seconds until the window resets). Clients can use these to implement intelligent retry logic."
+      },
+      {
+        question: "What is the key difference between a fixed window and a sliding window rate limiting algorithm?",
+        options: [
+          "Fixed window uses RAM, sliding window uses disk",
+          "Fixed window resets at calendar boundaries (e.g. every 15 min mark); sliding window tracks each request's timestamp and rolls continuously",
+          "Sliding window is slower because it requires sorting",
+          "There is no difference — they are the same algorithm"
+        ],
+        correct: 1,
+        explanation: "Fixed window resets at fixed time boundaries (e.g. :00, :15, :30, :45). A user could send max requests at :14 and again at :16 — double the intended rate across the boundary. Sliding window tracks individual request timestamps, so it's always 'the last N minutes from RIGHT NOW', eliminating the burst-at-boundary problem."
+      },
+      {
+        type: "fill-blank",
+        question: "Configure express-rate-limit to allow 100 requests per 15-minute window:",
+        code: "const limiter = rateLimit({\n  ___: 15 * 60 * 1000,\n  max: 100\n});",
+        answer: "windowMs",
+        explanation: "windowMs defines the time window in milliseconds. 15 * 60 * 1000 = 900,000ms = 15 minutes. During this window, each client (identified by their key) can make at most 'max' requests before getting a 429 response."
+      },
+      {
+        question: "Why should auth endpoints (/login, /register) have stricter rate limits than general API endpoints?",
+        options: [
+          "Auth endpoints use more CPU due to password hashing, and they are prime targets for brute-force attacks",
+          "Auth endpoints don't need rate limiting because they already check passwords",
+          "General API endpoints are more important than auth endpoints",
+          "It's just a convention with no real security benefit"
+        ],
+        correct: 0,
+        explanation: "Auth endpoints are uniquely dangerous: (1) they're the target of brute-force and credential stuffing attacks, (2) password verification with argon2 is deliberately CPU-intensive (so each request costs more server resources), and (3) a successful attack gives full account access. Stricter limits (5/15min vs 100/15min) protect both security and server resources."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this rate limiter configuration for a multi-server deployment?",
+        code: "const loginLimiter = rateLimit({\n  windowMs: 15 * 60 * 1000,\n  max: 5,\n  // Using default in-memory store\n});",
+        options: [
+          "windowMs should be in seconds, not milliseconds",
+          "max: 5 is too strict for production",
+          "The default MemoryStore is per-process — with multiple servers, each has its own counter, so an attacker gets 5 * N attempts (N = number of servers)",
+          "The limiter is missing a message field"
+        ],
+        correct: 2,
+        explanation: "The default MemoryStore keeps counters in the Node.js process's RAM. If you have 3 servers behind a load balancer, each server counts independently — the attacker gets 15 attempts (5 per server). Use a Redis store (rate-limit-redis) so all servers share one set of counters."
+      },
+      {
+        type: "predict-output",
+        question: "What happens on the client when it receives a 429 response with exponential backoff?",
+        code: "// Client retry logic with exponential backoff\nlet attempt = 0;\nconst baseDelay = 1000; // 1 second\n\n// After 3 consecutive 429 responses:\n// Delay 1: baseDelay * 2^0 = ???\n// Delay 2: baseDelay * 2^1 = ???\n// Delay 3: baseDelay * 2^2 = ???",
+        answer: "Delay 1: 1000ms (1s), Delay 2: 2000ms (2s), Delay 3: 4000ms (4s)",
+        explanation: "Exponential backoff doubles the wait time after each failure: 1s, 2s, 4s, 8s, 16s... This prevents the client from hammering a rate-limited server. In practice, you'd add random jitter (e.g. ± 500ms) to prevent all clients from retrying at the exact same time (thundering herd)."
+      },
+      {
+        type: "fill-blank",
+        question: "Reset the failed login counter when the user successfully logs in:",
+        code: "if (passwordValid) {\n  await db.query(\n    'UPDATE users SET failed_login_attempts = 0, ___ = NULL WHERE id = $1',\n    [user.id]\n  );\n}",
+        answer: "locked_until",
+        explanation: "On successful login, reset both the failure counter AND the lockout timestamp. If you only reset the counter but leave locked_until set, the account might appear locked even after the user successfully authenticates. Clean both fields to fully restore normal access."
+      },
+      {
+        type: "which-breaks",
+        question: "Which of these rate limiter key generators will break under a reverse proxy?",
+        variants: [
+          "keyGenerator: (req) => req.ip  // with app.set('trust proxy', 1)",
+          "keyGenerator: (req) => req.connection.remoteAddress",
+          "keyGenerator: (req) => req.headers['x-forwarded-for']?.split(',')[0] || req.ip"
+        ],
+        correct: 1,
+        explanation: "req.connection.remoteAddress gives the TCP socket's remote IP — behind a proxy, that's always the proxy's IP (e.g. 127.0.0.1 or the load balancer). ALL clients appear as one IP, so one user hitting the limit locks out everyone. Use req.ip with 'trust proxy' or manually parse X-Forwarded-For."
+      },
+      {
+        question: "For Token's redemption endpoint (POST /api/tokens/:code/redeem), what's an appropriate rate limit strategy?",
+        options: [
+          "No rate limiting needed — redemption is a public feature",
+          "Strict limit per IP (e.g. 10/hour) — prevents token code enumeration attacks where an attacker tries random codes",
+          "Same limit as the general API (100/15min) since it's just another endpoint",
+          "Rate limit only authenticated users, not anonymous visitors"
+        ],
+        correct: 1,
+        explanation: "Token codes are the entry point to the system. An attacker could brute-force random codes (e.g. trying AAAA-0000-0001 through ZZZZ-9999-9999). Strict IP-based limiting (10/hour) makes enumeration impractical. The legitimate use case (someone redeeming a code they were given) rarely needs more than a few attempts."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this registration rate limiter?",
+        code: "const registerLimiter = rateLimit({\n  windowMs: 60 * 60 * 1000, // 1 hour\n  max: 100, // 100 registrations per hour per IP\n  keyGenerator: (req) => req.ip\n});",
+        options: [
+          "windowMs is too short for registration",
+          "100 registrations per IP per hour is far too generous — enables mass account creation for spam/abuse",
+          "keyGenerator should use the email, not IP",
+          "Registration doesn't need rate limiting"
+        ],
+        correct: 1,
+        explanation: "100 accounts per hour from one IP is an invitation for abuse. An attacker could create hundreds of throwaway accounts for spam, harassment, or circumventing bans. A reasonable limit for registration is 3-5 per hour per IP. Legitimate users almost never create more than one account."
+      },
+      {
+        type: "predict-output",
+        question: "An account is locked after 10 failures with a 30-minute lockout. What happens if the user tries to log in with the CORRECT password during lockout?",
+        code: "// Account locked at 14:00 (lockout duration: 30 min)\n// User tries correct password at 14:15\n// locked_until = '14:30'\n// Current time = '14:15'\n// Is locked_until > now? ???",
+        answer: "Login is REJECTED — the account is still locked even though the password is correct. The user must wait until 14:30.",
+        explanation: "Account lockout blocks ALL login attempts, including correct passwords. This is by design — if correct passwords bypassed lockout, an attacker would know they found the right password (the error message would change). The user must wait for the lockout to expire, ensuring the attacker can't distinguish correct from incorrect attempts."
+      },
+      {
+        question: "What is the difference between credential stuffing and brute-force attacks?",
+        options: [
+          "They are the same thing with different names",
+          "Brute-force tries random passwords on one account; credential stuffing uses leaked username/password pairs from other breaches",
+          "Credential stuffing is slower than brute-force",
+          "Brute-force only works on encrypted passwords"
+        ],
+        correct: 1,
+        explanation: "Brute-force tries many passwords against one account (e.g. 'password123', 'qwerty', etc.). Credential stuffing takes leaked credentials from other breaches (e.g. the LinkedIn leak) and tries them on YOUR service, exploiting password reuse. Different defenses: brute-force → account lockout; credential stuffing → also need leaked-password detection and encouraging unique passwords."
+      },
+      {
+        type: "fill-blank",
+        question: "Use a Redis store so rate limits work across multiple server instances:",
+        code: "const RedisStore = require('rate-limit-redis');\nconst limiter = rateLimit({\n  windowMs: 15 * 60 * 1000,\n  max: 5,\n  ___: new RedisStore({ sendCommand: (...args) => redisClient.sendCommand(args) })\n});",
+        answer: "store",
+        explanation: "The 'store' option replaces the default in-memory store with a shared Redis store. Now all your Node.js instances (behind the load balancer) read and write the same counters in Redis. An attacker can't bypass limits by having their requests routed to different servers."
+      },
+      {
+        type: "order-steps",
+        question: "Put the correct client-side 429 handling flow in order:",
+        steps: ["Send request to server", "Receive 429 with Retry-After header", "Parse Retry-After to get wait duration", "Wait the specified duration (with jitter)", "Retry the request"],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "The client should: (1) send the request, (2) detect the 429 status, (3) read the Retry-After header to know exactly how long to wait, (4) wait that duration plus some random jitter (to avoid thundering herd when many clients retry simultaneously), and (5) retry. Never immediately retry a 429 — that just adds load to an already-overloaded server."
+      },
+      {
+        question: "Why is rate limiting applied BEFORE authentication in the middleware chain?",
+        options: [
+          "It's just a convention with no technical reason",
+          "Because rate limiting needs the user's identity from auth",
+          "Because rate limiting is cheap (no DB/crypto) and protects expensive operations like password hashing from being triggered by abusive traffic",
+          "Authentication must come first according to the HTTP spec"
+        ],
+        correct: 2,
+        explanation: "Password hashing (argon2) deliberately takes ~250ms of CPU time. Without rate limiting first, an attacker sending 1000 requests/second would force your server to do 1000 argon2 operations/second — a CPU denial-of-service. Rate limiting is nearly free (one Redis lookup or memory check) and blocks abusive traffic before it can trigger expensive processing."
+      },
+      {
+        type: "which-breaks",
+        question: "Which configuration will fail to protect against distributed brute-force attacks?",
+        variants: [
+          "rateLimit({ windowMs: 900000, max: 5, keyGenerator: (req) => req.ip })",
+          "rateLimit({ windowMs: 900000, max: 5, keyGenerator: (req) => req.body.email })",
+          "rateLimit({ windowMs: 900000, max: 5, keyGenerator: (req) => `${req.ip}:${req.body.email}` })"
+        ],
+        correct: 0,
+        explanation: "IP-only limiting (variant A) fails against distributed attacks — a botnet with 1000 IPs gets 5000 total attempts. Email-only (variant B) protects per-account but lets one IP attack many accounts. The combined key (variant C) limits per-IP-per-account but still needs account-level lockout for full distributed protection. Only IP-only has no account-level defense."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's the security issue in this lockout expiry logic?",
+        code: "// Check if account is locked\nconst user = await db.query('SELECT * FROM users WHERE email = $1', [email]);\nif (user.locked_until && user.locked_until > new Date()) {\n  return res.status(423).json({\n    error: `Account locked until ${user.locked_until.toISOString()}`\n  });\n}",
+        options: [
+          "The query should use prepared statements",
+          "Telling the attacker the EXACT unlock time lets them schedule their next attack perfectly — reveal only 'try again later'",
+          "423 is the wrong status code for rate limiting",
+          "new Date() is not reliable across time zones"
+        ],
+        correct: 1,
+        explanation: "Revealing the exact unlock time (e.g. '2024-03-15T14:30:00Z') lets an attacker set a timer and resume the attack the instant lockout expires — no guessing needed. Return a vague message like 'Account temporarily locked. Try again later.' or 'Try again in approximately 30 minutes.' to introduce uncertainty."
+      },
+      {
+        type: "predict-output",
+        question: "What happens when the lockout expires and the user tries again?",
+        code: "// locked_until = '2024-03-15T14:00:00'\n// Current time = '2024-03-15T14:01:00'\n// failed_login_attempts = 10\n// User sends correct password\n\n// Is locked_until > now? false (lockout expired)\n// Proceed to password check...\n// Password correct → what happens to failed_login_attempts?",
+        answer: "failed_login_attempts resets to 0 and locked_until is set to NULL — the account is fully unlocked",
+        explanation: "After lockout expires, the next successful login should reset the slate completely: zero out the failure counter and clear the lock timestamp. Without this reset, the counter stays at 10 and one more failure would immediately re-lock the account (since 11 > 10 threshold)."
+      },
+      {
+        type: "fill-blank",
+        question: "Set a custom error message for the rate limiter response:",
+        code: "const loginLimiter = rateLimit({\n  windowMs: 15 * 60 * 1000,\n  max: 5,\n  ___: 'Too many login attempts. Try again in 15 minutes.'\n});",
+        answer: "message",
+        explanation: "The 'message' option sets the response body when the limit is exceeded. For API endpoints returning JSON, you can also use the 'handler' option for a custom function that sends a structured JSON error response with additional details like retryAfter."
+      },
+      {
+        question: "In a DDoS scenario, why is application-level rate limiting (express-rate-limit) insufficient on its own?",
+        options: [
+          "express-rate-limit has a bug that makes it fail under load",
+          "Application-level limiting only fires after the TCP connection is established and the HTTP request is parsed — the server still uses resources per connection. You need network-level protection (CDN, firewall, Cloudflare) to drop traffic before it reaches your app.",
+          "DDoS attacks only target port 443 which Express doesn't use",
+          "Application-level rate limiting is actually sufficient for all DDoS scenarios"
+        ],
+        correct: 1,
+        explanation: "By the time express-rate-limit sees a request, your server has already: accepted the TCP connection, completed the TLS handshake, parsed HTTP headers, and loaded middleware. With millions of requests, this alone exhausts server resources. You need layer 3/4 protection (firewall rules, Cloudflare, AWS Shield) to drop malicious traffic before it ever reaches your Node.js process."
+      },
+      {
+        type: "which-breaks",
+        question: "Which key generation strategy is dangerous for a login rate limiter?",
+        variants: [
+          "keyGenerator: (req) => `login:${req.ip}:${req.body.email}`",
+          "keyGenerator: (req) => `login:${req.headers['x-api-key']}`",
+          "keyGenerator: (req) => `login:${req.body.email?.toLowerCase()}`"
+        ],
+        correct: 1,
+        explanation: "Using x-api-key as the rate limit key for a LOGIN endpoint is dangerous — login is typically called BEFORE the user has an API key (that's why they're logging in!). The header would be undefined for all requests, meaning everyone shares one counter. One user hitting the limit locks out ALL users. The key must identify the requester before authentication."
+      },
+      {
+        type: "order-steps",
+        question: "Put the exponential backoff with jitter retry sequence in order (after receiving a 429):",
+        steps: ["Calculate base delay: baseDelay * 2^attempt", "Add random jitter: delay + random(0, delay * 0.5)", "Cap at maximum delay (e.g. 60 seconds)", "Wait the calculated duration", "Increment attempt counter and retry"],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "First calculate the exponential delay (1s, 2s, 4s, 8s...). Then add jitter so thousands of clients don't all retry at the same millisecond (thundering herd). Cap the delay so users aren't waiting forever. Wait the final duration. Then increment the counter and retry. If max retries are exhausted, show an error to the user."
+      },
+      {
+        type: "spot-the-bug",
+        question: "What's wrong with this approach to resetting the rate limit after successful login?",
+        code: "app.post('/login', loginLimiter, async (req, res) => {\n  // ... verify password ...\n  if (passwordValid) {\n    // Reset rate limit for this user\n    loginLimiter.resetKey(req.ip);\n    return res.json({ token: jwt });\n  }\n});",
+        options: [
+          "resetKey doesn't exist on express-rate-limit",
+          "Resetting by IP after success means an attacker sharing the same IP (corporate NAT, VPN) gets their counter reset when ANY user on that IP logs in successfully",
+          "You shouldn't return a JWT from the login endpoint",
+          "The rate limiter should be applied after authentication"
+        ],
+        correct: 1,
+        explanation: "If the rate limit key is just the IP, and you reset on successful login, then in a shared-IP scenario (office network, university), attacker Alice gets 4 failures, legitimate user Bob logs in successfully (resetting the counter), and Alice gets 5 more attempts. The key should be IP + email, and you should only reset that specific compound key."
+      },
+      {
+        type: "predict-output",
+        question: "A sliding window rate limiter with a 1-minute window and max 3 requests. Requests arrive at t=0s, t=30s, t=45s, t=61s. Which requests are allowed?",
+        code: "// Window: 60 seconds, max: 3\n// t=0s:  request 1 → window [0s-60s] has 1 request\n// t=30s: request 2 → window [0s-60s] has 2 requests\n// t=45s: request 3 → window [0s-60s] has 3 requests\n// t=61s: request 4 → window [1s-61s] has ??? requests",
+        answer: "All 4 requests are ALLOWED. At t=61s, the sliding window covers [1s-61s], so t=0s has expired. Only 2 requests remain in the window (t=30s, t=45s). Request 4 is the 3rd in this window — under the max.",
+        explanation: "This is the key advantage of sliding window over fixed window. The window slides with time — it's always 'the last 60 seconds from now'. Old requests age out as time passes, so the user organically regains capacity. There's no hard reset boundary that could be exploited."
       }
     ]);
   </script>

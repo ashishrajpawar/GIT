@@ -513,6 +513,335 @@ console.log('\\nOnly 2 WS messages for 2 keystrokes — debounce works.');`);
         ],
         correctOrder: [0, 1, 2, 3, 4],
         explanation: "The client debounces (start on first keystroke, stop after 3s silence). The server just forwards — no logic beyond the safety timeout. The recipient renders based on the isTyping boolean. The whole round-trip is typically <50ms on good connections."
+      },
+
+      // --- Questions 6–25 ---
+
+      {
+        question: "What does 'ephemeral state' mean in the context of a WebSocket server?",
+        options: [
+          "State that is encrypted end-to-end",
+          "State that is stored in PostgreSQL with a TTL column",
+          "State that lives only in memory and does not survive a server restart",
+          "State that is replicated across multiple database nodes"
+        ],
+        correct: 2,
+        explanation: "Ephemeral state (presence, typing indicators) lives only in RAM. If the process restarts, it's gone. This is intentional — clients reconnect within seconds and presence rebuilds automatically. Trying to persist it adds complexity for no real benefit."
+      },
+
+      {
+        type: "predict-output",
+        question: "What does this code log when user 7 disconnects their only socket?",
+        code: `const clients = new Map();
+const sockets = new Set(['socketA']);
+clients.set(7, sockets);
+
+// Disconnect event:
+clients.get(7)?.delete('socketA');
+const remaining = clients.get(7)?.size ?? 0;
+console.log(remaining === 0 ? 'broadcast offline' : 'still online');`,
+        answer: "broadcast offline",
+        explanation: "After deleting the only socket, the Set's size becomes 0. The condition `remaining === 0` is true, so 'broadcast offline' is logged. This is exactly the transition check used in handleUserDisconnected — only broadcast when the LAST socket is removed."
+      },
+
+      {
+        type: "fill-blank",
+        question: "Complete the Redis pub/sub subscribe call that listens for presence events across servers:",
+        code: `import Redis from 'ioredis';
+const sub = new Redis();
+
+// Subscribe to the presence channel
+sub.___(  'presence'  );
+
+sub.on('message', (channel, message) => {
+  const data = JSON.parse(message);
+  // Forward to local sockets
+});`,
+        answer: "subscribe",
+        explanation: "Redis pub/sub uses `publish` to send a message to a channel and `subscribe` to listen for messages on a channel. In a multi-server setup, each server calls `sub.subscribe('presence')` so it receives events published by any other server instance."
+      },
+
+      {
+        type: "spot-the-bug",
+        question: "This code tries to detect the 'first connection' transition. What's the bug?",
+        code: `export async function handleUserConnected(userId: number) {
+  const sockets = getClients().get(userId);
+
+  // Check BEFORE adding the new socket
+  if (sockets && sockets.size === 1) {
+    await broadcastPresence(userId, 'online');
+  }
+}`,
+        options: [
+          "The condition should check size === 0, not size === 1 — size is checked before the socket is added",
+          "broadcastPresence should be called synchronously, not with await",
+          "getClients() returns a WeakMap, not a Map",
+          "The condition should use size >= 1 to handle reconnects"
+        ],
+        correct: 0,
+        explanation: "The socket is added to the Set in server.ts BEFORE handleUserConnected is called. So by the time this function runs, size is already 1 (first connection) or 2+ (additional connection). The check `size === 1` is correct in the real code because the socket was already added. But if the code ran BEFORE adding the socket, the first-connection check would need `size === 0`. Always confirm when in the lifecycle the check fires."
+      },
+
+      {
+        type: "which-breaks",
+        question: "Which approach for storing typing state would cause a memory leak?",
+        variants: [
+          "Map<string, ReturnType<typeof setTimeout>> with clearTimeout and delete on stop",
+          "A plain object `{}` with keys like `userId:convId` and entries deleted on stop",
+          "Map<string, ReturnType<typeof setTimeout>> where timers are set but never deleted after firing",
+          "A WeakMap keyed by the WebSocket object itself"
+        ],
+        correct: 2,
+        explanation: "If you call `typingTimers.set(key, setTimeout(...))` but inside the timeout callback you only call forwardTypingEvent without deleting the key from the Map, the Map grows indefinitely. You must call `typingTimers.delete(key)` both inside the timeout callback and inside handleTypingStop to prevent the leak."
+      },
+
+      {
+        type: "order-steps",
+        question: "Put the steps for setting up Redis pub/sub for multi-server presence in the correct order:",
+        steps: [
+          "Create two separate Redis connections: one for pub, one for sub",
+          "Call sub.subscribe('presence') on each server instance at startup",
+          "When a user connects, call pub.publish('presence', JSON.stringify({ userId, status: 'online' }))",
+          "In the sub 'message' handler, parse the event and forward to local sockets"
+        ],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "Redis requires separate connections for pub and sub because a connection in subscribe mode can only receive messages, not send commands. Setup comes first (create connections, subscribe), then the publish/receive loop handles runtime events."
+      },
+
+      {
+        type: "predict-output",
+        question: "User 3 has two sockets open (phone + tablet). Phone disconnects. What gets logged?",
+        code: `const clients = new Map();
+clients.set(3, new Set(['phone', 'tablet']));
+
+// Phone disconnects:
+clients.get(3)?.delete('phone');
+if (clients.get(3)?.size === 0) {
+  clients.delete(3);
+  console.log('went offline');
+} else {
+  console.log('still online, sockets: ' + clients.get(3)?.size);
+}`,
+        answer: "still online, sockets: 1",
+        explanation: "After removing 'phone', the Set still contains 'tablet', so size is 1, not 0. The user is still online. No 'offline' broadcast fires. This is the correct multi-device behaviour — a user is only offline when ALL their devices disconnect."
+      },
+
+      {
+        type: "fill-blank",
+        question: "Complete the Redis command to store a user's presence with a 60-second auto-expiry (TTL):",
+        code: `// Store presence key in Redis with 60s TTL
+// If the server crashes, the key auto-expires — stale presence cleaned up
+await redis.___(
+  \`presence:\${userId}\`,
+  'online',
+  'EX',
+  60
+);`,
+        answer: "set",
+        explanation: "Redis `SET key value EX seconds` stores a value with a time-to-live. If the server crashes without sending an offline event, the key expires after 60 seconds and clients polling Redis will see the user as offline. The 'EX' option sets expiry in seconds; 'PX' sets it in milliseconds."
+      },
+
+      {
+        question: "In Token, why is 'last_seen_at' stored in PostgreSQL rather than kept only in memory?",
+        options: [
+          "Because PostgreSQL is faster than in-memory Maps for timestamp data",
+          "Because 'last seen' is semi-durable — it needs to survive server restarts so clients can show 'last seen 2 hours ago' even after a deploy",
+          "Because Redis cannot store timestamp values",
+          "Because PostgreSQL automatically cleans up stale timestamps"
+        ],
+        correct: 1,
+        explanation: "Presence (online/offline now) is ephemeral — nobody cares about the precise online/offline transitions from hours ago. But 'last seen at 3:42pm yesterday' is a useful UI fact that should persist. Storing it in PostgreSQL on every disconnect makes it durable. On reconnect, it just gets overwritten with a newer timestamp."
+      },
+
+      {
+        type: "spot-the-bug",
+        question: "This presence broadcast query has a logic error. What is it?",
+        code: `async function broadcastPresence(userId: number, status: string) {
+  const result = await db.query(
+    \`SELECT DISTINCT
+       CASE WHEN issuer_id = $1 THEN issuer_id ELSE holder_id END AS other_user_id
+     FROM conversations
+     WHERE issuer_id = $1 OR holder_id = $1\`,
+    [userId]
+  );
+  // ... forward to result.rows ...
+}`,
+        options: [
+          "The CASE expression returns the wrong user — it returns userId instead of the other participant",
+          "DISTINCT cannot be used with CASE in PostgreSQL",
+          "The WHERE clause should use AND instead of OR",
+          "db.query should use parameterized arrays differently"
+        ],
+        correct: 0,
+        explanation: "The CASE is backwards. `WHEN issuer_id = $1 THEN issuer_id` returns the current user's own ID when they are the issuer. It should be `WHEN issuer_id = $1 THEN holder_id ELSE issuer_id` — always return the OTHER participant. The correct version is in the lesson code above."
+      },
+
+      {
+        type: "predict-output",
+        question: "What happens to a typing indicator if the client app crashes mid-typing (no typing:stop sent)?",
+        code: `// Server-side safety timer:
+const key = \`\${userId}:\${conversationId}\`;
+typingTimers.set(key, setTimeout(() => {
+  forwardTypingEvent(ws, conversationId, false); // auto-stop
+  typingTimers.delete(key);
+}, 5000));
+
+// Client crashes 1 second after typing:start — no typing:stop arrives.
+// Q: When does the recipient's 'typing...' indicator disappear?`,
+        answer: "After 5 seconds (server timeout fires)",
+        explanation: "Without the server-side timeout, the recipient would see 'typing...' forever after a client crash. The 5-second timer fires forwardTypingEvent with isTyping=false automatically. This is the safety net. 5 seconds is a reasonable balance — long enough to not flicker on a slow network, short enough to not be annoying."
+      },
+
+      {
+        type: "which-breaks",
+        question: "Which scenario correctly triggers a 'went online' broadcast in Token's presence system?",
+        variants: [
+          "User already has one socket; opens a second tab — size goes 1 → 2",
+          "User had zero sockets; first socket connects — size goes 0 → 1",
+          "User's socket sends a chat message after 10 minutes of inactivity",
+          "User changes their profile display name"
+        ],
+        correct: 1,
+        explanation: "The 'online' broadcast fires only on the transition from 0 → 1 sockets (was offline, is now online). Opening a second tab (1 → 2) doesn't re-broadcast — the user was already online. Sending a message or changing a name are unrelated to connection state."
+      },
+
+      {
+        type: "fill-blank",
+        question: "Complete the pub/sub publish call that notifies all servers when a user goes online:",
+        code: `// In handleUserConnected, after confirming first connection:
+const event = JSON.stringify({ userId, status: 'online' });
+await pub.___('presence', event);`,
+        answer: "publish",
+        explanation: "Redis pub/sub: `publish(channel, message)` sends a message to a named channel. Every server that has called `subscribe('presence')` receives it instantly. This is how Server B learns about a user who connected to Server A, even though they share no in-memory state."
+      },
+
+      {
+        type: "order-steps",
+        question: "Order the steps for handling a server restart gracefully in a presence system:",
+        steps: [
+          "Server process crashes — all in-memory clients Map is lost",
+          "Redis presence keys with TTL auto-expire after 60 seconds",
+          "Clients detect disconnection and attempt reconnect with exponential backoff",
+          "Client reconnects — server adds socket to clients Map and broadcasts 'online'",
+          "Presence state is fully rebuilt from live connections"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Server restarts clear all in-memory presence. Redis TTL-based keys clean up stale data automatically. Clients reconnect and re-register, rebuilding the state. This is why ephemeral presence is a good design — it self-heals. No manual cleanup needed."
+      },
+
+      {
+        question: "Why does the Redis pub/sub implementation use TWO separate Redis client instances (pub and sub)?",
+        options: [
+          "For redundancy — if one instance fails the other takes over",
+          "Because a Redis connection in subscribe mode can only receive messages and cannot issue other Redis commands",
+          "Because pub and sub connect to different Redis ports",
+          "To double the throughput by parallelising publish and subscribe operations"
+        ],
+        correct: 1,
+        explanation: "Once you call `subscribe()` on a Redis connection, that connection enters subscriber mode. It can only receive messages via the 'message' event — it cannot run SET, GET, PUBLISH, or any other commands. You need a separate connection for publishing and other operations. This is a Redis protocol limitation, not an ioredis quirk."
+      },
+
+      {
+        type: "predict-output",
+        question: "What does this client-side typing debounce send to the server for the keystrokes shown?",
+        code: `// Keystrokes: 'T' at 0ms, 'o' at 100ms, 'k' at 200ms
+// Then silence for 3+ seconds
+// isCurrentlyTyping starts as false
+
+// Keystroke 1 (T):
+//   isCurrentlyTyping is false → sends typing:start, sets flag true
+//   starts 3s timeout
+// Keystroke 2 (o):
+//   flag already true → no new typing:start
+//   clears 3s timeout, restarts it
+// Keystroke 3 (k):
+//   flag already true → no new typing:start
+//   clears 3s timeout, restarts it
+// After 3s silence: timeout fires → sends typing:stop
+
+// How many total WebSocket messages are sent?`,
+        answer: "2",
+        explanation: "Exactly 2 messages: one typing:start (on the first keystroke) and one typing:stop (after 3 seconds of silence). The intermediate keystrokes only reset the timer — they produce no additional WebSocket traffic. This is the entire point of debouncing: reducing 3 keystrokes to 2 server messages."
+      },
+
+      {
+        type: "spot-the-bug",
+        question: "This code tries to hide presence based on a token access rule. What's the bug?",
+        code: `async function broadcastPresence(userId: number, status: string) {
+  const partners = await getConversationPartners(userId);
+
+  for (const partnerId of partners) {
+    const hasHideRule = await db.query(
+      'SELECT 1 FROM token_rules WHERE rule_type = $1',
+      ['hide_presence']
+    );
+
+    if (!hasHideRule.rows.length) {
+      sendPresenceTo(partnerId, userId, status);
+    }
+  }
+}`,
+        options: [
+          "The query doesn't filter by userId — it checks if ANY token in the DB has a hide_presence rule, not this user's token",
+          "SELECT 1 is not valid PostgreSQL syntax",
+          "The loop should use Promise.all for parallel execution",
+          "sendPresenceTo should be awaited"
+        ],
+        correct: 0,
+        explanation: "The query checks for any hide_presence rule in the whole table, not specifically for the token between userId and partnerId. It needs a WHERE clause: `WHERE rule_type = 'hide_presence' AND (issuer_id = $1 OR holder_id = $1)` and ideally also filter by the specific conversation/token. Otherwise, one user's privacy setting accidentally silences everyone's presence."
+      },
+
+      {
+        type: "fill-blank",
+        question: "Complete the Redis TTL refresh so a user's presence key doesn't expire while they're still connected:",
+        code: `// Called periodically (e.g. every 30s via heartbeat) while user is online
+async function refreshPresenceTTL(userId: number) {
+  await redis.___(
+    \`presence:\${userId}\`,
+    60  // reset TTL to 60 seconds
+  );
+}`,
+        answer: "expire",
+        explanation: "Redis `EXPIRE key seconds` resets the TTL on an existing key without changing its value. By calling this on each heartbeat, the presence key stays alive as long as the connection is active. If the server crashes and heartbeats stop, the key expires in at most 60 seconds — stale data cleans itself up."
+      },
+
+      {
+        type: "which-breaks",
+        question: "Which message type should ALSO trigger clearing the typing indicator on the server?",
+        variants: [
+          "presence:update — when a user's status changes",
+          "message:send — when the user sends the message they were composing",
+          "auth:refresh — when the auth token is renewed",
+          "ping — the WebSocket heartbeat message"
+        ],
+        correct: 1,
+        explanation: "When a user sends a message, they've stopped typing. The client should send typing:stop alongside message:send (or the server should auto-clear the typing timer when it processes a message:send from that user). Otherwise the recipient briefly sees 'typing...' even after the message arrives. This is the 'also send typing:stop when the message is sent' rule from the lesson."
+      },
+
+      {
+        type: "predict-output",
+        question: "User A is connected to Server 1. User B is connected to Server 2. Server 1 has no Redis. User A sends typing:start. Does User B see it?",
+        code: `// Server 1: in-memory clients Map
+// clients = Map { userA: Set([socketA]) }
+// User B is NOT in Server 1's clients Map
+
+// When Server 1 tries to forward typing to User B:
+const recipientSockets = getClients().get(userB.id);
+// recipientSockets is:`,
+        answer: "undefined",
+        explanation: "Without Redis pub/sub, Server 1's clients Map only knows about connections on Server 1. User B is on Server 2, so Server 1 has no reference to their sockets. recipientSockets is undefined, the event is silently dropped, and User B never sees the typing indicator. This is why Redis pub/sub is needed for multi-server deployments."
+      },
+
+      {
+        question: "Token's privacy model says 'nobody contacts the user unless the user issued them a token'. How does this principle apply to presence broadcasts?",
+        options: [
+          "Presence should be broadcast to all registered users so they can decide whether to contact someone",
+          "Presence should only be sent to users who have an active conversation — meaning a token has been issued — not random users",
+          "Presence should be completely disabled to prevent any contact tracing",
+          "Presence should be broadcast only to the Token company's analytics servers"
+        ],
+        correct: 1,
+        explanation: "If a token has been issued, a conversation exists and there is a legitimate reason for the holder to know the issuer's availability. Without a token/conversation, broadcasting presence would expose the user's schedule to strangers — violating the core privacy guarantee. The broadcastPresence query filters to conversation partners precisely to enforce this rule."
       }
     ]);
   </script>

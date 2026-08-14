@@ -589,6 +589,196 @@ async function getUnreadCount(userId: string): Promise<number> {
                 code: "if (ticket.details?.error === '___') {\n  await clearInvalidToken(pushToken);\n}",
                 answer: "DeviceNotRegistered",
                 explanation: "When a push token is no longer valid (app uninstalled, token rotated), Expo returns a DeviceNotRegistered error. You should remove it from your database to stop wasting API calls."
+            },
+            // --- Questions 6-25 ---
+            {
+                type: "predict-output",
+                code: "const tokens = ['ExponentPushToken[aaa]', 'invalid-token', 'ExponentPushToken[bbb]'];\nconst valid = tokens.filter(t => t.startsWith('ExponentPushToken['));\nconsole.log(valid.length);",
+                answer: "2",
+                explanation: "Only tokens starting with 'ExponentPushToken[' pass the filter. 'invalid-token' does not match the pattern, so only 2 of the 3 tokens are valid Expo push tokens."
+            },
+            {
+                type: "fill-blank",
+                code: "const tokenData = await Notifications.getExpoPushTokenAsync({ ___ });\nreturn tokenData.data;",
+                answer: "projectId",
+                explanation: "getExpoPushTokenAsync requires a projectId parameter (from Constants.expoConfig.extra.eas.projectId) to identify your Expo project. Without it, the SDK cannot route the token to the correct project."
+            },
+            {
+                question: "What happens if you call getExpoPushTokenAsync() on a simulator/emulator?",
+                options: [
+                    "It returns a valid token that works for testing",
+                    "It returns a fake token prefixed with 'SimulatorToken['",
+                    "It throws an error because push tokens require a physical device",
+                    "It returns null silently"
+                ],
+                correct: 2,
+                explanation: "Push notification tokens only work on physical devices. Simulators and emulators do not register with FCM/APNs. That is why the code checks Device.isDevice before attempting registration."
+            },
+            {
+                type: "spot-the-bug",
+                code: "async function sendBatch(tokens, title, body) {\n  const messages = tokens.map(t => ({ to: t, title, body }));\n  const tickets = await expo.sendPushNotificationsAsync(messages);\n  return tickets;\n}",
+                options: [
+                    "Line 2 — no validation of tokens before sending",
+                    "Line 3 — sendPushNotificationsAsync does not accept arrays",
+                    "Line 4 — tickets should be awaited again"
+                ],
+                correct: 0,
+                explanation: "The code sends all tokens without checking Expo.isExpoPushToken() first. Invalid tokens will cause errors in the batch. Always filter tokens with Expo.isExpoPushToken() before building the message array."
+            },
+            {
+                type: "which-breaks",
+                question: "Which notification payload will fail to send via Expo's push API?",
+                variants: [
+                    "{ to: 'ExponentPushToken[abc]', title: 'Hi', body: 'Hello' }",
+                    "{ to: 'ExponentPushToken[abc]', body: 'Hello' }",
+                    "{ to: 'not-a-valid-token', title: 'Hi', body: 'Hello' }"
+                ],
+                correct: 2,
+                explanation: "Expo validates the token format. A token that does not match the ExponentPushToken[...] pattern will be rejected by the API. Title is optional (body-only notifications are valid)."
+            },
+            {
+                type: "order-steps",
+                question: "Order the steps to handle a DeviceNotRegistered error:",
+                steps: [
+                    "Receive error ticket from expo.sendPushNotificationsAsync()",
+                    "Check ticket.details.error value",
+                    "Query database to find user with this push token",
+                    "Set push_token to NULL for that user",
+                    "Log the cleanup for monitoring"
+                ],
+                correctOrder: [0, 1, 2, 3, 4],
+                explanation: "When you get a DeviceNotRegistered error, you need to identify the invalid token, find the user it belongs to, clear it from the database, and log the event for operational awareness."
+            },
+            {
+                type: "predict-output",
+                code: "const channel = { name: 'Calls', importance: 4, sound: 'ringtone.wav' };\nconsole.log(channel.importance === 4 ? 'MAX' : 'DEFAULT');",
+                answer: "MAX",
+                explanation: "AndroidImportance.MAX equals 4 in the Expo Notifications SDK. The 'calls' channel uses MAX importance so notifications break through Do Not Disturb and appear as heads-up notifications."
+            },
+            {
+                question: "Why does Token send push notifications through Expo's servers instead of directly to FCM/APNs?",
+                options: [
+                    "FCM and APNs do not accept direct requests",
+                    "Expo provides a unified API for both platforms and handles credentials",
+                    "Direct FCM/APNs is slower than Expo's servers",
+                    "Expo is required by React Native"
+                ],
+                correct: 1,
+                explanation: "Expo's push service abstracts both FCM and APNs behind one API. You send one request with an Expo push token, and Expo routes it to the correct platform. It also manages FCM server keys and APNs certificates for you."
+            },
+            {
+                type: "fill-blank",
+                code: "await Notifications.setNotificationChannelAsync('calls', {\n  name: 'Incoming Calls',\n  importance: Notifications.AndroidImportance.___,\n  sound: 'ringtone.wav',\n});",
+                answer: "MAX",
+                explanation: "Incoming calls need MAX importance so they appear as full-screen notifications and can break through Do Not Disturb mode. Lower importance levels would cause missed calls."
+            },
+            {
+                type: "spot-the-bug",
+                code: "responseListener.current =\n  Notifications.addNotificationResponseReceivedListener((response) => {\n    const data = response.content.data;\n    if (data.type === 'message') {\n      navigation.navigate('Messages');\n    }\n  });",
+                options: [
+                    "Line 3 — should be response.notification.request.content.data",
+                    "Line 5 — navigate should include screen params",
+                    "Line 1 — listener should use addNotificationReceivedListener"
+                ],
+                correct: 0,
+                explanation: "The correct path to notification data in the response listener is response.notification.request.content.data. The response object wraps the notification, which wraps the request, which contains the content."
+            },
+            {
+                question: "What is the purpose of the 'data' field in a push notification payload?",
+                options: [
+                    "It sets the notification title and body text",
+                    "It carries custom JSON that your app receives for routing/logic",
+                    "It defines the notification's visual appearance",
+                    "It stores the push token for verification"
+                ],
+                correct: 1,
+                explanation: "The data field carries arbitrary JSON that your app can read when the notification arrives or is tapped. Token uses it to pass conversationId, callId, tokenCode, and event type for navigation routing."
+            },
+            {
+                type: "predict-output",
+                code: "const preview = 'Your token MERC-8GH2-LP4X has been redeemed by a new contact who wants to reach you about a business inquiry';\nconsole.log(preview.substring(0, 100).length);",
+                answer: "100",
+                explanation: "substring(0, 100) returns exactly 100 characters (or fewer if the string is shorter). Token truncates message previews to 100 characters in push notifications to keep them concise."
+            },
+            {
+                type: "which-breaks",
+                question: "Which server-side code will fail when sending a notification?",
+                variants: [
+                    "await expo.sendPushNotificationsAsync([{ to: token, title: 'Hi', body: 'Msg', sound: 'default' }]);",
+                    "await expo.sendPushNotificationsAsync({ to: token, title: 'Hi', body: 'Msg' });",
+                    "await expo.sendPushNotificationsAsync([{ to: token, body: 'Msg', data: { id: '1' } }]);"
+                ],
+                correct: 1,
+                explanation: "sendPushNotificationsAsync expects an array of messages, not a single object. Passing an object directly instead of wrapping it in an array will cause a type error."
+            },
+            {
+                type: "order-steps",
+                question: "Order the steps for handling badge count in Token:",
+                steps: [
+                    "User receives a new message while app is in background",
+                    "Server queries unread count for the recipient",
+                    "Server includes badge count in the push payload",
+                    "OS displays the badge number on the app icon",
+                    "User opens the app, setBadgeCountAsync(0) resets it"
+                ],
+                correctOrder: [0, 1, 2, 3, 4],
+                explanation: "The server maintains the source of truth for unread count, includes it in each push. The OS displays it. When the user opens the app, the client resets it to zero."
+            },
+            {
+                type: "fill-blank",
+                code: "const { status: existingStatus } = await Notifications.___();\nlet finalStatus = existingStatus;",
+                answer: "getPermissionsAsync",
+                explanation: "getPermissionsAsync() checks the current notification permission status without prompting the user. You check this first and only call requestPermissionsAsync() if permission has not been granted yet."
+            },
+            {
+                type: "predict-output",
+                code: "const ticket = { status: 'ok', id: 'ticket-123' };\nconsole.log(ticket.status === 'error' ? 'failed' : 'sent');",
+                answer: "sent",
+                explanation: "A ticket with status 'ok' means Expo accepted the notification for delivery. The 'error' status indicates the push was rejected (e.g., invalid token, malformed payload)."
+            },
+            {
+                question: "What is a silent notification used for in Token?",
+                options: [
+                    "Sending encrypted messages that only show after biometric unlock",
+                    "Triggering background data sync without displaying anything to the user",
+                    "Testing if the push token is still valid",
+                    "Sending notifications that bypass Do Not Disturb"
+                ],
+                correct: 1,
+                explanation: "Silent notifications carry data but show no alert, play no sound, and set no badge. Token uses them to trigger background database syncs (e.g., token list updates, message read receipts) without interrupting the user."
+            },
+            {
+                type: "spot-the-bug",
+                code: "export async function initPushNotifications() {\n  const token = await registerForPushNotifications();\n  await savePushTokenToServer(token);\n}",
+                options: [
+                    "Line 2 — registerForPushNotifications is not async",
+                    "Line 3 — token could be null and is passed without checking",
+                    "Line 1 — function should return the token"
+                ],
+                correct: 1,
+                explanation: "registerForPushNotifications() returns null when the device is a simulator or permission is denied. Passing null to savePushTokenToServer would either crash or save a null token to the database. Always check if (token) before saving."
+            },
+            {
+                question: "Why does the calls notification channel use a different sound file than the default channel?",
+                options: [
+                    "Android requires unique sounds per channel",
+                    "Incoming calls need a ringtone that loops, while messages need a short alert sound",
+                    "FCM cannot play the default sound for high-priority notifications",
+                    "The Expo SDK only supports custom sounds on the calls channel"
+                ],
+                correct: 1,
+                explanation: "A message notification plays a brief alert sound. An incoming call needs a longer, looping ringtone so the user hears it across the room. Separate channels allow different sound behaviors."
+            },
+            {
+                type: "which-breaks",
+                question: "Which approach to storing push tokens will cause problems at scale?",
+                variants: [
+                    "One push_token column per user, overwritten when a new token is received",
+                    "A separate push_tokens table with user_id, token, platform, and created_at",
+                    "Storing the token in the JWT claims so the server always has it"
+                ],
+                correct: 2,
+                explanation: "Push tokens change when the app is reinstalled or the OS rotates them. Embedding a token in a JWT means it cannot be updated without re-issuing the JWT, and the server would send to a stale token. A separate table or column that can be updated is correct."
             }
         ]);
     </script>
