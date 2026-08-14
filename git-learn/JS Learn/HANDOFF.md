@@ -20,6 +20,12 @@ two-track lesson plan.
 
 ## 2. Current state
 
+> **"Complete" throughout this document means _written_, not _studied_.**
+> Student progress as of 2026-08-14 is **2 lessons of 95** — `01/0001` and
+> `01/0002` done with quizzes, now on `01/0003-functions`. All 95 lessons were
+> generated ahead of the student, contrary to the "one module at a time" rule
+> in CLAUDE.md. No lesson's code has been executed or confirmed running.
+
 ### Existing modules (written during the WhatsApp era)
 
 | Module | Lessons | Status |

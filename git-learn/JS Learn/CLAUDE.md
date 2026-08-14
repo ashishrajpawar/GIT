@@ -357,7 +357,12 @@ RootStack (headerShown: false)
 
 ## Student profile
 
-- Completed Modules 1 (JS) and 2 (React Native). Not an experienced programmer.
+- **Actual progress: 2 lessons of 95** (as of 2026-08-14). Finished
+  `01/0001-what-is-javascript` and `01/0002-data-types` with their quizzes;
+  now on `01/0003-functions`. A true beginner — pitch accordingly.
+  (This file previously claimed Modules 1 and 2 were complete. They are not.
+  "Complete" in the module tables below means *written*, never *studied*.)
+- Background: HTML and CSS. Not an experienced programmer.
 - Wants **deep understanding, not vibe coding**. Explain why, not just what.
 - Motivated by the end goal — tie concepts to Token concretely.
 - Short lessons with something working at the end beat thorough theory.
