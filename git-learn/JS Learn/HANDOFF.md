@@ -179,6 +179,12 @@ migration (`.sql` for SQL lessons, `.js`/`.ts` for Node lessons).
   already identifies the user. The app warns if the user tries.
 - **Exercise before solution** — never hand over complete code up front
 - **No gamification** — no badges, streaks, XP, points, mascots
+- **Never write a literal `</script>` inside a quiz string** — escape it as
+  `<\/script>`. The HTML parser ends a `<script>` element at the first `</script>`
+  sequence regardless of JavaScript string context, so an unescaped one truncates
+  the block mid-string. Result: `SyntaxError`, `createQuiz()` never runs, the quiz
+  silently renders as nothing, and the rest of the sentence leaks onto the page as
+  visible text. This bit two XSS-safety lessons — see §10.
 
 ---
 
@@ -212,34 +218,96 @@ migration (`.sql` for SQL lessons, `.js`/`.ts` for Node lessons).
 
 ---
 
-## 9. Quiz expansion — 5 → 25 questions per lesson
+## 9. Quiz expansion — 5 → 25 questions per lesson — COMPLETE
 
-Expanding all lesson quizzes from 5 to 25 questions with a mix of types
+**Done. All 24 modules, all 95 lessons, 2,508 questions.**
+
+Every Token-track lesson carries at least 25 questions with a mix of types
 (multiple-choice, predict-output, spot-the-bug, fill-blank, which-breaks, order-steps).
 
-| Module | Lessons | Status |
-|--------|---------|--------|
-| 01 — JavaScript Fundamentals | 12 | ✅ Done (prior session) |
-| 02 — React Native | 14 | ✅ Done (prior session) |
-| X1 — Git & Dev Environment | 3 | ✅ Done |
-| A2 — TypeScript | 3 | ✅ Done |
-| X2 — Debugging | 2 | ✅ Done |
-| B1 — SQL Fundamentals | 4 | ⬜ Pending |
-| B2 — Schema Design | 3 | ⬜ Pending |
-| B3 — Node & HTTP Server | 4 | ⬜ Pending |
-| B4 — Auth Server | 3 | ⬜ Pending |
-| A3 — API Consumption | 4 | ⬜ Pending |
-| A4 — Auth on the Client | 3 | ⬜ Pending |
-| A5 — Core Token Features | 5 | ⬜ Pending |
-| B5 — WebSocket Server | 3 | ⬜ Pending |
-| A6 — Chat & Real-time | 3 | ⬜ Pending |
-| B6 — WebRTC Signalling | 2 | ⬜ Pending |
-| A7 — Voice & Video | 5 | ⬜ Pending |
-| A8 — Redemption Web Page | 4 | ⬜ Pending |
-| A9 — Deep Linking & Routing | 2 | ⬜ Pending |
-| B7 — Token Engine | 3 | ⬜ Pending |
-| B8 — Push Notifications | 1 | ⬜ Pending |
-| A10 — Device Security | 2 | ⬜ Pending |
-| B9 — Docker & Deployment | 3 | ⬜ Pending |
-| B10 — Security & Compliance | 2 | ⬜ Pending |
-| A11 — Polish & Publish | 5 | ⬜ Pending |
+| Module | Lessons | Min | Total | Status |
+|--------|---------|-----|-------|--------|
+| 01 — JavaScript Fundamentals | 12 | 25 | 313 | ✅ Done |
+| 02 — React Native | 14 | 25 | 355 | ✅ Done |
+| X1 — Git & Dev Environment | 3 | 25 | 76 | ✅ Done |
+| A2 — TypeScript | 3 | 25 | 76 | ✅ Done |
+| X2 — Debugging | 2 | 25 | 50 | ✅ Done |
+| B1 — SQL Fundamentals | 4 | 25 | 103 | ✅ Done |
+| B2 — Schema Design | 3 | 26 | 81 | ✅ Done |
+| B3 — Node & HTTP Server | 4 | 28 | 117 | ✅ Done |
+| B4 — Auth Server | 3 | 25 | 81 | ✅ Done |
+| A3 — API Consumption | 4 | 26 | 111 | ✅ Done |
+| A4 — Auth on the Client | 3 | 25 | 80 | ✅ Done |
+| A5 — Core Token Features | 5 | 29 | 148 | ✅ Done |
+| B5 — WebSocket Server | 3 | 25 | 77 | ✅ Done |
+| A6 — Chat & Real-time | 3 | 26 | 78 | ✅ Done |
+| B6 — WebRTC Signalling | 2 | 26 | 52 | ✅ Done |
+| A7 — Voice & Video | 5 | 26 | 138 | ✅ Done |
+| A8 — Redemption Web Page | 4 | 27 | 115 | ✅ Done |
+| A9 — Deep Linking & Routing | 2 | 25 | 53 | ✅ Done |
+| B7 — Token Engine | 3 | 25 | 77 | ✅ Done |
+| B8 — Push Notifications | 1 | 25 | 25 | ✅ Done |
+| A10 — Device Security | 2 | 25 | 50 | ✅ Done |
+| B9 — Docker & Deployment | 3 | 25 | 77 | ✅ Done |
+| B10 — Security & Compliance | 2 | 25 | 50 | ✅ Done |
+| A11 — Polish & Publish | 5 | 25 | 125 | ✅ Done |
+
+**"Min" is the smallest question count in that module.** Some lessons run 26–30 —
+those extras are genuine questions, not miscounts. 25 was the floor, not a cap.
+
+**Legacy modules are excluded by design.** `modules/03-` through `modules/09-`
+(45 WhatsApp-era lessons) remain at 5 or 0 questions. They are superseded and were
+never part of this expansion.
+
+### How to re-verify cheaply
+
+Count two independent markers per lesson and check they agree — `explanation:` keys,
+and answer keys (`correct:` / `answer:` / `correctOrder:`, exactly one per question):
+
+```bash
+for f in $(find modules -name "0*.html" | grep -vE 'modules/0[3-9]-'); do
+  printf "%3d %3d  %s\n" "$(grep -cE '^\s*(correct|answer|correctOrder):' "$f")" \
+                         "$(grep -c 'explanation:' "$f")" "$f"
+done
+```
+
+Then syntax-check every lesson's inline `<script>` block (see §7 for why this matters):
+
+```bash
+node -e '
+const fs=require("fs"),vm=require("vm"),cp=require("child_process");
+const files=cp.execSync("find modules -name \"0*.html\" | grep -vE \"modules/0[3-9]-\"")
+  .toString().trim().split("\n");
+let bad=0;
+for(const f of files){const s=fs.readFileSync(f,"utf8");
+  const re=/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g;let m;
+  while((m=re.exec(s))){try{new vm.Script(m[1]);}catch(e){bad++;console.log("FAIL",f,e.message);}}}
+console.log(bad===0?"all clean":bad+" failures");'
+```
+
+---
+
+## 10. Commit state
+
+**Everything described in this document is committed.** The working tree is clean.
+
+Commit `99e1678 nv` landed the two large bodies of work:
+
+1. **The quiz expansion** (§9) — ~95 lesson files, 5 → 25+ questions each.
+2. **Responsive CSS** — `assets/styles.css` gained ~164 lines: two breakpoints,
+   `@media (max-width: 768px)` and `@media (max-width: 400px)`, covering `.quiz`,
+   `.quiz-option`, `.playground-editor`, `.solution-block`, `.lesson-nav`,
+   `.copy-btn`, and `.badge`. This mobile-layout pass is not recorded anywhere else
+   in this document.
+
+### The `</script>` fix
+
+Two lessons had quizzes that did not render at all in a browser — three explanation
+strings contained a literal `</script>` (see §7). Now escaped as `<\/script>`:
+
+- `modules/01-javascript-fundamentals/0007-dom-and-browser-apis.html:684`
+- `modules/b3-node-http-server/0004-input-validation-error-handling.html:378`
+- `modules/b3-node-http-server/0004-input-validation-error-handling.html:511`
+
+Both are XSS-safety lessons — writing about script injection is exactly when this
+bug gets typed. Re-run the syntax check in §9 after editing any quiz.
