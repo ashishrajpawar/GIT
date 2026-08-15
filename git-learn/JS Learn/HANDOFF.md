@@ -21,8 +21,8 @@ two-track lesson plan.
 ## 2. Current state
 
 > **"Complete" throughout this document means _written_, not _studied_.**
-> Student progress as of 2026-08-15 is **3 lessons of 95** — `01/0001`,
-> `01/0002` and `01/0003` done with quizzes, next is `01/0004-conditionals`.
+> Student progress as of 2026-08-15 is **4 lessons of 95** — `01/0001`
+> through `01/0004` done with quizzes, next is `01/0005-loops`.
 > All 95 lessons were
 > generated ahead of the student, contrary to the "one module at a time" rule
 > in CLAUDE.md. No lesson's code has been executed or confirmed running.
@@ -31,7 +31,7 @@ two-track lesson plan.
 
 | Module | Lessons | Status |
 |--------|---------|--------|
-| 01 — JavaScript Fundamentals | 12 | Written; concepts valid, WhatsApp framing, no exercises — see §6 |
+| 01 — JavaScript Fundamentals | 12 | Lessons 1-4 have playgrounds + exercise + self-check; 5-12 do not. WhatsApp framing throughout — see §6 |
 | 02 — React Native | 14 | Written; concepts valid, WhatsApp framing, no exercises — see §6 |
 | 03 — Firebase Backend | 5 | SUPERSEDED — replaced by Track B |
 | 04 — WhatsApp Features | 6 | Partially salvageable |
@@ -253,8 +253,8 @@ generated ahead; nothing was confirmed.
 
 ### For whoever writes course material next
 
-**Do not write more lessons.** There is a ~92-lesson backlog against a student
-on lesson 4. Adding to it is the trap this project already fell into. If a gap
+**Do not write more lessons.** There is a ~91-lesson backlog against a student
+on lesson 5. Adding to it is the trap this project already fell into. If a gap
 appears, fix an existing lesson instead.
 
 The one defensible piece of new work: **adding `createPlayground()` to Module 01**
@@ -418,6 +418,43 @@ pause the course, on the grounds that knowing the pattern exists is enough to no
 exploit it. Do not "helpfully" fix this mid-module — it rewrites quiz rendering
 across ~95 lessons for a problem the student has opted to work around. Raise it
 again only if they ask, or at a natural break between tracks.
+
+### Session of 2026-08-15 — practice retrofit, lessons 01/0001-0004
+
+The student said some lessons left them wanting more practice. An audit showed
+why: **modules 01-09 (71 lessons, all pre-pivot) contain zero playgrounds and
+zero exercises.** Every Token-track module (`a*`, `b*`, `x*`) has them — 41
+lessons with `createPlayground`, 69 with `createSolution` — so module 01 is the
+only stretch of the course where the student can read but never write.
+
+Lessons 1-4 now have playgrounds at each concept, one deliberately-broken
+snippet each, and an exercise with a behavioural self-check. See CLAUDE.md
+§ "The practice pattern" for the shape to match. Exercises: variables
+(`tokenCode`/`issuedTo`/`timesUsed`), a six-property `token` object across five
+types, `issueToken`/`describeToken`, and `checkAccess(token)` — the last being
+Token's real deny-by-default rule, including the ordering trap that revoking
+must outrank pausing.
+
+**Still open, ranked, and all discussed with the student:**
+
+1. **Lessons 01/0005-0012 and all of module 02** still have no practice.
+   Retrofit just-in-time as the student reaches them — do not batch ahead.
+2. **No capstone anywhere in the course.** All 95 lessons checked: zero
+   build-something-that-combines-it points. Module 01 ends after lesson 12 with
+   no consolidation. A small pure-JS token issuer would fit.
+3. **No spaced review.** Nothing revisits lesson 2 while the student is on
+   lesson 5. The 25-30 question banks are the obvious raw material: ~8 at the
+   end of the lesson, the rest into a pool the next lesson opens with.
+4. **Only 3 of 95 lessons ask the student to explain anything in words.**
+   One "write one sentence explaining X" prompt per lesson would fix it.
+5. **Nothing the student writes persists** — playgrounds reset on refresh, and
+   the Token repo does not exist yet (§8). They chose to keep the repo at X1 as
+   originally sequenced. A plain `practice/` folder of `.js` files was offered
+   as a lighter middle ground and not taken up. Their call; do not re-open it
+   unprompted.
+
+The student's stated preference throughout: keep studying, retrofit one lesson
+at a time, do not pause the course for tooling work.
 
 **Not committed:** `.claude/settings.local.json` carries local permission state
 and is deliberately left alone.

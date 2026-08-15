@@ -34,8 +34,8 @@ No monorepo tooling — plain folders with tsconfig path aliases.
 ```
 index.html                          ← course home page
 modules/
-  01-javascript-fundamentals/       ← 12 lessons, complete (keep as-is)
-  02-react-native/                  ← 14 lessons, complete (keep as-is)
+  01-javascript-fundamentals/       ← 12 lessons; 1-4 retrofitted with practice
+  02-react-native/                  ← 14 lessons, written (no practice yet)
   x1-git-dev-environment/           ← 3 lessons, complete
   a2-typescript/                    ← 3 lessons, complete
   x2-debugging/                     ← 2 lessons, complete
@@ -260,10 +260,16 @@ pointless without a client. See TOKEN-TRACK.md § "Recommended sequence".
 4. **Full runnable App.js / component** — the revealed solution must be
    complete and pasteable. No partial snippets as the final example.
 
-5. **Exactly 5 quiz questions** using `createQuiz(containerId, [...])`.
+5. **25+ quiz questions** using `createQuiz(containerId, [...])`.
+   (This said "exactly 5" until 2026-08-15; every lesson has carried 25-30
+   since the quiz expansion. The text was simply never updated.)
    Mix of types: predict-output, spot-the-bug, fill-blank, which-breaks,
-   order-steps. Not all multiple-choice. At least 2 of the 5 must be
-   non-multiple-choice types.
+   order-steps. Not all multiple-choice.
+
+   **Answer positions must vary.** Existing lessons put the correct answer
+   at index 1 in 64% of questions — always picking the second option scores
+   ~64% course-wide. Do not add to that pattern. `order-steps` steps are
+   shuffled at render, so `correctOrder` may be authored in any order.
 
 6. **Lesson nav** at the bottom with prev/next links using the planned
    filename even if the next lesson doesn't exist yet.
@@ -291,6 +297,39 @@ Same structure as Track A except point 4 becomes:
 <script src="../../assets/progress.js"></script>
 <script src="../../assets/copy-code.js"></script>
 ```
+
+### The practice pattern (established 2026-08-15, lessons 01/0001-0004)
+
+Every lesson that teaches runnable JavaScript gets all four of these. Match
+this shape when retrofitting further lessons:
+
+1. **A playground per concept**, placed where the concept lands — not all
+   collected at the end. Introduce with an `<h3>Try it yourself</h3>`.
+
+2. **At least one playground that is broken on purpose.** The student reads
+   the real error and fixes it. Debugging is taught in X2, ~26 lessons after
+   the student needs it; these are the stopgap. Good ones so far: reassigning
+   a `const`, reading past the end of an array, a missing `return`.
+
+3. **One `createSolution()` exercise before the quiz**, under the heading
+   "Now build it yourself", with 3 hints.
+
+4. **A self-check in the exercise playground.** Starter code is a blank
+   space, then a line reading `// --- Self-check: leave everything below this
+   line alone ---`, then a `check(label, passed, detail)` helper and one
+   check per requirement, all wrapped in `try/catch` so an empty editor gives
+   a friendly message rather than a crash.
+
+   Self-checks must test **behaviour, not resemblance** — a correct answer in
+   a different style (arrow function, properties in another order) has to
+   pass. Every `FAIL` prints what the student's code actually produced.
+
+Verify a retrofit by extracting the inline script, stubbing `createPlayground`
+/ `createSolution`, and running each starter plus the revealed solution
+through `new Function("console", code)`. Also run deliberately *wrong*
+answers: each should trip only its own check. And always confirm `<script>`
+tags balance — a literal `</script>` inside a JS string silently kills the
+whole block.
 
 ---
 
@@ -357,10 +396,9 @@ RootStack (headerShown: false)
 
 ## Student profile
 
-- **Actual progress: 3 lessons of 95** (as of 2026-08-15). Finished
-  `01/0001-what-is-javascript`, `01/0002-data-types` and `01/0003-functions`
-  with their quizzes; next is `01/0004-conditionals`. A true beginner —
-  pitch accordingly.
+- **Actual progress: 4 lessons of 95** (as of 2026-08-15). Finished
+  `01/0001-what-is-javascript` through `01/0004-conditionals` with their
+  quizzes; next is `01/0005-loops`. A true beginner — pitch accordingly.
   (This file previously claimed Modules 1 and 2 were complete. They are not.
   "Complete" in the module tables below means *written*, never *studied*.)
 - Background: HTML and CSS. Not an experienced programmer.
