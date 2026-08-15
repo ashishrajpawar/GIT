@@ -20,24 +20,37 @@ one or two lessons at a time, never batched ahead.
 | `01/0005-loops` | done — `f9230c5` |
 | `01/0006-scope-and-closures` | done — `be65077` (+ `scripts/verify-lesson.mjs`) |
 | `01/0007-dom-and-browser-apis` | done — `6a2221f` (sandbox) + `8700f19` (retrofit) |
-| **`01/0008-events`** | **in progress — unit 3a tooling, then 3b retrofit** |
-| `01/0009`–`01/0012` | not started |
+| `01/0008-events` | done — `e13a323` (sandbox) + retrofit |
+| **`01/0009-promises-and-async-await`** | **next** |
+| `01/0010`–`01/0012` | not started |
 
-### Unit 3a — sandbox gaps that 0008 needs
+### Unit 3a — sandbox gaps 0008 needed — DONE (`e13a323`)
 
-Checked before writing, as planned. The sandbox covers bubbling,
-`target`/`currentTarget`, `stopPropagation`, `preventDefault` and `event.key`
-already. Three things it does **not**, all of which 0008 teaches:
+Checked against the lesson before writing, as planned. `dataset` (the
+delegation section identifies rows with it), arbitrary event properties
+(`shiftKey`), and form submit. `form.submit()` deliberately throws rather than
+aliasing `requestSubmit()` — in a browser it skips the submit event entirely,
+and pretending otherwise would teach the opposite of the truth. `focus`/`blur`
+now dispatch and correctly do not bubble. Sandbox suite 55 → 72 assertions.
 
-1. **`dataset`** — used 6 times, and it is load-bearing: the delegation
-   section identifies the clicked row with `el.dataset.messageId`.
-2. **Arbitrary event properties** — `SandboxEvent` hard-codes `key` and
-   `value`. The Shift+Enter section needs `shiftKey`.
-3. **Form submit** — `preventDefault` is taught through a form's submit
-   event, and a submit button's click does not currently reach the form.
+### Unit 3b — retrofit `01/0008-events` — DONE
 
-Adding all three to `dom-sandbox.js` with matching assertions in
-`scripts/test-dom-sandbox.mjs`, per the standing note in this file.
+- 6 playgrounds. `pg-listener-trap` is the broken-on-purpose one and it is the
+  best of the set: `addEventListener("click", handleSend())` prints its
+  message *before* the click and then does nothing forever, so the student
+  sees why the bug is convincing rather than just being warned about it.
+- Exercise: `setupTokenActions(listEl, onRevoke)` — delegation, 9 checks.
+  4 alternative styles pass, 6 mistakes each trip the right check. The two
+  that matter both look correct against the rows already on the page:
+  looping over the buttons (only the late row exposes it) and `matches`
+  instead of `closest` (only a click on the inner label exposes it).
+- Reframed from the WhatsApp clone to Token: revoking from the token list,
+  the redemption page composer as the mini-project.
+- **All 5 `predict-output` questions were unrunnable.** Each described the
+  user action in a trailing comment (`// User clicks the button once`), so
+  the code did nothing — and referenced an element that did not exist, so it
+  threw and the verifier skipped it. They now carry `html` and perform the
+  action, and are executed.
 
 ### Unit 1 — `assets/dom-sandbox.js` — DONE
 
@@ -102,10 +115,20 @@ node scripts/verify-lesson.mjs modules/01-javascript-fundamentals/0007-dom-and-b
 
 ## Next action
 
-**Unit 3: retrofit `01/0008-events`.** The sandbox already does
-`addEventListener`, bubbling, `currentTarget` vs `target`,
-`stopPropagation`, `preventDefault`, `click()` and `event.key`, so no tooling
-work should be needed first. Confirm that before writing.
+**Unit 4: retrofit `01/0009-promises-and-async-await`.**
+
+Check the tooling first, as with 0008 — this is the lesson the timer note
+below was written for, and it is the one lesson whose playgrounds are
+inherently asynchronous. Specifically, before writing:
+
+- `playground.js` renders once synchronously and again after the microtask
+  queue drains (`settle()`), which is what makes `.then()` and `await` print
+  at all. Confirm a chain longer than a couple of ticks still lands inside
+  that window.
+- `verify-lesson.mjs` drains its own `setTimeout` queue in delay order but
+  does **not** await promises. A `predict-output` whose answer depends on
+  promise ordering may verify as empty rather than wrong — check before
+  trusting a green run on this lesson.
 
 ## Blocked on
 
