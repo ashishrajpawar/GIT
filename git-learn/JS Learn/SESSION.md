@@ -22,8 +22,34 @@ one or two lessons at a time, never batched ahead.
 | `01/0007-dom-and-browser-apis` | done — `6a2221f` (sandbox) + `8700f19` (retrofit) |
 | `01/0008-events` | done — `e13a323` (sandbox) + `5d941f0` (retrofit) |
 | `01/0009-promises-and-async-await` | done — `caafcf6` (tooling) + retrofit |
-| **`01/0010-arrays-and-objects`** | **next** |
-| `01/0011`–`01/0012` | not started |
+| `01/0010-arrays-and-objects` | done |
+| **`01/0011-modern-javascript-es6`** | **next** |
+| `01/0012-error-handling` | not started |
+
+### Unit 5 — `01/0010-arrays-and-objects` — DONE
+
+Checked first, as planned. **No premise-in-comment defects** — the pattern that
+broke 0007 and 0008 is absent here — and it is plain synchronous JavaScript, so
+no tooling work was needed. Shipped:
+
+- 6 playgrounds. `pg-reference-trap` is the broken-on-purpose one and it is the
+  best fit yet for that slot: assigning an object to a second variable is not a
+  copy, so the "copy" writes straight through to the original. Nothing throws;
+  the data is just wrong. `pg-shallow` then does the harder half — spread
+  protects the top level and silently shares everything nested.
+- Exercise: `revokeToken(tokens, code)`, 11 checks. This is CLAUDE.md's state
+  rule written out by hand. Every one of the 8 mistakes produces a **correct
+  result array** — the bug only shows in what happened to the original, which
+  is why the self-check snapshots it with `JSON.stringify` before calling.
+  One check is subtler: unchanged tokens must be the *same objects*, since
+  rebuilding them all is correct data that defeats React's identity check.
+- Removed **4 Firebase mentions** (out of scope) and reframed from the
+  WhatsApp clone (23 "Priya", 13 "Ashish") to the token list.
+- Fixed 2 invalid token codes that were in the lesson (`BANK-4FJ1`,
+  `SHOP-9KL3` — the `1` and `L` are excluded, and both were 8-char rather than
+  the 12-char format). Also caught 2 I introduced myself as "not found"
+  fixtures (`NOPE-0000-0000`) — a negative fixture still teaches a shape, so
+  they are now valid codes that simply are not in the list.
 
 ### Unit 4a — async tooling — DONE
 
@@ -168,12 +194,22 @@ node scripts/verify-lesson.mjs modules/01-javascript-fundamentals/0007-dom-and-b
 
 ## Next action
 
-**Unit 5: retrofit `01/0010-arrays-and-objects`.** No tooling work is expected
-— it is plain synchronous JavaScript, so the existing playground and verifier
-cover it. Check the quiz for the defect that has now appeared in two of the
-three lessons retrofitted so far: questions whose premise lives in a code
-comment (`// Given: <div>…`, `// User clicks the button`) rather than in the
-`html` field or in the code itself. Those are invisible to the verifier.
+**Unit 6: retrofit `01/0011-modern-javascript-es6`.** Then `01/0012` closes out
+Module 01 and Phase 1.
+
+Two things to check before writing, both of which have now bitten more than
+once:
+
+- **Premise-in-comment questions** (`// Given: <div>…`, `// User clicks`).
+  Found in 0007 (3) and 0008 (all 5); absent in 0009 and 0010. Cheap to grep:
+  `grep -c "// Given\|// User \|// Assume"`.
+- **Token codes with excluded characters.** Found in 0009 (`TOKEN-ABC`) and
+  0010 (`BANK-4FJ1`, `SHOP-9KL3`). Worth running the alphabet check over any
+  lesson before and after editing it — including on codes you write yourself.
+
+Note that 0011 covers ES6 syntax, so it overlaps 0010 (spread, destructuring)
+and 0009 (arrow functions, promises). Check what is genuinely left to teach
+before writing a lesson that repeats two others.
 
 ## Blocked on
 
