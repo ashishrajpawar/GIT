@@ -10,6 +10,12 @@
  *   3. every predict-output quiz answer matches what the code actually prints
  *   4. the revealed solution passes its own self-check
  *
+ * DOM lessons: playgrounds created with `{ dom: true }` and predict-output
+ * questions touching `document` or `localStorage` run against the sandbox in
+ * assets/dom-sandbox.js — the same one the browser loads, so the verifier and
+ * the student see identical behaviour. Before this existed, every DOM question
+ * was skipped and every DOM playground failed open.
+ *
  * What it deliberately does NOT do: judge whether the prose is any good, or
  * whether a wrong answer trips only its own check. Those need a human and a
  * per-lesson list of wrong answers respectively — see --wrong below.
@@ -47,6 +53,10 @@ const guardSrc = pgSrc.slice(pgSrc.indexOf("var TIME_BUDGET_MS"), pgSrc.indexOf(
 const { instrument, makeTicker, MAX_OUTPUT_LINES } =
   new Function(guardSrc + ";return {instrument, makeTicker, MAX_OUTPUT_LINES};")();
 
+// ---- the same DOM the browser playground uses, for the same reason --------
+const domSrc = fs.readFileSync(path.join(ROOT, "assets", "dom-sandbox.js"), "utf8");
+const createDomSandbox = new Function(domSrc + "\nreturn createDomSandbox;")();
+
 // ---- 1. parse -------------------------------------------------------------
 console.log("\n1. inline <script> blocks parse");
 const blocks = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
@@ -66,7 +76,7 @@ for (const b of blocks) {
     has: () => true, construct: () => permissive,
   });
   const ctx = {
-    createPlayground: (id, code) => (playgrounds[id] = code),
+    createPlayground: (id, code, opts) => (playgrounds[id] = { code, opts: opts || {} }),
     createSolution: (id, cfg) => (solutions[id] = cfg),
     createQuiz: (id, qs) => (quizzes[id] = qs),
     document: permissive, window: permissive, console: { log() {}, warn() {}, error() {} },
@@ -80,14 +90,21 @@ for (const b of blocks) {
 /** Run code the way the playground does: instrumented, guarded, log captured.
  *  setTimeout callbacks are queued and drained afterwards — without that, any
  *  playground demonstrating async behaviour (the classic var-in-a-loop closure
- *  trap, for one) silently produces no output and looks like it passed. */
-function runLikePlayground(code) {
+ *  trap, for one) silently produces no output and looks like it passed.
+ *
+ *  `opts.dom` swaps in the sandboxed document from assets/dom-sandbox.js, the
+ *  same one the browser gets, with `opts.html` as the starting body. Returns
+ *  `dom` — the final markup — so a caller can assert on the page, not just the
+ *  logs. */
+function runLikePlayground(code, opts = {}) {
   const logs = [];
   const fake = {
     log: (...a) => {
       if (logs.length >= MAX_OUTPUT_LINES) throw new Error("__CAP__");
-      logs.push(a.map((v) =>
-        typeof v === "object" && v !== null ? JSON.stringify(v) : String(v)).join(" "));
+      logs.push(a.map((v) => {
+        if (v && v.__isDomNode) return String(v);   // elements print as markup
+        return typeof v === "object" && v !== null ? JSON.stringify(v) : String(v);
+      }).join(" "));
     },
   };
   fake.warn = fake.info = fake.error = fake.log;
@@ -95,9 +112,17 @@ function runLikePlayground(code) {
   const queue = [];
   const setTimeoutShim = (fn, ms) => { queue.push([fn, ms || 0]); return queue.length; };
 
+  const sandbox = opts.dom ? createDomSandbox(opts.html || "") : null;
+
   let threw = null;
   try {
-    new Function("console", "__tick", "setTimeout", instrument(code))(fake, makeTicker(), setTimeoutShim);
+    const names = ["console", "__tick", "setTimeout"];
+    const values = [fake, makeTicker(), setTimeoutShim];
+    if (sandbox) {
+      names.push("document", "window", "localStorage", "Event");
+      values.push(sandbox.document, sandbox.window, sandbox.localStorage, sandbox.Event);
+    }
+    new Function(...names, instrument(code))(...values);
     // Drain in delay order, as a browser would. Callbacks may queue more.
     for (let guard = 0; queue.length && guard < 10000; guard++) {
       queue.sort((a, b) => a[1] - b[1]);
@@ -107,18 +132,19 @@ function runLikePlayground(code) {
   } catch (e) {
     threw = e && e.message === "__CAP__" ? "output cap" : `${e.name}: ${e.message}`;
   }
-  return { logs, threw };
+  return { logs, threw, dom: sandbox ? sandbox.serialize() : null };
 }
 
 // ---- 2. playgrounds run ---------------------------------------------------
 console.log("\n2. playgrounds run (deliberate breakage is expected, hangs are not)");
-for (const [id, code] of Object.entries(playgrounds)) {
+for (const [id, pg] of Object.entries(playgrounds)) {
   if (id === "pg-exercise") continue; // covered by the self-check below
   const t0 = Date.now();
-  const { logs, threw } = runLikePlayground(code);
+  const { logs, threw } = runLikePlayground(pg.code, pg.opts);
   const ms = Date.now() - t0;
+  const tag = pg.opts.dom ? " [dom]" : "";
   if (ms > 4000) fail(`${id}: took ${ms}ms — the guard is not stopping it`);
-  else ok(`${id}: ${logs.length} lines, ${ms}ms${threw ? `, stopped by ${threw.slice(0, 40)}` : ""}`);
+  else ok(`${id}${tag}: ${logs.length} lines, ${ms}ms${threw ? `, stopped by ${threw.slice(0, 40)}` : ""}`);
 }
 
 // ---- 3. predict-output answers -------------------------------------------
@@ -127,9 +153,16 @@ let checked = 0;
 for (const [qid, qs] of Object.entries(quizzes)) {
   for (const [i, q] of qs.entries()) {
     if (q.type !== "predict-output" || !q.code) continue;
-    // Skip anything needing a browser, a server, or React — not verifiable here.
-    if (/document|window\.|require\(|fetch\(|React|useState|StyleSheet|expo|SELECT |INSERT /.test(q.code)) continue;
-    const { logs, threw } = runLikePlayground(q.code);
+
+    /* DOM questions used to be skipped wholesale. They now run against the
+       sandbox, using the question's own `html` as the starting page — which is
+       the same markup the student is shown, so the two cannot drift. */
+    const needsDom = /\b(document|localStorage)\b/.test(q.code) || q.html;
+    // Still skip anything needing a server, React Native, or a database.
+    if (/require\(|fetch\(|React|useState|StyleSheet|expo|SELECT |INSERT /.test(q.code)) continue;
+    if (!needsDom && /window\./.test(q.code)) continue;
+
+    const { logs, threw } = runLikePlayground(q.code, needsDom ? { dom: true, html: q.html } : {});
     if (threw) continue; // e.g. deliberately-throwing snippets
     const norm = (s) => String(s).replace(/['"]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
     checked++;
@@ -144,11 +177,11 @@ console.log("\n4. revealed solution passes its self-check");
 const MARKER = "// --- Self-check: leave everything below this line alone ---";
 for (const [id, cfg] of Object.entries(solutions)) {
   const pg = playgrounds["pg-exercise"];
-  if (!pg || !pg.includes(MARKER)) { fail(`${id}: no self-check found in pg-exercise`); continue; }
-  const selfCheck = pg.split(MARKER)[1];
+  if (!pg || !pg.code.includes(MARKER)) { fail(`${id}: no self-check found in pg-exercise`); continue; }
+  const selfCheck = pg.code.split(MARKER)[1];
   // Strip the solution's own demo calls — the self-check supplies its own data.
   const impl = cfg.solution.split("\n").filter((l) => !/^console\.log|^const \w+ = create|^const \w+ = make/.test(l.trim())).join("\n");
-  const { logs, threw } = runLikePlayground(impl + "\n" + selfCheck);
+  const { logs, threw } = runLikePlayground(impl + "\n" + selfCheck, pg.opts);
   if (threw) { fail(`${id}: self-check threw — ${threw}`); continue; }
   const bad = logs.filter((l) => l.startsWith("FAIL"));
   const passed = logs.filter((l) => l.startsWith("PASS"));
@@ -160,9 +193,9 @@ for (const [id, cfg] of Object.entries(solutions)) {
 if (wrongFile) {
   const cases = await import("file://" + path.resolve(ROOT, wrongFile));
   const pg = playgrounds["pg-exercise"];
-  const selfCheck = pg.split(MARKER)[1];
+  const selfCheck = pg.code.split(MARKER)[1];
   const runCase = (impl) => {
-    const { logs, threw } = runLikePlayground(impl + "\n" + selfCheck);
+    const { logs, threw } = runLikePlayground(impl + "\n" + selfCheck, pg.opts);
     return { fails: logs.filter((l) => l.startsWith("FAIL")).map((l) => l.slice(6).trim()), threw };
   };
   console.log("\n5. alternative correct styles also pass (behaviour, not resemblance)");

@@ -131,6 +131,7 @@ assets/
   styles.css                        ← shared stylesheet
   quiz.js                           ← createQuiz() widget (multi-type)
   playground.js                     ← createPlayground() inline JS editor
+  dom-sandbox.js                    ← in-memory document for DOM playgrounds
   solution.js                       ← createSolution() exercise-first component
   progress.js                       ← lesson/module progress tracking (localStorage)
   copy-code.js                      ← auto-attaches Copy buttons to <pre> blocks
@@ -152,12 +153,15 @@ All lessons in `modules/` share `assets/styles.css` and `assets/quiz.js`.
 
 ### Additional shared scripts (load after quiz.js)
 ```html
+<script src="../../assets/dom-sandbox.js"></script>  <!-- before playground.js -->
 <script src="../../assets/playground.js"></script>
 <script src="../../assets/solution.js"></script>
 <script src="../../assets/progress.js"></script>
 <script src="../../assets/copy-code.js"></script>
 ```
-Not every lesson needs all of them — only load what's used.
+Not every lesson needs all of them — only load what's used. `dom-sandbox.js` is
+the one with an ordering requirement: `playground.js` looks for it at Run time,
+so it must come first, and only DOM lessons need it at all.
 
 ## Link paths inside module lessons
 From any `modules/XX-name/` subfolder:
@@ -184,6 +188,13 @@ createQuiz("lesson-quiz", [
   // Predict-output
   { type: "predict-output", code: "console.log(2 + '2')", answer: "22", explanation: "..." },
 
+  // Predict-output about the DOM — `html` is the starting page, shown to the
+  // student above the code and loaded into the sandbox by verify-lesson.mjs,
+  // so what they read and what the key is checked against cannot drift apart.
+  { type: "predict-output", html: '<p class="msg">one</p><p class="msg">two</p>',
+    code: 'console.log(document.querySelectorAll(".msg").length);',
+    answer: "2", explanation: "..." },
+
   // Spot-the-bug (options point to lines/sections)
   { type: "spot-the-bug", code: "...", bugLine: 3, options: ["Line 1", "Line 3", "Line 5"], correct: 1, explanation: "..." },
 
@@ -201,18 +212,10 @@ createQuiz("lesson-quiz", [
 ]);
 ```
 
-### `createPlayground(containerId, starterCode)` — `playground.js`
+### `createPlayground(containerId, starterCode, options)` — `playground.js`
 
 Embeddable JS editor. Textarea + Run + Reset buttons. Sandboxed execution,
 captured `console.log` output displayed below. Errors shown in red.
-
-**Two known limits — check before putting a playground in a lesson.**
-`runCode()` calls `new Function(...)` and reads the captured log *synchronously*,
-so anything resolving in a microtask is lost: `Promise.resolve("x").then(console.log)`
-and any `await` both print `(no output)` rather than the right answer. There is
-also no infinite-loop guard, so a stray `while (true)` hangs the browser tab.
-Both must be fixed before practice is retrofitted into `01/0005` (loops) or
-`01/0009` (promises & async/await). See `COURSE-REVIEW.md` §7.2.
 
 ```html
 <div id="playground-1"></div>
@@ -220,6 +223,43 @@ Both must be fixed before practice is retrofitted into `01/0005` (loops) or
   createPlayground("playground-1", `const tokens = ["ABC", "DEF"];\nconsole.log(tokens.length);`);
 </script>
 ```
+
+Two limits described here for months — async output swallowed, no infinite-loop
+guard — **were fixed in `5b07d93`** and the paragraph saying otherwise survived
+two more lessons. `await` and `.then()` now print, and a runaway loop is stopped
+by a 2s budget plus a 1000-line output cap. `COURSE-REVIEW.md` §7.2 is likewise
+history, not a to-do.
+
+#### DOM playgrounds — `options.dom`
+
+Student code normally runs in the page's own scope, where `document` is the
+real lesson page and `localStorage` is where `progress.js` keeps the student's
+completed lessons. In a DOM lesson that is a live hazard, not a theoretical
+one: `document.body.innerHTML = ""` deletes the lesson being read, and
+`localStorage.clear()` erases their progress. Both are things a beginner types
+on purpose while experimenting.
+
+Pass `{ dom: true }` and the playground swaps in the in-memory document from
+`assets/dom-sandbox.js`, plus a fake `window` and `localStorage`, and shows the
+resulting markup in a preview pane above the console output. `options.html` is
+the sandbox's starting `<body>`. **Every playground in a lesson that touches
+`document` or `localStorage` must set `dom: true`** — the sandbox is only
+protective where it is switched on.
+
+```html
+<script src="../../assets/dom-sandbox.js"></script>   <!-- before playground.js -->
+<script>
+  createPlayground("pg-append", `const list = document.getElementById("token-list");
+const row = document.createElement("li");
+row.textContent = "MERC-8GH2-KP4X";
+list.appendChild(row);`, { dom: true, html: '<ul id="token-list"></ul>' });
+</script>
+```
+
+It is a teaching sandbox, **not a security boundary** — it prevents accidents,
+not attacks. Its deliberate limits (no `>`/`+`/`~` or pseudo-class selectors, no
+layout, no CSS cascade) are listed at the top of `dom-sandbox.js`. Check them
+before writing a lesson that leans on one.
 
 ### `createSolution(containerId, config)` — `solution.js`
 
@@ -436,6 +476,7 @@ Same structure as Track A except point 4 becomes:
 <link rel="stylesheet" href="../../assets/styles.css" />
 <!-- at end of body -->
 <script src="../../assets/quiz.js"></script>
+<script src="../../assets/dom-sandbox.js"></script>  <!-- if lesson touches the DOM -->
 <script src="../../assets/playground.js"></script>   <!-- if lesson has playgrounds -->
 <script src="../../assets/solution.js"></script>     <!-- if lesson has exercises -->
 <script src="../../assets/progress.js"></script>
@@ -479,6 +520,20 @@ It parses every inline block, runs every playground under the real loop guard
 and output cap, executes each `predict-output` answer against its own code, and
 runs the revealed solution through its self-check. With `--wrong` it also proves
 alternative correct styles pass and that each mistake trips the check it should.
+
+DOM lessons verify the same way — playgrounds marked `dom: true` and questions
+touching `document` or `localStorage` run against `assets/dom-sandbox.js`, the
+same document the browser loads. Two supporting suites back that up:
+
+```bash
+node scripts/test-dom-sandbox.mjs      # the sandbox behaves like a DOM (55 assertions)
+node scripts/test-playground-dom.mjs   # playground.js wiring: preview, Reset,
+                                       # fresh sandbox per Run, host page safety
+```
+
+Run both after touching `dom-sandbox.js` or `playground.js`. `verify-lesson.mjs`
+reimplements the execution call, so it cannot catch a bug in the widget itself —
+that is what `test-playground-dom.mjs` is for.
 
 Write the wrong-answer cases in `scripts/cases/<lesson>.mjs` — `alternatives`
 (other correct styles, all must pass) and `mistakes` (each must fail, and

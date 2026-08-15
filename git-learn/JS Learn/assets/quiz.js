@@ -4,7 +4,11 @@
  *
  * Supports question types:
  *   - (default) multiple-choice: { question, options, correct, explanation }
- *   - predict-output: { type:"predict-output", code, answer, explanation }
+ *   - predict-output: { type:"predict-output", code, answer, explanation, html? }
+ *                     `html` is optional starting markup for DOM questions;
+ *                     verify-lesson.mjs loads it into the sandbox before
+ *                     running `code`, so the shown page and the checked answer
+ *                     cannot drift apart.
  *   - spot-the-bug:  { type:"spot-the-bug", code, bugLine, options, correct, explanation }
  *   - fill-blank:    { type:"fill-blank", code, answer, explanation }
  *   - which-breaks:  { type:"which-breaks", variants, correct, explanation }
@@ -138,6 +142,22 @@
   /* ---- Predict Output ---- */
 
   function renderPredictOutput(block, q, index, feedbackDiv, answered, correct, questions, containerId) {
+    /* Optional starting markup, for DOM questions. Without it a question about
+       querySelector has nothing to select and the student is guessing at what
+       the page contains. Shown as text, never parsed into the real page. */
+    if (q.html) {
+      var htmlLabel = document.createElement("p");
+      htmlLabel.style.cssText = "font-size:0.9rem;color:var(--gray-700);margin:0 0 0.3rem;";
+      htmlLabel.textContent = "Given this HTML:";
+      block.appendChild(htmlLabel);
+
+      var htmlPre = document.createElement("pre");
+      var htmlCode = document.createElement("code");
+      htmlCode.textContent = q.html;
+      htmlPre.appendChild(htmlCode);
+      block.appendChild(htmlPre);
+    }
+
     var pre = document.createElement("pre");
     var code = document.createElement("code");
     code.textContent = q.code;

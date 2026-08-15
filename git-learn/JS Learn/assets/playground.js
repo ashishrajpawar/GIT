@@ -1,7 +1,15 @@
 (function (global) {
   "use strict";
 
-  function createPlayground(containerId, starterCode) {
+  /**
+   * createPlayground(containerId, starterCode, options)
+   *
+   * options.dom   — run the code against a sandboxed in-memory document
+   *                 instead of the real page, and show the resulting markup
+   *                 in a preview pane. Requires assets/dom-sandbox.js.
+   * options.html  — starting contents of the sandbox's <body>.
+   */
+  function createPlayground(containerId, starterCode, options) {
     var container = document.getElementById(containerId);
     if (!container) {
       console.error("createPlayground: No element with id '" + containerId + "'");
@@ -9,6 +17,7 @@
     }
 
     starterCode = starterCode || "";
+    options = options || {};
 
     container.innerHTML = "";
     container.className = "playground";
@@ -33,7 +42,9 @@
     runBtn.type = "button";
     runBtn.className = "playground-run";
     runBtn.textContent = "Run";
-    runBtn.addEventListener("click", function () { runCode(textarea, output); });
+    runBtn.addEventListener("click", function () {
+      runCode(textarea, output, options, preview);
+    });
 
     var resetBtn = document.createElement("button");
     resetBtn.type = "button";
@@ -43,15 +54,74 @@
       textarea.value = starterCode;
       output.textContent = "";
       output.className = "playground-output";
+      if (preview) preview.body.textContent = formatHTML(options.html || "");
     });
 
     toolbar.appendChild(runBtn);
     toolbar.appendChild(resetBtn);
     container.appendChild(toolbar);
 
+    /* The DOM preview sits above the console output, because in a DOM lesson
+       the page is the result and the logs are the commentary. */
+    var preview = null;
+    if (options.dom) {
+      preview = buildPreview(options.html || "");
+      container.appendChild(preview.wrap);
+    }
+
     var output = document.createElement("pre");
     output.className = "playground-output";
     container.appendChild(output);
+  }
+
+  /* The preview shows the sandbox's markup as TEXT. It must never be assigned
+     with innerHTML — that would build real elements out of student code and
+     reintroduce exactly the problem the sandbox exists to prevent. */
+  function buildPreview(initialHTML) {
+    var wrap = document.createElement("div");
+    wrap.className = "playground-preview";
+
+    var label = document.createElement("div");
+    label.className = "playground-preview-label";
+    label.textContent = "document.body";
+    wrap.appendChild(label);
+
+    var body = document.createElement("pre");
+    body.className = "playground-preview-body";
+    body.textContent = formatHTML(initialHTML);
+    wrap.appendChild(body);
+
+    return { wrap: wrap, body: body };
+  }
+
+  /* Indent one tag per line so the tree is readable. Text nodes stay on the
+     line of the tag that contains them when they are the only child. */
+  function formatHTML(html) {
+    if (!html) return "(empty)";
+    var parts = String(html).split(/(<[^>]+>)/).filter(function (p) {
+      return p !== "" && !/^\s+$/.test(p);
+    });
+    var out = [];
+    var depth = 0;
+    for (var i = 0; i < parts.length; i++) {
+      var part = parts[i].trim();
+      if (!part) continue;
+      var isClose = /^<\//.test(part);
+      var isOpen = /^<[^/!]/.test(part) && !/\/>$/.test(part) &&
+                   !/^<(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)\b/i.test(part);
+      if (isClose) depth = Math.max(0, depth - 1);
+
+      /* <p>text</p> reads better on one line than spread over three. */
+      if (isOpen && parts[i + 1] && !/^</.test(parts[i + 1].trim()) &&
+          parts[i + 2] && /^<\//.test(parts[i + 2].trim())) {
+        out.push(new Array(depth + 1).join("  ") + part + parts[i + 1].trim() + parts[i + 2].trim());
+        i += 2;
+        continue;
+      }
+      out.push(new Array(depth + 1).join("  ") + part);
+      if (isOpen) depth++;
+    }
+    return out.join("\n") || "(empty)";
   }
 
   /* Time budget for a single Run, in milliseconds. A runaway loop is stopped
@@ -121,7 +191,8 @@
     return out;
   }
 
-  function runCode(textarea, output) {
+  function runCode(textarea, output, options, preview) {
+    options = options || {};
     output.textContent = "";
     output.className = "playground-output";
 
@@ -140,6 +211,10 @@
       }
       var args = Array.prototype.slice.call(arguments);
       logs.push(args.map(function (a) {
+        /* Sandbox nodes print as their markup, the way a browser console shows
+           an element. JSON.stringify would either throw on the parentNode
+           cycle or dump the internals of a detached one. */
+        if (a && a.__isDomNode) return String(a);
         if (typeof a === "object" && a !== null) {
           try { return JSON.stringify(a, null, 2); } catch (e) { return String(a); }
         }
@@ -159,7 +234,13 @@
        queue drains so late output appears. */
     function settle() {
       global.setTimeout(function () {
-        global.setTimeout(function () { render(false); }, 30);
+        global.setTimeout(function () {
+          /* A setTimeout callback can also touch the DOM — 01/0008 shows a
+             "sending…" bubble flipping to "sent" — so the preview has to be
+             refreshed here too, not only after the synchronous pass. */
+          updatePreview();
+          render(false);
+        }, 30);
       }, 0);
     }
 
@@ -172,12 +253,50 @@
       global.removeEventListener("unhandledrejection", onRejection);
     }, 1500);
 
+    /* A DOM playground gets a fresh sandbox on every Run, so a student can
+       press Run twice without the second run inheriting the first's leftovers.
+       `document`, `window` and `localStorage` are passed as parameters, which
+       shadows the real ones inside the function body — that is what keeps
+       `document.body.innerHTML = ""` and `localStorage.clear()` from reaching
+       the lesson page and the student's saved progress. */
+    var sandbox = null;
+    if (options.dom) {
+      if (typeof global.createDomSandbox !== "function") {
+        logs.push(
+          "This playground needs the DOM sandbox, which has not loaded. " +
+          "The lesson must include <script src=\"../../assets/dom-sandbox.js\"><\/script> " +
+          "before playground.js."
+        );
+        render(true);
+        return;
+      }
+      sandbox = global.createDomSandbox(options.html || "");
+    }
+
+    function updatePreview() {
+      if (preview && sandbox) preview.body.textContent = formatHTML(sandbox.serialize());
+    }
+
     try {
-      var fn = new Function("console", "__tick", instrument(textarea.value));
-      fn(fakeConsole, makeTicker());
+      var body = instrument(textarea.value);
+      var fn = sandbox
+        ? new Function("console", "__tick", "document", "window", "localStorage", "Event", body)
+        : new Function("console", "__tick", body);
+
+      if (sandbox) {
+        fn(fakeConsole, makeTicker(), sandbox.document, sandbox.window,
+           sandbox.localStorage, sandbox.Event);
+      } else {
+        fn(fakeConsole, makeTicker());
+      }
+
+      updatePreview();
       render(false);
       settle();
     } catch (err) {
+      /* Show the DOM as far as it got. Half-built markup is the most useful
+         thing on screen when an exception lands mid-way through building it. */
+      updatePreview();
       /* The output cap unwinds via a sentinel — the message is already in
          logs, so it must not be reported as a crash on top of that. */
       if (!(err instanceof TooMuchOutput)) logs.push(err.name + ": " + err.message);
