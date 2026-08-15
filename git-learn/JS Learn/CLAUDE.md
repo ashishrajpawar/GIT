@@ -468,12 +468,30 @@ this shape when retrofitting further lessons:
    a different style (arrow function, properties in another order) has to
    pass. Every `FAIL` prints what the student's code actually produced.
 
-Verify a retrofit by extracting the inline script, stubbing `createPlayground`
-/ `createSolution`, and running each starter plus the revealed solution
-through `new Function("console", code)`. Also run deliberately *wrong*
-answers: each should trip only its own check. And always confirm `<script>`
-tags balance — a literal `</script>` inside a JS string silently kills the
-whole block.
+**Verify a retrofit by running it, never by reading it:**
+
+```bash
+node scripts/verify-lesson.mjs modules/01-javascript-fundamentals/0006-scope-and-closures.html \
+     --wrong scripts/cases/0006-scope-and-closures.mjs
+```
+
+It parses every inline block, runs every playground under the real loop guard
+and output cap, executes each `predict-output` answer against its own code, and
+runs the revealed solution through its self-check. With `--wrong` it also proves
+alternative correct styles pass and that each mistake trips the check it should.
+
+Write the wrong-answer cases in `scripts/cases/<lesson>.mjs` — `alternatives`
+(other correct styles, all must pass) and `mistakes` (each must fail, and
+`expect` names the check it should trip). A mistake that trips *every* check
+means the self-check has poor diagnostics, not that the student is very wrong.
+
+Two traps this has already caught:
+
+- A literal `</script>` inside a JS string silently kills the whole block.
+- **Never build lesson content through a shell.** Escape-heavy strings passed
+  through `bash -c` or `node -e` get mangled — `\"` becomes `\\"` and terminates
+  the string early, or `\n` becomes a real newline. Use the editor tools, or a
+  template literal, for anything containing quotes or backslashes.
 
 ---
 
