@@ -1,5 +1,54 @@
 # Token Course — Claude Orientation
 
+## START HERE — resume protocol
+
+**Run the audit before trusting anything in this file.**
+
+```bash
+node scripts/audit.mjs        # ground truth: writes PROGRESS.md
+cat SESSION.md                # what was in flight
+git status && git log -5      # what landed, what is mid-edit
+```
+
+Five steps, in order:
+
+1. Read this file for architecture and conventions
+2. `node scripts/audit.mjs` — recomputes state from the files
+3. `SESSION.md` — **In progress / Next action / Blocked**
+4. `git status` + `git log -5` — uncommitted work is the only thing at risk
+5. Reconcile and continue
+
+### Document precedence — one fact, one home
+
+| File | Owns | Written by |
+|---|---|---|
+| `PROGRESS.md` | Anything a script can compute — counts, coverage, verification state | **Generated only.** Never hand-edit |
+| `SESSION.md` | In progress / Next action / Blocked | Hand, before each unit of work |
+| `CLAUDE.md` (this file) | Architecture invariants, conventions, product rules | Hand |
+| `HANDOFF.md` | Narrative — why decisions were made, what failed, session log | Hand, appended each session |
+| `ARCHITECTURE.md` + `docs/adr/` | Technical design and the decisions behind it | Hand |
+| `COURSE-REVIEW.md` | The 2026-08-15 audit and the phase plan | Hand |
+| `TOKEN-TRACK.md` | Lesson map and sequencing | Hand |
+
+**The rule that prevents drift: this file and `HANDOFF.md` never restate a
+number the audit can compute.** They point at `PROGRESS.md` instead. Prose
+asserting something checkable is exactly how "Modules 1 and 2 complete"
+survived for months against a student on lesson 2, and how `search-index.json`
+decayed to 65 of 95 entries unnoticed. If a document disagrees with the audit,
+**the audit is right**.
+
+**Never infer student progress from the files.** Written ≠ studied. That
+inference produced the false claim above. Ask, or read `progress.js`
+localStorage.
+
+### Working discipline
+
+- **Write-ahead:** update `SESSION.md` *before* starting a unit of work, not after
+- **Commit per unit** — one lesson, one script, one fix. Maximum loss from an
+  abrupt stop is one unit
+- **Architectural reasoning goes into an ADR as it is decided**, not at the end.
+  A conclusion without its argument doesn't survive the session
+
 ## What this project is
 A two-track HTML course teaching one student (Ashish) to build **Token** — a
 privacy-first mobile app for the Indian market where users issue revocable
@@ -11,10 +60,36 @@ framework for the course itself. The *product* being built has its own repo.
 
 ## The product being built — Token
 
-A user issues a token (e.g. `MERC-8GH2-LP4X`) to anyone who needs to reach
+A user issues a token (e.g. `MERC-8GH2-KP4X`) to anyone who needs to reach
 them. The holder redeems it at `tokn.app/t/CODE` — a web page — and
 communicates through that page. They never learn the user's phone number,
 email, or identity. The user can set rules, pause, or revoke at any time.
+
+### Token code format — the alphabet is a hard constraint
+
+```
+23456789ABCDEFGHJKMNPQRSTUVWXYZ    ← 31 characters
+```
+
+36 alphanumerics minus the 5 ambiguous ones: **0, O, 1, I, L are excluded.**
+Codes are 12 characters in three groups of four: `MERC-8GH2-KP4X`.
+
+**Every example token you write anywhere — lesson, quiz, doc, test — must be
+valid under this alphabet.** The canonical example was `MERC-8GH2-LP4X` for
+months; the `L` made it a code the product could never generate, and it had
+spread to 36 files including this one before anyone checked. Three quiz answers
+were wrong purely because they were regex tests against it.
+
+Derived figures, so nobody recomputes them wrongly again:
+- 31<sup>12</sup> ≈ 7.9 × 10<sup>17</sup> possible codes (~25,000 years to
+  exhaust at 1M/sec)
+- modulo bias: 256 / 31 = 8 remainder 8, so the **first 8** characters are
+  12.5% more likely than the rest
+- indices 26–30 are `V, W, X, Y, Z`
+
+Note ~15 other example tokens still contain excluded characters. Some are
+accidental; some look like deliberate negative fixtures. See `COURSE-REVIEW.md`
+§12.5 — do not bulk-rewrite them without reading each in context.
 
 ### Token repo layout (one git repo, four folders)
 ```
@@ -66,6 +141,7 @@ reference/
 TOKEN-BRIEF.md                      ← product brief (supersedes old CLAUDE.md app section)
 TOKEN-TRACK.md                      ← full two-track plan with sequencing
 TOKEN-ASSETS-TASK.md                ← course tooling upgrade spec (separate session)
+COURSE-REVIEW.md                    ← 2026-08-15 audit: gaps, plan, verified defects
 HANDOFF.md                          ← project handoff / state summary
 ```
 
@@ -115,6 +191,9 @@ createQuiz("lesson-quiz", [
   { type: "fill-blank", code: "const x = arr.___((a, b) => a + b, 0);", answer: "reduce", explanation: "..." },
 
   // Which-breaks (multiple snippets, one fails)
+  // `correct` = the one that BREAKS. The renderer always prints the fixed
+  // prompt "Which of these will fail?" above the options, whatever your
+  // `question` text says — see the warning below.
   { type: "which-breaks", variants: ["code A", "code B", "code C"], correct: 1, explanation: "..." },
 
   // Order-steps (click in correct sequence)
@@ -126,6 +205,14 @@ createQuiz("lesson-quiz", [
 
 Embeddable JS editor. Textarea + Run + Reset buttons. Sandboxed execution,
 captured `console.log` output displayed below. Errors shown in red.
+
+**Two known limits — check before putting a playground in a lesson.**
+`runCode()` calls `new Function(...)` and reads the captured log *synchronously*,
+so anything resolving in a microtask is lost: `Promise.resolve("x").then(console.log)`
+and any `await` both print `(no output)` rather than the right answer. There is
+also no infinite-loop guard, so a stray `while (true)` hangs the browser tab.
+Both must be fixed before practice is retrofitted into `01/0005` (loops) or
+`01/0009` (promises & async/await). See `COURSE-REVIEW.md` §7.2.
 
 ```html
 <div id="playground-1"></div>
@@ -268,8 +355,21 @@ pointless without a client. See TOKEN-TRACK.md § "Recommended sequence".
 
    **Answer positions must vary.** Existing lessons put the correct answer
    at index 1 in 64% of questions — always picking the second option scores
-   ~64% course-wide. Do not add to that pattern. `order-steps` steps are
+   ~64% course-wide (measured 63.6% across 1,284 keyed questions on
+   2026-08-15). Do not add to that pattern. `order-steps` steps are
    shuffled at render, so `correctOrder` may be authored in any order.
+
+   **Never tag a "which is correct?" question as `which-breaks`.** The renderer
+   prints a fixed "Which of these will fail?" prompt, so the key ends up
+   rewarding the *right* option while the screen asks for the failing one —
+   a student who understands the material is marked wrong. Ten questions had
+   this defect and were converted to multiple-choice on 2026-08-15. Use
+   `which-breaks` only when the question genuinely asks which snippet fails.
+
+   **Verify keys by executing them.** Every `predict-output` question whose
+   code runs without a browser, DB or React Native should be run and its
+   output compared to `answer`. Doing this to the 188 executable ones found
+   8 wrong keys — a 4.3% error rate. The recipe is in `COURSE-REVIEW.md` §10.
 
 6. **Lesson nav** at the bottom with prev/next links using the planned
    filename even if the next lesson doesn't exist yet.
