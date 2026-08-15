@@ -51,6 +51,7 @@
     resetBtn.className = "playground-reset";
     resetBtn.textContent = "Reset";
     resetBtn.addEventListener("click", function () {
+      cancelPendingRenders(output);
       textarea.value = starterCode;
       output.textContent = "";
       output.className = "playground-output";
@@ -191,8 +192,18 @@
     return out;
   }
 
+  /* Renders from a previous Run are still queued when the student presses Run
+     again. Left alone they fire against the new run's output element and
+     redraw the old logs over the new ones. */
+  function cancelPendingRenders(output) {
+    if (!output.__renderTimers) return;
+    output.__renderTimers.forEach(function (id) { global.clearTimeout(id); });
+    output.__renderTimers = null;
+  }
+
   function runCode(textarea, output, options, preview) {
     options = options || {};
+    cancelPendingRenders(output);
     output.textContent = "";
     output.className = "playground-output";
 
@@ -223,25 +234,37 @@
     }
     var fakeConsole = { log: push, warn: push, info: push, error: push, debug: push };
 
+    /* Sticky: a later re-render must not clear the red from an error that
+       already happened, and async failures arrive after the first render. */
+    var hasFailed = false;
+
     function render(failed) {
+      if (failed) hasFailed = true;
       output.textContent = logs.join("\n") || "(no output)";
-      output.className = "playground-output" + (failed ? " playground-error" : "");
+      output.className = "playground-output" + (hasFailed ? " playground-error" : "");
     }
 
-    /* Async code resolves in a microtask, so reading `logs` immediately after
-       the call reports "(no output)" for correct answers — .then() and await
-       both looked broken. Render once synchronously, then again after the
-       queue drains so late output appears. */
+    /* Async code resolves in a microtask or a timer, so reading `logs`
+       immediately after the call reports "(no output)" — .then() and await
+       both looked broken.
+       Rendering once after ~30ms fixed the immediate case but not a promise
+       that resolves on a timer: `await wait(300)` still printed nothing, while
+       verify-lesson.mjs drained its whole timer queue and saw the output. The
+       verifier and the browser disagreeing about a lesson is the failure mode
+       all of this is built to avoid, so the browser now keeps re-rendering
+       across the same budget the loop guard uses. */
+    var RENDER_AT_MS = [0, 30, 100, 250, 500, 1000, 1500, TIME_BUDGET_MS];
+
     function settle() {
-      global.setTimeout(function () {
-        global.setTimeout(function () {
-          /* A setTimeout callback can also touch the DOM — 01/0008 shows a
-             "sending…" bubble flipping to "sent" — so the preview has to be
-             refreshed here too, not only after the synchronous pass. */
+      cancelPendingRenders(output);
+      output.__renderTimers = RENDER_AT_MS.map(function (delay) {
+        return global.setTimeout(function () {
+          /* A timer callback can also touch the DOM — a "sending…" row
+             flipping to "sent" — so the preview refreshes here too. */
           updatePreview();
           render(false);
-        }, 30);
-      }, 0);
+        }, delay);
+      });
     }
 
     var onRejection = function (e) {

@@ -33,6 +33,8 @@ const win = host.window;
 win.createDomSandbox = createDomSandbox;
 win.document = host.document;
 win.setTimeout = (fn, ms) => { timers.push([fn, ms || 0]); return timers.length; };
+// Cancelled entries are blanked rather than spliced, so the ids stay stable.
+win.clearTimeout = (id) => { if (timers[id - 1]) timers[id - 1] = [() => {}, 0]; };
 win.addEventListener = () => {};
 win.removeEventListener = () => {};
 // playground.js is an IIFE that assigns onto `window`, so passing `win` in as
@@ -100,6 +102,60 @@ eq("student progress in host localStorage survived",
    host.localStorage.getItem("token-course-progress"), '["01/0001"]');
 eq("destructive code reported normally", output.textContent, "wiped");
 eq("preview shows the emptied sandbox body", preview.textContent, "(empty)");
+
+// --- async output must survive to the screen -------------------------------
+// Student code inside new Function() uses the REAL setTimeout, so this section
+// runs the widget on real timers too. Draining a fake queue instantly would
+// fire every scheduled render before the async output existed, and the test
+// would pass even with the old single 30ms render — the exact regression it is
+// here to catch. Costs ~2.5s of wall clock, which is worth it.
+const fakeSetTimeout = win.setTimeout;
+const fakeClearTimeout = win.clearTimeout;
+win.setTimeout = (fn, ms) => globalThis.setTimeout(fn, ms);
+win.clearTimeout = (id) => globalThis.clearTimeout(id);
+const sleep = (ms) => new Promise((r) => globalThis.setTimeout(r, ms));
+
+textarea.value = [
+  'function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }',
+  'console.log("sync");',
+  'Promise.resolve().then(function () { console.log("micro"); });',
+  'setTimeout(function () { console.log("timer 0"); }, 0);',
+  '(async function () {',
+  '  await wait(300);',
+  '  console.log("after 300ms");',
+  '  await wait(900);',
+  '  console.log("after 1200ms");',
+  '})();',
+].join("\n");
+runBtn.click();
+
+await sleep(120);
+eq("the early part is on screen before the slow work finishes",
+   output.textContent, "sync\nmicro\ntimer 0");
+
+await sleep(1400);
+eq("late async output reaches the output pane",
+   output.textContent, "sync\nmicro\ntimer 0\nafter 300ms\nafter 1200ms");
+
+// A second Run must not let the first run's queued renders repaint stale logs.
+textarea.value = 'setTimeout(function () { console.log("stale"); }, 200);';
+runBtn.click();
+await sleep(50);
+textarea.value = 'console.log("second run");';
+runBtn.click();
+await sleep(400);
+eq("a new Run cancels the previous run's pending renders",
+   output.textContent, "second run");
+
+// Reset while renders are pending must leave the box cleared.
+textarea.value = 'setTimeout(function () { console.log("late"); }, 200);';
+runBtn.click();
+resetBtn.click();
+await sleep(400);
+eq("Reset cancels pending renders", output.textContent, "");
+
+win.setTimeout = fakeSetTimeout;
+win.clearTimeout = fakeClearTimeout;
 
 // Missing sandbox is reported, not silently ignored.
 delete win.createDomSandbox;

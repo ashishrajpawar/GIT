@@ -87,16 +87,26 @@ for (const b of blocks) {
   catch (e) { fail(`evaluating a block: ${e.message.slice(0, 70)}`); }
 }
 
+/** Yield past the microtask queue. `await Promise.resolve()` advances only one
+ *  tick, so a chain of .then()s would need one await per link; setImmediate
+ *  runs in the check phase, after everything the microtask queue holds. */
+const drainMicrotasks = () => new Promise((r) => setImmediate(r));
+
 /** Run code the way the playground does: instrumented, guarded, log captured.
  *  setTimeout callbacks are queued and drained afterwards — without that, any
  *  playground demonstrating async behaviour (the classic var-in-a-loop closure
  *  trap, for one) silently produces no output and looks like it passed.
  *
+ *  Async, because promise callbacks are microtasks: a synchronous runner
+ *  finishes before any of them execute, so every `.then()` and `await` in the
+ *  lesson printed nothing. Playgrounds reported "ok" with the output missing,
+ *  and correct predict-output answers were reported as wrong.
+ *
  *  `opts.dom` swaps in the sandboxed document from assets/dom-sandbox.js, the
  *  same one the browser gets, with `opts.html` as the starting body. Returns
  *  `dom` — the final markup — so a caller can assert on the page, not just the
  *  logs. */
-function runLikePlayground(code, opts = {}) {
+async function runLikePlayground(code, opts = {}) {
   const logs = [];
   const fake = {
     log: (...a) => {
@@ -114,6 +124,17 @@ function runLikePlayground(code, opts = {}) {
 
   const sandbox = opts.dom ? createDomSandbox(opts.html || "") : null;
 
+  /* A lesson demonstrating a rejected promise without a .catch() would
+     otherwise take the whole verifier down with it — unhandled rejections are
+     fatal in modern Node. Recorded the way the browser playground records
+     them, so the two agree. */
+  let rejection = null;
+  const onRejection = (reason) => {
+    rejection = "Uncaught (in promise): " +
+      (reason && reason.message ? reason.message : String(reason));
+  };
+  process.on("unhandledRejection", onRejection);
+
   let threw = null;
   try {
     const names = ["console", "__tick", "setTimeout"];
@@ -123,15 +144,25 @@ function runLikePlayground(code, opts = {}) {
       values.push(sandbox.document, sandbox.window, sandbox.localStorage, sandbox.Event);
     }
     new Function(...names, instrument(code))(...values);
-    // Drain in delay order, as a browser would. Callbacks may queue more.
+
+    /* Real event-loop ordering: every microtask the synchronous pass queued
+       runs before the first timer, and again after each timer callback. Get
+       this wrong and the classic "sync, micro, timer" question — the one this
+       lesson is built around — verifies to the wrong answer. */
+    await drainMicrotasks();
     for (let guard = 0; queue.length && guard < 10000; guard++) {
       queue.sort((a, b) => a[1] - b[1]);
       const [fn] = queue.shift();
       fn();
+      await drainMicrotasks();
     }
   } catch (e) {
     threw = e && e.message === "__CAP__" ? "output cap" : `${e.name}: ${e.message}`;
+  } finally {
+    process.off("unhandledRejection", onRejection);
   }
+
+  if (rejection && !threw) logs.push(rejection);
   return { logs, threw, dom: sandbox ? sandbox.serialize() : null };
 }
 
@@ -140,7 +171,7 @@ console.log("\n2. playgrounds run (deliberate breakage is expected, hangs are no
 for (const [id, pg] of Object.entries(playgrounds)) {
   if (id === "pg-exercise") continue; // covered by the self-check below
   const t0 = Date.now();
-  const { logs, threw } = runLikePlayground(pg.code, pg.opts);
+  const { logs, threw } = await runLikePlayground(pg.code, pg.opts);
   const ms = Date.now() - t0;
   const tag = pg.opts.dom ? " [dom]" : "";
   if (ms > 4000) fail(`${id}: took ${ms}ms — the guard is not stopping it`);
@@ -162,7 +193,7 @@ for (const [qid, qs] of Object.entries(quizzes)) {
     if (/require\(|fetch\(|React|useState|StyleSheet|expo|SELECT |INSERT /.test(q.code)) continue;
     if (!needsDom && /window\./.test(q.code)) continue;
 
-    const { logs, threw } = runLikePlayground(q.code, needsDom ? { dom: true, html: q.html } : {});
+    const { logs, threw } = await runLikePlayground(q.code, needsDom ? { dom: true, html: q.html } : {});
     if (threw) continue; // e.g. deliberately-throwing snippets
     const norm = (s) => String(s).replace(/['"]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
     checked++;
@@ -181,7 +212,7 @@ for (const [id, cfg] of Object.entries(solutions)) {
   const selfCheck = pg.code.split(MARKER)[1];
   // Strip the solution's own demo calls — the self-check supplies its own data.
   const impl = cfg.solution.split("\n").filter((l) => !/^console\.log|^const \w+ = create|^const \w+ = make/.test(l.trim())).join("\n");
-  const { logs, threw } = runLikePlayground(impl + "\n" + selfCheck, pg.opts);
+  const { logs, threw } = await runLikePlayground(impl + "\n" + selfCheck, pg.opts);
   if (threw) { fail(`${id}: self-check threw — ${threw}`); continue; }
   const bad = logs.filter((l) => l.startsWith("FAIL"));
   const passed = logs.filter((l) => l.startsWith("PASS"));
@@ -194,19 +225,19 @@ if (wrongFile) {
   const cases = await import("file://" + path.resolve(ROOT, wrongFile));
   const pg = playgrounds["pg-exercise"];
   const selfCheck = pg.code.split(MARKER)[1];
-  const runCase = (impl) => {
-    const { logs, threw } = runLikePlayground(impl + "\n" + selfCheck, pg.opts);
+  const runCase = async (impl) => {
+    const { logs, threw } = await runLikePlayground(impl + "\n" + selfCheck, pg.opts);
     return { fails: logs.filter((l) => l.startsWith("FAIL")).map((l) => l.slice(6).trim()), threw };
   };
   console.log("\n5. alternative correct styles also pass (behaviour, not resemblance)");
   for (const [name, impl] of Object.entries(cases.alternatives || {})) {
-    const { fails, threw } = runCase(impl);
+    const { fails, threw } = await runCase(impl);
     if (threw || fails.length) fail(`${name}: ${threw || fails.join(" | ").slice(0, 90)}`);
     else ok(name);
   }
   console.log("\n6. each mistake trips the check it should");
   for (const [name, { impl, expect }] of Object.entries(cases.mistakes || {})) {
-    const { fails, threw } = runCase(impl);
+    const { fails, threw } = await runCase(impl);
     const hit = threw ? threw : fails.join(" | ");
     if (!fails.length && !threw) fail(`${name}: passed everything — the self-check misses this mistake`);
     else if (expect && !hit.includes(expect)) fail(`${name}: expected "${expect}", got "${hit.slice(0, 80)}"`);

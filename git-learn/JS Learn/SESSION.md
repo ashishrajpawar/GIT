@@ -20,9 +20,40 @@ one or two lessons at a time, never batched ahead.
 | `01/0005-loops` | done — `f9230c5` |
 | `01/0006-scope-and-closures` | done — `be65077` (+ `scripts/verify-lesson.mjs`) |
 | `01/0007-dom-and-browser-apis` | done — `6a2221f` (sandbox) + `8700f19` (retrofit) |
-| `01/0008-events` | done — `e13a323` (sandbox) + retrofit |
-| **`01/0009-promises-and-async-await`** | **next** |
+| `01/0008-events` | done — `e13a323` (sandbox) + `5d941f0` (retrofit) |
+| **`01/0009-promises-and-async-await`** | **in progress — 4a tooling done, 4b retrofit next** |
 | `01/0010`–`01/0012` | not started |
+
+### Unit 4a — async tooling — DONE
+
+The caution left here was right, and the problem was worse than "may verify as
+empty". Proved with a throwaway async fixture before touching the lesson:
+
+- `verify-lesson.mjs` ran everything **synchronously**, so no promise callback
+  ever executed. Playgrounds printed their sync lines and reported **`ok`** —
+  silently passing with the async output missing. Correct `predict-output`
+  answers were reported as *wrong*: `"1\n2\n3"` verified as `"1\n2"`.
+- `runLikePlayground` is now `async` and yields past the microtask queue with
+  `setImmediate` — once after the synchronous pass, and again after every
+  timer callback. That reproduces real event-loop ordering, which the
+  `sync → micro → timer` question depends on. All four call sites await it.
+- Unhandled rejections are captured and recorded rather than killing the
+  process. A lesson demonstrating a rejected promise without `.catch()` would
+  otherwise have taken the whole verifier down.
+
+The browser had the mirror-image bug. `settle()` rendered once at ~30ms, so
+`await wait(300)` printed nothing on screen while the verifier — which drains
+its whole timer queue — saw it. **The verifier and the browser disagreeing
+about a lesson is the exact failure mode this tooling exists to prevent.**
+`playground.js` now re-renders across the same 2s budget the loop guard uses,
+cancelling pending renders on Run and Reset so a late render cannot repaint
+stale logs.
+
+`scripts/test-playground-dom.mjs` 11 → 15 assertions. The new async ones run on
+**real timers**, because draining a fake queue instantly would fire every
+scheduled render before the async output existed and the test would pass
+against the old code. Confirmed it has teeth by reverting the schedule to
+`[0, 30]` and watching it fail.
 
 ### Unit 3a — sandbox gaps 0008 needed — DONE (`e13a323`)
 
