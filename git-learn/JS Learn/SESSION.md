@@ -21,14 +21,14 @@ how far it got.
 | 4. Token repo scaffold at `GIT/token/` | done — `3d12ca6` |
 | 5. `ARCHITECTURE.md` + ADRs | done — `3db9fdc` |
 | 6. `CLAUDE.md` architecture rewrite | done |
-| 7. `TOKEN-TRACK.md` resequenced | pending |
+| 7. `TOKEN-TRACK.md` resequenced | done |
 | 8. Playground async + loop guard | pending |
 | 9. Quiz answer-position bias | pending |
 | 10. Broken links + delete stale `lessons/` | pending |
 
 ## Next action
 
-Resequence TOKEN-TRACK.md: E2EE before B2, Trust & Safety earlier and redesigned, Scale alongside B-track, add C0-C9 placeholders (step 7).
+Fix assets/playground.js: flush microtasks so .then/await produce output, and guard runaway loops (step 8).
 
 ## Blocked on
 

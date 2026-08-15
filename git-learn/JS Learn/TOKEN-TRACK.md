@@ -1,20 +1,30 @@
 # Token — Two-Track Course Plan
 
-> **This plan is incomplete — reviewed 2026-08-15, see `COURSE-REVIEW.md`.**
+> **SUPERSEDED IN PART — read this box before the tables below.**
+> Reviewed 2026-08-15 (`COURSE-REVIEW.md`); resequenced after the student
+> settled seven open decisions the same day (`HANDOFF.md`).
 >
-> Three things below are known to be wrong or missing:
+> The A/B tables below still describe **what exists on disk**, which is why they
+> are kept. They no longer describe **the order it will be studied in**, or the
+> full scope. The revised sequence is in § "Revised sequence" at the foot of
+> this file.
 >
-> 1. **Ten modules of coverage are absent entirely** — testing, CI/CD,
->    observability, product analytics, scale & performance, offline/media/jobs,
->    E2EE, trust & safety, architecture & ADRs, and launch/support/operations.
->    Zero lessons exist for any of them. Proposed as C0–C9 in `COURSE-REVIEW.md` §6.
-> 2. **B2.2 under-delivered.** The row below promises "conversations, messages,
->    participants, read_receipts". The lesson creates only `conversations` and
->    `messages` — yet B10 queries `participants`, and `deletion_queue` and
->    `push_tokens` are queried without ever being created anywhere.
-> 3. **The timeline is for an MVP by someone who already codes.** For a
->    production-grade, operable product from a beginner start, the realistic
->    figure is 8–12 months and ~130 lessons, not the 3–4 months below.
+> Four things below are known to be wrong:
+>
+> 1. **Ten modules of coverage are missing entirely** — architecture/ADRs,
+>    testing, CI/CD, trust & safety, data/media/offline, E2EE, scale &
+>    performance, observability, analytics, and launch/support/ops. ~36 lessons.
+>    Specified as C0–C9 in `COURSE-REVIEW.md` §6.
+> 2. **B2 and B5 need rewriting, not deepening.** E2EE lands in v1, so the
+>    messaging schema stores ciphertext; and the WebSocket layer is multi-node
+>    from the start rather than single-node-then-fixed.
+> 3. **B2.2 under-delivered.** The row below promises "conversations, messages,
+>    participants, read_receipts" and the lesson creates only the first two.
+>    `participants`, `deletion_queue`, and `calls` are queried by later lessons
+>    and created by none — run `node scripts/audit.mjs` for the live list.
+> 4. **The timeline was for an MVP by someone who already codes.** With E2EE in
+>    v1 and a scale-out architecture, the realistic figure is **12–18 months and
+>    ~145 lessons**, not the 3–4 months below.
 
 ---
 
@@ -222,3 +232,98 @@ security holes that undermine the entire privacy promise.
 
 Old modules stay in `modules/` as reference material until the replacement
 is written and confirmed working. No deletion without explicit confirmation.
+
+---
+
+# Revised sequence (2026-08-15)
+
+Supersedes "Recommended sequence" above. Driven by the seven decisions in
+`HANDOFF.md` — chiefly **E2EE in v1** and **build for millions from day one**,
+both of which move modules earlier because they are constraints on design rather
+than features bolted on afterwards.
+
+**Written just-in-time, never batched ahead.** Each C-module is written before
+the student reaches it, against a repo that exists and code that has been run.
+Generating 36 lessons now would repeat exactly the mistake that produced 95
+unverified lessons against a student on lesson 5.
+
+## The new modules
+
+| ID | Module | ~Lessons | Why here |
+|----|--------|---------|----------|
+| **C0** | Architecture & System Design | 2 | Before B1 — the whole-system view, trust boundaries, ADRs, where the seams go |
+| **C5** | End-to-End Encryption | 5 | **Before B2** — the schema stores ciphertext, so this is a prerequisite. Grown from 2 lessons: key generation, distribution, verification, backup/recovery, multi-device |
+| **C1** | Testing & Quality | 5 | After B3 — test the API as it is built, not at the end |
+| **C2** | CI/CD & Release Engineering | 4 | After C1 — nothing to automate until tests exist |
+| **C3** | Trust, Safety & Abuse | 3 | After A5 — redesigned around client-side report packaging (ADR-0006), since E2EE removes server-side moderation |
+| **C6** | Scale & Performance | 5 | **Alongside B-track**, not after B9 — you cannot defer what you are building for |
+| **C4** | Data, Media & Offline | 4 | After A6 — SQLite cache, offline outbox, attachments, background jobs |
+| **C7** | Observability | 4 | Extends B9 — self-hosted error tracking, metrics, logs, alerting, runbooks |
+| **C8** | Product Analytics | 2 | After C7 — privacy-first analytics for a privacy product |
+| **C9** | Launch, Support & Operations | 5 | Replaces the A11 tail — store compliance, account deletion, i18n/a11y, support, incident response |
+
+## Phase order
+
+```
+Phase 1 — Where the student actually is
+  01/0005–0012  practice retrofit, just-in-time
+  01 capstone   pure-JS token issuer → first commit to token/practice/
+  02            practice retrofit, just-in-time
+
+Phase 2 — Verify and deepen
+  Every verifiable lesson executed; the rest marked unverifiable with a reason
+  ~20 spine lessons gain: Why this way / When this breaks / What this costs you
+
+Phase 3 — Foundations, re-architected
+  X1  Git & Dev Environment
+  C0  Architecture & System Design        ← new
+  A2  TypeScript
+  X2  Debugging
+  B1  SQL Fundamentals
+  C5  End-to-End Encryption               ← new, MUST precede B2
+  B2  Schema Design                       ← REWRITE for ciphertext + partitioning
+  B3  Node & HTTP Server
+  C1  Testing & Quality                   ← new
+  C2  CI/CD & Release Engineering         ← new
+  B4  Auth (server)
+
+Phase 4 — Client meets server
+  A3  API Consumption
+  A4  Auth on the client
+  A5  Core Token Features
+  C3  Trust, Safety & Abuse               ← new
+
+Phase 5 — Real-time
+  B5  WebSocket Server                    ← REWRITE for multi-node + Redis
+  A6  Chat & Real-time
+  C4  Data, Media & Offline               ← new
+  B6  WebRTC Signalling
+  A7  Voice & Video (client)
+
+Phase 6 — The second client
+  A8  Redemption Web Page
+  A9  Deep Linking & Routing
+
+Phase 7 — Engine and hardening
+  B7  Token Engine
+  B8  Push Notifications
+  A10 Device Security & Storage
+
+Phase 8 — Ship and operate
+  B9  Docker & Deployment
+  C6  Scale & Performance                 ← new (threads through B-track too)
+  C7  Observability                       ← new
+  B10 Security & Compliance
+  C8  Product Analytics                   ← new
+  A11 Polish & Publish                    ← modernised off Expo SDK 49
+  C9  Launch, Support & Operations        ← new
+```
+
+## Rewrites, not deepenings
+
+| Module | Why |
+|--------|-----|
+| **B2 — Schema Design** | Messages store ciphertext; `messages` partitioned by time from the first migration; `participants`, `deletion_queue`, `calls` designed properly rather than patched |
+| **B5 — WebSocket Server** | Multi-node from the start: Redis pub/sub fan-out, presence as TTL keys, no node-local socket registry |
+| **A7/0004 — Incoming calls** | Imports `@react-native-firebase/messaging`, contradicting both the no-Firebase constraint and B8's Expo Notifications |
+| **All of Track A** | Written against Expo SDK 49 (mid-2023); camera, notifications, and secure-store APIs have all moved |
