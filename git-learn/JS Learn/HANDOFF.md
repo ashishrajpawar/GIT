@@ -374,6 +374,51 @@ A full review of the project produced four commits after `99e1678`:
 have no exercises or playgrounds (§6). Both are decisions for the student, not
 cleanups.
 
+### Session of 2026-08-15 — quiz answer-position bugs
+
+The student reported that every *"Put these steps in the correct order"* question
+displayed the steps already in the correct order. Confirmed and fixed in
+`92aad6c`: `renderOrderSteps` iterated `q.steps` in array order, and 252 of the
+275 order-steps questions are authored with the steps correctly sequenced and
+`correctOrder: [0, 1, 2, …]`. Clicking straight down the list always scored.
+
+The renderer now shuffles the buttons (Fisher-Yates) while each button keeps its
+original index in `dataset.stepIndex`, so scoring against `correctOrder` is
+unchanged and no lesson data needed editing — including the 23 questions whose
+author had scrambled the steps by hand. The shuffle takes `correctOrder` as an
+*avoid* sequence, so the displayed order is never itself the answer.
+
+**Open — the same bug class in multiple-choice, not fixed.** Correct-answer
+positions are clustered hard across all 1,309 `correct: N` questions
+(multiple-choice, spot-the-bug, which-breaks):
+
+| Position | Count | Share |
+|----------|-------|-------|
+| 2nd option (`correct: 1`) | 837 | 64% |
+| 3rd option (`correct: 2`) | 326 | 25% |
+| 1st option (`correct: 0`) | 120 | 9% |
+| 4th option (`correct: 3`) | 26 | 2% |
+
+Always picking the second option scores ~64% course-wide without reading the
+question. Same root cause: a positional habit in the generator, preserved by a
+renderer that paints options in array order.
+
+Unlike order-steps this is **not** safe as a pure renderer shuffle:
+
+- ~27 options are "All of the above" / "Neither" kind and break unless rendered last
+- ~46 explanations name a position or letter ("option B", "the third option") and
+  would contradict a shuffled display
+
+(Both counts are from a quick grep and need proper verification before anyone
+acts on them.) The workable fix shuffles by default but pins position-dependent
+options and skips questions whose explanation names a position.
+
+**Deliberately left open.** The student was told and chose to move on rather than
+pause the course, on the grounds that knowing the pattern exists is enough to not
+exploit it. Do not "helpfully" fix this mid-module — it rewrites quiz rendering
+across ~95 lessons for a problem the student has opted to work around. Raise it
+again only if they ask, or at a natural break between tracks.
+
 **Not committed:** `.claude/settings.local.json` carries local permission state
 and is deliberately left alone.
 
