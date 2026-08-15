@@ -9,7 +9,7 @@ how far it got.
 
 ---
 
-## In progress
+## In progress — PHASE 0 COMPLETE
 
 **Phase 0 — foundations.** See `COURSE-REVIEW.md` §6 for the full phase plan.
 
@@ -24,11 +24,11 @@ how far it got.
 | 7. `TOKEN-TRACK.md` resequenced | done |
 | 8. Playground async + loop guard | done |
 | 9. Quiz answer-position bias | done |
-| 10. Broken links + delete stale `lessons/` | pending |
+| 10. Broken links + delete stale `lessons/` | done |
 
 ## Next action
 
-Fix 5 broken links and delete the stale lessons/ duplicate, then re-run the audit and close Phase 0 (step 10).
+**Phase 0 is done.** Next is Phase 1: retrofit practice into 01/0005-loops — the lesson the student is on. The playground now handles loops safely, so this is unblocked. Do NOT batch ahead; one or two lessons at a time.
 
 ## Blocked on
 

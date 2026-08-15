@@ -19,16 +19,26 @@ with this one, this one is right — everything below is measured, not asserted.
 | Lessons with an exercise | 73 / 95 |
 | **Deepened** (all 3 spine sections) | 0 / 95 |
 | **Verified** (code executed) | 0 / 95 |
-| Errors | 9 |
-| Warnings | 50 |
+| Errors | 3 |
+| Warnings | 51 |
 
 Student-completed lessons are **not** tracked here — that comes from the student
 or from `progress.js` localStorage, and is never inferred from the files.
 
-## Answer-position distribution
+## Answer-position distribution — **authored order, not what the student sees**
 
 1284 keyed questions (multiple-choice, spot-the-bug, which-breaks).
-An even spread is ~25% each; heavy clustering means the quiz can be gamed.
+
+> **This clustering is expected and already handled. Do not "fix" it again.**
+> `quiz.js` shuffles options at render time (`optionDisplayOrder`), so the
+> displayed distribution is roughly even — measured at 26.9 / 28.5 / 26.9 / 17.6
+> across all 1284 questions, versus the authored figures below. Index 3 sits
+> lower only because many questions have three options.
+>
+> The numbers here read `correct` straight from the lesson data, which is
+> deliberately unchanged: rewriting 1,284 keys risks breaking them, while a
+> renderer change cannot. What this table is good for is catching a *new* batch
+> of questions authored with the same habit.
 
 | Position | Count | Share |
 |---|---|---|
@@ -84,23 +94,17 @@ An even spread is ~25% each; heavy clustering means the quiz can be gamed.
 | Inline `<script>` blocks parse | ok |
 | Quiz structure valid | ok |
 | Tables queried but never created | participants, deletion_queue, calls |
-| Broken relative links | 6 |
+| Broken relative links | ok |
 | search-index.json | 95 entries, 0 dead, 0 unindexed |
 | Example tokens valid under alphabet | 23 invalid |
 
-## Errors (9)
+## Errors (3)
 
 - schema: table "participants" is queried in 2 lesson(s) but never created
 - schema: table "deletion_queue" is queried in 1 lesson(s) but never created
 - schema: table "calls" is queried in 2 lesson(s) but never created
-- link: modules/01-javascript-fundamentals/0009-promises-and-async-await.html -> ./0010-fetch-and-http.html (missing)
-- link: modules/07-store-compliance-and-safety/0005-data-export-and-terms.html -> ./privacy-policy.html (missing)
-- link: modules/a10-device-security/README.html -> ../a5-core-token/README.html (missing)
-- link: modules/b7-token-engine/README.html -> ../b5-websocket/README.html (missing)
-- link: modules/b8-push-notifications/README.html -> ../b5-websocket/README.html (missing)
-- link: modules/b8-push-notifications/README.html -> ../a7-incoming-calls/README.html (missing)
 
-## Warnings (50)
+## Warnings (51)
 
 - modules/02-react-native/0002-core-components.html q7: 3 blanks but one answer
 - modules/02-react-native/0002-core-components.html q27: 3 blanks but one answer
@@ -129,6 +133,7 @@ An even spread is ~25% each; heavy clustering means the quiz can be gamed.
 - modules/b4-auth-server/0003-rate-limiting.html q2: 2 blanks but one answer
 - modules/b6-webrtc-signalling/0002-coturn-setup.html q18: 3 blanks but one answer
 - modules/b7-token-engine/0001-token-generation-redemption.html q7: 2 blanks but one answer
+- link (legacy): modules/07-store-compliance-and-safety/0005-data-export-and-terms.html -> ./privacy-policy.html
 - token: "UTIL-4KQ9-ZT7M" uses characters excluded from the alphabet (3 file(s))
 - token: "DELI-2XN5-QW8R" uses characters excluded from the alphabet (3 file(s))
 - token: "BOLT-3KP9" uses characters excluded from the alphabet (3 file(s))
@@ -141,8 +146,7 @@ An even spread is ~25% each; heavy clustering means the quiz can be gamed.
 - token: "SHOP-4FD9" uses characters excluded from the alphabet (2 file(s))
 - token: "CAFE-2KL7" uses characters excluded from the alphabet (3 file(s))
 - token: "MERC-11AB" uses characters excluded from the alphabet (2 file(s))
-- token: "DELI-9XK2" uses characters excluded from the alphabet (2 file(s))
-- …and 10 more
+- …and 11 more
 
 ## Per-lesson detail
 
