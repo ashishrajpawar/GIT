@@ -30,6 +30,17 @@ import path from "node:path";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 
+/* A lesson may deliberately reject a promise and attach the .catch() a tick
+   later — that is a thing async code legitimately does, and 01/0009 shows it.
+   Node reports it as PromiseRejectionHandledWarning, which is noise here, not
+   a finding. Every other warning is still printed.
+   Node installs its own printing listener at startup, so filtering means
+   replacing it rather than adding alongside it. */
+process.removeAllListeners("warning");
+process.on("warning", (w) => {
+  if (w.name !== "PromiseRejectionHandledWarning") console.warn(w.stack || String(w));
+});
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
 const lessonArg = args.find((a) => !a.startsWith("--"));

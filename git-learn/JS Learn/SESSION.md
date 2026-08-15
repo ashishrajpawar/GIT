@@ -21,8 +21,9 @@ one or two lessons at a time, never batched ahead.
 | `01/0006-scope-and-closures` | done — `be65077` (+ `scripts/verify-lesson.mjs`) |
 | `01/0007-dom-and-browser-apis` | done — `6a2221f` (sandbox) + `8700f19` (retrofit) |
 | `01/0008-events` | done — `e13a323` (sandbox) + `5d941f0` (retrofit) |
-| **`01/0009-promises-and-async-await`** | **in progress — 4a tooling done, 4b retrofit next** |
-| `01/0010`–`01/0012` | not started |
+| `01/0009-promises-and-async-await` | done — `caafcf6` (tooling) + retrofit |
+| **`01/0010-arrays-and-objects`** | **next** |
+| `01/0011`–`01/0012` | not started |
 
 ### Unit 4a — async tooling — DONE
 
@@ -144,22 +145,35 @@ node scripts/verify-lesson.mjs modules/01-javascript-fundamentals/0007-dom-and-b
 - Three quiz questions that described their starting page in a code comment
   now use the real `html` field, so they are executed rather than skipped.
 
+### Unit 4b — retrofit `01/0009` — DONE
+
+- 8 playgrounds. `pg-await-trap` is the broken-on-purpose one: a missing
+  `await`, so `token.code` is `undefined` and nothing throws anywhere.
+  `pg-parallel` prints the sequential and parallel runs side by side, showing
+  both that the two requests overlap and that `Promise.all` returns results in
+  argument order rather than completion order.
+- Exercise: `loadTokenScreen(code, api)` — `Promise.all` plus `try`/`catch`,
+  9 checks. The mistake the exercise exists for is **sequential awaits**: it
+  returns the correct answer and never throws, it is just twice as slow.
+  Nothing but the start/finish ordering check can see it, so the fake api
+  records `start:`/`end:` events and the check requires both to have started
+  before either finished — deterministic, and it works identically under the
+  verifier's fake timers and the browser's real ones.
+- **The 6 existing `predict-output` questions were all correct** and had simply
+  never been runnable. With the async tooling fixed they verify as written —
+  the opposite of 0007 and 0008, where the questions themselves were broken.
+- Removed the one **Firebase** mention (out of scope per CLAUDE.md) and the
+  placeholder code `TOKEN-ABC`, which contained an excluded `O` and was not in
+  the 12-character format.
+
 ## Next action
 
-**Unit 4: retrofit `01/0009-promises-and-async-await`.**
-
-Check the tooling first, as with 0008 — this is the lesson the timer note
-below was written for, and it is the one lesson whose playgrounds are
-inherently asynchronous. Specifically, before writing:
-
-- `playground.js` renders once synchronously and again after the microtask
-  queue drains (`settle()`), which is what makes `.then()` and `await` print
-  at all. Confirm a chain longer than a couple of ticks still lands inside
-  that window.
-- `verify-lesson.mjs` drains its own `setTimeout` queue in delay order but
-  does **not** await promises. A `predict-output` whose answer depends on
-  promise ordering may verify as empty rather than wrong — check before
-  trusting a green run on this lesson.
+**Unit 5: retrofit `01/0010-arrays-and-objects`.** No tooling work is expected
+— it is plain synchronous JavaScript, so the existing playground and verifier
+cover it. Check the quiz for the defect that has now appeared in two of the
+three lessons retrofitted so far: questions whose premise lives in a code
+comment (`// Given: <div>…`, `// User clicks the button`) rather than in the
+`html` field or in the code itself. Those are invisible to the verifier.
 
 ## Blocked on
 

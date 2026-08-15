@@ -22,513 +22,450 @@
     <span class="badge">Lesson 9</span>
     <h1 style="margin-top:0.5rem;">Promises &amp; Async/Await</h1>
     <div class="lesson-meta">
-      <span>Browser JS</span>
-      <span>~25 min read</span>
-      <span>Beginner</span>
+      <span>Core JS</span>
+      <span>~40 min read</span>
+      <span>Intermediate</span>
     </div>
 
-    <!-- Why this matters -->
+    <!-- Why this matters callout -->
     <div class="callout">
-      <div class="callout-title">Why this matters for your WhatsApp clone</div>
-      <p>Every time your app opens a chat, it has to go to a server, ask for messages, wait for the reply, and then show them on screen. That round trip takes time — maybe 200 ms, maybe 2 seconds on a slow connection. JavaScript does <strong>not</strong> stop and wait for it. While your fetch is in flight, JS keeps running other code. Async/await is the tool that lets you say: <em>"Start fetching messages — and when they arrive, do this."</em> Without it you cannot build a real chat app.</p>
+      <div class="callout-title">Why this matters for Token</div>
+      <p>Nothing in Token happens instantly. Issuing a token is a round trip to your API. Opening the token list is a round trip. Redeeming a code, sending a message, revoking access — all round trips, each taking anywhere from 40 milliseconds on wifi to several seconds on a bad mobile connection in a lift.</p>
+      <p>JavaScript runs your code on <strong>one thread</strong>. If waiting for the network blocked that thread, the entire app would freeze — no scrolling, no typing, no cancel button — until the server replied. So JavaScript does not wait. It starts the request, carries on, and comes back to you when the answer arrives.</p>
+      <p>This lesson is about how you write code that comes back later. It is also where a specific bug is born: forgetting one <code>await</code> and getting a <code>Promise</code> where you expected a token. You will meet that bug deliberately, in a playground, rather than at midnight.</p>
     </div>
 
     <hr>
 
-    <!-- Section 1: Sync vs Async -->
-    <h2>1. The problem: synchronous vs asynchronous</h2>
+    <!-- Spaced review -->
+    <h2>Before you start — five from last week</h2>
 
-    <p>JavaScript normally runs code <strong>line by line, top to bottom</strong>. That is called <em>synchronous</em> execution. Each line finishes before the next one begins.</p>
+    <p>From events and the DOM. Handlers that run later are the same idea this whole lesson generalises, so it is worth having them fresh.</p>
 
-    <p>That works fine for maths and string manipulation, but it breaks down the moment you need to <em>wait</em> for something outside your own code — a database, an HTTP server, a file on disk. Those operations take unpredictable amounts of time.</p>
-
-    <h3>A restaurant analogy</h3>
-
-    <p>Imagine two restaurants:</p>
-    <ul>
-      <li><strong>Synchronous restaurant:</strong> the cashier takes your order, walks to the kitchen, stands there watching the chef cook, carries the food back, and only then serves the next customer. Everyone else queues. The whole restaurant grinds to a halt for every order.</li>
-      <li><strong>Asynchronous restaurant:</strong> the cashier takes your order, gives you a buzzer, and immediately serves the next customer. When your food is ready the kitchen presses a button on your buzzer. You walk up and collect it. Nobody waits for anyone else.</li>
-    </ul>
-
-    <p>JavaScript is the asynchronous restaurant. When you ask it to fetch messages from a server, it kicks off the request and moves on. You have to give it a way to know what to do <em>when the food is ready</em>.</p>
-
-    <p>Here is the core problem shown in code. This does <strong>not</strong> work:</p>
-
-    <pre><code>// BROKEN — this cannot work the way you'd expect
-function getMessages(chatId) {
-  // Pretend this sends a network request...
-  // but the network request takes 500 ms
-  // By the time the data arrives, this function has already returned!
-  const messages = fetchFromServer(chatId); // takes time
-  return messages; // returns undefined, not messages
-}
-
-const msgs = getMessages("chat-001");
-console.log(msgs); // undefined — the data hasn't arrived yet!</code></pre>
-
-    <div class="callout success">
-      <div class="callout-title">The key insight</div>
-      <p>A network request is not instant. By the time your function returns, the data does not exist yet. You need a way to <strong>register a callback for when it does</strong> — that is exactly what Promises and async/await give you.</p>
-    </div>
+    <div id="lesson-0009-review"></div>
 
     <hr>
 
-    <!-- Section 2: Callbacks -->
-    <h2>2. Callbacks — the original solution</h2>
+    <!-- Section 1 -->
+    <h2>1. Synchronous vs asynchronous</h2>
 
-    <p>The first solution JavaScript developers reached for was <strong>callbacks</strong>: pass a function as an argument, and call it when the work is done.</p>
+    <p><strong>Synchronous</strong> code runs top to bottom, each line finishing before the next begins. That is every program you have written so far.</p>
 
-    <pre><code>function loadMessages(chatId, onDone) {
-  // Simulate a 500 ms network delay
-  setTimeout(function() {
-    const messages = [
-      { sender: "Priya", text: "Hey, still on for tonight?" },
-      { sender: "Ashish", text: "Yes! 8pm works?" }
-    ];
-    onDone(messages); // call the function we were given
-  }, 500);
-}
+    <p>The problem is that one thread means one queue. While a synchronous line is running, nothing else can — no click handler, no repaint, nothing.</p>
 
-loadMessages("chat-001", function(messages) {
-  console.log("Messages loaded:", messages);
+    <h3>Try it yourself — feel the freeze</h3>
+
+    <p>The loop below does nothing for 400 milliseconds, on purpose. Notice that the "meanwhile" message cannot print during it, even though it was scheduled first.</p>
+
+    <div id="pg-blocking"></div>
+
+    <p>400 ms is already a visible stutter. A network request is routinely ten times that. Blocking the thread on one is not a performance problem, it is a broken app.</p>
+
+    <hr>
+
+    <!-- Section 2 -->
+    <h2>2. Callbacks — the original answer</h2>
+
+    <p>The first solution was to hand over a function to be called when the work finishes:</p>
+
+    <pre><code>fetchToken("MERC-8GH2-KP4X", function (token) {
+  console.log("got", token.code);
 });</code></pre>
 
-    <p>That works for one step. But a real chat app has many steps: load the user profile, then load their chats, then load the selected chat's messages, then check for unread notifications. With callbacks each step nests inside the previous one:</p>
+    <p>That works. It stops working well when one result feeds the next.</p>
 
-    <pre><code>// CALLBACK HELL — real code that developers actually wrote
-loadUser("ashish", function(user) {
-  loadChats(user.id, function(chats) {
-    loadMessages(chats[0].id, function(messages) {
-      loadUnreadCount(user.id, function(count) {
-        // Finally have everything — but the indentation is a nightmare
-        // and error handling is a mess
-        console.log(user, chats, messages, count);
-      });
-    });
-  });
-});</code></pre>
+    <h3>Try it yourself — callback hell</h3>
 
-    <div class="callout warning">
-      <div class="callout-title">Callback hell is a real problem</div>
-      <p>This pattern — deeply nested callbacks — became known as "callback hell" or the "pyramid of doom." It is hard to read, hard to debug, and error handling requires checking for errors in every single callback. The JavaScript community built Promises specifically to escape it.</p>
-    </div>
+    <div id="pg-callbacks"></div>
 
-    <div class="callout success">
-      <div class="callout-title">Historical context</div>
-      <p>Callbacks are not wrong — they are still used in many places. But for chaining multiple async operations one after another, Promises and async/await are far cleaner. You will still encounter callbacks in React Native event handlers and timers, so it is important to understand how they work.</p>
-    </div>
+    <p>Three steps, three levels of indentation, and the error handling has to be repeated at every level. Six steps would run off the side of the screen. This shape has a name — the <strong>pyramid of doom</strong> — and Promises exist because of it.</p>
 
     <hr>
 
-    <!-- Section 3: Promises -->
+    <!-- Section 3 -->
     <h2>3. Promises</h2>
 
-    <p>A <strong>Promise</strong> is an object that represents the eventual result of an asynchronous operation. Think of it like a ticket at a deli counter: you do not have your order yet, but you have a <em>promise</em> that it will arrive, and you can tell the system what to do when it does.</p>
+    <p>A <strong>Promise</strong> is an object representing a value that is not available yet. It is in one of three states:</p>
 
-    <p>A Promise is always in one of three states:</p>
     <ul>
-      <li><strong>Pending</strong> — the operation is still in progress (the fetch is running)</li>
-      <li><strong>Fulfilled</strong> — the operation succeeded and has a result value</li>
-      <li><strong>Rejected</strong> — the operation failed and has an error reason</li>
+      <li><strong>pending</strong> — the work is still going</li>
+      <li><strong>fulfilled</strong> — it finished, and there is a value</li>
+      <li><strong>rejected</strong> — it failed, and there is an error</li>
     </ul>
 
-    <p>Once a Promise moves from pending to either fulfilled or rejected, it <strong>never changes state again</strong>.</p>
+    <p>It settles <em>once</em>. A fulfilled Promise never becomes rejected, and a settled Promise never changes value — which is what makes it safe to hand around.</p>
 
-    <h3>Creating and consuming a Promise</h3>
-
-    <pre><code>// Creating a Promise — simulating loading messages from a server
-function loadMessages(chatId) {
-  return new Promise(function(resolve, reject) {
-    // Simulate a 600 ms network request
-    setTimeout(function() {
-      if (chatId) {
-        // Success — call resolve() with the data
-        resolve([
-          { sender: "Priya", text: "Are you coming tonight?" },
-          { sender: "Ashish", text: "Yes, on my way!" }
-        ]);
-      } else {
-        // Failure — call reject() with an error
-        reject(new Error("chatId is required"));
+    <pre><code>function fetchToken(code) {
+  return new Promise(function (resolve, reject) {
+    setTimeout(function () {
+      if (code === "") {
+        reject(new Error("No code given"));
+        return;
       }
-    }, 600);
-  });
-}
-
-// Consuming a Promise with .then() and .catch()
-loadMessages("chat-001")
-  .then(function(messages) {
-    // This runs when the Promise fulfils
-    console.log("Got messages:", messages);
-  })
-  .catch(function(error) {
-    // This runs if the Promise rejects
-    console.error("Failed to load:", error.message);
-  });</code></pre>
-
-    <h3>Chaining .then() calls</h3>
-
-    <p>Promises can be chained — each <code>.then()</code> returns a new Promise, so you can attach another <code>.then()</code> to it. This avoids the deep nesting of callback hell:</p>
-
-    <pre><code>loadUser("ashish")
-  .then(function(user) {
-    return loadChats(user.id); // return a new Promise
-  })
-  .then(function(chats) {
-    return loadMessages(chats[0].id); // return another Promise
-  })
-  .then(function(messages) {
-    console.log("Messages:", messages);
-  })
-  .catch(function(error) {
-    // One catch handles errors from any step above
-    console.error("Something went wrong:", error.message);
-  });</code></pre>
-
-    <div class="callout success">
-      <div class="callout-title">In your WhatsApp clone</div>
-      <p>Every time you call a Firebase or REST API function from React Native, it returns a Promise. Understanding that is what lets you handle the response correctly and show a loading spinner while waiting.</p>
-    </div>
-
-    <hr>
-
-    <!-- Section 4: async/await -->
-    <h2>4. async/await — the modern syntax</h2>
-
-    <p>Promises solved callback hell, but chains of <code>.then()</code> can still be verbose. In 2017, JavaScript gained <strong>async/await</strong> — special syntax that lets you write asynchronous code that <em>looks</em> like ordinary synchronous code.</p>
-
-    <p>Two keywords to learn:</p>
-    <ul>
-      <li><code>async</code> — put this in front of a <code>function</code> keyword. It marks the function as asynchronous, and makes it <strong>always return a Promise</strong>.</li>
-      <li><code>await</code> — put this in front of any expression that returns a Promise. It <strong>pauses execution inside the function</strong> until the Promise resolves, then gives you the resolved value. It does <em>not</em> block the rest of the program.</li>
-    </ul>
-
-    <pre><code>// The same loadMessages() from before (still returns a Promise)
-function loadMessages(chatId) {
-  return new Promise(function(resolve, reject) {
-    setTimeout(function() {
-      resolve([
-        { sender: "Priya", text: "Are you coming tonight?" },
-        { sender: "Ashish", text: "Yes, on my way!" }
-      ]);
-    }, 600);
-  });
-}
-
-// Now consuming it with async/await — reads like normal code
-async function showChat(chatId) {
-  const messages = await loadMessages(chatId); // pauses here until done
-  console.log("Messages:", messages);          // then continues here
-}
-
-showChat("chat-001");</code></pre>
-
-    <p>Compare that to the <code>.then()</code> version — the async/await version reads from top to bottom like plain synchronous code. No nesting, no callbacks.</p>
-
-    <h3>async functions always return a Promise</h3>
-
-    <p>This is important: even if your <code>async</code> function returns a plain value, the caller gets a Promise back. The value you <code>return</code> becomes the resolved value of that Promise.</p>
-
-    <pre><code>async function getGreeting(name) {
-  return "Hello, " + name; // returns a plain string
-}
-
-// But the caller gets a Promise!
-const result = getGreeting("Ashish");
-console.log(result); // Promise { "Hello, Ashish" }
-
-// To get the actual string, you await it:
-async function main() {
-  const greeting = await getGreeting("Ashish");
-  console.log(greeting); // "Hello, Ashish"
-}
-
-main();</code></pre>
-
-    <div class="callout warning">
-      <div class="callout-title">Common mistake: forgetting await</div>
-      <p>If you forget to write <code>await</code> in front of a Promise-returning function, you get the <strong>Promise object itself</strong> — not the data inside it.</p>
-      <pre><code>async function showChat(chatId) {
-  const messages = loadMessages(chatId); // MISSING await!
-  console.log(messages); // Promise { &lt;pending&gt; } — not useful
-}</code></pre>
-      <p>Always ask yourself: "Does this function return a Promise?" If yes, add <code>await</code>.</p>
-    </div>
-
-    <div class="callout success">
-      <div class="callout-title">await can only be used inside an async function</div>
-      <p>You cannot write <code>await</code> at the top level of a regular script (outside any function). It must be inside a function marked <code>async</code>. If you need to run async code at the top level, wrap it: <code>async function main() &#123; ... &#125; main();</code></p>
-    </div>
-
-    <hr>
-
-    <!-- Section 5: try/catch error handling -->
-    <h2>5. Error handling with try/catch</h2>
-
-    <p>With <code>.then()</code> you used <code>.catch()</code> to handle errors. With async/await you use the standard JavaScript <strong>try/catch</strong> block — the same syntax used for synchronous errors. This makes your error-handling code consistent across the whole app.</p>
-
-    <pre><code>async function loadChatMessages(chatId) {
-  try {
-    const messages = await loadMessages(chatId);
-    console.log("Loaded", messages.length, "messages");
-    return messages;
-  } catch (error) {
-    // Runs if the Promise rejects — e.g. network failure, server error
-    console.error("Could not load messages:", error.message);
-    return []; // return empty array so the UI doesn't crash
-  }
-}
-
-loadChatMessages("chat-001");</code></pre>
-
-    <p>If the network is down, <code>loadMessages()</code> rejects its Promise. The <code>await</code> turns that rejection into a thrown error, which <code>catch</code> intercepts — exactly as if it were a synchronous throw.</p>
-
-    <h3>What happens without try/catch</h3>
-
-    <pre><code>async function badExample(chatId) {
-  const messages = await loadMessages(chatId); // if this rejects...
-  console.log(messages); // ...this line is never reached
-  // And nothing handles the error — it becomes an unhandled rejection
-}
-
-badExample(""); // passes empty chatId — loadMessages rejects</code></pre>
-
-    <div class="callout warning">
-      <div class="callout-title">Unhandled Promise rejections</div>
-      <p>If an <code>async</code> function throws (or an <code>await</code> rejects) and nothing catches it, you get an <strong>UnhandledPromiseRejection</strong> error. In a React Native app this can silently swallow errors and leave the user staring at a blank screen. Always wrap <code>await</code> calls in try/catch, or attach a <code>.catch()</code> to the returned Promise.</p>
-    </div>
-
-    <div class="callout success">
-      <div class="callout-title">Pattern: show an error message to the user</div>
-      <pre><code>async function loadChatScreen(chatId) {
-  try {
-    const messages = await loadMessages(chatId);
-    displayMessages(messages);
-  } catch (error) {
-    showErrorBanner("Couldn't load messages. Check your connection.");
-  }
-}</code></pre>
-      <p>In your WhatsApp clone, every data-loading function should follow this pattern: try to load, catch errors, and show a user-friendly message instead of crashing.</p>
-    </div>
-
-    <hr>
-
-    <!-- Section 6: Promise.all -->
-    <h2>6. Promise.all — running multiple async operations in parallel</h2>
-
-    <p>Sometimes you need several independent pieces of data at the same time. For example, when opening a chat you might need:</p>
-    <ul>
-      <li>The messages for that chat</li>
-      <li>The other user's profile (name, avatar, online status)</li>
-    </ul>
-
-    <p>You could <code>await</code> them one after another — but that means waiting for the first to finish before even <em>starting</em> the second. If each takes 400 ms, sequential fetching takes 800 ms total.</p>
-
-    <p><strong>Promise.all</strong> lets you start both at the same time and wait for both to finish. Total time is just the time of the <em>slowest</em> one — not the sum.</p>
-
-    <pre><code>async function loadProfileAndMessages(chatId, userId) {
-  // Both requests START at the same time
-  const [messages, userProfile] = await Promise.all([
-    loadMessages(chatId),
-    loadUserProfile(userId)
-  ]);
-
-  // Both are done — we have both results
-  console.log("Messages:", messages);
-  console.log("Profile:", userProfile);
-}</code></pre>
-
-    <p><code>Promise.all</code> takes an <strong>array of Promises</strong> and returns a single Promise. That Promise:</p>
-    <ul>
-      <li><strong>Fulfils</strong> when all the input Promises have fulfilled — with an array of their results, in the same order.</li>
-      <li><strong>Rejects immediately</strong> if <em>any</em> of the input Promises rejects. The other Promises are ignored.</li>
-    </ul>
-
-    <pre><code>// Simulated helper functions
-function loadMessages(chatId) {
-  return new Promise(function(resolve) {
-    setTimeout(function() {
-      resolve([
-        { sender: "Priya", text: "Ready?" },
-        { sender: "Ashish", text: "2 mins!" }
-      ]);
-    }, 400);
-  });
-}
-
-function loadUserProfile(userId) {
-  return new Promise(function(resolve) {
-    setTimeout(function() {
-      resolve({ name: "Priya Sharma", avatar: "priya.jpg", online: true });
+      resolve({ code: code, issuedTo: "Corner Store", revoked: false });
     }, 300);
   });
 }
 
-// Both start together — total wait ≈ 400 ms (not 700 ms)
-async function openChat(chatId, userId) {
-  try {
-    const [messages, profile] = await Promise.all([
-      loadMessages(chatId),
-      loadUserProfile(userId)
-    ]);
-    console.log("Chat partner:", profile.name);
-    console.log("First message:", messages[0].text);
-  } catch (error) {
-    console.error("Failed to open chat:", error.message);
-  }
+fetchToken("MERC-8GH2-KP4X")
+  .then(function (token) { console.log("got", token.code); })
+  .catch(function (error) { console.log("failed:", error.message); });</code></pre>
+
+    <h3>Try it yourself</h3>
+
+    <div id="pg-promise"></div>
+
+    <h3>Chaining</h3>
+
+    <p>The payoff: <code>.then()</code> returns a new Promise, so each step's return value becomes the next step's input, and one <code>.catch()</code> at the end covers every step above it.</p>
+
+    <h3>Try it yourself</h3>
+
+    <div id="pg-chain"></div>
+
+    <hr>
+
+    <!-- Section 4 -->
+    <h2>4. async / await</h2>
+
+    <p>Chaining is a big improvement on nesting, but it still does not read like the sequence it is. <code>async</code>/<code>await</code> is syntax over exactly the same Promises:</p>
+
+    <ul>
+      <li><code>async</code> before a function means it always returns a Promise</li>
+      <li><code>await</code> pauses <em>inside that function</em> until a Promise settles, and gives you the value</li>
+    </ul>
+
+    <pre><code>async function showToken(code) {
+  const token = await fetchToken(code);
+  console.log("got", token.code);
+}</code></pre>
+
+    <p>"Pauses" is worth being precise about: it pauses that function, not the thread. Everything else on the page keeps running. That is the whole difference between <code>await</code> and the blocking loop in section 1.</p>
+
+    <h3>Try it yourself</h3>
+
+    <div id="pg-await"></div>
+
+    <h3><code>async</code> functions always return a Promise</h3>
+
+    <p>Even when you return a plain string:</p>
+
+    <pre><code>async function getCode() {
+  return "MERC-8GH2-KP4X";
 }
 
-openChat("chat-001", "user-priya");</code></pre>
-
-    <div class="callout success">
-      <div class="callout-title">Performance wins in your WhatsApp clone</div>
-      <p>Any time you need two or more unrelated pieces of data on the same screen, reach for <code>Promise.all</code>. It makes your app feel noticeably faster because the network requests overlap instead of stacking.</p>
-    </div>
+console.log(typeof getCode());   // "object" — a Promise, not a string</code></pre>
 
     <div class="callout warning">
-      <div class="callout-title">async inside forEach does not work as expected</div>
-      <p>A common mistake is using <code>async</code> callbacks inside <code>forEach</code>:</p>
-      <pre><code>const chatIds = ["chat-001", "chat-002", "chat-003"];
+      <div class="callout-title">The forgotten await — the bug you will actually write</div>
+      <p>Leave out one <code>await</code> and you get a <code>Promise</code> where you expected a value. Nothing throws. The variable is simply an object, and every property you read off it is <code>undefined</code>.</p>
+      <p style="margin-bottom:0;">It is worth meeting this on purpose, because the symptom — <code>undefined</code> appearing three functions away from the missing keyword — points nowhere near the cause.</p>
+    </div>
 
-// BROKEN — forEach does not await the async callbacks
-chatIds.forEach(async function(chatId) {
-  const messages = await loadMessages(chatId);
-  console.log(messages); // order is unpredictable, errors are swallowed
-});</code></pre>
-      <p><code>forEach</code> fires all callbacks but does not wait for the Promises they return. Your code after the <code>forEach</code> runs before any of the fetches complete. Instead, use <code>for...of</code> with <code>await</code>:</p>
-      <pre><code>// CORRECT — for...of respects await
-async function loadAllChats(chatIds) {
-  for (const chatId of chatIds) {
-    const messages = await loadMessages(chatId);
-    console.log("Loaded:", chatId, messages.length, "messages");
+    <h3>Try it yourself — this one is broken on purpose</h3>
+
+    <p>Run it and look at what <code>token.code</code> gives you. Then add the missing <code>await</code> on the marked line and run again.</p>
+
+    <div id="pg-await-trap"></div>
+
+    <hr>
+
+    <!-- Section 5 -->
+    <h2>5. Error handling</h2>
+
+    <p>With <code>await</code>, a rejected Promise <strong>throws</strong> — so ordinary <code>try</code>/<code>catch</code> works:</p>
+
+    <pre><code>async function showToken(code) {
+  try {
+    const token = await fetchToken(code);
+    console.log("got", token.code);
+  } catch (error) {
+    console.log("failed:", error.message);
   }
-}
-
-// Or, if order doesn't matter, load them all in parallel:
-async function loadAllChatsParallel(chatIds) {
-  const allMessages = await Promise.all(
-    chatIds.map(function(chatId) { return loadMessages(chatId); })
-  );
-  console.log("All loaded:", allMessages);
 }</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">An unhandled rejection is not a crash you will notice</div>
+      <p>Forget the <code>try</code>/<code>catch</code> and the Promise rejects with nobody listening. In Node that terminates the process. In a browser it logs to the console and the app carries on in a half-built state — the spinner spins forever and no error is ever shown to the user.</p>
+    </div>
+
+    <h3>Try it yourself</h3>
+
+    <div id="pg-errors"></div>
+
+    <hr>
+
+    <!-- Section 6 -->
+    <h2>6. <code>Promise.all</code> — waiting for several at once</h2>
+
+    <p>The token detail screen needs two things: the token itself, and its redemption history. They do not depend on each other, so waiting for one before starting the other doubles the time on screen for no reason.</p>
+
+    <pre><code>// Sequential — 300ms then 200ms = 500ms
+const detail      = await fetchDetail(code);
+const redemptions = await fetchRedemptions(code);
+
+// Parallel — both start now, done in 300ms
+const [detail, redemptions] = await Promise.all([
+  fetchDetail(code),
+  fetchRedemptions(code)
+]);</code></pre>
+
+    <p><code>Promise.all</code> takes an array of Promises and returns one Promise, which fulfils with an array of all the values — <em>in the order you passed them in</em>, not the order they finished. If any one of them rejects, the whole thing rejects immediately with that error.</p>
+
+    <h3>Try it yourself</h3>
+
+    <p>Watch the order the log lines come out in. Both requests start before either finishes — that is what parallel means here.</p>
+
+    <div id="pg-parallel"></div>
+
+    <div class="callout">
+      <div class="callout-title">When not to use it</div>
+      <p><code>Promise.all</code> is all-or-nothing: one failure discards every other result. That is right for a screen that cannot render without both pieces. It is wrong when the pieces are independent and you would rather show what you have — for that there is <code>Promise.allSettled</code>, which waits for every Promise and reports each outcome separately.</p>
     </div>
 
     <hr>
 
-    <!-- Section 7: Complete WhatsApp example -->
-    <h2>7. A complete WhatsApp example</h2>
+    <!-- Section 7: Mini-project -->
+    <h2>7. Mini-project: the token detail screen</h2>
 
-    <p>Let's put everything together. When a user taps on a contact in your app, you want to open the chat screen. That means loading messages and the user's profile in parallel, showing both, and handling any network failure gracefully.</p>
+    <p>Everything together. Save as <code>token-detail-demo.html</code> and open it — a spinner, two requests in parallel, a rendered screen, and a failure path that shows a real message instead of hanging. The Fail buttons make the error path reachable, because an error path you have never seen is an error path that does not work.</p>
 
-    <pre><code>// ─── Simulated API layer ───────────────────────────────────────────────────
+    <pre><code>&lt;!DOCTYPE html&gt;
+&lt;html lang="en"&gt;
+&lt;head&gt;
+  &lt;meta charset="UTF-8" /&gt;
+  &lt;title&gt;Token Detail Demo&lt;/title&gt;
+  &lt;style&gt;
+    body {
+      font-family: sans-serif;
+      max-width: 520px;
+      margin: 2rem auto;
+      background: #F3F4F6;
+      color: #111827;
+    }
+    #panel {
+      background: #fff;
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+      min-height: 260px;
+    }
+    #panel-header {
+      background: #2563EB;
+      color: #fff;
+      padding: 0.9rem 1rem;
+      font-family: monospace;
+      font-weight: bold;
+      letter-spacing: 0.05em;
+    }
+    #body { padding: 1rem; }
+    .muted { color: #6B7280; font-size: 0.88rem; }
+    .error {
+      background: #FEE2E2;
+      border: 1px solid #FCA5A5;
+      color: #991B1B;
+      padding: 0.75rem;
+      border-radius: 8px;
+    }
+    ul { margin: 0.4rem 0 0; padding-left: 1.1rem; }
+    li { margin-bottom: 0.2rem; font-size: 0.9rem; }
+    #controls {
+      display: flex;
+      gap: 0.5rem;
+      padding: 0.75rem;
+      background: #F9FAFB;
+      border-top: 1px solid #E5E7EB;
+      flex-wrap: wrap;
+    }
+    button {
+      border: none;
+      border-radius: 6px;
+      padding: 0.5rem 0.8rem;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+    #load-btn { background: #2563EB; color: #fff; }
+    .fail-btn { background: #FEE2E2; color: #991B1B; }
+  &lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
 
-function fetchMessages(chatId) {
-  return new Promise(function(resolve, reject) {
-    setTimeout(function() {
-      if (!chatId) {
-        reject(new Error("Invalid chatId"));
-        return;
+  &lt;div id="panel"&gt;
+    &lt;div id="panel-header"&gt;MERC-8GH2-KP4X&lt;/div&gt;
+    &lt;div id="body"&gt;&lt;p class="muted"&gt;Press Load.&lt;/p&gt;&lt;/div&gt;
+  &lt;/div&gt;
+
+  &lt;div id="controls"&gt;
+    &lt;button id="load-btn"&gt;Load&lt;/button&gt;
+    &lt;button id="fail-detail-btn" class="fail-btn"&gt;Load with detail failing&lt;/button&gt;
+    &lt;button id="fail-history-btn" class="fail-btn"&gt;Load with history failing&lt;/button&gt;
+  &lt;/div&gt;
+
+  &lt;script&gt;
+    const bodyEl = document.getElementById("body");
+
+    // ── A fake API. Real ones return Promises exactly like this. ──────────
+    function wait(ms) {
+      return new Promise(function (resolve) { setTimeout(resolve, ms); });
+    }
+
+    async function fetchDetail(code, shouldFail) {
+      await wait(300);
+      if (shouldFail) {
+        throw new Error("Could not reach the token service");
       }
-      resolve([
-        { id: "m1", sender: "Priya",  text: "Hey! Did you see the match?",    time: "10:02" },
-        { id: "m2", sender: "Ashish", text: "Yes! What a final 10 minutes.",   time: "10:04" },
-        { id: "m3", sender: "Priya",  text: "I almost had a heart attack lol", time: "10:05" }
-      ]);
-    }, 450);
-  });
-}
+      return { code: code, issuedTo: "Corner Store", revoked: false, uses: 3, maxUses: 5 };
+    }
 
-function fetchUserProfile(userId) {
-  return new Promise(function(resolve, reject) {
-    setTimeout(function() {
-      if (!userId) {
-        reject(new Error("Invalid userId"));
-        return;
+    async function fetchRedemptions(code, shouldFail) {
+      await wait(200);
+      if (shouldFail) {
+        throw new Error("Could not load redemption history");
       }
-      resolve({
-        id:     userId,
-        name:   "Priya Sharma",
-        avatar: "priya-avatar.jpg",
-        status: "online",
-        lastSeen: null
-      });
-    }, 280);
-  });
-}
+      return [
+        { at: "10:02", where: "web" },
+        { at: "09:14", where: "web" },
+        { at: "Yesterday", where: "web" }
+      ];
+    }
 
-// ─── UI helpers (would be React Native components in your real app) ─────────
+    // ── The screen ────────────────────────────────────────────────────────
+    async function loadTokenScreen(code, failDetail, failHistory) {
+      bodyEl.innerHTML = "";
+      const spinner = document.createElement("p");
+      spinner.className = "muted";
+      spinner.textContent = "Loading…";
+      bodyEl.appendChild(spinner);
 
-function displayChatHeader(profile) {
-  console.log("─── Chat Header ────────────────────────");
-  console.log("Name:   ", profile.name);
-  console.log("Status: ", profile.status === "online" ? "Online" : "Last seen " + profile.lastSeen);
-}
+      try {
+        // Both start now. Sequential awaits would take 500ms instead of 300.
+        const results = await Promise.all([
+          fetchDetail(code, failDetail),
+          fetchRedemptions(code, failHistory)
+        ]);
 
-function displayMessages(messages) {
-  console.log("─── Messages ───────────────────────────");
-  for (const msg of messages) {
-    console.log("[" + msg.time + "] " + msg.sender + ": " + msg.text);
-  }
-}
+        render(results[0], results[1]);
+      } catch (error) {
+        // One catch covers a failure from either request
+        showError(error.message);
+      }
+    }
 
-function showLoadingSpinner() {
-  console.log("Loading chat...");
-}
+    function render(detail, redemptions) {
+      bodyEl.innerHTML = "";
 
-function hideLoadingSpinner() {
-  console.log("Done loading.");
-}
+      const status = document.createElement("p");
+      status.textContent = detail.revoked ? "Revoked" : "Active";
+      bodyEl.appendChild(status);
 
-function showErrorScreen(message) {
-  console.log("ERROR: " + message);
-}
+      const issued = document.createElement("p");
+      issued.className = "muted";
+      issued.textContent = "Issued to " + detail.issuedTo +
+        " · used " + detail.uses + " of " + detail.maxUses;
+      bodyEl.appendChild(issued);
 
-// ─── Main function: called when user taps a contact ─────────────────────────
+      const heading = document.createElement("p");
+      heading.className = "muted";
+      heading.textContent = "Redemptions";
+      bodyEl.appendChild(heading);
 
-async function loadChatScreen(chatId, userId) {
-  showLoadingSpinner();
+      const list = document.createElement("ul");
+      for (const entry of redemptions) {
+        const item = document.createElement("li");
+        item.textContent = entry.at + " — " + entry.where;
+        list.appendChild(item);
+      }
+      bodyEl.appendChild(list);
+    }
 
-  try {
-    // Fetch messages AND profile at the same time — not one after the other
-    const [messages, profile] = await Promise.all([
-      fetchMessages(chatId),
-      fetchUserProfile(userId)
-    ]);
+    function showError(message) {
+      bodyEl.innerHTML = "";
+      const box = document.createElement("div");
+      box.className = "error";
+      box.textContent = message + " Pull down to retry.";
+      bodyEl.appendChild(box);
+    }
 
-    hideLoadingSpinner();
+    document.getElementById("load-btn").addEventListener("click", function () {
+      loadTokenScreen("MERC-8GH2-KP4X", false, false);
+    });
+    document.getElementById("fail-detail-btn").addEventListener("click", function () {
+      loadTokenScreen("MERC-8GH2-KP4X", true, false);
+    });
+    document.getElementById("fail-history-btn").addEventListener("click", function () {
+      loadTokenScreen("MERC-8GH2-KP4X", false, true);
+    });
+  &lt;/script&gt;
 
-    // Both fetches succeeded — render the screen
-    displayChatHeader(profile);
-    displayMessages(messages);
-
-  } catch (error) {
-    hideLoadingSpinner();
-    showErrorScreen("Could not load chat. Please check your connection.");
-    console.error("loadChatScreen failed:", error.message);
-  }
-}
-
-// ─── Entry point ─────────────────────────────────────────────────────────────
-loadChatScreen("chat-priya-001", "user-priya-002");</code></pre>
-
-    <p>Run this in your browser console (F12) and you'll see the spinner message, then the header and messages — loaded in parallel in under 500 ms total.</p>
+&lt;/body&gt;
+&lt;/html&gt;</code></pre>
 
     <div class="callout success">
-      <div class="callout-title">What this pattern gives you</div>
+      <div class="callout-title">What to notice</div>
       <ul>
-        <li>Loading spinner while both fetches run in parallel</li>
-        <li>A single catch block handles any failure from either fetch</li>
-        <li>User sees a friendly error message, not a crash</li>
-        <li>The async/await syntax reads almost like a step-by-step recipe</li>
+        <li>The spinner goes up <em>before</em> the <code>await</code>, and the <code>try</code> starts before it too. Both are deliberate: the user sees something immediately, and every failure lands in one place.</li>
+        <li>One <code>catch</code> handles a failure from either request, because <code>Promise.all</code> rejects as soon as any of them does.</li>
+        <li>The error path renders a message. Compare with forgetting the <code>catch</code>: the spinner would spin forever and the only sign of trouble would be in the console.</li>
+        <li>Every screen in Token that loads remote data has this shape: <code>show spinner → Promise.all → render</code>, wrapped in <code>try</code>/<code>catch</code>.</li>
       </ul>
-      <p style="margin-bottom:0;">In your WhatsApp clone, every screen that loads remote data will follow this exact shape: <code>showSpinner → Promise.all → hideSpinner + render</code>, wrapped in try/catch.</p>
     </div>
+
+    <hr>
+
+    <!-- Bridge -->
+    <h2>Bridge to React Native: the same shape, held in state</h2>
+
+    <p>In the app the three outcomes — loading, loaded, failed — become state, and the render is React's job:</p>
+
+    <pre><code>function TokenDetailScreen({ code }) {
+  const [state, setState] = React.useState({ status: "loading" });
+
+  React.useEffect(function () {
+    let cancelled = false;
+
+    async function load() {
+      try {
+        const [detail, redemptions] = await Promise.all([
+          api.fetchDetail(code),
+          api.fetchRedemptions(code)
+        ]);
+        if (!cancelled) setState({ status: "ok", detail, redemptions });
+      } catch (error) {
+        if (!cancelled) setState({ status: "error", message: error.message });
+      }
+    }
+
+    load();
+    return function () { cancelled = true; };   // cleanup, as in lesson 8
+  }, [code]);
+
+  if (state.status === "loading") return &lt;Spinner /&gt;;
+  if (state.status === "error")   return &lt;ErrorView message={state.message} /&gt;;
+  return &lt;TokenDetail detail={state.detail} redemptions={state.redemptions} /&gt;;
+}</code></pre>
+
+    <p>The <code>cancelled</code> flag is the async version of lesson 8's <code>removeEventListener</code>. If the user leaves the screen while the requests are in flight, the responses still arrive — and calling <code>setState</code> on a screen that is gone is a bug. The cleanup function does not cancel the network request; it makes the answer irrelevant when it lands.</p>
+
+    <hr>
+
+    <!-- Exercise -->
+    <h2>Now build it yourself</h2>
+
+    <p>This is the loader from the mini-project, on its own. It is worth writing by hand once, because every data-loading screen in Token is a variation of it — and because the two easy mistakes here (running the requests one after another, and letting a rejection escape) are both invisible when everything works.</p>
+
+    <div id="exercise-0009"></div>
+
+    <h3>Check your work</h3>
+
+    <p>Write <code>loadTokenScreen</code> in the playground below and press Run. The checks test behaviour: <code>Promise.all</code> and any other way of starting both requests before awaiting either will pass equally. One check records when each request starts and finishes, and only passes if both had <em>started</em> before either <em>finished</em> — sequential <code>await</code>s fail it no matter how fast they are.</p>
+
+    <div id="pg-exercise"></div>
 
     <hr>
 
     <!-- Quiz -->
     <h2>Quick check — test yourself</h2>
-    <p>Five questions on what you just read. No tricks — just making sure it landed.</p>
+    <p>Twenty-five questions on promises and async/await. Take your time.</p>
 
     <div id="lesson-0009-quiz"></div>
 
@@ -538,21 +475,21 @@ loadChatScreen("chat-priya-001", "user-priya-002");</code></pre>
     <h2>Primary resources for this lesson</h2>
     <p>Go deepen this on <strong>javascript.info</strong> — the best free JavaScript textbook online:</p>
     <ul>
-      <li><a href="https://javascript.info/promise-basics" target="_blank" rel="noopener">Promises — basics</a> — what a Promise is, resolve, reject, .then(), .catch()</li>
-      <li><a href="https://javascript.info/async-await" target="_blank" rel="noopener">Async/await</a> — the modern syntax, await, async functions, error handling</li>
+      <li><a href="https://javascript.info/promise-basics" target="_blank" rel="noopener">Chapter: Promise</a> — states, resolve/reject, and why a Promise settles only once</li>
+      <li><a href="https://javascript.info/async-await" target="_blank" rel="noopener">Chapter: Async/await</a> — the syntax, and how it maps back onto Promises</li>
+      <li><a href="https://javascript.info/event-loop" target="_blank" rel="noopener">Chapter: Event loop</a> — read this if the "sync, then microtasks, then timers" ordering felt arbitrary; it is the model that makes it obvious</li>
     </ul>
-    <p>Read both chapters and do the exercises at the bottom. They take about 30 minutes and will cement everything from this lesson.</p>
 
     <!-- Reference callout -->
     <div class="callout">
       <div class="callout-title">Quick reference</div>
-      <p>Need a fast lookup for syntax? The <a href="../../reference/js-basics-cheatsheet.html">JavaScript Basics Cheatsheet</a> has all the fundamentals on one page. Bookmark it.</p>
+      <p>The <a href="../../reference/js-basics-cheatsheet.html">JavaScript Basics Cheatsheet</a> has the Promise methods and the async/await forms on one page.</p>
     </div>
 
     <!-- Ask teacher -->
     <div class="ask-teacher">
       <strong>Anything unclear? Ask your teacher.</strong>
-      Async code is the #1 thing beginners find confusing — and that is completely normal. If the difference between a Promise and its resolved value didn't click, or if the parallel vs sequential thing felt fuzzy, just ask. There are no silly questions here.
+      Async is the topic where most people need to say it back in their own words before it sticks. If "await pauses the function but not the thread" is still slippery, or you want to know what actually happens to a rejection nobody catches, ask.
     </div>
 
     <hr>
@@ -560,274 +497,798 @@ loadChatScreen("chat-priya-001", "user-priya-002");</code></pre>
     <!-- Lesson nav -->
     <nav class="lesson-nav" aria-label="Lesson navigation">
       <a href="./0008-events.html">← Lesson 8: Events</a>
-      <a href="./0010-arrays-and-objects.html">Lesson 10: Fetch &amp; HTTP Requests →</a>
+      <a href="./0010-arrays-and-objects.html">Lesson 10: Arrays &amp; Objects →</a>
     </nav>
 
   </div><!-- .page-wrap -->
 
-  <!-- Load quiz widget and initialise -->
+  <!-- Load widgets and initialise -->
   <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
   <script>
+    /* --- Spaced review: lessons 7 and 8 --------------------------------- */
+
+    createQuiz("lesson-0009-review", [
+      {
+        question: "From lesson 8 — why is a click handler already an example of code that runs later?",
+        options: [
+          "It is not — handlers run immediately when registered",
+          "Because addEventListener returns a Promise you can await",
+          "Because you hand over a function and the browser calls it at some point in the future, after your setup code has finished",
+          "Because handlers are always slower than ordinary functions"
+        ],
+        correct: 2,
+        explanation: "Registering a handler finishes instantly; the function runs later, when something happens. That inversion — you supply the code, something else decides when to run it — is exactly what a Promise callback does. This lesson generalises the pattern rather than introducing it."
+      },
+      {
+        type: "predict-output",
+        question: "From lesson 8 — event ordering. What does this print?",
+        html: "<button id=\"b\">go</button>",
+        code: "const b = document.getElementById(\"b\");\nb.addEventListener(\"click\", function () { console.log(\"handler\"); });\nconsole.log(\"registered\");\nb.click();",
+        answer: "registered\nhandler",
+        explanation: "Registering the handler prints nothing. The setup line runs, and only the click makes the handler run. The same order applies to a .then() callback — it is queued now and runs later."
+      },
+      {
+        question: "From lesson 7 — the DOM. Your loader shows a spinner, then awaits the network. Where must the spinner be added to the page?",
+        options: [
+          "Before the await — otherwise nothing appears until the request has already finished",
+          "After the await, so it does not flicker",
+          "Inside the catch block",
+          "It does not matter; the browser batches DOM changes"
+        ],
+        correct: 0,
+        explanation: "Everything after an `await` runs once the Promise settles. Put the spinner after it and it appears at the moment it is no longer needed — the user stares at a blank screen for the whole request and then sees a flash of 'Loading'."
+      },
+      {
+        type: "predict-output",
+        question: "From lesson 6 — closures. What does this print?",
+        code: "function makeLoader() {\n  let calls = 0;\n  return function () {\n    calls = calls + 1;\n    return calls;\n  };\n}\n\nconst load = makeLoader();\nload();\nconsole.log(load());",
+        answer: "2",
+        explanation: "The returned function keeps its own `calls` between invocations. The `cancelled` flag in this lesson's React example works the same way — the cleanup function and the async function both close over the same variable."
+      },
+      {
+        question: "From lesson 8 — cleanup. Why does leaving a screen while a request is still in flight need handling?",
+        options: [
+          "The request is cancelled automatically, so it does not",
+          "The response still arrives, and updating a screen that is gone is a bug",
+          "Because promises cannot be garbage collected",
+          "Because the network layer retries forever"
+        ],
+        correct: 1,
+        explanation: "Nothing cancels the request. It completes and your `.then` or the code after your `await` runs regardless. This is the async twin of a listener you forgot to remove — the work outlives the thing it was for."
+      }
+    ]);
+
+    /* --- Inline practice ------------------------------------------------ */
+
+    createPlayground("pg-blocking", `// A timer set for 0ms cannot run while the thread is busy.
+
+setTimeout(function () {
+  console.log("meanwhile: I was scheduled FIRST, at 0ms");
+}, 0);
+
+console.log("start blocking");
+
+const end = Date.now() + 400;
+while (Date.now() < end) {
+  // deliberately doing nothing, for 400ms
+}
+
+console.log("stop blocking (400ms later)");
+
+// The "meanwhile" line only prints after the loop lets go of the thread.
+// For those 400ms the page could not scroll, repaint or respond to a click.`);
+
+    createPlayground("pg-callbacks", `// The callback style: hand over a function to run when the work is done.
+
+function fetchToken(code, callback) {
+  setTimeout(function () {
+    callback(null, { code: code, issuedTo: "Corner Store" });
+  }, 100);
+}
+
+function fetchRedemptions(code, callback) {
+  setTimeout(function () {
+    callback(null, [{ at: "10:02" }, { at: "09:14" }]);
+  }, 100);
+}
+
+function fetchRule(code, callback) {
+  setTimeout(function () {
+    callback(null, { maxUses: 5 });
+  }, 100);
+}
+
+// Each step needs the one before it, so each nests inside the last.
+fetchToken("MERC-8GH2-KP4X", function (err, token) {
+  if (err) { console.log("failed:", err.message); return; }
+  console.log("1. token:", token.code);
+
+  fetchRedemptions(token.code, function (err, redemptions) {
+    if (err) { console.log("failed:", err.message); return; }
+    console.log("2. redemptions:", redemptions.length);
+
+    fetchRule(token.code, function (err, rule) {
+      if (err) { console.log("failed:", err.message); return; }
+      console.log("3. max uses:", rule.maxUses);
+
+      console.log("Three steps, three levels of nesting, three error checks.");
+    });
+  });
+});`);
+
+    createPlayground("pg-promise", `function fetchToken(code) {
+  return new Promise(function (resolve, reject) {
+    setTimeout(function () {
+      if (code === "") {
+        reject(new Error("No code given"));
+        return;
+      }
+      resolve({ code: code, issuedTo: "Corner Store", revoked: false });
+    }, 200);
+  });
+}
+
+// A pending Promise is an object you can hold before the value exists
+const pending = fetchToken("MERC-8GH2-KP4X");
+console.log("straight away, it is a:", typeof pending);
+console.log("and it is a Promise:", pending instanceof Promise);
+
+pending
+  .then(function (token) {
+    console.log("fulfilled with:", token.code, "->", token.issuedTo);
+  })
+  .catch(function (error) {
+    console.log("this does not run");
+  });
+
+// The failing path
+fetchToken("")
+  .then(function (token) {
+    console.log("this does not run either");
+  })
+  .catch(function (error) {
+    console.log("rejected with:", error.message);
+  });
+
+console.log("...and this line runs before either of them");`);
+
+    createPlayground("pg-chain", `function wait(ms, value) {
+  return new Promise(function (resolve) {
+    setTimeout(function () { resolve(value); }, ms);
+  });
+}
+
+// Each .then returns a NEW promise, so the value flows down the chain.
+wait(50, 1)
+  .then(function (n) {
+    console.log("step 1 got", n);
+    return n + 1;                 // a plain value is wrapped automatically
+  })
+  .then(function (n) {
+    console.log("step 2 got", n);
+    return wait(50, n * 10);      // returning a promise waits for it
+  })
+  .then(function (n) {
+    console.log("step 3 got", n);
+    throw new Error("something went wrong at step 3");
+  })
+  .then(function (n) {
+    console.log("SKIPPED - a throw jumps straight to catch");
+  })
+  .catch(function (error) {
+    console.log("caught:", error.message);
+  })
+  .finally(function () {
+    console.log("finally runs whether it worked or not");
+  });`);
+
+    createPlayground("pg-await", `function wait(ms, value) {
+  return new Promise(function (resolve) {
+    setTimeout(function () { resolve(value); }, ms);
+  });
+}
+
+async function loadToken() {
+  console.log("2. inside loadToken, before the await");
+
+  const code = await wait(100, "MERC-8GH2-KP4X");
+
+  console.log("4. after the await, code is", code);
+  return code;
+}
+
+console.log("1. before calling loadToken");
+
+loadToken().then(function (result) {
+  console.log("5. the async function's promise resolved with", result);
+});
+
+console.log("3. after calling it - await paused the FUNCTION, not this script");`);
+
+    createPlayground("pg-await-trap", `// BROKEN ON PURPOSE. Run it and look at what token.code gives you.
+
+function wait(ms, value) {
+  return new Promise(function (resolve) {
+    setTimeout(function () { resolve(value); }, ms);
+  });
+}
+
+async function fetchToken(code) {
+  await wait(100);
+  return { code: code, issuedTo: "Corner Store" };
+}
+
+async function showToken() {
+  // The bug is on the next line: no await, so this is the Promise itself.
+  const token = fetchToken("MERC-8GH2-KP4X");
+
+  console.log("typeof token:", typeof token);
+  console.log("token.code:  ", token.code);
+  console.log("token.issuedTo:", token.issuedTo);
+
+  console.log("");
+  console.log("Nothing threw. There is no error message anywhere.");
+  console.log("You just get undefined, and the real cause is one missing word.");
+}
+
+showToken();
+
+// Fix: put await in front of fetchToken(...) on the marked line.`);
+
+    createPlayground("pg-errors", `function fetchToken(code) {
+  return new Promise(function (resolve, reject) {
+    setTimeout(function () {
+      if (code === "") {
+        reject(new Error("No code given"));
+        return;
+      }
+      resolve({ code: code });
+    }, 50);
+  });
+}
+
+// 1. try/catch around await - the readable way
+async function withTryCatch() {
+  try {
+    const token = await fetchToken("");
+    console.log("got", token.code);
+  } catch (error) {
+    console.log("1. caught by try/catch:", error.message);
+  } finally {
+    console.log("2. finally always runs - hide the spinner here");
+  }
+}
+
+// 2. A throw inside an async function rejects its promise
+async function throwsInside() {
+  throw new Error("revoked token");
+}
+
+// 3. Which means the caller can catch it either way
+async function run() {
+  await withTryCatch();
+
+  try {
+    await throwsInside();
+  } catch (error) {
+    console.log("3. an async function's throw becomes a rejection:", error.message);
+  }
+
+  throwsInside().catch(function (error) {
+    console.log("4. ...and .catch() sees exactly the same thing:", error.message);
+  });
+}
+
+run();`);
+
+    createPlayground("pg-parallel", `function fetchDetail(code) {
+  console.log("  detail:      started");
+  return new Promise(function (resolve) {
+    setTimeout(function () {
+      console.log("  detail:      finished");
+      resolve({ code: code, issuedTo: "Corner Store" });
+    }, 300);
+  });
+}
+
+function fetchRedemptions(code) {
+  console.log("  redemptions: started");
+  return new Promise(function (resolve) {
+    setTimeout(function () {
+      console.log("  redemptions: finished");
+      resolve([{ at: "10:02" }, { at: "09:14" }]);
+    }, 200);
+  });
+}
+
+async function sequential() {
+  console.log("SEQUENTIAL - one waits for the other:");
+  const detail = await fetchDetail("MERC-8GH2-KP4X");
+  const redemptions = await fetchRedemptions("MERC-8GH2-KP4X");
+  console.log("  -> got", detail.issuedTo, "and", redemptions.length, "redemptions");
+}
+
+async function parallel() {
+  console.log("PARALLEL - both start, then we wait for both:");
+  const results = await Promise.all([
+    fetchDetail("MERC-8GH2-KP4X"),
+    fetchRedemptions("MERC-8GH2-KP4X")
+  ]);
+  console.log("  -> got", results[0].issuedTo, "and", results[1].length, "redemptions");
+  console.log("");
+  console.log("Note the order: in the parallel run BOTH started before either");
+  console.log("finished. Note also that results are in the order you passed");
+  console.log("them in, not the order they came back.");
+}
+
+async function run() {
+  await sequential();
+  console.log("");
+  await parallel();
+}
+
+run();`);
+
+    /* --- Exercise ------------------------------------------------------- */
+
+    createSolution("exercise-0009", {
+      exercise: `Write loadTokenScreen(code, api).
+
+`+"`api`"+` has two methods, both returning Promises:
+
+  api.fetchDetail(code)       -> { code, issuedTo, revoked }
+  api.fetchRedemptions(code)  -> an array of entries
+
+Return an object describing the outcome. It must never throw or reject.
+
+  On success:  { status: "ok", detail: <detail>, redemptions: <array> }
+  On failure:  { status: "error", message: <the error's message> }
+
+A failure of EITHER request means the whole thing failed - the screen
+cannot render half a token.
+
+The requirement that decides the shape: both requests must be in flight
+at the same time. Awaiting one and then the other would work and would
+be twice as slow, so the checks measure it - they record when each
+request starts and finishes, and require that both have started before
+either finishes.
+
+Call each method exactly once.`,
+      hints: [
+        "Start both requests BEFORE awaiting anything. Promise.all([a(), b()]) does that in one line, because the two calls are made while building the array and only then is the result awaited.",
+        "Promise.all rejects as soon as any of its promises does, so a single try/catch around it covers both failures.",
+        "Return the object rather than throwing. `catch (error) { return { status: \"error\", message: error.message }; }` — the caller wants a value to render, not an exception to handle."
+      ],
+      solution: `async function loadTokenScreen(code, api) {
+  try {
+    // Both calls are made HERE, before anything is awaited, so they run
+    // at the same time. Promise.all then waits for both.
+    const results = await Promise.all([
+      api.fetchDetail(code),
+      api.fetchRedemptions(code)
+    ]);
+
+    return { status: "ok", detail: results[0], redemptions: results[1] };
+  } catch (error) {
+    // Promise.all rejects as soon as either one does, so this single
+    // catch covers a failure of either request.
+    return { status: "error", message: error.message };
+  }
+}`
+    });
+
+    createPlayground("pg-exercise", `// --- Write loadTokenScreen(code, api) here, then press Run ---
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label);
+  if (!passed && detail) console.log("      " + detail);
+}
+
+// Builds a fake api that records the order of starts and finishes, so
+// parallelism can be proven without measuring the clock.
+function makeApi(options) {
+  const events = [];
+  const calls = { detail: 0, redemptions: 0 };
+
+  function step(name, ms, value, shouldFail) {
+    calls[name] = calls[name] + 1;
+    events.push("start:" + name);
+    return new Promise(function (resolve, reject) {
+      setTimeout(function () {
+        events.push("end:" + name);
+        if (shouldFail) {
+          reject(new Error(name + " unavailable"));
+          return;
+        }
+        resolve(value);
+      }, ms);
+    });
+  }
+
+  return {
+    events: events,
+    calls: calls,
+    fetchDetail: function (code) {
+      return step("detail", 30, { code: code, issuedTo: "Corner Store", revoked: false },
+                  options.failDetail);
+    },
+    fetchRedemptions: function (code) {
+      return step("redemptions", 20, [{ at: "10:02" }, { at: "09:14" }],
+                  options.failRedemptions);
+    }
+  };
+}
+
+// If loadTokenScreen rejects instead of returning, catch it here rather than
+// letting it abort the whole run - the remaining checks still have something
+// useful to say, and the message names the actual problem.
+async function callLoader(code, api) {
+  try {
+    return await loadTokenScreen(code, api);
+  } catch (err) {
+    return { __threw: err };
+  }
+}
+
+function threwDetail(result) {
+  return "it threw '" + result.__threw.message + "' instead of returning a " +
+         "status object. A rejection has to be caught and turned into " +
+         "{ status: 'error', message: ... } - the caller wants a value to " +
+         "render, not an exception to handle.";
+}
+
+async function runChecks() {
+  const okApi = makeApi({});
+  const result = await callLoader("MERC-8GH2-KP4X", okApi);
+
+  check("it returns an object, not a promise or undefined",
+        result !== undefined && result !== null && typeof result === "object" &&
+        typeof result.then !== "function",
+        "got " + JSON.stringify(result) + " - an async function's return value " +
+        "is what the caller receives after awaiting it");
+
+  check("status is ok when both requests succeed",
+        result && result.status === "ok",
+        "got status " + JSON.stringify(result && result.status));
+
+  check("the detail is passed through",
+        result && result.detail && result.detail.issuedTo === "Corner Store",
+        "detail was " + JSON.stringify(result && result.detail));
+
+  check("the redemptions are passed through",
+        result && Array.isArray(result.redemptions) && result.redemptions.length === 2,
+        "redemptions was " + JSON.stringify(result && result.redemptions));
+
+  check("each request is made exactly once",
+        okApi.calls.detail === 1 && okApi.calls.redemptions === 1,
+        "detail called " + okApi.calls.detail + " times, redemptions " +
+        okApi.calls.redemptions);
+
+  // The one that only passes if the requests overlap
+  const firstEnd = okApi.events.indexOf(okApi.events.filter(function (e) {
+    return e.indexOf("end:") === 0;
+  })[0]);
+  const bothStarted = okApi.events.indexOf("start:detail") < firstEnd &&
+                      okApi.events.indexOf("start:redemptions") < firstEnd;
+
+  check("both requests start before either finishes",
+        bothStarted,
+        "the order was " + JSON.stringify(okApi.events) + " - awaiting the " +
+        "first before calling the second makes them sequential. Call both, " +
+        "THEN await.");
+
+  const failDetailApi = makeApi({ failDetail: true });
+  const failed = await callLoader("MERC-8GH2-KP4X", failDetailApi);
+
+  check("a failing detail request gives status error",
+        failed && !failed.__threw && failed.status === "error",
+        failed && failed.__threw ? threwDetail(failed) : "got " + JSON.stringify(failed));
+
+  check("the error message is passed through",
+        failed && !failed.__threw && failed.message === "detail unavailable",
+        failed && failed.__threw
+          ? "it threw rather than returning a message"
+          : "got message " + JSON.stringify(failed && failed.message) +
+            ", expected the error's own message");
+
+  const failRedemptionsApi = makeApi({ failRedemptions: true });
+  const failed2 = await callLoader("MERC-8GH2-KP4X", failRedemptionsApi);
+
+  check("a failing redemptions request also gives status error",
+        failed2 && !failed2.__threw && failed2.status === "error" &&
+        failed2.message === "redemptions unavailable",
+        failed2 && failed2.__threw ? threwDetail(failed2) : "got " + JSON.stringify(failed2));
+}
+
+runChecks().catch(function (err) {
+  console.log("FAIL  " + err.name + ": " + err.message);
+  console.log("      Usually this means loadTokenScreen is missing or misspelt,");
+  console.log("      or it threw instead of returning a status object.");
+});`);
+
+    /* --- Lesson quiz ----------------------------------------------------- */
+
     createQuiz("lesson-0009-quiz", [
-      // ── Question 1 (existing) ──────────────────────────────────────────────
       {
-        question: "You write `const messages = loadMessages(\"chat-001\")` inside an async function, but forget to write `await`. What does `messages` contain?",
+        question: "JavaScript runs your code on one thread. What does that mean for a slow network request?",
         options: [
-          "The array of chat messages from the server",
-          "undefined, because the function hasn't been called yet",
-          "A Promise object in the pending state — not the actual messages",
-          "An error, because you must always use await"
+          "The browser starts a second thread for it automatically",
+          "If you waited for it synchronously, nothing else could run — no scrolling, no clicks, no repaint",
+          "Requests are limited to 100ms so it never matters",
+          "The request is dropped if it takes too long"
+        ],
+        correct: 1,
+        explanation: "One thread means one thing at a time. That is exactly why asynchronous code exists: the request is started, the thread is released to do other work, and your code resumes when the answer arrives."
+      },
+      {
+        question: "What are the three states of a Promise?",
+        options: [
+          "waiting, done, cancelled",
+          "open, closed, errored",
+          "pending, fulfilled, rejected",
+          "started, running, finished"
         ],
         correct: 2,
-        explanation: "Without `await`, you get the Promise object itself — not the value it will eventually resolve to. Always add `await` in front of any call that returns a Promise when you want the resolved value."
+        explanation: "A Promise begins pending and settles exactly once — either fulfilled with a value or rejected with a reason. Once settled it never changes again, which is what makes it safe to pass around and attach handlers to later."
       },
-      // ── Question 2 (existing) ──────────────────────────────────────────────
       {
-        question: "You have two independent API calls: `fetchMessages()` and `fetchUserProfile()`. Both take about 400 ms. What is the fastest way to run them?",
+        question: "What does `await` actually pause?",
         options: [
-          "await fetchMessages(), then await fetchUserProfile() — one after the other",
-          "Promise.all([fetchMessages(), fetchUserProfile()]) — both start at the same time",
-          "Put them inside a forEach loop",
-          "Use a setTimeout for each one"
+          "The whole page, until the Promise settles",
+          "Only the async function it appears in — the rest of the program keeps running",
+          "Nothing; it is a hint to the engine",
+          "Every Promise currently pending"
         ],
         correct: 1,
-        explanation: "Running them sequentially with two awaits takes ~800 ms total. `Promise.all` starts both at the same time and resolves when the slower one finishes — so total wait is ~400 ms. Always use `Promise.all` for independent parallel requests."
+        explanation: "This is the distinction that matters. `await` suspends its own function and hands the thread back, so click handlers, animations and other async work carry on. That is the opposite of a blocking loop, which holds the thread and freezes everything."
       },
-      // ── Question 3 (existing) ──────────────────────────────────────────────
       {
-        question: "What does `async` in front of a function declaration do?",
+        question: "Why is Promise.all([fetchDetail(), fetchRedemptions()]) faster than awaiting each in turn?",
         options: [
-          "It makes the function run faster",
-          "It lets the function use `await` inside it, and makes it always return a Promise",
-          "It means the function will run in a separate thread",
-          "It prevents the function from throwing errors"
+          "It uses multiple threads",
+          "Both calls are made before anything is awaited, so the two requests overlap",
+          "It skips the slower of the two",
+          "It caches the second result"
         ],
         correct: 1,
-        explanation: "The `async` keyword does two things: it allows `await` to be used inside the function body, and it wraps the function's return value in a Promise automatically — even if you return a plain value."
+        explanation: "The speed-up comes from when the calls are made, not from Promise.all itself. Both functions are invoked while building the array, so both requests are already in flight; Promise.all just waits for them. Awaiting the first before calling the second is what makes it sequential."
       },
-      // ── Question 4 (existing) ──────────────────────────────────────────────
       {
-        question: "Inside an async function, a network request fails and the awaited Promise rejects. You have the call wrapped in a try/catch block. What happens?",
+        question: "You forget to await a function that returns a Promise. What happens?",
         options: [
-          "The program crashes immediately",
-          "The rejection is silently ignored and execution continues",
-          "The error is caught by the catch block, where you can handle it gracefully",
-          "await automatically retries the request three times before failing"
+          "A TypeError is thrown immediately",
+          "The value arrives anyway, just later",
+          "The variable holds a Promise object, so reading properties off it gives undefined — with no error",
+          "The function never runs"
         ],
         correct: 2,
-        explanation: "When an awaited Promise rejects, it behaves like a thrown error inside the function. A surrounding try/catch block intercepts it — giving you a safe place to show an error message or fall back to default data, instead of crashing the app."
+        explanation: "This is the most common async bug and the reason it is hard: nothing throws. You get a Promise object, its properties are undefined, and the undefined usually shows up somewhere far from the missing keyword."
       },
-      // ── Question 5 (existing) ──────────────────────────────────────────────
-      {
-        question: "You want to load messages for 5 different chats, one at a time in order, using async/await. Which approach is correct?",
-        options: [
-          "chatIds.forEach(async (id) => { await loadMessages(id); }) — forEach handles the awaiting",
-          "for (const id of chatIds) { await loadMessages(id); } — for...of respects await",
-          "Promise.all(chatIds) — pass the array directly",
-          "You cannot loop over async calls in JavaScript"
-        ],
-        correct: 1,
-        explanation: "`for...of` with `await` correctly pauses on each iteration until the Promise resolves before moving to the next chat. `forEach` does NOT await its async callbacks — it fires them all and moves on immediately, so the loop finishes before any fetch completes."
-      },
-      // ── Question 6 (predict-output) ────────────────────────────────────────
+
+      // Q6
       {
         type: "predict-output",
         code: "console.log(\"A\");\nsetTimeout(() => console.log(\"B\"), 0);\nPromise.resolve().then(() => console.log(\"C\"));\nconsole.log(\"D\");",
         answer: "A\nD\nC\nB",
-        explanation: "Synchronous code runs first (A, D). Then microtasks (Promise .then callbacks) run before macrotasks (setTimeout callbacks). So C prints before B, even though both have a delay of 0."
+        explanation: "Synchronous code runs first (A, D). Then microtasks — Promise callbacks — run before macrotasks like setTimeout. So C prints before B, even with a 0ms delay."
       },
-      // ── Question 7 (predict-output) ────────────────────────────────────────
+
+      // Q7
       {
         type: "predict-output",
         code: "async function fetchToken() {\n  return \"MERC-8GH2-KP4X\";\n}\nconsole.log(typeof fetchToken());",
         answer: "object",
-        explanation: "An async function always returns a Promise, even if you return a plain string. typeof a Promise is 'object'. To get the string itself you would need to await it."
+        explanation: "An async function always returns a Promise, even when you return a plain string. typeof a Promise is \"object\". To get the string you have to await it."
       },
-      // ── Question 8 (spot-the-bug) ──────────────────────────────────────────
-      {
-        type: "spot-the-bug",
-        code: "async function redeemToken(code) {\n  const result = fetchToken(code);\n  if (result.valid) {\n    showSuccess();\n  }\n}",
-        bugLine: 2,
-        options: [
-          "Line 1: async keyword is wrong here",
-          "Line 2: missing await before fetchToken(code)",
-          "Line 3: result.valid should be result.isValid",
-          "Line 5: showSuccess needs await"
-        ],
-        correct: 1,
-        explanation: "fetchToken() returns a Promise. Without await, result is the Promise object itself — not the resolved data. result.valid would be undefined (Promises don't have a .valid property), so the if block never runs."
-      },
-      // ── Question 9 (fill-blank) ─────────────────────────────────────────────
+
+      // Q8
       {
         type: "fill-blank",
-        code: "const [tokens, profile] = await Promise.___([fetchTokens(), fetchProfile()]);",
-        answer: "all",
-        explanation: "Promise.all() takes an array of Promises and returns a single Promise that resolves with an array of all results when every input Promise has fulfilled."
+        code: "async function load() {\n  const token = ___ fetchToken(\"MERC-8GH2-KP4X\");\n  console.log(token.code);\n}",
+        answer: "await",
+        explanation: "Without await, `token` is the Promise itself and token.code is undefined. The keyword is what unwraps the value once the Promise settles."
       },
-      // ── Question 10 (which-breaks) ─────────────────────────────────────────
+
+      // Q9
       {
-        type: "which-breaks",
-        variants: [
-          "async function a() { return 42; }",
-          "async function b() { await Promise.resolve(42); }",
-          "function c() { await Promise.resolve(42); }"
+        type: "spot-the-bug",
+        code: "async function loadScreen(code) {\n  const detail = await api.fetchDetail(code);\n  const redemptions = await api.fetchRedemptions(code);\n  return { detail, redemptions };\n}",
+        bugLine: 3,
+        options: [
+          "Line 1: async functions cannot take parameters",
+          "Line 2: fetchDetail needs a .then instead",
+          "Line 3: the second request only starts after the first finishes, doubling the wait for no reason",
+          "Line 4: you cannot return an object from an async function"
         ],
         correct: 2,
-        explanation: "await can only be used inside an async function. Variant C is a regular function using await — this throws a SyntaxError. Variants A and B are both valid async functions."
+        explanation: "Nothing here is broken, which is what makes it easy to ship. The two requests do not depend on each other, so awaiting the first before starting the second wastes exactly the duration of the first. Promise.all starts both."
       },
-      // ── Question 11 (order-steps) ──────────────────────────────────────────
-      {
-        type: "order-steps",
-        steps: [
-          "Create a new Promise with new Promise()",
-          "Start the async operation inside the executor",
-          "Call resolve(value) when the operation succeeds",
-          "The .then() callback receives the resolved value"
-        ],
-        correctOrder: [0, 1, 2, 3],
-        explanation: "A Promise starts by executing the function you pass to new Promise(). Inside that function you perform the async work. When it succeeds, you call resolve() with the result. That triggers any .then() callbacks registered on the Promise."
-      },
-      // ── Question 12 (predict-output) ───────────────────────────────────────
+
+      // Q10
       {
         type: "predict-output",
         code: "const p = new Promise((resolve) => {\n  resolve(\"first\");\n  resolve(\"second\");\n});\np.then(val => console.log(val));",
         answer: "first",
-        explanation: "A Promise can only be resolved once. The second call to resolve() is ignored — the Promise already settled with 'first'. This is by design: once fulfilled or rejected, a Promise never changes state again."
+        explanation: "A Promise settles once. The second resolve() is ignored — the Promise already fulfilled with \"first\". Once settled, a Promise never changes state or value again."
       },
-      // ── Question 13 (multiple-choice) ──────────────────────────────────────
-      {
-        question: "What are the three possible states of a Promise?",
-        options: [
-          "waiting, done, failed",
-          "pending, fulfilled, rejected",
-          "open, closed, error",
-          "started, resolved, thrown"
-        ],
-        correct: 1,
-        explanation: "A Promise is always in one of three states: pending (operation still running), fulfilled (operation succeeded with a value), or rejected (operation failed with a reason). These are the official terms defined in the JavaScript specification."
-      },
-      // ── Question 14 (spot-the-bug) ─────────────────────────────────────────
-      {
-        type: "spot-the-bug",
-        code: "async function validateToken(code) {\n  try {\n    const response = await fetch('/api/validate/' + code);\n    const data = response.json();\n    return data.isValid;\n  } catch (e) {\n    return false;\n  }\n}",
-        bugLine: 4,
-        options: [
-          "Line 3: fetch needs a second argument",
-          "Line 4: missing await before response.json()",
-          "Line 5: should be data.valid not data.isValid",
-          "Line 7: catch should rethrow the error"
-        ],
-        correct: 1,
-        explanation: "response.json() returns a Promise — it must be awaited. Without await, data is a Promise object, and data.isValid is undefined. The correct line is: const data = await response.json();"
-      },
-      // ── Question 15 (fill-blank) ────────────────────────────────────────────
-      {
-        type: "fill-blank",
-        code: "async function revokeToken(tokenId) {\n  try {\n    await api.delete('/tokens/' + tokenId);\n  } ___ (error) {\n    showError(error.message);\n  }\n}",
-        answer: "catch",
-        explanation: "In async/await, you handle rejected Promises using a standard try/catch block. The catch keyword follows the try block and receives the error (the rejection reason) as its parameter."
-      },
-      // ── Question 16 (predict-output) ───────────────────────────────────────
-      {
-        type: "predict-output",
-        code: "async function getCode() {\n  return \"TOKEN-ABC\";\n}\ngetCode().then(code => console.log(code));",
-        answer: "TOKEN-ABC",
-        explanation: "An async function wraps its return value in a resolved Promise. Calling .then() on that Promise gives you the unwrapped value — the string 'TOKEN-ABC'."
-      },
-      // ── Question 17 (multiple-choice) ──────────────────────────────────────
-      {
-        question: "What happens if one Promise in Promise.all([p1, p2, p3]) rejects?",
-        options: [
-          "The other Promises are cancelled and Promise.all resolves with partial results",
-          "Promise.all waits for all three to finish, then rejects with all errors",
-          "Promise.all rejects immediately with that one error — the other results are lost",
-          "Promise.all ignores the rejection and resolves with the successful results only"
-        ],
-        correct: 2,
-        explanation: "Promise.all follows a 'fail fast' strategy. As soon as any single Promise rejects, the entire Promise.all rejects with that error. The other Promises still run to completion in the background, but their results are discarded."
-      },
-      // ── Question 18 (order-steps) ──────────────────────────────────────────
+
+      // Q11
       {
         type: "order-steps",
         steps: [
-          "User taps 'Redeem Token' button",
-          "Show loading spinner",
-          "await validateToken(code) inside try block",
-          "Hide spinner and show success or catch error"
+          "Show the loading spinner",
+          "Start both requests and await Promise.all",
+          "Render the screen from the results",
+          "Or, if either failed, show the error message"
         ],
         correctOrder: [0, 1, 2, 3],
-        explanation: "The correct UX flow: respond to user action, show feedback (spinner), perform the async work with await (inside try), then handle the outcome — either show success on fulfillment or show an error message in the catch block."
+        explanation: "The spinner has to go up before the await, or it appears only once the data has already arrived. Every data-loading screen in Token follows this shape."
       },
-      // ── Question 19 (fill-blank) ────────────────────────────────────────────
+
+      // Q12
       {
-        type: "fill-blank",
-        code: "function fetchToken(code) {\n  return new ___(function(resolve, reject) {\n    setTimeout(() => resolve({ code, valid: true }), 500);\n  });\n}",
-        answer: "Promise",
-        explanation: "To create a Promise manually, you use new Promise() and pass it an executor function that receives resolve and reject as parameters. Calling resolve() fulfills the Promise; calling reject() rejects it."
+        type: "predict-output",
+        code: "async function getCode() {\n  return \"MERC-8GH2-KP4X\";\n}\ngetCode().then(code => console.log(code));",
+        answer: "MERC-8GH2-KP4X",
+        explanation: "The async function wraps its return value in a fulfilled Promise, and .then() unwraps it. This is the same value you would get from `await getCode()`."
       },
-      // ── Question 20 (predict-output) ───────────────────────────────────────
+
+      // Q13
+      {
+        type: "which-breaks",
+        variants: [
+          "const token = await fetchToken(code);",
+          "fetchToken(code).then(t => console.log(t.code));",
+          "const token = await fetchToken(code); // at the top level of a non-module script"
+        ],
+        correct: 2,
+        explanation: "`await` is only allowed inside an async function — or at the top level of an ES module. In an ordinary script it is a SyntaxError. The usual fix is to wrap it in an async function and call that."
+      },
+
+      // Q14
       {
         type: "predict-output",
         code: "Promise.resolve(1)\n  .then(x => x + 1)\n  .then(x => x * 3)\n  .then(x => console.log(x));",
         answer: "6",
-        explanation: "Promise chains pass values through. resolve(1) gives 1 to the first .then, which returns 2. That 2 goes to the next .then, which returns 6. The final .then logs 6. Each .then receives the return value of the previous one."
+        explanation: "Each .then receives the previous one's return value: 1 becomes 2, 2 becomes 6, and the last logs it. Returning a plain value from a .then wraps it in a fulfilled Promise automatically."
       },
-      // ── Question 21 (spot-the-bug) ─────────────────────────────────────────
+
+      // Q15
+      {
+        question: "Promise.all is given three Promises and the second one rejects. What happens?",
+        options: [
+          "It waits for all three, then reports which failed",
+          "It rejects immediately with that error; the other two results are discarded",
+          "It fulfils with the two successful values",
+          "It retries the failed one"
+        ],
+        correct: 1,
+        explanation: "Promise.all is all-or-nothing. That is right for a screen that cannot render without every piece. When you would rather show partial results, Promise.allSettled waits for all of them and reports each outcome separately."
+      },
+
+      // Q16
+      {
+        type: "fill-blank",
+        code: "try {\n  const data = await load();\n} ___ (error) {\n  showError(error.message);\n}",
+        answer: "catch",
+        explanation: "With await, a rejected Promise throws, so ordinary try/catch handles it. Without the catch the rejection is unhandled — in a browser the app carries on in a half-built state with the spinner still spinning."
+      },
+
+      // Q17
       {
         type: "spot-the-bug",
-        code: "const tokenIds = [\"T1\", \"T2\", \"T3\"];\ntokenIds.forEach(async (id) => {\n  const token = await fetchToken(id);\n  console.log(token);\n});\nconsole.log(\"All tokens loaded\");",
-        bugLine: 2,
+        code: "async function loadScreen(code) {\n  const data = await api.fetchDetail(code);\n  showSpinner();\n  render(data);\n}",
+        bugLine: 3,
         options: [
-          "Line 1: tokenIds should be declared with let",
-          "Line 2: forEach does not await async callbacks — 'All tokens loaded' prints before any token is fetched",
-          "Line 3: fetchToken should not be awaited inside forEach",
-          "Line 6: console.log should use template literals"
+          "Line 2: await cannot be used on an api method",
+          "Line 3: the spinner is shown after the request finishes, so the user stares at a blank screen and then sees a flash of it",
+          "Line 4: render must be awaited",
+          "Line 1: the function should not be async"
         ],
         correct: 1,
-        explanation: "forEach fires all the async callbacks but does not await the Promises they return. 'All tokens loaded' prints immediately, before any fetchToken call completes. Use for...of with await, or Promise.all with .map(), instead."
+        explanation: "Everything after an await runs once the Promise has settled. The spinner has to go up before the request starts, or it only appears at the moment it is no longer needed."
       },
-      // ── Question 22 (which-breaks) ─────────────────────────────────────────
-      {
-        type: "which-breaks",
-        variants: [
-          "fetchToken('ABC').then(t => console.log(t)).catch(e => console.error(e));",
-          "const t = await fetchToken('ABC'); console.log(t);",
-          "fetchToken('ABC').then(t => { console.log(t); return t; }).then(t => t.code);"
-        ],
-        correct: 1,
-        explanation: "Variant B uses await at the top level of a script (not inside an async function). This is a SyntaxError in standard scripts. Variant A uses .then/.catch correctly. Variant C chains .then calls correctly (even though t.code might be undefined, it won't throw a SyntaxError)."
-      },
-      // ── Question 23 (multiple-choice) ──────────────────────────────────────
-      {
-        question: "What does the .finally() method on a Promise do?",
-        options: [
-          "It runs only if the Promise is fulfilled successfully",
-          "It runs only if the Promise is rejected",
-          "It runs after the Promise settles — whether fulfilled OR rejected — without changing the result",
-          "It cancels the Promise and cleans up resources"
-        ],
-        correct: 2,
-        explanation: ".finally() is called regardless of whether the Promise was fulfilled or rejected. It's ideal for cleanup code like hiding a loading spinner. It does not receive the resolved value or error, and it passes through the original result to the next .then or .catch."
-      },
-      // ── Question 24 (predict-output) ───────────────────────────────────────
+
+      // Q18
       {
         type: "predict-output",
         code: "async function redeemToken() {\n  try {\n    throw new Error(\"expired\");\n  } catch (e) {\n    return \"handled: \" + e.message;\n  }\n}\nredeemToken().then(val => console.log(val));",
         answer: "handled: expired",
-        explanation: "The throw inside the try block is caught by catch, which returns a string. Since the catch block returns normally (no re-throw), the async function's Promise resolves with 'handled: expired'. The .then receives this value."
+        explanation: "The throw is caught inside the function and the catch block returns normally, so the async function's Promise fulfils with that string rather than rejecting. A rejection only happens if the error escapes the function."
       },
-      // ── Question 25 (order-steps) ──────────────────────────────────────────
+
+      // Q19
+      {
+        question: "What is the difference between the callback style and Promises for three dependent steps?",
+        options: [
+          "Callbacks are faster because there is no Promise object",
+          "Promises let you chain steps flatly with one .catch at the end, instead of nesting deeper and repeating error handling at every level",
+          "Callbacks cannot express three steps",
+          "There is no difference; Promises are only newer syntax"
+        ],
+        correct: 1,
+        explanation: "The nesting is the problem — each step indents inside the last, and every level needs its own error check. A Promise chain stays flat and one .catch covers every step above it."
+      },
+
+      // Q20
       {
         type: "order-steps",
         steps: [
-          "Call fetchToken(code) which returns a Promise",
-          "Promise enters the 'pending' state",
-          "Server responds — resolve() is called",
-          "Promise moves to 'fulfilled' state",
-          ".then() callback executes with the resolved value"
+          "Synchronous code in the current script finishes",
+          "Microtasks run — every queued .then and every resumed await",
+          "One macrotask runs — a setTimeout callback",
+          "Microtasks queued by that callback run before the next macrotask"
         ],
-        correctOrder: [0, 1, 2, 3, 4],
-        explanation: "The lifecycle of a Promise: it's created (pending), the async work happens in the background, when the work completes resolve() is called, the Promise transitions to fulfilled, and then any registered .then() callbacks fire with the resolved value."
+        correctOrder: [0, 1, 2, 3],
+        explanation: "This is the event loop. The microtask queue is drained completely before the next timer callback, which is why a .then with no delay beats a setTimeout of 0."
+      },
+
+      // Q21
+      {
+        type: "which-breaks",
+        variants: [
+          "const [a, b] = await Promise.all([one(), two()]);",
+          "const results = await Promise.all([one(), two()]);",
+          "const results = await Promise.all(one(), two());"
+        ],
+        correct: 2,
+        explanation: "Promise.all takes a single iterable — an array — not separate arguments. Passing them separately means the second is ignored and the first is not an array, so it throws a TypeError."
+      },
+
+      // Q22
+      {
+        question: "In the React example, what does the `cancelled` flag in useEffect's cleanup actually do?",
+        options: [
+          "It cancels the network request",
+          "It stops the Promise from settling",
+          "It does not stop the response arriving; it makes the code ignore the result instead of updating a screen that is gone",
+          "It retries the request when the screen reopens"
+        ],
+        correct: 2,
+        explanation: "Nothing here cancels the request — it completes and the code after the await runs regardless. The flag just makes the result irrelevant. It is the async counterpart of removing an event listener when a screen unmounts."
+      },
+
+      // Q23
+      {
+        type: "fill-blank",
+        code: "const [detail, redemptions] = await Promise.___([\n  api.fetchDetail(code),\n  api.fetchRedemptions(code)\n]);",
+        answer: "all",
+        explanation: "Promise.all returns one Promise that fulfils with an array of every value, in the order the Promises were passed in — not the order they finished."
+      },
+
+      // Q24
+      {
+        type: "spot-the-bug",
+        code: "async function loadScreen(code) {\n  const results = await Promise.all([\n    api.fetchDetail(code),\n    api.fetchRedemptions(code)\n  ]);\n  return { status: \"ok\", results };\n}",
+        bugLine: 2,
+        options: [
+          "Line 2: Promise.all needs a .then",
+          "Line 2: there is no try/catch, so a failure of either request rejects this function and the caller gets an unhandled rejection",
+          "Line 6: you cannot return a status string",
+          "Line 3: fetchDetail must be awaited individually"
+        ],
+        correct: 1,
+        explanation: "The happy path is fine, which is why this ships. Promise.all rejects as soon as either request fails, and with no try/catch that rejection escapes — leaving the caller with a spinner that never stops."
+      },
+
+      // Q25
+      {
+        question: "Why does the mini-project include buttons that deliberately make a request fail?",
+        options: [
+          "To test the network connection",
+          "Because an error path you have never actually seen is an error path that does not work",
+          "To slow the demo down so it is easier to read",
+          "Because Promise.all requires a failure case to function"
+        ],
+        correct: 1,
+        explanation: "Error handling is the code least likely to be exercised and most likely to be wrong. Making failure reachable on demand is how you find out whether your catch block renders something useful or just hides the problem."
       }
     ]);
   </script>
