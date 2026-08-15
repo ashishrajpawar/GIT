@@ -19,8 +19,8 @@ one or two lessons at a time, never batched ahead.
 |---|---|
 | `01/0005-loops` | done — `f9230c5` |
 | `01/0006-scope-and-closures` | done — `be65077` (+ `scripts/verify-lesson.mjs`) |
-| **`01/0007-dom-and-browser-apis`** | **in progress — blocked on tooling, see below** |
-| `01/0008-events` | not started (same tooling blocker) |
+| `01/0007-dom-and-browser-apis` | done — sandbox + retrofit, see below |
+| **`01/0008-events`** | **next** — sandbox already covers bubbling events |
 | `01/0009`–`01/0012` | not started |
 
 ### Unit 1 — `assets/dom-sandbox.js` — DONE
@@ -53,23 +53,43 @@ Shipped:
 - `scripts/test-dom-sandbox.mjs` (55 assertions) and
   `scripts/test-playground-dom.mjs` (11) — both green.
 
+### Unit 2 — retrofit `01/0007-dom-and-browser-apis` — DONE
+
+Practice pattern plus the full Token reframe. Verified by running:
+
+```bash
+node scripts/verify-lesson.mjs modules/01-javascript-fundamentals/0007-dom-and-browser-apis.html \
+     --wrong scripts/cases/0007-dom-and-browser-apis.mjs
+```
+
+- 8 playgrounds, all `{ dom: true }` against a shared `PRACTICE_PAGE`.
+  `pg-null-crash` is the broken-on-purpose one: a mistyped selector, so the
+  student meets `Cannot set properties of null` deliberately rather than by
+  accident at 11pm.
+- `pg-content` is the one that earns the sandbox — the same hostile string
+  through `textContent` and `innerHTML` side by side, with the preview showing
+  `&lt;b&gt;` next to a real `<b>` element.
+- Exercise: `renderTokenList(tokens)`, 8 behaviour checks. 4 alternative
+  correct styles pass; 6 mistakes each trip only the checks they genuinely
+  break (the first pass had the no-clear mistake also failing the escaping
+  check, which would have told a student their escaping was broken when it
+  was not — fixed by scoping the checks).
+- Reframed from the WhatsApp clone to Token throughout: the redemption page
+  at `tokn.app/t/CODE`, issuing and revoking, `issuedTo` as untrusted input.
+  The mini-project is now a token manager that generates codes from the real
+  31-character alphabet.
+- **Added the missing `localStorage` section.** The quiz had 6 questions on
+  it; the prose never taught it. With a callout on why a token code is
+  capability material and does not belong in `localStorage`.
+- Three quiz questions that described their starting page in a code comment
+  now use the real `html` field, so they are executed rather than skipped.
+
 ## Next action
 
-**Unit 2: retrofit `01/0007-dom-and-browser-apis`.** The practice pattern
-(playground per concept, one deliberately broken, one `createSolution()`
-exercise with a behaviour-testing self-check, spaced review) — every playground
-in it must pass `{ dom: true }`.
-
-Two things to fix while in there, both noted during the sandbox work:
-
-- The lesson is written around a **WhatsApp clone** — "your WhatsApp clone",
-  Priya's chat, message bubbles. CLAUDE.md requires Token framing
-  (`tokenCode`, `issuedTo`, `revokedAt`). This is a rewrite of the examples,
-  not a find-and-replace.
-- It teaches `localStorage` in 18 places with no mention that a token is
-  capability material. Worth one honest callout.
-
-Then `01/0008-events`, which the sandbox's event support already covers.
+**Unit 3: retrofit `01/0008-events`.** The sandbox already does
+`addEventListener`, bubbling, `currentTarget` vs `target`,
+`stopPropagation`, `preventDefault`, `click()` and `event.key`, so no tooling
+work should be needed first. Confirm that before writing.
 
 ## Blocked on
 
@@ -77,6 +97,15 @@ Nothing.
 
 ## Notes for the next session
 
+- **Timers are not sandboxed.** `setInterval` and `setTimeout` in a playground
+  reach the real ones, so a student's `setInterval` keeps running after the
+  Run finishes. It has not bitten anything yet — quiz Q19 in 0007 verifies
+  correctly because Node has these globals — but 0008 (events) and 0009
+  (promises) are where timer code arrives in bulk. Decide there whether to
+  shim them; do not do it speculatively.
+- The `dom-sandbox` selector engine deliberately has no `>`, `+`, `~` or
+  pseudo-classes. If a lesson needs one, add it to the sandbox *and* to
+  `scripts/test-dom-sandbox.mjs` in the same commit.
 - The audit found a **fourth** orphan table beyond the manual review:
   `calls`, queried by `b7/0002` and `b7/0003`, created nowhere. Together with
   `participants` and `deletion_queue` these are schema gaps to close when B2 is
