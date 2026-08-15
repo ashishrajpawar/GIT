@@ -278,41 +278,85 @@ pointless without a client. See TOKEN-TRACK.md § "Recommended sequence".
 
 ---
 
-## Architecture — fixed decisions, do not revisit
+## Architecture — fixed decisions
 
-**Mobile app**
+**The full reasoning lives in `token/ARCHITECTURE.md` and `token/docs/adr/`.**
+This is the summary. Where the two disagree, the ADRs win — they carry the
+alternatives that were rejected and why, which is what stops a decision being
+re-litigated every few months.
+
+> **"Do not revisit" means not casually.** The student revised four of these on
+> 2026-08-15, deliberately, after being shown the costs. That is the only
+> legitimate way they change — see `HANDOFF.md` for the reasoning on both sides
+> of each, so a future session does not "helpfully" revert them.
+
+### The two constraints that shape everything else
+
+**1. Messages are end-to-end encrypted from v1** (ADR-0002). The server stores
+ciphertext and cannot read it. This *removes options*, and every lesson touching
+messages must respect it:
+
+- No server-side search — search runs on-device over the SQLite cache
+- No server-side content moderation — see ADR-0006, abuse handling works from
+  user-submitted reports (with signatures proving authorship) and metadata
+- Multi-device needs explicit key sharing; there is no server copy to sync
+- Key backup and recovery is a **v1 feature**, not a later nicety — and it must
+  not be a server-held copy of the key, or the guarantee is theatre
+
+**2. Built to scale out, deployed on one box** (ADR-0003). The architecture
+assumes N replicas; the deployment runs one until traffic says otherwise.
+Retrofitting statelessness or partitioning is a rewrite; adding a replica is a
+config change.
+
+- The API is **stateless** — no in-memory session, no node-local socket registry
+- **Redis is required, not optional** — socket fan-out via pub/sub, presence as
+  TTL keys, rate limiting as shared counters. Without it a second replica
+  silently drops messages between users on different nodes
+- Postgres connections go through **pgbouncer**
+- `messages` is **partitioned by time from the first migration**
+- Media never transits the API
+
+### Mobile app — `app/`
 - React Native + Expo, EAS Build, TypeScript
 - Both iOS and Android — never suggest Android-only shortcuts
-- Local cache: SQLite
-- EAS Build required for WebRTC (native C++/Obj-C code; Expo Go cannot run it)
+- Local cache: SQLite. Private keys in `expo-secure-store` (Keychain / Keystore),
+  **never** `AsyncStorage`
+- EAS Build required for WebRTC (native code; Expo Go cannot run it)
 
-**Redemption web page**
-- Vite + React (plain web app, NOT React Native Web)
+### Redemption web page — `web/`
+- Vite + React (plain web app, **NOT** React Native Web)
 - Native browser WebRTC and WebSocket APIs
-- Deployed as a container on the same Coolify VPS as the API
+- Deployed as a container alongside the API
 
-**Backend**
-- Node.js + TypeScript
-- PostgreSQL — primary datastore
-- Redis — presence, rate limiting, socket routing (optional for v1)
-- Raw SQL via the `pg` driver first, then Drizzle later
-  **Do not use Prisma** — hides the query layer; the student wants to learn SQL
-- Express or Fastify (decided during B3)
+### Backend — `api/`
+- Node.js + TypeScript, Express or Fastify (decided during B3)
+- PostgreSQL — primary datastore, pooled and partition-aware
+- **Redis — required** (ADR-0003)
+- Raw SQL via the `pg` driver first, Drizzle later.
+  **Never Prisma** — it hides the query layer, and learning SQL is a goal here
+- Parameterised queries always (`$1`), never string concatenation
 
-**Communication**
-- Chat: WebSocket on own server
+### Communication
+- Chat: WebSocket on own server, routed across nodes through Redis pub/sub
 - Voice/video: WebRTC (`react-native-webrtc` on mobile, native APIs in browser)
-- Signalling: own WebSocket server — NOT Firestore
-- STUN: Google (free). TURN: self-hosted coturn.
-- Consider `iceTransportPolicy: 'relay'` for IP privacy (cover the trade-off)
+- Signalling: own WebSocket server — **not** Firestore
+- STUN: Google (free). TURN: self-hosted coturn
+- `iceTransportPolicy: 'relay'` hides participants' IPs from each other — cover
+  the trade-off, including that it forces **every** call through TURN and makes
+  relay bandwidth the most likely surprise on the bill
 
-**Push notifications**
-- FCM + APNs via Expo Notifications (only third-party dependency)
+### Push notifications
+- FCM + APNs via Expo Notifications (the only unavoidable third party — only
+  Apple and Google can wake a backgrounded app)
 
-**Deployment**
+### Deployment
 - Coolify on a VPS, deploy from git
-- `api/` and `web/` as separate containers, Postgres and Redis as containers
+- `api/` and `web/` as containers; Postgres and Redis as containers
 - Automatic TLS via Coolify
+- **The single-box ceiling, stated honestly:** a few thousand concurrent
+  WebSocket connections and low tens of thousands of users, bounded by memory
+  and file descriptors first, then Postgres connections. Passing it means adding
+  replicas, not redesigning
 
 ---
 

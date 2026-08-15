@@ -18,9 +18,9 @@ how far it got.
 | 1. `scripts/audit.mjs` + generated `PROGRESS.md` | done — `8c06ac3` |
 | 2. `SESSION.md` + resume protocol in `CLAUDE.md` | done |
 | 3. `HANDOFF.md` session entry — the 7 decisions | done |
-| 4. Token repo scaffold at `GIT/token/` | pending |
-| 5. `ARCHITECTURE.md` + ADRs | pending |
-| 6. `CLAUDE.md` architecture rewrite | pending |
+| 4. Token repo scaffold at `GIT/token/` | done — `3d12ca6` |
+| 5. `ARCHITECTURE.md` + ADRs | done — `3db9fdc` |
+| 6. `CLAUDE.md` architecture rewrite | done |
 | 7. `TOKEN-TRACK.md` resequenced | pending |
 | 8. Playground async + loop guard | pending |
 | 9. Quiz answer-position bias | pending |
@@ -28,7 +28,7 @@ how far it got.
 
 ## Next action
 
-Scaffold the Token repo at GIT/token/ with its own git repo and a /token/ ignore line in a new GIT/.gitignore (step 4).
+Resequence TOKEN-TRACK.md: E2EE before B2, Trust & Safety earlier and redesigned, Scale alongside B-track, add C0-C9 placeholders (step 7).
 
 ## Blocked on
 
