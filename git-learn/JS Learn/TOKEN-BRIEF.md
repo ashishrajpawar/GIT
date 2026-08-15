@@ -11,10 +11,16 @@ This document supersedes the app description in both of those files.
 **Token** — a privacy-first mobile app for the Indian market.
 
 Instead of sharing a phone number or email address, a user issues a
-**revocable capability token** (e.g. `MERC-8GH2-LP4X`) to whoever needs to
+**revocable capability token** (e.g. `MERC-8GH2-KP4X`) to whoever needs to
 reach them. Deny-by-default: nobody can contact the user unless the user has
 issued them a token. The user can set rules on it, pause it, or revoke it at
 any time, all from inside the app.
+
+**Code format.** 12 characters in three groups of four, drawn from the
+31-character alphabet `23456789ABCDEFGHJKMNPQRSTUVWXYZ` — the ambiguous
+**0, O, 1, I and L are excluded** so a code can be read aloud or copied off a
+printed card without error. Every example token written anywhere must be valid
+under this alphabet; see `CLAUDE.md` § "Token code format".
 
 The business or person holding a token redeems it at a web page —
 `tokn.app/t/CODE` — and communicates through that page. They never learn the

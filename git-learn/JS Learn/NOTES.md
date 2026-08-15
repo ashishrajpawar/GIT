@@ -1,7 +1,9 @@
 # Teacher Notes
 
 ## The student
-- Ashish. Completed Module 01 (JavaScript) and Module 02 (React Native)
+- Ashish. **4 lessons of 95 as of 2026-08-15** — `01/0001` through `01/0004`,
+  next is `01/0005-loops`. This file claimed Modules 01 and 02 were complete
+  until 2026-08-15; they are written, not studied. Ask, don't infer
 - Not an experienced programmer — but wants **deep understanding, not vibe coding**.
   Explain why, not just what
 - Strongly motivated by the end goal — tie every concept to Token concretely

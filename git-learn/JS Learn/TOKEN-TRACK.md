@@ -1,5 +1,21 @@
 # Token — Two-Track Course Plan
 
+> **This plan is incomplete — reviewed 2026-08-15, see `COURSE-REVIEW.md`.**
+>
+> Three things below are known to be wrong or missing:
+>
+> 1. **Ten modules of coverage are absent entirely** — testing, CI/CD,
+>    observability, product analytics, scale & performance, offline/media/jobs,
+>    E2EE, trust & safety, architecture & ADRs, and launch/support/operations.
+>    Zero lessons exist for any of them. Proposed as C0–C9 in `COURSE-REVIEW.md` §6.
+> 2. **B2.2 under-delivered.** The row below promises "conversations, messages,
+>    participants, read_receipts". The lesson creates only `conversations` and
+>    `messages` — yet B10 queries `participants`, and `deletion_queue` and
+>    `push_tokens` are queried without ever being created anywhere.
+> 3. **The timeline is for an MVP by someone who already codes.** For a
+>    production-grade, operable product from a beginner start, the realistic
+>    figure is 8–12 months and ~130 lessons, not the 3–4 months below.
+
 ---
 
 ## Repo layout (one repo, four folders)
