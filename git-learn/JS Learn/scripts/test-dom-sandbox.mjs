@@ -154,6 +154,94 @@ btn.addEventListener("click", (e) => e.preventDefault());
 eq("dispatchEvent returns false after preventDefault",
    btn.dispatchEvent(new s.Event("click", {})), false);
 
+// --- dataset (01/0008 event delegation identifies rows with it)
+const rowHost = createDomSandbox(
+  '<ul id="rows">' +
+    '<li class="row" data-token-code="CAFE-2BN7-4KQ9" data-revoked="false">a</li>' +
+    '<li class="row" data-token-code="RENT-2WX7-JP8N">b</li>' +
+  '</ul>');
+const rowDoc = rowHost.document;
+const row0 = rowDoc.querySelectorAll(".row")[0];
+eq("dataset reads a data- attribute", row0.dataset.tokenCode, "CAFE-2BN7-4KQ9");
+eq("dataset camelCases the hyphens", row0.dataset.revoked, "false");
+eq("dataset is undefined when absent", rowDoc.querySelectorAll(".row")[1].dataset.revoked, undefined);
+row0.dataset.tokenCode = "GYM4-7TXQ-3RBV";
+eq("dataset write updates the attribute", row0.getAttribute("data-token-code"), "GYM4-7TXQ-3RBV");
+row0.dataset.issuedTo = "Corner Store";
+eq("dataset write camelCase -> hyphen", row0.getAttribute("data-issued-to"), "Corner Store");
+eq("dataset write shows in markup",
+   row0.toString().includes('data-issued-to="Corner Store"'), true);
+eq("dataset is live, not a snapshot", (() => {
+  const d = row0.dataset;
+  row0.setAttribute("data-late", "yes");
+  return d.late;
+})(), "yes");
+eq("Object.keys over dataset", Object.keys(rowDoc.querySelectorAll(".row")[1].dataset), ["tokenCode"]);
+
+// delegation end-to-end: one listener on the parent, identify by dataset
+let delegated = [];
+rowDoc.getElementById("rows").addEventListener("click", (e) => {
+  const row = e.target.closest(".row");
+  if (row) delegated.push(row.dataset.tokenCode);
+});
+rowDoc.querySelectorAll(".row")[1].click();
+eq("delegation via closest + dataset", delegated, ["RENT-2WX7-JP8N"]);
+
+// --- arbitrary event properties (Shift+Enter needs shiftKey)
+const keyHost = createDomSandbox('<input id="msg" type="text">');
+const msgEl = keyHost.document.getElementById("msg");
+let sent = [];
+msgEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sent.push("send"); }
+  else if (e.key === "Enter") sent.push("newline");
+});
+msgEl.dispatchEvent(new keyHost.Event("keydown", { key: "Enter" }));
+msgEl.dispatchEvent(new keyHost.Event("keydown", { key: "Enter", shiftKey: true }));
+eq("shiftKey distinguishes send from newline", sent, ["send", "newline"]);
+eq("event.type is set", (() => {
+  let t = null;
+  msgEl.addEventListener("input", (e) => { t = e.type; });
+  msgEl.dispatchEvent(new keyHost.Event("input", {}));
+  return t;
+})(), "input");
+
+// --- form submit and preventDefault (the whole point of 01/0008's section 3)
+const formHost = createDomSandbox(
+  '<form id="chat-form"><input id="f-msg" type="text" value="hi">' +
+  '<button id="f-send">Send</button></form>');
+const formDoc = formHost.document;
+let submits = 0;
+formDoc.getElementById("chat-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  submits++;
+});
+formDoc.getElementById("f-send").click();
+eq("clicking a submit button fires the form's submit", submits, 1);
+eq("requestSubmit fires it too",
+   (() => { formDoc.getElementById("chat-form").requestSubmit(); return submits; })(), 2);
+eq("preventDefault is reported to the caller",
+   formDoc.getElementById("chat-form").requestSubmit(), false);
+throws("form.submit() explains that it skips handlers",
+   () => formDoc.getElementById("chat-form").submit(), "bypasses the submit event");
+
+// a button explicitly typed "button" must NOT submit
+const plainHost = createDomSandbox(
+  '<form id="f2"><button id="b2" type="button">Nope</button></form>');
+let plainSubmits = 0;
+plainHost.document.getElementById("f2").addEventListener("submit", () => plainSubmits++);
+plainHost.document.getElementById("b2").click();
+eq("type=button does not submit", plainSubmits, 0);
+
+// --- focus and blur dispatch, and do not bubble
+const focusHost = createDomSandbox('<div id="wrap"><input id="fi"></div>');
+let focusLog = [];
+focusHost.document.getElementById("fi").addEventListener("focus", () => focusLog.push("focus"));
+focusHost.document.getElementById("fi").addEventListener("blur", () => focusLog.push("blur"));
+focusHost.document.getElementById("wrap").addEventListener("focus", () => focusLog.push("wrap"));
+focusHost.document.getElementById("fi").focus();
+focusHost.document.getElementById("fi").blur();
+eq("focus and blur fire, and do not bubble", focusLog, ["focus", "blur"]);
+
 // --- localStorage
 eq("storage empty", s.localStorage.getItem("x"), null);
 s.localStorage.setItem("draft", "hello");

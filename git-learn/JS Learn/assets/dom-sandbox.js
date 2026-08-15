@@ -166,6 +166,53 @@
     }
   });
 
+  /* dataset <-> data-* attributes. 01/0008 leans on this: event delegation
+     identifies the clicked row with `el.dataset.tokenCode`, which has to read
+     back the `data-token-code` attribute set in markup, and writing to it has
+     to show up in the serialised output. A live object rather than a snapshot,
+     so `el.dataset.x = 1` after the first read still works. */
+  Object.defineProperty(Element.prototype, "dataset", {
+    get: function () {
+      var el = this;
+      if (typeof Proxy !== "function") return readDataset(el);
+      return new Proxy({}, {
+        get: function (_, prop) {
+          if (typeof prop !== "string") return undefined;
+          var attr = "data-" + kebab(prop);
+          return el.hasAttribute(attr) ? el.getAttribute(attr) : undefined;
+        },
+        set: function (_, prop, value) {
+          el.setAttribute("data-" + kebab(prop), value);
+          return true;
+        },
+        has: function (_, prop) { return el.hasAttribute("data-" + kebab(prop)); },
+        deleteProperty: function (_, prop) {
+          el.removeAttribute("data-" + kebab(prop));
+          return true;
+        },
+        ownKeys: function () { return Object.keys(readDataset(el)); },
+        getOwnPropertyDescriptor: function (_, prop) {
+          var attr = "data-" + kebab(prop);
+          if (!el.hasAttribute(attr)) return undefined;
+          return { value: el.getAttribute(attr), enumerable: true, configurable: true };
+        }
+      });
+    }
+  });
+
+  /* data-token-code -> { tokenCode: "..." } */
+  function readDataset(el) {
+    var out = {};
+    Object.keys(el.__attrs).forEach(function (name) {
+      if (name.indexOf("data-") !== 0) return;
+      var key = name.slice(5).replace(/-([a-z])/g, function (_, c) {
+        return c.toUpperCase();
+      });
+      out[key] = el.__attrs[name];
+    });
+    return out;
+  }
+
   Object.defineProperty(Element.prototype, "children", {
     get: function () {
       return this.childNodes.filter(function (n) { return n.nodeType === 1; });
@@ -277,8 +324,16 @@
   /* No layout in this DOM, so scrolling is a no-op. 01/0007 calls it at the
      end of addMessageToUI; throwing there would derail the lesson's point. */
   Element.prototype.scrollIntoView = function () {};
-  Element.prototype.focus = function () {};
-  Element.prototype.blur = function () {};
+
+  /* focus and blur do dispatch, because 01/0008 attaches handlers to them.
+     They do not bubble, matching the real events — which is itself the point
+     of the delegation caveat in that lesson. */
+  Element.prototype.focus = function () {
+    this.dispatchEvent(new SandboxEvent("focus", { bubbles: false }));
+  };
+  Element.prototype.blur = function () {
+    this.dispatchEvent(new SandboxEvent("blur", { bubbles: false }));
+  };
 
   Element.prototype.querySelector = function (sel) {
     return querySelectorAll(this, sel)[0] || null;
@@ -332,7 +387,39 @@
   };
 
   Element.prototype.click = function () {
-    return this.dispatchEvent(new SandboxEvent("click", { bubbles: true }));
+    var allowed = this.dispatchEvent(new SandboxEvent("click", { bubbles: true }));
+
+    /* A real browser submits the enclosing form when a submit button is
+       clicked, and 01/0008 teaches preventDefault through exactly that path.
+       Without this, a lesson could "prove" preventDefault works while the
+       submit handler had in fact never run. A click stopped by
+       preventDefault does not submit, which is the behaviour being taught. */
+    if (allowed && this.tagName === "BUTTON" &&
+        (this.getAttribute("type") === "submit" || !this.hasAttribute("type"))) {
+      var form = this.closest("form");
+      if (form) form.requestSubmit();
+    }
+    return allowed;
+  };
+
+  /* Fires a submit event the handler can cancel. Returning whether it was
+     allowed lets a playground show that preventDefault actually stopped it. */
+  Element.prototype.requestSubmit = function () {
+    return this.dispatchEvent(new SandboxEvent("submit", { bubbles: true }));
+  };
+
+  /* NOT an alias for requestSubmit. In a real browser form.submit() submits
+     the form *without* firing the submit event, so every handler — including
+     the preventDefault that stops a page reload — is skipped. Silently
+     treating the two as the same would teach the opposite of the truth, so
+     this explains itself instead. */
+  Element.prototype.submit = function () {
+    throw new Error(
+      "form.submit() bypasses the submit event, so your submit handler never " +
+      "runs — that is real browser behaviour, not a limitation of this " +
+      "playground. Use form.requestSubmit() to submit the way a user would, " +
+      "or click the submit button."
+    );
   };
 
   /* Serialising to markup is what `console.log(el)` and the playground's DOM
@@ -362,6 +449,12 @@
 
   // ------------------------------------------------------------------- event
 
+  /* One event class for every event type. Anything in `opts` that is not a
+     known control field is copied straight onto the event, so `key`,
+     `shiftKey`, `clientX` and friends all work without a KeyboardEvent /
+     MouseEvent hierarchy that would teach nothing extra here. */
+  var EVENT_CONTROL_FIELDS = { bubbles: 1, target: 1 };
+
   function SandboxEvent(type, opts) {
     opts = opts || {};
     this.type = String(type);
@@ -370,10 +463,11 @@
     this.currentTarget = null;
     this.defaultPrevented = false;
     this.__stopped = false;
-    /* Keyboard and input extras, so 01/0008 can teach `event.key === "Enter"`
-       without a second event class. */
-    if (opts.key !== undefined) this.key = opts.key;
-    if (opts.value !== undefined) this.value = opts.value;
+
+    var self = this;
+    Object.keys(opts).forEach(function (name) {
+      if (!EVENT_CONTROL_FIELDS[name]) self[name] = opts[name];
+    });
   }
 
   SandboxEvent.prototype.preventDefault = function () { this.defaultPrevented = true; };

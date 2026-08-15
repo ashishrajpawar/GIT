@@ -19,9 +19,25 @@ one or two lessons at a time, never batched ahead.
 |---|---|
 | `01/0005-loops` | done — `f9230c5` |
 | `01/0006-scope-and-closures` | done — `be65077` (+ `scripts/verify-lesson.mjs`) |
-| `01/0007-dom-and-browser-apis` | done — sandbox + retrofit, see below |
-| **`01/0008-events`** | **next** — sandbox already covers bubbling events |
+| `01/0007-dom-and-browser-apis` | done — `6a2221f` (sandbox) + `8700f19` (retrofit) |
+| **`01/0008-events`** | **in progress — unit 3a tooling, then 3b retrofit** |
 | `01/0009`–`01/0012` | not started |
+
+### Unit 3a — sandbox gaps that 0008 needs
+
+Checked before writing, as planned. The sandbox covers bubbling,
+`target`/`currentTarget`, `stopPropagation`, `preventDefault` and `event.key`
+already. Three things it does **not**, all of which 0008 teaches:
+
+1. **`dataset`** — used 6 times, and it is load-bearing: the delegation
+   section identifies the clicked row with `el.dataset.messageId`.
+2. **Arbitrary event properties** — `SandboxEvent` hard-codes `key` and
+   `value`. The Shift+Enter section needs `shiftKey`.
+3. **Form submit** — `preventDefault` is taught through a form's submit
+   event, and a submit button's click does not currently reach the form.
+
+Adding all three to `dom-sandbox.js` with matching assertions in
+`scripts/test-dom-sandbox.mjs`, per the standing note in this file.
 
 ### Unit 1 — `assets/dom-sandbox.js` — DONE
 
