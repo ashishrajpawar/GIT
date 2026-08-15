@@ -345,7 +345,13 @@
     orderDisplay.className = "quiz-order-display";
     orderDisplay.innerHTML = '<span class="quiz-order-placeholder">Click steps in the correct order…</span>';
 
-    q.steps.forEach(function (step, stepIndex) {
+    // Buttons are shown in a shuffled order. Almost every lesson authors
+    // `steps` already in the correct sequence with correctOrder [0,1,2,…],
+    // so rendering in array order gave the answer away. The button keeps its
+    // ORIGINAL index in dataset.stepIndex, so correctOrder still means the
+    // same thing whichever way the lesson authored it.
+    shuffledIndexes(q.steps.length, q.correctOrder).forEach(function (stepIndex) {
+      var step = q.steps[stepIndex];
       var btn = document.createElement("button");
       btn.type = "button";
       btn.className = "quiz-option quiz-step-btn";
@@ -378,6 +384,31 @@
 
     block.appendChild(orderDisplay);
     block.appendChild(stepsDiv);
+  }
+
+  /* Fisher-Yates over [0..n-1]. `avoid` is the sequence that must NOT come
+     out — pass correctOrder, so the displayed order is never itself the
+     answer. Retries are bounded; with n < 2 there is nothing to shuffle. */
+  function shuffledIndexes(n, avoid) {
+    var order = [];
+    for (var i = 0; i < n; i++) order.push(i);
+    if (n < 2) return order;
+
+    for (var attempt = 0; attempt < 20; attempt++) {
+      for (var j = n - 1; j > 0; j--) {
+        var k = Math.floor(Math.random() * (j + 1));
+        var tmp = order[j];
+        order[j] = order[k];
+        order[k] = tmp;
+      }
+      if (!avoid || !arraysEqual(order, avoid)) return order;
+    }
+    // Fell through 20 identical draws (vanishingly unlikely): swap the
+    // first two so we never hand back the answer sequence.
+    var first = order[0];
+    order[0] = order[1];
+    order[1] = first;
+    return order;
   }
 
   function updateOrderDisplay(display, selected, steps) {

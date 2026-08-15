@@ -357,9 +357,10 @@ RootStack (headerShown: false)
 
 ## Student profile
 
-- **Actual progress: 2 lessons of 95** (as of 2026-08-14). Finished
-  `01/0001-what-is-javascript` and `01/0002-data-types` with their quizzes;
-  now on `01/0003-functions`. A true beginner — pitch accordingly.
+- **Actual progress: 3 lessons of 95** (as of 2026-08-15). Finished
+  `01/0001-what-is-javascript`, `01/0002-data-types` and `01/0003-functions`
+  with their quizzes; next is `01/0004-conditionals`. A true beginner —
+  pitch accordingly.
   (This file previously claimed Modules 1 and 2 were complete. They are not.
   "Complete" in the module tables below means *written*, never *studied*.)
 - Background: HTML and CSS. Not an experienced programmer.

@@ -21,8 +21,9 @@ two-track lesson plan.
 ## 2. Current state
 
 > **"Complete" throughout this document means _written_, not _studied_.**
-> Student progress as of 2026-08-14 is **2 lessons of 95** — `01/0001` and
-> `01/0002` done with quizzes, now on `01/0003-functions`. All 95 lessons were
+> Student progress as of 2026-08-15 is **3 lessons of 95** — `01/0001`,
+> `01/0002` and `01/0003` done with quizzes, next is `01/0004-conditionals`.
+> All 95 lessons were
 > generated ahead of the student, contrary to the "one module at a time" rule
 > in CLAUDE.md. No lesson's code has been executed or confirmed running.
 
@@ -252,8 +253,8 @@ generated ahead; nothing was confirmed.
 
 ### For whoever writes course material next
 
-**Do not write more lessons.** There is a ~93-lesson backlog against a student
-on lesson 3. Adding to it is the trap this project already fell into. If a gap
+**Do not write more lessons.** There is a ~92-lesson backlog against a student
+on lesson 4. Adding to it is the trap this project already fell into. If a gap
 appears, fix an existing lesson instead.
 
 The one defensible piece of new work: **adding `createPlayground()` to Module 01**
