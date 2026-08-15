@@ -22,13 +22,13 @@ how far it got.
 | 5. `ARCHITECTURE.md` + ADRs | done — `3db9fdc` |
 | 6. `CLAUDE.md` architecture rewrite | done |
 | 7. `TOKEN-TRACK.md` resequenced | done |
-| 8. Playground async + loop guard | pending |
+| 8. Playground async + loop guard | done |
 | 9. Quiz answer-position bias | pending |
 | 10. Broken links + delete stale `lessons/` | pending |
 
 ## Next action
 
-Fix assets/playground.js: flush microtasks so .then/await produce output, and guard runaway loops (step 8).
+Fix the quiz answer-position bias: renderer shuffle plus the 49 explanations that name options by letter (step 9).
 
 ## Blocked on
 
