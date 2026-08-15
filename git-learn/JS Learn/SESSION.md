@@ -23,12 +23,12 @@ how far it got.
 | 6. `CLAUDE.md` architecture rewrite | done |
 | 7. `TOKEN-TRACK.md` resequenced | done |
 | 8. Playground async + loop guard | done |
-| 9. Quiz answer-position bias | pending |
+| 9. Quiz answer-position bias | done |
 | 10. Broken links + delete stale `lessons/` | pending |
 
 ## Next action
 
-Fix the quiz answer-position bias: renderer shuffle plus the 49 explanations that name options by letter (step 9).
+Fix 5 broken links and delete the stale lessons/ duplicate, then re-run the audit and close Phase 0 (step 10).
 
 ## Blocked on
 

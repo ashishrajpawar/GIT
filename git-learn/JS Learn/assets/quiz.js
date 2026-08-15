@@ -98,7 +98,9 @@
     var optionsDiv = document.createElement("div");
     optionsDiv.className = "quiz-options";
 
-    q.options.forEach(function (optionText, optIndex) {
+    var __order = optionDisplayOrder(q, q.options);
+    __order.forEach(function (optIndex, __display) {
+      var optionText = q.options[optIndex];
       var btn = document.createElement("button");
       btn.className = "quiz-option";
       btn.type = "button";
@@ -114,7 +116,7 @@
         var buttons = optionsDiv.querySelectorAll(".quiz-option");
         buttons.forEach(function (b, idx) {
           b.disabled = true;
-          if (idx === q.correct) b.classList.add("reveal-correct");
+          if (__order[idx] === q.correct) b.classList.add("reveal-correct");
         });
 
         if (isCorrect) {
@@ -202,7 +204,9 @@
     var optionsDiv = document.createElement("div");
     optionsDiv.className = "quiz-options";
 
-    q.options.forEach(function (optionText, optIndex) {
+    var __order = optionDisplayOrder(q, q.options);
+    __order.forEach(function (optIndex, __display) {
+      var optionText = q.options[optIndex];
       var btn = document.createElement("button");
       btn.className = "quiz-option";
       btn.type = "button";
@@ -218,7 +222,7 @@
         var buttons = optionsDiv.querySelectorAll(".quiz-option");
         buttons.forEach(function (b, idx) {
           b.disabled = true;
-          if (idx === q.correct) b.classList.add("reveal-correct");
+          if (__order[idx] === q.correct) b.classList.add("reveal-correct");
         });
 
         if (isCorrect) {
@@ -296,7 +300,9 @@
     var optionsDiv = document.createElement("div");
     optionsDiv.className = "quiz-options";
 
-    q.variants.forEach(function (variant, optIndex) {
+    var __order = optionDisplayOrder(q, q.variants);
+    __order.forEach(function (optIndex, __display) {
+      var variant = q.variants[optIndex];
       var btn = document.createElement("button");
       btn.className = "quiz-option quiz-option-code";
       btn.type = "button";
@@ -315,7 +321,7 @@
         var buttons = optionsDiv.querySelectorAll(".quiz-option");
         buttons.forEach(function (b, idx) {
           b.disabled = true;
-          if (idx === q.correct) b.classList.add("reveal-correct");
+          if (__order[idx] === q.correct) b.classList.add("reveal-correct");
         });
 
         if (isCorrect) {
@@ -389,6 +395,52 @@
   /* Fisher-Yates over [0..n-1]. `avoid` is the sequence that must NOT come
      out — pass correctOrder, so the displayed order is never itself the
      answer. Retries are bounded; with n < 2 there is nothing to shuffle. */
+  /* ---- Option ordering ----
+     Correct answers were clustered hard: 63.6% sat at index 1, so always
+     picking the second option scored ~64% without reading the question.
+     Options are shuffled at render time and each button remembers its original
+     index, so scoring against q.correct is unchanged and no lesson data moves.
+
+     Two things must NOT be shuffled:
+       - Options whose meaning depends on position ("All of the above",
+         "Both A and B", "Neither") — these are pinned last.
+       - Whole questions whose explanation names an option by letter
+         ("Option A creates a label statement"). ~49 questions do this, almost
+         always to explain why the WRONG options are wrong. Shuffling those
+         would make the explanation contradict the screen, so they render in
+         their authored order. Removing those references is follow-up work for
+         the deepening pass, when the explanations are being rewritten anyway. */
+
+  function explanationNamesAPosition(text) {
+    return /\b(?:option|answer|choice)\s+[A-D]\b/i.test(text) ||
+           /\bthe\s+(?:first|second|third|fourth|last)\s+(?:option|answer|choice|one)\b/i.test(text);
+  }
+
+  function isPositionPinned(text) {
+    return /^(all of the above|none of the above|both\b|neither\b|any of the above|either\b)/i
+      .test(String(text).trim());
+  }
+
+  function optionDisplayOrder(q, list) {
+    var order = [];
+    for (var i = 0; i < list.length; i++) order.push(i);
+    if (list.length < 2) return order;
+    if (explanationNamesAPosition(q.explanation || "")) return order;
+
+    var pinned = [];
+    var free = [];
+    order.forEach(function (i) {
+      (isPositionPinned(list[i]) ? pinned : free).push(i);
+    });
+    for (var j = free.length - 1; j > 0; j--) {
+      var k = Math.floor(Math.random() * (j + 1));
+      var tmp = free[j];
+      free[j] = free[k];
+      free[k] = tmp;
+    }
+    return free.concat(pinned);
+  }
+
   function shuffledIndexes(n, avoid) {
     var order = [];
     for (var i = 0; i < n; i++) order.push(i);
