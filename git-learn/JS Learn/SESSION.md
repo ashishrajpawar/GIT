@@ -24,7 +24,38 @@ one or two lessons at a time, never batched ahead.
 | `01/0009-promises-and-async-await` | done — `caafcf6` (tooling) + retrofit |
 | `01/0010-arrays-and-objects` | done — `c16b9be` |
 | `01/0011-modern-javascript-es6` | done |
-| **`01/0012-error-handling`** | **next — last of Module 01 and of Phase 1** |
+| `01/0012-error-handling` | done — **Module 01 and Phase 1.1 complete** |
+
+### Unit 7 — `01/0012-error-handling`
+
+Overlap checked first. Verdict: enough new material, unlike 0011.
+
+- `try`/`catch` with `await` **is** already in 0009 §5, so that part is
+  compressed and cross-referenced rather than re-taught.
+- Genuinely new and uncovered: `throw`, `finally`, custom error classes,
+  `instanceof`, and validating before you call.
+
+**§5 is "Firebase-specific error handling" — 29 Firebase mentions in the
+lesson.** Out of scope per CLAUDE.md, and it is a whole section rather than a
+stray reference, so it is replaced rather than trimmed. The replacement is
+errors crossing Token's own API boundary, which carries a genuinely
+Token-specific security point: a redemption page that distinguishes "no such
+token" from "this token is revoked" lets an attacker enumerate valid codes.
+Both must produce the *same* message. One check in the exercise tests exactly
+that, by comparing the two messages for equality.
+
+Shipped: 7 playgrounds, an exercise with 10 checks, 4 alternative styles and
+7 mistakes. The mistake the lesson exists for — **chatty messages** — handles
+every error type correctly, returns the right shape, never throws, and is
+*more helpful to read*. It fails exactly one check. Being helpful is the bug.
+
+**One audit warning added on purpose (51 → 52).** `pg-validate` uses
+`MERC-8GH2-KP4O` as a negative fixture: correct length, correct grouping, and
+impossible, because `O` is not in the alphabet. The playground explains why
+right underneath it. This is the deliberate-negative-fixture case
+`COURSE-REVIEW.md` §12.5 anticipates — **do not "fix" it**; removing it would
+delete the only place in the course that teaches the alphabet constraint as a
+validation rule rather than a piece of trivia.
 
 ### Unit 6 — `01/0011-modern-javascript-es6`
 
@@ -240,17 +271,32 @@ node scripts/verify-lesson.mjs modules/01-javascript-fundamentals/0007-dom-and-b
 
 ## Next action
 
-**Unit 7: retrofit `01/0012-error-handling`.** This closes Module 01 and
-Phase 1 item 1.1.
+**Phase 1.1 is complete — all of `01/0005`–`01/0012` are retrofitted and
+verified.** Module 01 now stands at 12/12 lessons with practice: 72
+playgrounds, 12 exercises, 350 questions.
 
-Check the overlap first, as with 0011 — `try`/`catch` is already taught in
-0009 §5 (with `await`), and 0011 covers `?.`/`??` as the way to avoid a whole
-class of error. What is likely left and genuinely uncovered: `throw`, custom
-error types, `finally`, error boundaries as a concept, and validation errors
-versus network errors. Confirm before writing.
+What remains in COURSE-REVIEW.md §6 Phase 1:
 
-Two things to check before writing, both of which have now bitten more than
-once:
+| # | Work | Status |
+|---|---|---|
+| 1.1 | Retrofit `01/0005`–`01/0012` | **done** |
+| 1.2 | Capstone at the end of Module 01 — a pure-JS token issuer, as the repo's first real commit | not started |
+| 1.3 | One "explain it in your own words" prompt per lesson | not started |
+| 1.4 | Spaced review from the previous two lessons | **done** — built into each retrofit |
+| 1.5 | Same retrofit for Module 02, just-in-time | not started |
+
+**Recommended next: 1.2, the capstone.** It is the natural close to Module 01,
+it is the first thing that actually lands in the Token repo (which has been
+scaffolded but is otherwise empty), and every piece it needs is now taught —
+generation from the alphabet (0005), closures for private state (0006),
+arrays and immutable updates (0010), `??` (0011), typed errors (0012).
+
+**Do not start Module 02 (1.5) yet.** The student is on lesson 5 or 6 of 12;
+Module 02 is just-in-time work and writing it now is exactly the batching-ahead
+the working discipline forbids.
+
+Two things to check before writing any further lesson, both of which have now
+bitten more than once:
 
 - **Premise-in-comment questions** (`// Given: <div>…`, `// User clicks`).
   Found in 0007 (3) and 0008 (all 5); absent in 0009 and 0010. Cheap to grep:
