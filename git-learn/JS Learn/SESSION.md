@@ -9,7 +9,7 @@ how far it got.
 
 ---
 
-## In progress — PHASE 0 COMPLETE
+## In progress — PHASE 1
 
 **Phase 0 — foundations.** See `COURSE-REVIEW.md` §6 for the full phase plan.
 

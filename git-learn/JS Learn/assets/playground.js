@@ -59,14 +59,23 @@
      01/0005, and a frozen browser teaches nothing. */
   var TIME_BUDGET_MS = 2000;
 
+  /* A runaway loop that logs on every pass produces millions of lines long
+     before the clock runs out. Rendering those would freeze the tab even
+     though execution was stopped — so output is capped too, and hitting the
+     cap ends the run. Measured: an unguarded logging loop reached 17.6M
+     iterations in 5.5s. */
+  var MAX_OUTPUT_LINES = 1000;
+
+  function TooMuchOutput() {}
+
   /* Wall-clock guard, called once per loop iteration by instrumented code. */
   function makeTicker() {
     var deadline = Date.now() + TIME_BUDGET_MS;
     var n = 0;
     return function () {
-      /* Check the clock every 2000 iterations — Date.now() in a hot loop is
-         itself slow enough to matter. */
-      if ((++n & 2047) === 0 && Date.now() > deadline) {
+      /* Check every 256 iterations. Date.now() in a hot loop costs enough to
+         matter, but checking too rarely lets a slow body overshoot badly. */
+      if ((++n & 255) === 0 && Date.now() > deadline) {
         throw new RangeError(
           "Your code ran for more than " + (TIME_BUDGET_MS / 1000) +
           " seconds and was stopped. This usually means a loop never ends — " +
@@ -117,7 +126,18 @@
     output.className = "playground-output";
 
     var logs = [];
+    var truncated = false;
     function push() {
+      if (logs.length >= MAX_OUTPUT_LINES) {
+        if (!truncated) {
+          truncated = true;
+          logs.push(
+            "... stopped after " + MAX_OUTPUT_LINES + " lines. A loop is " +
+            "printing far more than you meant it to — check its exit condition."
+          );
+        }
+        throw new TooMuchOutput();
+      }
       var args = Array.prototype.slice.call(arguments);
       logs.push(args.map(function (a) {
         if (typeof a === "object" && a !== null) {
@@ -158,7 +178,9 @@
       render(false);
       settle();
     } catch (err) {
-      logs.push(err.name + ": " + err.message);
+      /* The output cap unwinds via a sentinel — the message is already in
+         logs, so it must not be reported as a crash on top of that. */
+      if (!(err instanceof TooMuchOutput)) logs.push(err.name + ": " + err.message);
       render(true);
     }
   }

@@ -13,10 +13,10 @@ with this one, this one is right — everything below is measured, not asserted.
 |---|---|
 | Token-track lessons | 95 |
 | Legacy lessons (pre-pivot, excluded) | 45 |
-| Quiz questions (track) | 2508 |
-| Avg teaching prose per track lesson | 1434 words |
-| Lessons with a playground | 45 / 95 |
-| Lessons with an exercise | 73 / 95 |
+| Quiz questions (track) | 2513 |
+| Avg teaching prose per track lesson | 1440 words |
+| Lessons with a playground | 46 / 95 |
+| Lessons with an exercise | 74 / 95 |
 | **Deepened** (all 3 spine sections) | 0 / 95 |
 | **Verified** (code executed) | 0 / 95 |
 | Errors | 3 |
@@ -27,12 +27,12 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 ## Answer-position distribution — **authored order, not what the student sees**
 
-1284 keyed questions (multiple-choice, spot-the-bug, which-breaks).
+1287 keyed questions (multiple-choice, spot-the-bug, which-breaks).
 
 > **This clustering is expected and already handled. Do not "fix" it again.**
 > `quiz.js` shuffles options at render time (`optionDisplayOrder`), so the
 > displayed distribution is roughly even — measured at 26.9 / 28.5 / 26.9 / 17.6
-> across all 1284 questions, versus the authored figures below. Index 3 sits
+> across all 1287 questions, versus the authored figures below. Index 3 sits
 > lower only because many questions have three options.
 >
 > The numbers here read `correct` straight from the lesson data, which is
@@ -42,17 +42,17 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Position | Count | Share |
 |---|---|---|
-| index 0 | 118 | 9.2% |
-| index 1 | 816 | 63.6% |
-| index 2 | 324 | 25.2% |
-| index 3 | 26 | 2.0% |
+| index 0 | 119 | 9.2% |
+| index 1 | 816 | 63.4% |
+| index 2 | 325 | 25.3% |
+| index 3 | 27 | 2.1% |
 
 ## Question types
 
 | Type | Count |
 |---|---|
-| multiple-choice | 610 |
-| predict-output | 493 |
+| multiple-choice | 613 |
+| predict-output | 495 |
 | fill-blank | 456 |
 | spot-the-bug | 372 |
 | which-breaks | 302 |
@@ -62,7 +62,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Module | Lessons | Avg prose | Playgrounds | Exercises | Questions | Deepened | Verified |
 |---|---|---|---|---|---|---|---|
-| 01-javascript-fundamentals | 12 | 2305 | 17 | 4 | 313 | 0/12 | 0/12 |
+| 01-javascript-fundamentals | 12 | 2355 | 22 | 5 | 318 | 0/12 | 0/12 |
 | 02-react-native | 14 | 2301 | 0 | 0 | 355 | 0/14 | 0/14 |
 | a10-device-security | 2 | 1277 | 2 | 2 | 50 | 0/2 | 0/2 |
 | a11-polish-publish | 5 | 1229 | 0 | 5 | 125 | 0/5 | 0/5 |
@@ -156,7 +156,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | 01-javascript-fundamentals/0002-data-types.html | 1638 | 18 | 4 | 1 | 30 | — | — |
 | 01-javascript-fundamentals/0003-functions.html | 2535 | 18 | 5 | 1 | 25 | — | — |
 | 01-javascript-fundamentals/0004-conditionals.html | 2716 | 23 | 4 | 1 | 25 | — | — |
-| 01-javascript-fundamentals/0005-loops.html | 2322 | 15 | 0 | 0 | 30 | — | — |
+| 01-javascript-fundamentals/0005-loops.html | 2918 | 15 | 5 | 1 | 35 | — | — |
 | 01-javascript-fundamentals/0006-scope-and-closures.html | 3086 | 16 | 0 | 0 | 25 | — | — |
 | 01-javascript-fundamentals/0007-dom-and-browser-apis.html | 2858 | 19 | 0 | 0 | 25 | — | — |
 | 01-javascript-fundamentals/0008-events.html | 2472 | 15 | 0 | 0 | 25 | — | — |
