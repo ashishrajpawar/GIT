@@ -22,9 +22,55 @@ one or two lessons at a time, never batched ahead.
 | `01/0007-dom-and-browser-apis` | done — `6a2221f` (sandbox) + `8700f19` (retrofit) |
 | `01/0008-events` | done — `e13a323` (sandbox) + `5d941f0` (retrofit) |
 | `01/0009-promises-and-async-await` | done — `caafcf6` (tooling) + retrofit |
-| `01/0010-arrays-and-objects` | done |
-| **`01/0011-modern-javascript-es6`** | **next** |
-| `01/0012-error-handling` | not started |
+| `01/0010-arrays-and-objects` | done — `c16b9be` |
+| `01/0011-modern-javascript-es6` | done |
+| **`01/0012-error-handling`** | **next — last of Module 01 and of Phase 1** |
+
+### Unit 6 — `01/0011-modern-javascript-es6`
+
+Checked the overlap before writing, as planned, and it is worse than expected.
+Measured across module 01:
+
+| 0011 section | Already taught in | Verdict |
+|---|---|---|
+| §1 `let`/`const` | 0002, 0006 | redundant |
+| §2 arrow functions | 0003 — 17 mentions, 41 `=>` | redundant |
+| §3 destructuring | **0010** §3 | redundant |
+| §4 spread | **0010** §5 — 19 mentions + the exercise | redundant |
+| §5 template literals | 0002 — 8 mentions | partial |
+| §6 `?.` / `??` | **nowhere in the course** | new |
+| §7 modules | **nowhere in the course** | new |
+
+Roughly 60% of the lesson re-teaches material the student has already met, two
+lessons of which I wrote in this session. **Restructured rather than rewritten
+as-is**: one short consolidation section that names the syntax he is already
+using, then the lesson's weight on `?.`, `??` and modules.
+
+`?.` and `??` earn the space — they are the direct answer to the
+returns-null/undefined traps built up in 0007 (`querySelector`), 0009 (a
+rejected promise) and 0010 (`find`). The broken-on-purpose playground is
+`||` vs `??` on a rule of `maxUses: 0`, which silently becomes 5 — a
+capability system quietly granting uses that were never authorised.
+
+**Modules deliberately have no playground.** `import` resolves real files and a
+playground runs one snippet with no file system or bundler, so it cannot work.
+The lesson says that outright rather than faking it with objects, which would
+teach the wrong mental model.
+
+#### Tooling fix found by writing it
+
+Two playgrounds shipped with over-escaped backticks (`\\\`` where `\``
+was meant), so the code string contained `\`` outside a string and did not
+parse. **`verify-lesson.mjs` reported both as `ok`** — it treats any throw as
+"deliberate breakage is expected", and a `SyntaxError` was indistinguishable
+from a lesson's intentional `TypeError`.
+
+Section 2 now fails on `SyntaxError` specifically, with a message saying
+deliberate breakage must throw at run time rather than fail to compile. Proved
+both directions on a fixture: malformed code fails, a deliberate `TypeError`
+with zero output still passes. An earlier version also failed any playground
+that threw with no output — that would have wrongly flagged `0007`'s
+`pg-null-crash`, which legitimately crashes on its first statement.
 
 ### Unit 5 — `01/0010-arrays-and-objects` — DONE
 
@@ -194,8 +240,14 @@ node scripts/verify-lesson.mjs modules/01-javascript-fundamentals/0007-dom-and-b
 
 ## Next action
 
-**Unit 6: retrofit `01/0011-modern-javascript-es6`.** Then `01/0012` closes out
-Module 01 and Phase 1.
+**Unit 7: retrofit `01/0012-error-handling`.** This closes Module 01 and
+Phase 1 item 1.1.
+
+Check the overlap first, as with 0011 — `try`/`catch` is already taught in
+0009 §5 (with `await`), and 0011 covers `?.`/`??` as the way to avoid a whole
+class of error. What is likely left and genuinely uncovered: `throw`, custom
+error types, `finally`, error boundaries as a concept, and validation errors
+versus network errors. Confirm before writing.
 
 Two things to check before writing, both of which have now bitten more than
 once:

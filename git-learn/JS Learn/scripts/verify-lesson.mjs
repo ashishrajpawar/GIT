@@ -186,7 +186,18 @@ for (const [id, pg] of Object.entries(playgrounds)) {
   const ms = Date.now() - t0;
   const tag = pg.opts.dom ? " [dom]" : "";
   if (ms > 4000) fail(`${id}: took ${ms}ms — the guard is not stopping it`);
-  else ok(`${id}${tag}: ${logs.length} lines, ${ms}ms${threw ? `, stopped by ${threw.slice(0, 40)}` : ""}`);
+  /* A playground that is broken on purpose throws at RUN time — a TypeError
+     from a null selector, a ReferenceError from an out-of-scope variable. A
+     SyntaxError means the code never parsed, so the student sees an error
+     message about the lesson's own typo rather than about the concept. This
+     was reported as "ok" until 01/0011 shipped two playgrounds whose escaped
+     backticks produced `\` outside a string. */
+  else if (/^SyntaxError/.test(threw || "")) {
+    fail(`${id}: ${threw} — the playground code does not parse. Deliberate ` +
+         `breakage should throw at run time, not fail to compile.`);
+  } else {
+    ok(`${id}${tag}: ${logs.length} lines, ${ms}ms${threw ? `, stopped by ${threw.slice(0, 40)}` : ""}`);
+  }
 }
 
 // ---- 3. predict-output answers -------------------------------------------
