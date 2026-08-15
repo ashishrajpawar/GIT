@@ -21,11 +21,16 @@ two-track lesson plan.
 ## 2. Current state
 
 > **"Complete" throughout this document means _written_, not _studied_.**
-> Student progress as of 2026-08-15 is **4 lessons of 95** — `01/0001`
-> through `01/0004` done with quizzes, next is `01/0005-loops`.
-> All 95 lessons were
-> generated ahead of the student, contrary to the "one module at a time" rule
-> in CLAUDE.md. No lesson's code has been executed or confirmed running.
+>
+> **Student progress, from the student (2026-08-15): `01/0001`–`01/0004` done
+> with quizzes; next is `01/0005-loops`.** This is the one fact no script can
+> compute — never infer it from the files. Doing exactly that produced the
+> "Modules 1 and 2 complete" claim that mispitched every session for months.
+>
+> Every lesson was generated ahead of the student, contrary to the "one module
+> at a time" rule in CLAUDE.md, and none has been executed. Verification is now
+> tracked in `PROGRESS.md`; the student chose to verify all of it (decision 4,
+> 2026-08-15 session below).
 
 ### Existing modules (written during the WhatsApp era)
 
@@ -87,8 +92,11 @@ All six features from `TOKEN-ASSETS-TASK.md` are built and working in `assets/`:
 | B10 — Security & Compliance | 2 | Complete |
 | A11 — Polish & Publish | 5 | Complete |
 
-**All 24 modules written. The course is finished; the student is on lesson 3,
-and the Token repo does not yet exist — see §8.**
+**All 24 modules are written — which is not the same as finished.** Written ≠
+verified ≠ studied. The 2026-08-15 review found ten missing modules (~36
+lessons) and scope has since grown to ~145 lessons total; see
+`COURSE-REVIEW.md`. For counts and coverage run `node scripts/audit.mjs` and
+read `PROGRESS.md` — never trust a number stated here.
 
 ---
 
@@ -96,7 +104,10 @@ and the Token repo does not yet exist — see §8.**
 
 **Mobile app:** React Native + Expo, EAS Build, TypeScript, SQLite cache
 **Redemption web page:** Vite + React (NOT RN Web), same Coolify VPS
-**Backend:** Node.js + TypeScript, PostgreSQL, Redis (optional v1), raw SQL then Drizzle
+**Backend:** Node.js + TypeScript, PostgreSQL (pooled, partition-aware), **Redis
+required** — socket routing, presence, distributed rate limiting — raw SQL then
+Drizzle. API is **stateless**; see `ARCHITECTURE.md`.
+**Messages are end-to-end encrypted from v1** — the server stores ciphertext only.
 **Communication:** WebSocket (chat), WebRTC (voice/video), own signalling server
 **Push:** FCM + APNs via Expo Notifications (only third-party dep)
 **Deployment:** Coolify on VPS, `api/` and `web/` as containers, auto TLS
@@ -130,11 +141,16 @@ assets/
   progress.js         ← localStorage progress tracking
   copy-code.js        ← auto-attaches Copy buttons to <pre>
   search.js           ← client-side search (index.html only)
-  search-index.json   ← 95 entries, all 24 modules — regenerate when lessons change
+  search-index.json   ← regenerate when lessons change; audit reports its accuracy
+scripts/audit.mjs   ← ground truth; generates PROGRESS.md
+PROGRESS.md         ← GENERATED state — counts, coverage, verification. Never hand-edit
+SESSION.md          ← hand-written: In progress / Next action / Blocked
 reference/js-basics-cheatsheet.html
 MISSION.md      ← why Token, success criteria, out of scope
 NOTES.md        ← teacher notes; CLAUDE.md wins where they disagree
 RESOURCES.md    ← open-source links only; Firebase/Agora deliberately absent
+COURSE-REVIEW.md ← 2026-08-15 audit: vision-vs-course gaps, phased plan,
+                   verified defects, and what is still unverified
 TOKEN-BRIEF.md  TOKEN-TRACK.md  TOKEN-ASSETS-TASK.md
 CLAUDE.md       ← operative orientation
 HANDOFF.md      ← this file
@@ -218,7 +234,24 @@ migration (`.sql` for SQL lessons, `.js`/`.ts` for Node lessons).
   after adding or renaming lessons.
 - **No lesson code has ever been executed.** All 95 lessons were generated ahead
   of the student without the "confirm it runs" gate. Treat every snippet as
-  unverified; when something fails, suspect the lesson.
+  unverified; when something fails, suspect the lesson. Partially addressed
+  2026-08-15: the 188 executable `predict-output` snippets were run and 8 wrong
+  keys fixed. The other ~92% of the quiz bank is still unverified.
+- **Every example token must be valid under the 31-character alphabet**
+  (`23456789ABCDEFGHJKMNPQRSTUVWXYZ` — no 0, O, 1, I, L). The canonical example
+  contained an `L` for months and reached 36 files including `CLAUDE.md`. See
+  CLAUDE.md § "Token code format" — it is a hard constraint, not a style note.
+- **Never tag a "which is correct?" question as `which-breaks`.** The renderer
+  prints a fixed "Which of these will fail?" prompt regardless of your
+  `question` text, which inverts the question. Ten had this defect.
+- **The playground cannot run async code and has no loop guard.** `new Function`
+  plus a synchronous log read means `.then()` and `await` both print
+  `(no output)`; `while (true)` hangs the tab. Fix before adding practice to
+  `01/0005` or `01/0009`. See `COURSE-REVIEW.md` §7.2.
+- **Lessons do not compose into one codebase.** `participants`, `read_receipts`,
+  `deletion_queue` and `push_tokens` are queried by later lessons but created by
+  none. Following the course in order produces a database B10 cannot run
+  against. See `COURSE-REVIEW.md` §8.
 
 ---
 
@@ -269,35 +302,21 @@ when 01 and 02 were believed complete.
 
 **Done. All 24 modules, all 95 lessons, 2,508 questions.**
 
+> **"Complete" here means the questions exist and are well-formed — not that
+> their answers are right.** The 2,508 count was independently confirmed on
+> 2026-08-15, and structure came back clean. But running the 188 executable
+> `predict-output` questions found **8 wrong keys**, and a framing check found
+> **10 more** inverted by a wrong `type`. All 18 are fixed. Only 7.5% of the
+> bank has been checked against ground truth. See §"Session of 2026-08-15 —
+> full course review" and `COURSE-REVIEW.md` §10.
+
 Every Token-track lesson carries at least 25 questions with a mix of types
 (multiple-choice, predict-output, spot-the-bug, fill-blank, which-breaks, order-steps).
 
-| Module | Lessons | Min | Total | Status |
-|--------|---------|-----|-------|--------|
-| 01 — JavaScript Fundamentals | 12 | 25 | 313 | ✅ Done |
-| 02 — React Native | 14 | 25 | 355 | ✅ Done |
-| X1 — Git & Dev Environment | 3 | 25 | 76 | ✅ Done |
-| A2 — TypeScript | 3 | 25 | 76 | ✅ Done |
-| X2 — Debugging | 2 | 25 | 50 | ✅ Done |
-| B1 — SQL Fundamentals | 4 | 25 | 103 | ✅ Done |
-| B2 — Schema Design | 3 | 26 | 81 | ✅ Done |
-| B3 — Node & HTTP Server | 4 | 28 | 117 | ✅ Done |
-| B4 — Auth Server | 3 | 25 | 81 | ✅ Done |
-| A3 — API Consumption | 4 | 26 | 111 | ✅ Done |
-| A4 — Auth on the Client | 3 | 25 | 80 | ✅ Done |
-| A5 — Core Token Features | 5 | 29 | 148 | ✅ Done |
-| B5 — WebSocket Server | 3 | 25 | 77 | ✅ Done |
-| A6 — Chat & Real-time | 3 | 26 | 78 | ✅ Done |
-| B6 — WebRTC Signalling | 2 | 26 | 52 | ✅ Done |
-| A7 — Voice & Video | 5 | 26 | 138 | ✅ Done |
-| A8 — Redemption Web Page | 4 | 27 | 115 | ✅ Done |
-| A9 — Deep Linking & Routing | 2 | 25 | 53 | ✅ Done |
-| B7 — Token Engine | 3 | 25 | 77 | ✅ Done |
-| B8 — Push Notifications | 1 | 25 | 25 | ✅ Done |
-| A10 — Device Security | 2 | 25 | 50 | ✅ Done |
-| B9 — Docker & Deployment | 3 | 25 | 77 | ✅ Done |
-| B10 — Security & Compliance | 2 | 25 | 50 | ✅ Done |
-| A11 — Polish & Publish | 5 | 25 | 125 | ✅ Done |
+**Per-module counts have moved to `PROGRESS.md`** (generated by
+`scripts/audit.mjs`). A hand-maintained table here would drift the moment a
+lesson changed — which is the failure mode this project already has twice. Run
+the audit for current numbers.
 
 **"Min" is the smallest question count in that module.** Some lessons run 26–30 —
 those extras are genuine questions, not miscounts. 25 was the floor, not a cap.
@@ -458,6 +477,154 @@ at a time, do not pause the course for tooling work.
 
 **Not committed:** `.claude/settings.local.json` carries local permission state
 and is deliberately left alone.
+
+### Session of 2026-08-15 — full course review, and quiz-key repairs
+
+The student asked for a 360° review: does the course actually deliver a
+production-grade, scalable, self-operated Token without Googling the gaps.
+Findings and the phased plan live in **`COURSE-REVIEW.md`** — read that before
+planning any further course work. Headlines:
+
+- **Architecture is sound and the open-source constraint holds.** Every Track
+  A/B lesson was searched for Firebase, Agora, Twilio, Prisma, Auth0, Supabase
+  and ten others. One violation remains unfixed: `a7/0004` imports
+  `@react-native-firebase/messaging`, contradicting B8's Expo Notifications.
+- **Depth is inverted.** Modules 01/02 average 2,303 words of prose; the 69
+  Token-track lessons that actually build the product average **1,106**. The
+  thinning happened exactly where the product gets built.
+- **Ten modules of coverage are missing** — testing, CI/CD, observability,
+  analytics, scale/performance, offline+media+jobs, E2EE, trust & safety,
+  architecture/ADRs, launch & support. Zero lessons on each.
+- **Lessons do not compose into one codebase** (see §7).
+- **Realistic timeline is 8–12 months**, ~130 lessons — not the 3–4 months in
+  `TOKEN-TRACK.md`, which costed an MVP by someone who already codes.
+
+#### Quiz keys — verified in part, 18 fixed
+
+All 2,508 track questions were extracted by executing each lesson's inline
+script. Structure is clean: 0 out-of-range keys, 0 malformed `correctOrder`,
+0 genuinely missing fields. Semantics are another matter.
+
+| Fixed | What |
+|-------|------|
+| 8 wrong answer keys | Found by running the 188 executable `predict-output` snippets — a 4.3% error rate on the testable sample |
+| 10 inverted questions | Multiple-choice questions tagged `which-breaks`, so the key rewarded the correct option under a "which will fail?" prompt |
+| 187 invalid tokens | `MERC-8GH2-LP4X` → `MERC-8GH2-KP4X` across 36 files |
+| 6 stale figures | Lesson `a5/0001` used alphabet size 29 throughout; it is 31. Every derived number was wrong, one twice over |
+
+`which-breaks` 312 → 302, multiple-choice 600 → 610, total holds at 2,508.
+All 140 lessons still parse clean. **47 files changed, not committed.**
+
+**Deliberately not fixed:** ~15 other example tokens contain excluded characters.
+Some are accidental like MERC was; others look like deliberate negative fixtures
+(`TEST-1234`, `NOPE-0000`, `IJKL-3333`) where invalidity may be the point.
+Reading each in context is required — do not bulk-rewrite.
+
+#### Honest coverage of the key verification
+
+188 of 2,508 keys (**7.5%**) were checked against ground truth. The remaining
+600 multiple-choice, 456 fill-blank, 372 spot-the-bug, 302 which-breaks and 275
+order-steps rest on domain judgement that execution cannot settle. If the 4.3%
+rate holds, roughly a hundred more questions carry a wrong key. That is an
+extrapolation from one sample, not a finding.
+
+#### Decisions still open with the student
+
+1. Depth-first (deepen ~20 spine lessons) or breadth-first (add the 10 modules)?
+2. Create the Token repo now? — recommended, highest-leverage item in the review
+3. E2EE in v1 or v2? Must be settled **before** B2 schema design
+4. Verify all lesson code by execution?
+5. Fix the answer-position bias (63.6% at index 1) at the 01/02 break?
+6. What scale is v1 for? "Millions" and "one Coolify VPS" are different designs
+7. Modernise off Expo SDK 49, or leave it?
+
+### Session of 2026-08-15 — seven decisions taken, Phase 0 begun
+
+The student reviewed `COURSE-REVIEW.md` and settled every open decision. **Four
+followed the recommendation; three deliberately overrode it, all in the more
+ambitious direction.** The overrides change the architecture, so the reasoning
+on both sides is recorded here — a future session must not "helpfully" revert
+them.
+
+| # | Decision | Choice |
+|---|---|---|
+| 1 | Sequencing | Depth first, **then breadth in waves** |
+| 2 | Token repo | Create now, at `GIT/token/` |
+| 3 | E2EE | **v1 — built in from the start** ← override |
+| 4 | Verify lesson code | **Everything** ← override |
+| 5 | Quiz answer-position bias | Fix it |
+| 6 | v1 scale | **Build for millions from day one** ← override |
+| 7 | Expo SDK | Modernise Track A before he reaches it |
+
+#### The three overrides, and why
+
+**E2EE in v1** (recommended: v2, designed for). The case for v2 was that E2EE
+costs server-side search, blocks content moderation — which a product where
+strangers can message you genuinely needs — makes multi-device hard, and turns
+key backup into a product problem to solve before launch. The student chose v1
+anyway: E2EE is the core of Token's privacy promise, and retrofitting it is a
+rewrite of the message schema. **Accepted. It is his product and his call.**
+
+**Verify everything** (recommended: the ~20 spine lessons). Bounded verification
+covers the code the product is built from. He wants the whole bank. Accepted,
+with a method note: some lessons cannot be executed without a device, a VPS, or
+a domain. Those are recorded as `unverifiable` with a reason in
+`scripts/verification-log.json` — never silently marked verified.
+
+**Build for millions from day one** (recommended: first 10,000, instrumented).
+The reconciliation that makes this coherent: **build the architecture that
+scales, deploy it on one box until traffic justifies more.** Stateless API,
+Redis-backed socket fan-out, pooled connections, partition-aware schema — then
+scaling out is a config change, not a rewrite. That is what "I don't want to
+re-architect after production" actually requires, so this is not a compromise
+version of his choice.
+
+#### What changed as a result
+
+Architecture decisions previously marked "do not revisit" — revised by the
+student, deliberately, which is the only legitimate way that happens:
+
+- Redis: *optional for v1* → **required** (socket routing across nodes, presence,
+  distributed rate limiting)
+- API: implicitly single-node → **explicitly stateless**
+- Postgres: one container → **pooled, partition-aware, read-replica-ready**
+- Messages: server-readable → **server stores ciphertext only**
+
+Module sequence:
+
+- **E2EE moves before B2** — a schema prerequisite now, not an add-on, and grows
+  from 2 lessons to ~5 (key generation, distribution, verification, backup and
+  recovery, multi-device — the last being the hardest thing in the plan)
+- **Trust & Safety redesigned and moved earlier.** Server-side moderation is off
+  the table. The answer is client-side report packaging: the reporting user's
+  device decrypts and submits the message with cryptographic proof of
+  authorship. Signal and WhatsApp both do this, and it satisfies Apple's and
+  Google's abuse-reporting requirements — but it is a design constraint from day
+  one, not a later feature
+- **Scale & Performance moves alongside the backend track**, not after deployment
+- **B2 (schema) and B5 (WebSocket) get rewritten**, not merely deepened
+
+**Timeline, revised honestly: 12–18 months and ~145 lessons.** The earlier
+8–12 month figure assumed the moderate path on decisions 3 and 6. The old 3–4
+month estimate in `TOKEN-TRACK.md` costed an MVP by someone who already codes.
+
+#### Phase 0 — progress
+
+Live status is in `SESSION.md`; measured state is in `PROGRESS.md`. Do not look
+for either here.
+
+The first audit run found a **fourth orphan table** the manual review missed:
+`calls`, queried by `b7/0002` and `b7/0003`, created by no lesson. It joins
+`participants` and `deletion_queue`. All three get closed when B2 is rewritten
+for E2EE — they are schema design work, not typo fixes.
+
+#### Corrections to this document
+
+- §2 said "the course is finished". It is written, not finished, and the scope
+  has since grown by ~50 lessons. Written ≠ studied ≠ verified.
+- §3 listed Redis as optional for v1. It is required (decision 6).
+- §9's per-module quiz table restated counts the audit computes. Superseded by
+  `PROGRESS.md` — see the precedence rule in `CLAUDE.md`.
 
 ### Watch out when editing this file from a shell
 

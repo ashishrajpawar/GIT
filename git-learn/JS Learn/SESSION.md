@@ -17,7 +17,7 @@ how far it got.
 |---|---|
 | 1. `scripts/audit.mjs` + generated `PROGRESS.md` | done — `8c06ac3` |
 | 2. `SESSION.md` + resume protocol in `CLAUDE.md` | done |
-| 3. `HANDOFF.md` session entry — the 7 decisions | pending |
+| 3. `HANDOFF.md` session entry — the 7 decisions | done |
 | 4. Token repo scaffold at `GIT/token/` | pending |
 | 5. `ARCHITECTURE.md` + ADRs | pending |
 | 6. `CLAUDE.md` architecture rewrite | pending |
@@ -28,7 +28,7 @@ how far it got.
 
 ## Next action
 
-Write the HANDOFF.md session entry recording the 7 decisions (step 3).
+Scaffold the Token repo at GIT/token/ with its own git repo and a /token/ ignore line in a new GIT/.gitignore (step 4).
 
 ## Blocked on
 
