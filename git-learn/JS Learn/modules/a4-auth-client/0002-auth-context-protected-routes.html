@@ -46,8 +46,9 @@ const auth = useContext(AuthContext);</code></pre>
     <h2>Token's AuthContext</h2>
 
     <pre><code>// app/src/auth/AuthContext.tsx
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useMemo, ReactNode } from 'react';
 import * as SecureStore from 'expo-secure-store';
+import { api, ApiError } from '../api';        // the shared client from A3.2
 import { setAccessToken, clearTokens } from './store';
 
 interface User {
@@ -59,6 +60,7 @@ interface User {
 interface AuthState {
   user: User | null;
   isLoading: boolean;
+  isOffline: boolean;
   login: (email: string, password: string) =&gt; Promise&lt;void&gt;;
   register: (email: string, password: string, displayName: string) =&gt; Promise&lt;void&gt;;
   logout: () =&gt; Promise&lt;void&gt;;
@@ -69,6 +71,7 @@ const AuthContext = createContext&lt;AuthState | null&gt;(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState&lt;User | null&gt;(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isOffline, setIsOffline] = useState(false);
 
   // Check for existing session on app launch
   useEffect(() =&gt; {
@@ -76,81 +79,79 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   async function restoreSession() {
+    const refreshToken = await SecureStore.getItemAsync('refreshToken');
+    if (!refreshToken) {
+      setIsLoading(false);           // genuinely logged out
+      return;
+    }
+
     try {
-      const refreshToken = await SecureStore.getItemAsync('refreshToken');
-      if (!refreshToken) {
-        setIsLoading(false);
-        return;
+      const { data } = await api.refresh(refreshToken);
+      setAccessToken(data.accessToken);
+      await SecureStore.setItemAsync('refreshToken', data.refreshToken);
+      setUser(data.user);
+    } catch (err) {
+      // Two very different failures, and treating them the same is what
+      // makes an app log you out on a train.
+      if (err instanceof ApiError &amp;&amp; err.retryable) {
+        setIsOffline(true);          // could not ask - we still have the token
+      } else {
+        await clearTokens();          // the server said no - really logged out
       }
-
-      const res = await fetch('http://localhost:3000/api/auth/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refreshToken }),
-      });
-
-      if (!res.ok) {
-        await clearTokens();
-        setIsLoading(false);
-        return;
-      }
-
-      const json = await res.json();
-      setAccessToken(json.data.accessToken);
-      await SecureStore.setItemAsync('refreshToken', json.data.refreshToken);
-      setUser(json.data.user);
-    } catch {
-      // Network error — stay on loading or show offline
     } finally {
       setIsLoading(false);
     }
   }
 
-  async function login(email: string, password: string) {
-    const res = await fetch('http://localhost:3000/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.error);
-
-    setAccessToken(json.data.accessToken);
-    await SecureStore.setItemAsync('refreshToken', json.data.refreshToken);
-    setUser(json.data.user);
+  // One place that turns "a server said yes" into "we are signed in".
+  async function adoptSession(data: SessionResponse) {
+    setAccessToken(data.accessToken);
+    await SecureStore.setItemAsync('refreshToken', data.refreshToken);
+    setUser(data.user);
   }
 
+  async function login(email: string, password: string) {
+    const { data } = await api.login({ email, password });
+    await adoptSession(data);
+  }
+
+  // Register returns a session directly. Registering and then logging in is
+  // two round trips, re-sends the password, and can leave the account created
+  // but the user staring at an error - the login limiter is a separate one.
   async function register(email: string, password: string, displayName: string) {
-    const res = await fetch('http://localhost:3000/api/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, displayName }),
-    });
-
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.error || json.details?.[0]?.message);
-
-    // Auto-login after registration
-    await login(email, password);
+    const { data } = await api.register({ email, password, displayName });
+    await adoptSession(data);
   }
 
   async function logout() {
+    const refreshToken = await SecureStore.getItemAsync('refreshToken');
+
+    // The refresh token is what must be revoked, and it goes in the BODY.
+    // The Authorization header carries the access token - putting the
+    // refresh token there means the server rejects the call, and because
+    // the failure is swallowed, logout silently becomes local-only while
+    // the refresh token stays valid on the server.
     try {
-      const token = await SecureStore.getItemAsync('refreshToken');
-      // Tell server to revoke (best effort)
-      await fetch('http://localhost:3000/api/auth/logout', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
-      });
-    } catch {} // Don't block logout on network error
+      await api.logout({ refreshToken });
+    } catch {
+      // Best effort: the user asked to be logged out, so log them out
+      // locally regardless. Worth queueing a retry - see "When this breaks".
+    }
 
     await clearTokens();
     setUser(null);
   }
 
+  // Without useMemo this object is new on every render of the provider, so
+  // every consumer in the tree re-renders whenever anything here changes -
+  // including screens that only read `user` and never touch the functions.
+  const value = useMemo(
+    () =&gt; ({ user, isLoading, isOffline, login, register, logout }),
+    [user, isLoading, isOffline]
+  );
+
   return (
-    &lt;AuthContext.Provider value={{ user, isLoading, login, register, logout }}&gt;
+    &lt;AuthContext.Provider value={value}&gt;
       {children}
     &lt;/AuthContext.Provider&gt;
   );
@@ -268,6 +269,192 @@ function LoginScreen() {
   // ... render form with error display
 }</code></pre>
 
+    <h2>Wiring the client's refresh to this context</h2>
+
+    <p>
+      A3.2 built the API client with an <code>onUnauthorized</code> hook and a
+      <code>refreshOnce</code> helper. This is where they get connected — and
+      the connection has to be made once, outside React, because a 401 can
+      arrive while no component is mounted:
+    </p>
+
+    <pre><code>// app/src/api/index.ts
+import { createApiClient, createTokenApi } from '@token/shared/api';
+import { refreshOnce } from '@token/shared/auth-refresh';
+import * as SecureStore from 'expo-secure-store';
+import { getAccessToken, setAccessToken, clearTokens } from '../auth/store';
+
+let onSessionLost: () =&gt; void = () =&gt; {};
+export function setSessionLostHandler(fn: () =&gt; void) { onSessionLost = fn; }
+
+const client = createApiClient({
+  baseUrl: process.env.EXPO_PUBLIC_API_URL!,   // never a hardcoded localhost
+  getAccessToken,
+  onUnauthorized: () =&gt; refreshOnce(async () =&gt; {
+    const refreshToken = await SecureStore.getItemAsync('refreshToken');
+    if (!refreshToken) return onSessionLost();
+
+    try {
+      const { data } = await rawRefresh(refreshToken);
+      setAccessToken(data.accessToken);
+      await SecureStore.setItemAsync('refreshToken', data.refreshToken);
+    } catch {
+      await clearTokens();
+      onSessionLost();          // the provider sets user to null; the
+    }                            // navigator swaps to Login on its own
+  }),
+});</code></pre>
+
+    <p>
+      <code>AuthProvider</code> calls <code>setSessionLostHandler(() =&gt;
+      setUser(null))</code> on mount. The client never imports React, the
+      context never imports fetch, and there is exactly one refresh in flight no
+      matter how many screens hit a 401 at once.
+    </p>
+
+    <hr>
+
+    <h2>Why this way (and what was rejected)</h2>
+
+    <h3>The context calls the API client, not <code>fetch</code></h3>
+
+    <p>
+      The version this lesson shipped called <code>fetch('http://localhost:3000/api/auth/login')</code>
+      directly. Three separate problems, and the first one ships to users:
+      <strong>that URL is in the production build.</strong> Every install would
+      try to reach a server on the phone itself and fail with a network error
+      that looks like an outage.
+    </p>
+    <p>
+      The other two are quieter. Requests made outside the client get no
+      timeout, so a login on a stalled connection hangs forever; and they get no
+      401 handling, which is fine for login itself and wrong for everything the
+      context does afterwards. Auth is not a special case that deserves its own
+      networking — it is the part most worth doing consistently.
+    </p>
+
+    <h3>Register returns a session; it does not log in afterwards</h3>
+
+    <p>
+      "Create the account, then call login" reads naturally and has a failure
+      mode that is hard to explain to a user: registration and login are
+      <em>separately</em> rate limited (B4.3), so the register can succeed and
+      the follow-up login be refused. The account now exists, the user saw an
+      error, and their next move is to try registering again — which fails,
+      because the email is taken.
+    </p>
+    <p>
+      One request that returns a session removes the window entirely, and sends
+      the password once instead of twice.
+    </p>
+
+    <h3>The refresh token lives in SecureStore, not AsyncStorage</h3>
+
+    <p>
+      <code>AsyncStorage</code> is an unencrypted file in the app's sandbox.
+      That sandbox is a real boundary on a healthy device and no boundary at all
+      on a rooted or jailbroken one, or against a full device backup.
+      <code>expo-secure-store</code> puts the value in the iOS Keychain or the
+      Android Keystore, where the key material is held by hardware and does not
+      leave it.
+    </p>
+    <p>
+      The access token stays in memory only. It lives about fifteen minutes and
+      writing it to disk buys nothing but another copy to steal.
+    </p>
+
+    <hr>
+
+    <h2>When this breaks</h2>
+
+    <h3>Offline is not logged out</h3>
+
+    <p>
+      The original <code>restoreSession</code> caught every error the same way
+      and then set <code>isLoading</code> to false, so a user opening the app on
+      a train — refresh request never answered — arrives at the Login screen.
+      Their session was fine. They now have to type a password on a moving train
+      to get back to where they already were.
+    </p>
+    <p>
+      "The server said this token is dead" and "I could not reach the server"
+      are different answers and only one of them means log out. The
+      <code>retryable</code> flag added to <code>ApiError</code> in A3.2 is what
+      makes the distinction available here.
+    </p>
+
+    <h3>Logout that does not log out</h3>
+
+    <p>
+      The original sent the refresh token in the <code>Authorization</code>
+      header, where the server expects an access token. The call fails, the
+      failure is swallowed by <code>catch {}</code>, and the local tokens are
+      cleared — so it looks like it worked. <strong>The refresh token stays
+      valid on the server.</strong>
+    </p>
+    <p>
+      Anyone holding a copy of it — from a backup, a stolen device, a shared
+      computer — keeps a working session for its full lifetime, and the user who
+      pressed "Log out" believes they are protected. Local logout on a network
+      failure is still right; what is wrong is not knowing it happened. Queue
+      the revocation and retry it, or accept it explicitly.
+    </p>
+
+    <h3>A new context object on every render</h3>
+
+    <p>
+      <code>value={{ user, isLoading, login, register, logout }}</code> builds a
+      fresh object each time the provider renders, and <code>useContext</code>
+      compares by identity. Every screen reading <code>useAuth()</code> — the
+      whole tree — re-renders whenever anything in the provider changes, even a
+      screen that only ever reads <code>user.displayName</code>. Wrapping it in
+      <code>useMemo</code> costs one line.
+    </p>
+
+    <h3>The client believes it is logged in until something fails</h3>
+
+    <p>
+      <code>user</code> is a snapshot taken at login. If the account is deleted,
+      locked, or its sessions revoked from another device, this app keeps
+      rendering the main tabs until the next request happens to fail. That is
+      usually acceptable — the failure comes quickly, because everything needs
+      the API — but it means <strong>the UI is not the authority</strong>. Every
+      screen must handle "the server disagrees" rather than assuming
+      <code>user</code> being non-null makes an action permitted.
+    </p>
+
+    <hr>
+
+    <h2>What this costs you</h2>
+
+    <table>
+      <thead>
+        <tr><th>Decision</th><th>What you pay</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Auth in Context</td>
+          <td>Every consumer re-renders when the value changes, which is why the <code>useMemo</code> is not optional. And Context is not a state manager: putting token lists or messages here too would re-render the app on every incoming message.</td>
+        </tr>
+        <tr>
+          <td>The module-level session-lost handler</td>
+          <td>A mutable global bridging non-React code into React. It is the price of a client that can refresh without a component mounted, and it needs care in tests — set it, and reset it, or one test's provider outlives its describe block.</td>
+        </tr>
+        <tr>
+          <td>Distinguishing offline from logged out</td>
+          <td>A third state to design for. Every screen that assumed "user or no user" now has "user, no user, or we do not know yet", and the offline case needs its own UI rather than falling through to Login.</td>
+        </tr>
+        <tr>
+          <td>SecureStore</td>
+          <td>Async on both platforms, so session restoration is genuinely asynchronous and the app has a loading state at launch it cannot skip. On Android the Keystore is unavailable while the device is locked, so a background refresh can fail for a reason that has nothing to do with the network.</td>
+        </tr>
+        <tr>
+          <td>The conditional navigator</td>
+          <td>Swapping the whole stack on logout unmounts every screen and discards their state — which is correct for logout and surprising the first time a refresh failure triggers it mid-typing.</td>
+        </tr>
+      </tbody>
+    </table>
+
     <hr>
 
     <h2>Exercise</h2>
@@ -303,6 +490,20 @@ function LoginScreen() {
 // - restoreSession() runs once on mount via useEffect
 // - login() sets user state which triggers navigation swap
 // - logout() clears tokens AND sets user to null
+//
+// The five that are easy to get wrong, all covered above:
+// - call the API client, never fetch() with a hardcoded URL. A
+//   localhost address in a release build reaches the phone itself.
+// - a failed refresh because the network is down is NOT a logout.
+//   Check err.retryable before clearing the session.
+// - logout sends the refresh token in the BODY. In the Authorization
+//   header the server rejects it, the catch hides that, and the token
+//   stays valid on the server while the user thinks they signed out.
+// - register returns a session; do not follow it with a login call.
+//   They are separately rate limited, so the second can be refused
+//   after the account already exists.
+// - wrap the context value in useMemo, or every screen re-renders
+//   whenever anything in the provider changes.
 
 // app/src/navigation/RootNavigator.tsx — as shown in the lesson
 // Key: conditional rendering based on user state

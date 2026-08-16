@@ -127,8 +127,8 @@ prints `n/a` for that lesson rather than counting it as verified.
 **Student decided the pace: full depth on all 15 remaining.** Order — thinnest
 and most load-bearing first: ~~`b3/0003` REST design~~ **done**, ~~`b4/0003`
 rate limiting~~ **done**, ~~`a3/0002` API client~~ **done**, ~~`b3/0004`
-validation~~ **done**,
-`a4/0002` auth context (865), `b4/0002` JWT rotation (923), `a10/0001` secure
+validation~~ **done**, ~~`a4/0002` auth context~~ **done**,
+`b4/0002` JWT rotation (923), `a10/0001` secure
 storage (982), `b7/0002` (1,126), `b7/0003` (1,139), then `b9/0002`, `b6/0001`,
 `b9/0001`, `b10/0001`, `a5/0001`, `a5/0004`.
 
@@ -305,6 +305,34 @@ return the message only; middleware order is cheapest-first (limit → auth →
 validate) so an attacker does not get Zod parsing for free; and
 `console.error` with no request id means "it failed around 3pm" is
 untraceable.
+
+#### `a4/0002` auth context — done, 865 → 2,143 words
+
+Five defects, and the first one ships to users.
+
+- **`fetch('http://localhost:3000/api/auth/login')` in the context.** That
+  address is in the production build; every install would try to reach a server
+  on the phone itself. It also bypassed everything A3.2 built — no timeout, no
+  401 handling, no envelope. Auth is not a special case deserving its own
+  networking; it is the part most worth doing consistently.
+- **Offline was treated as logged out.** `restoreSession` caught every error
+  the same way, so opening the app on a train sends the user to Login with a
+  perfectly good session. Now checks `err.retryable` — the flag added in A3.2
+  is what makes the distinction available here.
+- **Logout did not log out.** It sent the refresh token in the `Authorization`
+  header, where the server expects an access token; the call fails, `catch {}`
+  hides it, local tokens are cleared, and it *looks* like it worked. **The
+  refresh token stays valid on the server** — anyone with a copy keeps a
+  working session while the user believes they are protected.
+- **`register` then called `login`.** Separately rate limited (B4.3), so the
+  register can succeed and the login be refused: account created, user sees an
+  error, tries again, "email already taken". Register now returns a session.
+- **Context value rebuilt every render**, so every screen re-renders on any
+  provider change. `useMemo`, one line.
+
+Also added the wiring the two lessons had been describing separately: the
+client's `onUnauthorized` now calls A3.2's `refreshOnce`, with a module-level
+session-lost handler so a 401 can be handled when no component is mounted.
 
 #### Trap that bit twice
 

@@ -14,10 +14,10 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1563 words |
+| Avg teaching prose per track lesson | 1577 words |
 | Lessons with a playground | 54 / 96 |
 | Lessons with an exercise | 82 / 96 |
-| **Deepened** (all 3 spine sections) | 5 / 96 |
+| **Deepened** (all 3 spine sections) | 6 / 96 |
 | **Verified** (code executed) | 13 / 96 |
 | Errors | 3 |
 | Warnings | 51 |
@@ -68,7 +68,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a11-polish-publish | 5 | 1229 | 0 | 5 | 125 | 0/5 | 0/5 |
 | a2-typescript | 3 | 727 | 2 | 3 | 76 | 0/3 | 0/3 |
 | a3-api-consumption | 4 | 1103 | 1 | 4 | 111 | 1/4 | 0/4 |
-| a4-auth-client | 3 | 879 | 0 | 3 | 80 | 0/3 | 0/3 |
+| a4-auth-client | 3 | 1305 | 0 | 3 | 80 | 1/3 | 0/3 |
 | a5-core-token-features | 5 | 1690 | 5 | 5 | 148 | 0/5 | 0/5 |
 | a6-chat-realtime | 3 | 1387 | 3 | 3 | 78 | 0/3 | 0/3 |
 | a7-voice-video | 5 | 980 | 5 | 5 | 138 | 0/5 | 0/5 |
@@ -194,7 +194,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a3-api-consumption/0003-loading-empty-error-states.html | 844 | 8 | 0 | 1 | 27 | — | — |
 | a3-api-consumption/0004-pagination-infinite-scroll.html | 789 | 6 | 0 | 1 | 29 | — | — |
 | a4-auth-client/0001-jwt-storage.html | 894 | 6 | 0 | 1 | 25 | — | — |
-| a4-auth-client/0002-auth-context-protected-routes.html | 865 | 6 | 0 | 1 | 26 | — | — |
+| a4-auth-client/0002-auth-context-protected-routes.html | 2143 | 7 | 0 | 1 | 26 | yes | n/a |
 | a4-auth-client/0003-handling-401s-logout.html | 877 | 6 | 0 | 1 | 29 | — | — |
 | a5-core-token-features/0001-token-generation-display.html | 1617 | 12 | 1 | 1 | 30 | — | — |
 | a5-core-token-features/0002-qr-generation-scanning.html | 1740 | 16 | 1 | 1 | 30 | — | — |
