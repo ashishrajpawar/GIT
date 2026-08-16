@@ -126,8 +126,8 @@ prints `n/a` for that lesson rather than counting it as verified.
 
 **Student decided the pace: full depth on all 15 remaining.** Order — thinnest
 and most load-bearing first: ~~`b3/0003` REST design~~ **done**, ~~`b4/0003`
-rate limiting~~ **done**, ~~`a3/0002` API client~~ **done**, `b3/0004`
-validation (858),
+rate limiting~~ **done**, ~~`a3/0002` API client~~ **done**, ~~`b3/0004`
+validation~~ **done**,
 `a4/0002` auth context (865), `b4/0002` JWT rotation (923), `a10/0001` secure
 storage (982), `b7/0002` (1,126), `b7/0003` (1,139), then `b9/0002`, `b6/0001`,
 `b9/0001`, `b10/0001`, `a5/0001`, `a5/0004`.
@@ -264,6 +264,47 @@ The cost worth remembering from the new table: **you cannot force a mobile app
 update.** Someone will run today's build in two years, so shared types mean
 additive API changes only — new optional fields, never renamed or removed —
 for far longer than feels necessary.
+
+#### `b3/0004` validation — done, 858 → 2,190 words
+
+**The sanitization section taught the wrong model and had to go.** It stripped
+tags with `input.replace(/<[^>]*>/g, '')` — a regex that loses the arms race
+(`<img src=x onerror=…` with no closing bracket walks past it) and, worse,
+destroys data: a label of `Mum <3` is stored as `Mum`, permanently, and nobody
+finds out until the user asks. Replaced with the rule that actually holds:
+**validate on input, escape on output, per destination.** React escapes text
+nodes, `$1` stops SQL parsing it, JSON encoding handles the response — the
+only place needing care is hand-built HTML or URLs. Plus the note that with
+E2EE the server *cannot* filter message content, as a fact about the
+architecture rather than a policy.
+
+Three schema defects, all of which the earlier lessons had already implied:
+
+- **`maxUses: z.number().int().min(0).default(0)`** — third lesson carrying
+  this. 0 is a token nobody can use and b7/0001 rejects it; null means
+  unlimited. Now `min(1).nullable().default(null)` in the schema *and* the
+  solution.
+- **`cursor: z.string().optional()`** is validation in name only — it checks a
+  string is a string and hands `?cursor=hello` to `JSON.parse`, which is the
+  500 identified in b3/0003. The decode now happens *inside* the schema via
+  `transform` + `ctx.addIssue`, so a bad cursor is a 400 from the validator.
+  General rule written down: **anything decoded after validation is still
+  unvalidated input.**
+- **`payload: z.record(z.unknown())` with the comment "validated per type in
+  the service layer"** — which means validated nowhere the day someone
+  forgets, and the type system cannot help because `unknown` accepts anything.
+  Now a `discriminatedUnion`.
+
+Added `redeemSchema`, which is where the alphabet regex belongs on the public
+endpoint, with the denial wording matching every other denial.
+
+Also written up: `.optional()` cannot express "clear this field" (the PATCH
+ambiguity from B3.3 — the handler needs `'expiresAt' in req.body`); Zod's
+`details` array describes your schema to strangers, so public endpoints should
+return the message only; middleware order is cheapest-first (limit → auth →
+validate) so an attacker does not get Zod parsing for free; and
+`console.error` with no request id means "it failed around 3pm" is
+untraceable.
 
 #### Trap that bit twice
 

@@ -14,10 +14,10 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1549 words |
+| Avg teaching prose per track lesson | 1563 words |
 | Lessons with a playground | 54 / 96 |
 | Lessons with an exercise | 82 / 96 |
-| **Deepened** (all 3 spine sections) | 4 / 96 |
+| **Deepened** (all 3 spine sections) | 5 / 96 |
 | **Verified** (code executed) | 13 / 96 |
 | Errors | 3 |
 | Warnings | 51 |
@@ -77,7 +77,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b1-sql-fundamentals | 4 | 905 | 0 | 4 | 103 | 0/4 | 0/4 |
 | b10-security-compliance | 2 | 1831 | 2 | 2 | 50 | 0/2 | 0/2 |
 | b2-schema-design | 3 | 1032 | 0 | 3 | 81 | 0/3 | 0/3 |
-| b3-node-http-server | 4 | 1167 | 1 | 4 | 117 | 1/4 | 0/4 |
+| b3-node-http-server | 4 | 1500 | 1 | 4 | 117 | 2/4 | 0/4 |
 | b4-auth-server | 3 | 1381 | 0 | 3 | 81 | 1/3 | 0/3 |
 | b5-websocket-server | 3 | 1427 | 3 | 3 | 77 | 0/3 | 0/3 |
 | b6-webrtc-signalling | 2 | 1381 | 2 | 2 | 52 | 0/2 | 0/2 |
@@ -227,7 +227,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b3-node-http-server/0001-nodejs-fundamentals.html | 806 | 10 | 1 | 1 | 29 | — | — |
 | b3-node-http-server/0002-express-fastify-setup.html | 912 | 13 | 0 | 1 | 30 | — | — |
 | b3-node-http-server/0003-rest-api-design.html | 2091 | 10 | 0 | 1 | 28 | yes | n/a |
-| b3-node-http-server/0004-input-validation-error-handling.html | 858 | 8 | 0 | 1 | 30 | — | — |
+| b3-node-http-server/0004-input-validation-error-handling.html | 2190 | 9 | 0 | 1 | 30 | yes | n/a |
 | b4-auth-server/0001-password-hashing-registration.html | 905 | 8 | 0 | 1 | 25 | — | — |
 | b4-auth-server/0002-jwt-refresh-rotation.html | 923 | 8 | 0 | 1 | 26 | — | — |
 | b4-auth-server/0003-rate-limiting.html | 2314 | 7 | 0 | 1 | 30 | yes | n/a |

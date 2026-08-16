@@ -36,7 +36,7 @@
       <li><strong>Type</strong> — is it actually a string/number/array?</li>
       <li><strong>Required fields</strong> — are all mandatory fields present?</li>
       <li><strong>Format</strong> — is the email valid? Is the date ISO format?</li>
-      <li><strong>Range</strong> — is maxUses between 0 and 1000?</li>
+      <li><strong>Range</strong> — is maxUses at least 1? (0 would be a token nobody can use)</li>
       <li><strong>Length</strong> — is the label under 200 characters?</li>
     </ul>
 
@@ -51,13 +51,16 @@ import { z } from 'zod';
 
 export const createTokenSchema = z.object({
   label: z.string().min(1).max(200),
-  maxUses: z.number().int().min(0).max(10000).default(0),
+  // null means unlimited. 0 would be a token nobody can ever use, which
+  // is never what anyone meant - so the schema refuses it rather than
+  // letting the engine reject it later.
+  maxUses: z.number().int().min(1).max(10000).nullable().default(null),
   expiresAt: z.string().datetime().optional(),
 });
 
 // TypeScript type derived from the schema (no duplication!)
 export type CreateTokenInput = z.infer&lt;typeof createTokenSchema&gt;;
-// = { label: string; maxUses: number; expiresAt?: string }</code></pre>
+// = { label: string; maxUses: number | null; expiresAt?: string }</code></pre>
 
     <p>The same schema works on both the client (form validation) and server (API validation). Define once in <code>shared/</code>, import everywhere.</p>
 
@@ -134,15 +137,31 @@ import { z } from 'zod';
 
 export const createTokenSchema = z.object({
   label: z.string().min(1, 'Label is required').max(200),
-  maxUses: z.number().int().min(0).max(10000).default(0),
+  maxUses: z.number().int().min(1).max(10000).nullable().default(null),
   expiresAt: z.string().datetime().optional(),
 });
 
+// PATCH: absent means "leave it alone", null means "clear it". Those are
+// different instructions, and .optional() alone cannot tell them apart -
+// see "When this breaks".
 export const updateTokenSchema = z.object({
   label: z.string().min(1).max(200).optional(),
-  maxUses: z.number().int().min(0).max(10000).optional(),
+  maxUses: z.number().int().min(1).max(10000).nullable().optional(),
+  expiresAt: z.string().datetime().nullable().optional(),
 }).refine(data =&gt; Object.keys(data).length &gt; 0, {
   message: 'At least one field must be provided',
+});
+
+// The redemption endpoint's only input, and the one that faces strangers.
+// The alphabet lives in one constant; this is where it is enforced.
+export const redeemSchema = z.object({
+  code: z.string()
+    .transform(v =&gt; v.trim().toUpperCase())
+    .pipe(z.string().regex(
+      /^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}(-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}){2}$/,
+      'That code cannot be used.'          // same wording as every other denial
+    )),
+  holderName: z.string().min(1).max(80),
 });
 
 // Access rule payload schemas
@@ -158,10 +177,18 @@ export const callLimitPayload = z.object({
   maxPerWeek: z.number().int().min(1).max(1000).optional(),
 });
 
-export const createRuleSchema = z.object({
-  ruleType: z.enum(['time_window', 'call_limit', 'category', 'cooldown']),
-  payload: z.record(z.unknown()),  // validated per type in the service layer
-});</code></pre>
+export const cooldownPayload = z.object({
+  minutesBetweenContacts: z.number().int().min(1).max(60 * 24),
+});
+
+// A discriminated union, not z.record(z.unknown()). "Validated later in the
+// service layer" means validated nowhere the day someone forgets - and the
+// type system cannot help, because unknown accepts anything.
+export const createRuleSchema = z.discriminatedUnion('ruleType', [
+  z.object({ ruleType: z.literal('time_window'), payload: timeWindowPayload }),
+  z.object({ ruleType: z.literal('call_limit'),  payload: callLimitPayload }),
+  z.object({ ruleType: z.literal('cooldown'),    payload: cooldownPayload }),
+]);</code></pre>
 
     <h2>Error handling strategy</h2>
 
@@ -208,9 +235,23 @@ export function errorHandler(err, req, res, next) {
     <h2>Query parameter validation</h2>
 
     <pre><code>// Validate query params (they're always strings from the URL)
+// The cursor is base64url JSON that WE issued - and it still arrives from
+// a stranger. Decoding it inside the schema means a malformed one is a 400
+// from the validator, not a 500 from JSON.parse further down.
+const cursorSchema = z.string().transform((raw, ctx) =&gt; {
+  try {
+    const parsed = JSON.parse(Buffer.from(raw, 'base64url').toString());
+    if (typeof parsed?.id !== 'number') throw new Error('bad shape');
+    return parsed as { id: number };
+  } catch {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid cursor' });
+    return z.NEVER;
+  }
+});
+
 const paginationSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
-  cursor: z.string().optional(),
+  cursor: cursorSchema.optional(),
   status: z.enum(['active', 'paused', 'revoked']).optional(),
 });
 
@@ -224,19 +265,198 @@ router.get('/', async (req, res, next) =&gt; {
 
     <p><code>z.coerce.number()</code> converts the string "20" to the number 20 before validating. Query parameters are always strings from the URL.</p>
 
-    <h2>Sanitization</h2>
+    <h2>Validate on the way in, escape on the way out</h2>
 
-    <p>Beyond validation (rejecting bad input), sanitize input to prevent stored XSS:</p>
+    <p>
+      The tempting next step is "sanitize" — strip anything dangerous-looking
+      out of the text before storing it:
+    </p>
 
-    <pre><code>// Strip HTML tags from user-provided text
+    <pre><code>// Do NOT do this
 function sanitize(input: string): string {
   return input.replace(/&lt;[^&gt;]*&gt;/g, '').trim();
-}
+}</code></pre>
 
-// In Token, sanitize: label, holder_name, message content
-// Don't sanitize: code (generated by server), timestamps, numbers</code></pre>
+    <p>Two things are wrong with it, and the second is the serious one.</p>
 
-    <p>For Token specifically, SQL injection is prevented by parameterized queries ($1), and XSS is prevented by React's built-in escaping on the client. Server-side sanitization is a defense-in-depth measure.</p>
+    <p>
+      <strong>It does not work.</strong> That regex is a decade-old arms race
+      that the regex loses; <code>&lt;img src=x onerror=…</code> without a
+      closing bracket, or a payload built from entities, walks straight past it.
+      A filter that stops the examples you thought of is not a boundary, it is a
+      speed bump you have chosen to trust.
+    </p>
+
+    <p>
+      <strong>It destroys data.</strong> A user whose label is
+      <code>Mum &lt;3</code> gets <code>Mum</code> stored, permanently, and
+      nobody finds out until they ask why. Input validation decides
+      <em>whether</em> to accept a value. It should not quietly rewrite it.
+    </p>
+
+    <p>The rule that does work has two halves, and they live in different places:</p>
+
+    <ul>
+      <li>
+        <strong>Validate on input</strong> — type, length, range, format.
+        Reject what is wrong; store what is right, exactly as it was sent.
+      </li>
+      <li>
+        <strong>Escape on output</strong>, and escape for the <em>specific</em>
+        place it is going. The escaping that makes text safe in HTML is not the
+        escaping that makes it safe in a URL, a shell argument, a CSV cell, or
+        an SQL string.
+      </li>
+    </ul>
+
+    <p>
+      Which is why the same value needs no work in three of the four places
+      Token sends it: React escapes text nodes, so <code>Mum &lt;3</code>
+      renders correctly and inertly; parameterised queries (<code>$1</code>)
+      mean the database never parses it as SQL; and JSON encoding handles the
+      API response. The one place that needs deliberate care is anywhere you
+      build HTML or a URL by hand.
+    </p>
+
+    <div class="callout warning">
+      <div class="callout-title">And for messages, the server cannot sanitize even if it wanted to</div>
+      <p>
+        Message bodies are encrypted before they leave the sender's device
+        (ADR-0002). The server stores ciphertext and cannot read it, so there is
+        no server-side filtering of message content — not as a policy choice, as
+        a fact about the architecture. Anything that has to happen to message
+        text happens on the device that decrypts it.
+      </p>
+    </div>
+
+    <hr>
+
+    <h2>Why this way (and what was rejected)</h2>
+
+    <h3>One schema, in <code>shared/</code>, not two that agree</h3>
+
+    <p>
+      The alternative is validation written twice — a form check in the app and
+      a separate check in the API. It is rejected for the obvious reason and one
+      less obvious one. The obvious: two copies drift, and the drift is silent
+      until a user hits it. The less obvious: <strong>the client's copy is not
+      validation at all.</strong> It is a courtesy that saves a round trip.
+      Anyone can send whatever they like straight to the API with
+      <code>curl</code>, so the server's schema is the only one that is load
+      bearing — the client's exists to make the form nicer.
+    </p>
+    <p>
+      Sharing one schema gets the courtesy for free and leaves exactly one
+      definition to keep correct.
+    </p>
+
+    <h3>Parse, do not validate-then-use</h3>
+
+    <p>
+      <code>schema.parse(req.body)</code> returns a new, typed value, and the
+      handler uses <em>that</em> rather than <code>req.body</code>. It sounds
+      like a formality; it is the whole benefit. A validator that returns a
+      boolean leaves you holding the same untyped object you started with, and
+      nothing stops the next line reading a field nobody checked. A parser
+      hands back a value whose type is proof it was checked.
+    </p>
+
+    <h3>Validation runs after rate limiting and auth, not before</h3>
+
+    <p>
+      Order the middleware by cost, cheapest first: rate limiter, then
+      authentication, then validation, then the handler. Zod parsing a 200 KB
+      body is real work, and doing it for a request that was going to be
+      rejected as unauthenticated is work an attacker gets for free.
+    </p>
+
+    <hr>
+
+    <h2>When this breaks</h2>
+
+    <h3><code>.optional()</code> cannot express "clear this field"</h3>
+
+    <p>
+      This is the PATCH ambiguity from B3.3, and Zod does not solve it for you.
+      Once <code>{ "expiresAt": null }</code> has been parsed into an object,
+      "the client sent null" and "the client did not send it" look identical to
+      anything that checks for <code>undefined</code>.
+    </p>
+    <p>
+      So the schema allows <code>.nullable().optional()</code> — null is a
+      legal, meaningful value — and the handler distinguishes the two cases with
+      <code>'expiresAt' in req.body</code>, which asks about the key rather than
+      the value. Get this wrong and clearing an expiry silently does nothing,
+      which is a bug report that will read "the app ignored me".
+    </p>
+
+    <h3>A validator that throws a 500</h3>
+
+    <p>
+      <code>cursor: z.string().optional()</code> looks like validation. It
+      checks that a string is a string, and hands
+      <code>?cursor=hello</code> onward to <code>JSON.parse</code>, which
+      throws, and the client sees <strong>500 Internal Server Error</strong> —
+      the code that means "we have a bug" — for a request that was simply
+      malformed.
+    </p>
+    <p>
+      Anything that gets decoded, parsed or converted after validation is
+      <em>still unvalidated input</em>. Doing the decode inside the schema, as
+      above, is what makes the 400 come from the validator.
+    </p>
+
+    <h3>Error details describe your schema to strangers</h3>
+
+    <pre><code>{ "error": "Validation failed",
+  "details": [{ "field": "holderName", "message": "String must contain at most 80 character(s)" }] }</code></pre>
+
+    <p>
+      Perfect for your own app's form. On the public redemption endpoint it
+      hands an attacker your field names and limits for free. Keep the detailed
+      shape for authenticated routes; on the public ones, return the message and
+      nothing else — the same principle as the single denial message, applied to
+      validation errors.
+    </p>
+
+    <h3>The 500 nobody can trace</h3>
+
+    <p>
+      <code>console.error('Unhandled error:', err)</code> writes to a log with
+      no way back to the user who hit it. When someone writes in saying "it
+      failed around 3pm", there is nothing to search for. A request id generated
+      at the edge, returned in the error body and logged with the stack, turns
+      that conversation into one grep. C7 builds it properly; the hole is worth
+      seeing now.
+    </p>
+
+    <hr>
+
+    <h2>What this costs you</h2>
+
+    <table>
+      <thead>
+        <tr><th>Decision</th><th>What you pay</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Zod schemas in <code>shared/</code></td>
+          <td>A runtime dependency in the bundle that ships to phones, and every schema change is a change both clients import — which, since you cannot force an app update, means old builds keep sending the old shape. Schemas must stay permissive about extra fields and strict about the ones they know.</td>
+        </tr>
+        <tr>
+          <td>Parsing before the handler</td>
+          <td>CPU on every request, including the ones you reject. Bounded by putting the limiter and auth in front, and by a body-size limit — Zod will happily try to parse 10 MB of JSON if Express hands it over.</td>
+        </tr>
+        <tr>
+          <td>Storing text exactly as sent</td>
+          <td>Every consumer becomes responsible for escaping in its own context. That is correct, and it means a future non-React consumer — an email, a CSV export, a server-rendered page — is a new place to get it right rather than something the database already handled.</td>
+        </tr>
+        <tr>
+          <td>Discriminated unions for rule payloads</td>
+          <td>Adding a rule type means touching the union, the payload schema and the engine — three places instead of one. In exchange the compiler will not let you forget the third.</td>
+        </tr>
+      </tbody>
+    </table>
 
     <hr>
 
@@ -273,13 +493,13 @@ import { z } from 'zod';
 
 export const createTokenSchema = z.object({
   label: z.string().min(1, 'Label is required').max(200, 'Label too long'),
-  maxUses: z.number().int().min(0).max(10000).default(0),
+  maxUses: z.number().int().min(1).max(10000).nullable().default(null),
   expiresAt: z.string().datetime().optional(),
 });
 
 export const updateTokenSchema = z.object({
   label: z.string().min(1).max(200).optional(),
-  maxUses: z.number().int().min(0).max(10000).optional(),
+  maxUses: z.number().int().min(1).max(10000).nullable().optional(),
 }).refine(data => Object.keys(data).length > 0, {
   message: 'At least one field must be provided',
 });
