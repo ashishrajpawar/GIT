@@ -14,12 +14,12 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1680 words |
+| Avg teaching prose per track lesson | 1693 words |
 | Lessons with a playground | 54 / 96 |
 | Lessons with an exercise | 82 / 96 |
-| **Deepened** (all 3 spine sections) | 13 / 96 |
+| **Deepened** (all 3 spine sections) | 14 / 96 |
 | **Verified** (code executed) | 13 / 96 |
-| Errors | 3 |
+| Errors | 5 |
 | Warnings | 51 |
 
 Student-completed lessons are **not** tracked here — that comes from the student
@@ -27,12 +27,12 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 ## Answer-position distribution — **authored order, not what the student sees**
 
-1332 keyed questions (multiple-choice, spot-the-bug, which-breaks).
+1333 keyed questions (multiple-choice, spot-the-bug, which-breaks).
 
 > **This clustering is expected and already handled. Do not "fix" it again.**
 > `quiz.js` shuffles options at render time (`optionDisplayOrder`), so the
 > displayed distribution is roughly even — measured at 26.9 / 28.5 / 26.9 / 17.6
-> across all 1332 questions, versus the authored figures below. Index 3 sits
+> across all 1333 questions, versus the authored figures below. Index 3 sits
 > lower only because many questions have three options.
 >
 > The numbers here read `correct` straight from the lesson data, which is
@@ -43,7 +43,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Position | Count | Share |
 |---|---|---|
 | index 0 | 125 | 9.4% |
-| index 1 | 838 | 62.9% |
+| index 1 | 839 | 62.9% |
 | index 2 | 338 | 25.4% |
 | index 3 | 31 | 2.3% |
 
@@ -51,8 +51,8 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Type | Count |
 |---|---|
-| multiple-choice | 660 |
-| predict-output | 514 |
+| multiple-choice | 661 |
+| predict-output | 513 |
 | fill-blank | 454 |
 | spot-the-bug | 371 |
 | which-breaks | 301 |
@@ -75,7 +75,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a8-redemption-web | 4 | 1216 | 4 | 4 | 115 | 0/4 | 0/4 |
 | a9-deep-linking | 2 | 1159 | 2 | 2 | 53 | 0/2 | 0/2 |
 | b1-sql-fundamentals | 4 | 905 | 0 | 4 | 103 | 0/4 | 0/4 |
-| b10-security-compliance | 2 | 1831 | 2 | 2 | 50 | 0/2 | 0/2 |
+| b10-security-compliance | 2 | 2470 | 2 | 2 | 50 | 1/2 | 0/2 |
 | b2-schema-design | 3 | 1032 | 0 | 3 | 81 | 0/3 | 0/3 |
 | b3-node-http-server | 4 | 1500 | 1 | 4 | 117 | 2/4 | 0/4 |
 | b4-auth-server | 3 | 1969 | 0 | 3 | 81 | 2/3 | 0/3 |
@@ -92,14 +92,16 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Check | Result |
 |---|---|
 | Inline `<script>` blocks parse | ok |
-| Quiz structure valid | ok |
+| Quiz structure valid | FAIL |
 | Tables queried but never created | participants, deletion_queue, calls |
 | Broken relative links | ok |
 | search-index.json | 96 entries, 0 dead, 0 unindexed |
 | Example tokens valid under alphabet | 24 invalid |
 
-## Errors (3)
+## Errors (5)
 
+- modules/b10-security-compliance/0001-security-hardening.html q23: missing answer
+- modules/b10-security-compliance/0001-security-hardening.html q23: missing code
 - schema: table "participants" is queried in 2 lesson(s) but never created
 - schema: table "deletion_queue" is queried in 1 lesson(s) but never created
 - schema: table "calls" is queried in 2 lesson(s) but never created
@@ -219,7 +221,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b1-sql-fundamentals/0002-joins-relationships.html | 828 | 10 | 0 | 1 | 25 | — | — |
 | b1-sql-fundamentals/0003-indexes-transactions-constraints.html | 935 | 11 | 0 | 1 | 26 | — | — |
 | b1-sql-fundamentals/0004-postgres-specifics.html | 910 | 8 | 0 | 1 | 26 | — | — |
-| b10-security-compliance/0001-security-hardening.html | 1708 | 16 | 1 | 1 | 25 | — | — |
+| b10-security-compliance/0001-security-hardening.html | 2987 | 20 | 1 | 1 | 25 | yes | n/a |
 | b10-security-compliance/0002-dpdp-act.html | 1953 | 11 | 1 | 1 | 25 | — | — |
 | b2-schema-design/0001-token-schema.html | 1090 | 8 | 0 | 1 | 26 | — | — |
 | b2-schema-design/0002-messaging-schema.html | 1075 | 8 | 0 | 1 | 26 | — | — |
@@ -240,7 +242,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b7-token-engine/0002-access-rules-engine.html | 2621 | 7 | 1 | 1 | 26 | yes | n/a |
 | b7-token-engine/0003-revocation-pause.html | 2569 | 9 | 1 | 1 | 26 | yes | n/a |
 | b8-push-notifications/0001-fcm-apns-expo.html | 1206 | 11 | 1 | 1 | 25 | — | — |
-| b9-docker-deployment/0001-docker-fundamentals.html | 2403 | 13 | 1 | 1 | 26 | yes | — |
+| b9-docker-deployment/0001-docker-fundamentals.html | 2403 | 13 | 1 | 1 | 26 | yes | n/a |
 | b9-docker-deployment/0002-coolify-setup.html | 2663 | 12 | 1 | 1 | 26 | yes | n/a |
 | b9-docker-deployment/0003-logs-backups-monitoring.html | 1827 | 17 | 1 | 1 | 25 | — | — |
 | x1-git-dev-environment/0001-git-fundamentals.html | 790 | 9 | 1 | 1 | 26 | — | — |

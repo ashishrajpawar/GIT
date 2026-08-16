@@ -354,6 +354,229 @@ npm audit --audit-level=high
 # Keep dependencies updated (check monthly)
 npm outdated</code></pre>
 
+    <h2>The secret this system leaks most easily: its own logs</h2>
+
+    <p>
+      Trace what has already been done to protect a token code. It is kept out
+      of URLs, because a path is written into access logs, browser history and
+      the <code>Referer</code> header (B3.3). It is kept out of the database,
+      stored as a hash for lookup and an encrypted copy for display
+      (ADR-0007). Backups are handled so the two never travel together (B9.2).
+    </p>
+    <p>
+      Then one line of ordinary, sensible middleware undoes all of it:
+    </p>
+
+    <pre><code>// This is a normal thing to write and it is a disaster here
+app.use((req, _res, next) =&gt; {
+  logger.info({ method: req.method, path: req.path, body: req.body });
+  next();
+});
+
+// POST /api/redeem  { "code": "MERC-8GH2-KP4X", "holderName": "Ravi" }
+//                                ^^^^^^^^^^^^^^
+// now in a plain-text file, on the same box as the database, for as long
+// as the log retention policy says - and in every copy of those logs.</code></pre>
+
+    <p>
+      <strong>The body became the sensitive part precisely because we moved the
+      code there.</strong> The decision that protected it from one exposure
+      moved it into another, and the second one is easier to make by accident.
+    </p>
+
+    <h3>Redact by allow-list, never by deny-list</h3>
+
+    <pre><code>// api/src/logger.ts
+import pino from 'pino';
+
+export const logger = pino({
+  redact: {
+    paths: [
+      'req.body.code', 'req.body.password', 'req.body.refreshToken',
+      'req.headers.authorization', 'req.headers.cookie',
+    ],
+    censor: '[redacted]',
+  },
+});</code></pre>
+
+    <p>
+      That list is a deny-list, and a deny-list is a list of the mistakes you
+      have already thought of. The field added next month is not on it. Prefer
+      logging <em>chosen</em> fields:
+    </p>
+
+    <pre><code>// Nothing is logged unless it is named here.
+logger.info({
+  method: req.method,
+  path: req.path,
+  status: res.statusCode,
+  durationMs,
+  userId: req.user?.id,
+  requestId: req.id,
+});</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">Your error tracker captures bodies too</div>
+      <p>
+        Sentry and GlitchTip attach request data to exceptions by default. An
+        unhandled error inside the redeem handler therefore ships the code to
+        the error tracker — a second system, with its own retention, its own
+        access list, and possibly its own operator.
+      </p>
+      <p>
+        Configure the <code>beforeSend</code> scrubbing when the tracker goes
+        in (C7), not after the first incident. And treat "which systems have
+        seen a token code?" as a question you should be able to answer: the
+        API's memory, the log pipeline, and the error tracker are three
+        different answers with three different blast radii.
+      </p>
+    </div>
+
+    <hr>
+
+    <h2>Why this way (and what was rejected)</h2>
+
+    <h3>Parameterised queries, and the one place they do not reach</h3>
+
+    <p>
+      <code>$1</code> is not escaping — the value never becomes part of the SQL
+      text, so there is no parser for it to confuse. That is why it is a rule
+      rather than a recommendation, and why "sanitise the input first" is the
+      weaker answer to a problem that has an exact one.
+    </p>
+    <p>
+      The gap worth knowing: the <code>rules</code> JSONB column holds
+      structured data the database will not check for you. A parameterised
+      insert stops SQL injection into that column and does nothing about the
+      contents being nonsense. That is what the discriminated union in B3.4 is
+      for — and why B7.2 refuses rule types it does not recognise rather than
+      skipping them.
+    </p>
+
+    <h3>Security headers are for the browser, not the API</h3>
+
+    <p>
+      Helmet on the API is close to decoration: the mobile app is not a browser
+      and ignores every one of these headers. They matter on
+      <code>tokn.app</code>, the redemption page — which is the part of the
+      system a stranger actually loads in a browser, and therefore the only
+      part with an XSS or clickjacking story at all.
+    </p>
+    <p>
+      One header there deserves a different value from the API's. The redemption
+      page is <code>tokn.app/t/CODE</code> — a code in a URL, unavoidably,
+      because a person has to type it. <code>strict-origin-when-cross-origin</code>
+      sends only the origin to other sites, which is fine, and the full URL
+      on same-origin navigations, which is not what you want for a page whose
+      path is a capability. <code>no-referrer</code> on that route removes the
+      question.
+    </p>
+
+    <h3>CORS is not access control</h3>
+
+    <p>
+      This is worth being blunt about because the name suggests otherwise. CORS
+      tells a <em>browser</em> which origins may read a response. It does
+      nothing about <code>curl</code>, a script, or a mobile app, all of which
+      ignore it entirely. It stops a malicious website making authenticated
+      requests using a logged-in user's credentials; it does not stop anyone
+      talking to your API. Authentication and rate limiting do that.
+    </p>
+
+    <hr>
+
+    <h2>When this breaks</h2>
+
+    <h3><code>npm audit</code> is not supply-chain security</h3>
+
+    <p>
+      It checks installed versions against a database of <em>known, published</em>
+      vulnerabilities. The realistic supply-chain attack on a small project is
+      the opposite shape: a maintainer account is compromised, a new version is
+      published, and it runs a <code>postinstall</code> script on your machine
+      and in your CI — with your permissions and your environment variables —
+      before anyone has reported anything to report.
+    </p>
+
+    <pre><code># Install scripts do not run. Nothing in this project needs them,
+# and the day one does, that is worth noticing rather than automating.
+npm ci --ignore-scripts
+
+# And pin: package-lock.json is committed, CI uses `ci` not `install`,
+# and a lockfile change is a diff to read rather than a line to skim.</code></pre>
+
+    <h3>HSTS preload is close to permanent</h3>
+
+    <p>
+      <code>preload: true</code> is an instruction to hard-code your domain
+      into browsers as HTTPS-only, shipped in Chrome, Firefox and Safari.
+      Removal is a request, a review, and then <em>the next browser release
+      cycle</em> — months, during which old browsers still refuse plain HTTP to
+      your domain and every subdomain.
+    </p>
+    <p>
+      That is the right setting for <code>tokn.app</code>, and it is one to
+      make deliberately, with the subdomains understood, rather than by copying
+      a config snippet.
+    </p>
+
+    <h3>A CSP that gets weakened until it does nothing</h3>
+
+    <p>
+      <code>styleSrc: ["'self'", "'unsafe-inline'"]</code> is already in the
+      config above, with the honest comment "needed for some UI frameworks".
+      That is how CSP usually degrades: something breaks, the fastest fix is one
+      more <code>unsafe-</code>, and the policy becomes a header that passes
+      scanners and blocks nothing.
+    </p>
+    <p>
+      Inline styles are a small hole; <code>'unsafe-inline'</code> in
+      <code>scriptSrc</code> is the whole door, and it is the next one someone
+      reaches for. If a framework needs inline anything, nonces are the answer
+      that keeps the policy meaningful.
+    </p>
+
+    <h3>Ownership checks that live in the handler</h3>
+
+    <p>
+      The <code>WHERE user_id = $2</code> pattern in this lesson is right, and
+      its weakness is that it is a habit rather than a mechanism: one query
+      written without it is a broken access control bug, and nothing fails
+      until someone finds it. Every ownership check in this course is written
+      that way, which is a real risk worth naming — the durable fix is
+      row-level security in Postgres, which belongs with the B2 rewrite.
+    </p>
+
+    <hr>
+
+    <h2>What this costs you</h2>
+
+    <table>
+        <tr><th>Decision</th><th>What you pay</th></tr>
+        <tr>
+          <td>Allow-list logging</td>
+          <td>Debugging is harder. The field you want during an incident is the one nobody thought to add, and adding it means a deploy. That is the correct trade for a system holding capabilities — but it means logging what you <em>do</em> need has to be deliberate, not left to a catch-all.</td>
+        </tr>
+        <tr>
+          <td>A strict CSP</td>
+          <td>Real breakage in the web app, usually at the worst moment, and a policy that has to be maintained as the page changes. Its value is entirely in not weakening it under pressure.</td>
+        </tr>
+        <tr>
+          <td>HSTS with preload</td>
+          <td>HTTPS forever, for the domain and every subdomain, effectively irreversibly. A future subdomain that cannot do TLS is simply unreachable.</td>
+        </tr>
+        <tr>
+          <td><code>--ignore-scripts</code></td>
+          <td>Packages that genuinely need a build step stop working, and you find out at install time. Which is the point, and it is still an interruption.</td>
+        </tr>
+        <tr>
+          <td>Security headers on the API</td>
+          <td>Almost nothing, and almost no benefit — the clients that matter are not browsers. Keep them because the cost is a middleware, but do not mistake them for the work; the redemption page is where they earn anything.</td>
+        </tr>
+    </table>
+
+    <hr>
+
     <h2>Security Checklist for Token</h2>
     <pre><code>// Before every deploy, verify:
 //
@@ -663,7 +886,7 @@ export async function findOwned<T>(
             {
                 type: "predict-output",
                 question: "What happens when this code runs?",
-                code: "const secrets = [\n  process.env.JWT_SECRET,\n  process.env.JWT_SECRET_PREVIOUS\n].filter(Boolean);\n\nconsole.log(secrets.length);\n// Assume JWT_SECRET is set, JWT_SECRET_PREVIOUS is undefined",
+                code: "// Mid-rotation: the new secret is live, the previous one has been removed\nconst env = { JWT_SECRET: 'abc123', JWT_SECRET_PREVIOUS: undefined };\n\nconst secrets = [env.JWT_SECRET, env.JWT_SECRET_PREVIOUS].filter(Boolean);\nconsole.log(secrets.length);",
                 answer: "1",
                 explanation: "filter(Boolean) removes falsy values (undefined, null, empty string). Since JWT_SECRET_PREVIOUS is undefined, it gets filtered out, leaving only the current secret. This is how dual-secret rotation works — the array has 2 entries during rotation and 1 normally."
             },
@@ -795,10 +1018,15 @@ export async function findOwned<T>(
             },
             {
                 type: "predict-output",
-                question: "What does npm audit return for this scenario?",
-                code: "// Package 'old-lib' version 1.2.3 has a known critical vulnerability\n// It's a direct dependency in package.json\n// Running: npm audit --audit-level=high\n// What is the exit code?",
-                answer: "1",
-                explanation: "npm audit returns exit code 1 (failure) when vulnerabilities at or above the specified level are found. --audit-level=high means it fails on high and critical vulnerabilities. This is used in CI to block deployments with known vulnerabilities."
+                question: "A direct dependency has a known critical vulnerability and CI runs npm audit --audit-level=high. What happens — and what does it still not protect you from?",
+                options: [
+                  "Exit code 0 with a warning; audit never fails a build",
+                  "Exit code 1 so CI fails — but it only knows about vulnerabilities already published, not a freshly compromised package running a postinstall script",
+                  "Exit code 1, and CI is now protected from supply-chain attacks",
+                  "It rewrites package.json automatically and carries on"
+                ],
+                correct: 1,
+                explanation: "Exit code 1, so CI blocks the deploy — which is worth having and is not supply-chain security. audit compares installed versions against a database of vulnerabilities somebody has already found, published and catalogued. The realistic attack on a small project is the opposite shape: a maintainer account is compromised, a new version ships, and its postinstall script runs on your machine and in your CI with your environment variables, before there is anything to report. npm ci --ignore-scripts is the defence audit cannot provide."
             },
             {
                 type: "fill-blank",

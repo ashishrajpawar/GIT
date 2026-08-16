@@ -626,6 +626,53 @@ anyone who can pull the image can read it months on.
 
 One premise-in-comment quiz question converted to multiple-choice.
 
+#### `b10/0001` hardening — done, 1,708 → 2,987 words
+
+**The culmination point the spine had been building toward and nobody had
+written down: the logs.**
+
+Trace what has been done to protect a token code. Kept out of URLs, because a
+path reaches access logs, browser history and `Referer` (B3.3). Kept out of the
+database as a hash plus an encrypted copy (ADR-0007). Backups arranged so the
+data and the keys never travel together (B9.2). Then one line of ordinary,
+sensible middleware — `logger.info({ body: req.body })` — puts the code in a
+plain-text file on the same box.
+
+**The body became the sensitive part precisely because we moved the code
+there.** The decision that protected it from one exposure moved it into
+another, and the second is easier to make by accident. Added: redaction, the
+argument for allow-list over deny-list logging (a deny-list is a list of the
+mistakes you already thought of), and the note that Sentry/GlitchTip attach
+request bodies to exceptions by default — so an unhandled error in the redeem
+handler ships the code to a second system with its own retention and its own
+operator.
+
+Four more:
+
+- **`npm audit` is not supply-chain security.** It compares against
+  vulnerabilities already published; the realistic attack is a compromised
+  maintainer account shipping a `postinstall` script that runs in your CI with
+  your environment variables before there is anything to report.
+  `npm ci --ignore-scripts`.
+- **HSTS `preload: true` is close to irreversible** — hard-coded into shipped
+  browsers, removal is a request plus a release cycle. Right for `tokn.app`,
+  and a decision rather than a snippet to copy.
+- **CORS is not access control.** It tells a *browser* which origins may read a
+  response and does nothing about curl, a script, or the mobile app. Worth
+  being blunt about because the name suggests otherwise.
+- **Security headers on the API are close to decoration** — the clients that
+  matter are not browsers. They earn their keep on the redemption page, which
+  should use `no-referrer` rather than the API's
+  `strict-origin-when-cross-origin`, because its own path is a capability.
+
+Also named a real structural risk rather than papering over it: every ownership
+check in this course is `WHERE user_id = $2`, which is a habit rather than a
+mechanism — one query written without it is a broken-access-control bug that
+fails silently. The durable fix is row-level security, and it belongs with the
+B2 rewrite.
+
+Two premise-in-comment quiz questions fixed.
+
 #### Trap that bit twice
 
 **Two escaping failures while writing `b3/0003`, both caught by the verifier**, both
