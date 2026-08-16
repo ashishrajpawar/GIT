@@ -749,9 +749,29 @@ Proof nothing broke: per-lesson question counts are unchanged (25 each, 30 in
 pre-existing schema errors and 52 warnings as before — no new link errors,
 which is what confirms the new nav target resolves.
 
-**Not done, and a separate decision:** `modules/03-firebase-backend/` still
-exists. Nothing links to it now. Deleting it is its own call — it remains the
-only written material on several topics Track B has not reached.
+#### And then Module 03 was deleted
+
+Raised as a separate decision; the student took it the same day. `modules/
+03-firebase-backend/` is gone — 5 lessons and a README, 3,071 lines: project
+setup, authentication, two Firestore lessons and Storage.
+
+The reasoning on both sides, since deletions are the one thing that cannot be
+re-derived from the files afterwards: it was the only written material on
+auth, real-time sync and file upload, and Track B has not reached any of the
+three. Against that, every line of it teaches a stack that is out of scope —
+so the material would have to be rewritten rather than adapted, and leaving it
+in place meant a student who wandered in would be studying the wrong product.
+Git keeps it either way.
+
+Order of operations mattered: the two inbound links from
+`modules/04-whatsapp-features/` were turned into disabled spans **before**
+`git rm`, so the deletion added **no new audit warnings** — still 52, with the
+same 3 pre-existing schema errors. Legacy lessons 45 → 40; track lessons
+unchanged at 96, because 03 was never counted as track. Nothing else referenced
+it: not `index.html`, not `search-index.json`.
+
+Recover with `git show fbf79c0~1:"git-learn/JS Learn/modules/03-firebase-backend/README.html"`
+or check the whole tree out of that commit.
 
 ### Watch out when editing this file from a shell
 

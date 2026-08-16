@@ -12,7 +12,7 @@ with this one, this one is right — everything below is measured, not asserted.
 | Metric | Value |
 |---|---|
 | Token-track lessons | 96 |
-| Legacy lessons (pre-pivot, excluded) | 45 |
+| Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
 | Avg teaching prose per track lesson | 1481 words |
 | Lessons with a playground | 54 / 96 |

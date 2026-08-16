@@ -121,7 +121,9 @@ modules/
   b4-auth-server/                   ← 3 lessons, complete
   a3-api-consumption/               ← 4 lessons, complete
   a4-auth-client/                   ← 3 lessons, complete
-  03-firebase-backend/              ← SUPERSEDED — replaced by Track B
+  (03-firebase-backend/)           ← DELETED 2026-08-16. Firebase is out of
+                                      scope; Track B replaces it. In git history
+                                      if it is ever wanted back
   04-whatsapp-features/             ← partially salvageable
   05-audio-video-calls/             ← theory transfers, implementation rewritten
   06-polish-and-publish/            ← keep for reference

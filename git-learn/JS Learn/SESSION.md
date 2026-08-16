@@ -87,10 +87,18 @@ backgrounded app — but `expo-notifications` already speaks FCM and APNs, so
 the `@react-native-firebase` SDK adds a native dependency and a Google config
 file in the repo for nothing.
 
-**Still Firebase-shaped, and deliberately left:** `modules/03-firebase-backend/`
-exists and is SUPERSEDED, and Module 02 no longer links to it. Deleting it is a
-separate call — it is still the only written material on several topics Track B
-has not reached yet.
+**`modules/03-firebase-backend/` is deleted** — the student called it after
+being shown the trade-off. 5 lessons and a README, 3,071 lines, in git history
+at `fbf79c0~1` if any of it is ever wanted back.
+
+Two inbound links from `modules/04-whatsapp-features/` were replaced with
+disabled spans *before* the removal, so the deletion added no new audit
+warnings. Legacy lessons 45 → 40; track lessons unchanged at 96, since 03 was
+never counted as track.
+
+Nothing else pointed at it — not `index.html`, not `search-index.json`. The
+only surviving mentions are historical notes in `HANDOFF.md`, which are meant
+to be historical.
 
 ### Unit 8 — Phase 1.2, the Module 01 capstone — DONE
 
