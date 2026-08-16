@@ -26,6 +26,80 @@ one or two lessons at a time, never batched ahead.
 | `01/0011-modern-javascript-es6` | done |
 | `01/0012-error-handling` | done — **Module 01 and Phase 1.1 complete** |
 
+### Unit 8 — Phase 1.2, the Module 01 capstone — DONE
+
+`COURSE-REVIEW.md` §6 item 1.2: a pure-JavaScript token issuer — generate,
+store, apply rules, revoke — as the Token repo's **first real commit**.
+
+Shape decided before writing:
+
+- **Three staged exercises, not one.** A single 100-line exercise stalls a
+  beginner on lesson 13. Stages are `generateCode()`, then
+  `createIssuer(generateCode)` with `issue`/`list`, then `redeem`/`revoke`.
+  Each gets its own `createSolution` and its own self-check playground.
+- **The repo artefact is the deliverable**, not the page. `token/practice/
+  01-token-issuer/` — `issuer.mjs`, `demo.mjs`, `test.mjs`, `README.md`.
+  `.mjs` throughout so `import` works with no `package.json` and no npm
+  install; 0011 taught modules and this is the first place they run for real.
+- **Generation uses `crypto.getRandomValues` with rejection sampling**, not
+  `Math.random`. CLAUDE.md already carries the arithmetic (256 / 31 = 8 r 8,
+  so the first 8 characters are 12.5% more likely); teaching the biased
+  version and leaving it to be rewritten later would be vibe coding.
+
+Tooling this needs first: `verify-lesson.mjs` pairs every `createSolution`
+with the single playground `pg-exercise`, so a page with three exercises
+cannot be verified. Adding a pairing convention — `exercise-<name>` →
+`pg-exercise-<name>`, falling back to `pg-exercise` — before writing the page.
+
+**Shipped.** `modules/01-javascript-fundamentals/0013-capstone-token-issuer.html`
+and `token/practice/01-token-issuer/` (Token repo commit `221e6b0`, its first
+real code). Verified by running:
+
+```bash
+node scripts/verify-lesson.mjs modules/01-javascript-fundamentals/0013-capstone-token-issuer.html \
+     --wrong scripts/cases/0013-capstone-token-issuer.mjs
+cd ../../../token/practice/01-token-issuer && node test.mjs   # 36 pass
+```
+
+10 teaching playgrounds, 3 staged exercises (6 + 8 + 15 = 29 checks), 30
+questions, 11 alternative styles passing and 22 mistakes each tripping the
+check named for it.
+
+**The two mistakes the capstone exists for both produce output that looks
+right.** `gen`'s modulo bias makes perfect-looking codes in which eight
+characters are 12.5% more likely, forever, and unfixable for codes already
+issued. `rules`' chatty messages enforce every rule correctly and read
+*better* — and turn the redemption page into a code-guessing oracle. Neither
+is catchable by reading the output, which is the argument for the test file
+existing at all.
+
+Deliberate calls worth not re-litigating:
+
+- **`crypto.getRandomValues` with rejection sampling, not `Math.random`.**
+  Teaching the biased version and leaving it for Track B to fix would put a
+  permanent flaw into codes already issued.
+- **Randomness and time are both injected** — `generateCode(nextByte)` and
+  `now` as a parameter on every issuer method. That is what makes the bias
+  test exact rather than statistical, and it is stated in the lesson as the
+  reason, not as a style preference.
+- **Statuses are derived at read time.** A stored status needs a sweep to
+  maintain it and is wrong until the sweep runs.
+
+Two tooling problems found by writing it:
+
+1. `verify-lesson.mjs`'s demo-stripping filter matched `const x = create…`
+   after `trim()`, so an *indented* `const issuer = createIssuer(gen)` inside a
+   solution's function body would have been deleted and the student blamed for
+   the resulting failure. Now anchored to column 0.
+2. A backtick inside a `createSolution` exercise string ends the template
+   literal and kills the whole `<script>` block. Cost one debugging cycle;
+   noted in CLAUDE.md next to the `</script>` trap.
+
+Also fixed a standing lie in the audit: **`Verified` had read 0/95 since the
+column existed**, because nothing ever wrote `scripts/verification-log.json`.
+`verify-lesson.mjs` now writes it on a pass and deletes the entry on a fail,
+and all 13 Module 01 lessons were re-run to populate it — 13/96.
+
 ### Unit 7 — `01/0012-error-handling`
 
 Overlap checked first. Verdict: enough new material, unlike 0011.
@@ -271,29 +345,35 @@ node scripts/verify-lesson.mjs modules/01-javascript-fundamentals/0007-dom-and-b
 
 ## Next action
 
-**Phase 1.1 is complete — all of `01/0005`–`01/0012` are retrofitted and
-verified.** Module 01 now stands at 12/12 lessons with practice: 72
-playgrounds, 12 exercises, 350 questions.
+**Phase 1.1 and 1.2 are both complete.** Module 01 is 12 lessons plus a
+capstone, all carrying practice and all verified by execution — see
+`PROGRESS.md` for the counts, which are now computed rather than asserted.
 
 What remains in COURSE-REVIEW.md §6 Phase 1:
 
 | # | Work | Status |
 |---|---|---|
 | 1.1 | Retrofit `01/0005`–`01/0012` | **done** |
-| 1.2 | Capstone at the end of Module 01 — a pure-JS token issuer, as the repo's first real commit | not started |
+| 1.2 | Capstone at the end of Module 01 | **done** — Token repo `221e6b0` |
 | 1.3 | One "explain it in your own words" prompt per lesson | not started |
 | 1.4 | Spaced review from the previous two lessons | **done** — built into each retrofit |
 | 1.5 | Same retrofit for Module 02, just-in-time | not started |
 
-**Recommended next: 1.2, the capstone.** It is the natural close to Module 01,
-it is the first thing that actually lands in the Token repo (which has been
-scaffolded but is otherwise empty), and every piece it needs is now taught —
-generation from the alphabet (0005), closures for private state (0006),
-arrays and immutable updates (0010), `??` (0011), typed errors (0012).
+**Recommended next: 1.3.** It is the only item left that touches lessons the
+student is about to read, it is small and uniform (one prompt per lesson, no
+tooling), and it is the piece that turns passive reading into recall. Do it
+across `01/0001`–`0013` in one pass, since the shape is identical everywhere.
 
 **Do not start Module 02 (1.5) yet.** The student is on lesson 5 or 6 of 12;
 Module 02 is just-in-time work and writing it now is exactly the batching-ahead
-the working discipline forbids.
+the working discipline forbids. When it does start, note that `verify-lesson.mjs`
+cannot run React Native code — Module 02's exercises will need a different
+verification story, and deciding what it is comes before writing the lessons.
+
+**When the student reaches the capstone**, they need Node 19+ on the machine
+(`node -v`) — `crypto.getRandomValues` as a global is the only environment
+requirement in the whole module. Worth checking before they get there rather
+than at the exercise.
 
 Two things to check before writing any further lesson, both of which have now
 bitten more than once:

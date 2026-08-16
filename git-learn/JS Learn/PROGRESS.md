@@ -4,21 +4,21 @@
      Regenerate with: node scripts/audit.mjs
      Hand-written session state lives in SESSION.md, never here. -->
 
-Generated 2026-08-15 from the files on disk. Where any other document disagrees
+Generated 2026-08-16 from the files on disk. Where any other document disagrees
 with this one, this one is right — everything below is measured, not asserted.
 
 ## Summary
 
 | Metric | Value |
 |---|---|
-| Token-track lessons | 95 |
+| Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 45 |
-| Quiz questions (track) | 2545 |
-| Avg teaching prose per track lesson | 1460 words |
-| Lessons with a playground | 53 / 95 |
-| Lessons with an exercise | 81 / 95 |
-| **Deepened** (all 3 spine sections) | 0 / 95 |
-| **Verified** (code executed) | 0 / 95 |
+| Quiz questions (track) | 2575 |
+| Avg teaching prose per track lesson | 1477 words |
+| Lessons with a playground | 54 / 96 |
+| Lessons with an exercise | 82 / 96 |
+| **Deepened** (all 3 spine sections) | 0 / 96 |
+| **Verified** (code executed) | 13 / 96 |
 | Errors | 3 |
 | Warnings | 52 |
 
@@ -27,12 +27,12 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 ## Answer-position distribution — **authored order, not what the student sees**
 
-1310 keyed questions (multiple-choice, spot-the-bug, which-breaks).
+1327 keyed questions (multiple-choice, spot-the-bug, which-breaks).
 
 > **This clustering is expected and already handled. Do not "fix" it again.**
 > `quiz.js` shuffles options at render time (`optionDisplayOrder`), so the
 > displayed distribution is roughly even — measured at 26.9 / 28.5 / 26.9 / 17.6
-> across all 1310 questions, versus the authored figures below. Index 3 sits
+> across all 1327 questions, versus the authored figures below. Index 3 sits
 > lower only because many questions have three options.
 >
 > The numbers here read `correct` straight from the lesson data, which is
@@ -42,27 +42,27 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Position | Count | Share |
 |---|---|---|
-| index 0 | 123 | 9.4% |
-| index 1 | 830 | 63.4% |
-| index 2 | 329 | 25.1% |
-| index 3 | 28 | 2.1% |
+| index 0 | 126 | 9.5% |
+| index 1 | 835 | 62.9% |
+| index 2 | 335 | 25.2% |
+| index 3 | 31 | 2.3% |
 
 ## Question types
 
 | Type | Count |
 |---|---|
-| multiple-choice | 641 |
-| predict-output | 511 |
-| fill-blank | 451 |
-| spot-the-bug | 369 |
-| which-breaks | 300 |
-| order-steps | 273 |
+| multiple-choice | 655 |
+| predict-output | 519 |
+| fill-blank | 454 |
+| spot-the-bug | 371 |
+| which-breaks | 301 |
+| order-steps | 275 |
 
 ## Modules
 
 | Module | Lessons | Avg prose | Playgrounds | Exercises | Questions | Deepened | Verified |
 |---|---|---|---|---|---|---|---|
-| 01-javascript-fundamentals | 12 | 2513 | 72 | 12 | 350 | 0/12 | 0/12 |
+| 01-javascript-fundamentals | 13 | 2556 | 85 | 15 | 380 | 0/13 | 13/13 |
 | 02-react-native | 14 | 2301 | 0 | 0 | 355 | 0/14 | 0/14 |
 | a10-device-security | 2 | 1277 | 2 | 2 | 50 | 0/2 | 0/2 |
 | a11-polish-publish | 5 | 1229 | 0 | 5 | 125 | 0/5 | 0/5 |
@@ -95,7 +95,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Quiz structure valid | ok |
 | Tables queried but never created | participants, deletion_queue, calls |
 | Broken relative links | ok |
-| search-index.json | 95 entries, 0 dead, 0 unindexed |
+| search-index.json | 96 entries, 0 dead, 0 unindexed |
 | Example tokens valid under alphabet | 24 invalid |
 
 ## Errors (3)
@@ -138,7 +138,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 - token: "DELI-2XN5-QW8R" uses characters excluded from the alphabet (3 file(s))
 - token: "BOLT-3KP9" uses characters excluded from the alphabet (3 file(s))
 - token: "WAVE-1MN4" uses characters excluded from the alphabet (3 file(s))
-- token: "MERC-8GH2-KP4O" uses characters excluded from the alphabet (2 file(s))
+- token: "MERC-8GH2-KP4O" uses characters excluded from the alphabet (3 file(s))
 - token: "FOOD-3KP9" uses characters excluded from the alphabet (2 file(s))
 - token: "XPRT-4KL9" uses characters excluded from the alphabet (2 file(s))
 - token: "PRYA-4KL9" uses characters excluded from the alphabet (2 file(s))
@@ -152,18 +152,19 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Lesson | Prose | Pre | Play | Exer | Q | Deepened | Verified |
 |---|---|---|---|---|---|---|---|
-| 01-javascript-fundamentals/0001-what-is-javascript.html | 1332 | 6 | 4 | 1 | 25 | — | — |
-| 01-javascript-fundamentals/0002-data-types.html | 1638 | 18 | 4 | 1 | 30 | — | — |
-| 01-javascript-fundamentals/0003-functions.html | 2535 | 18 | 5 | 1 | 25 | — | — |
-| 01-javascript-fundamentals/0004-conditionals.html | 2716 | 23 | 4 | 1 | 25 | — | — |
-| 01-javascript-fundamentals/0005-loops.html | 2918 | 15 | 5 | 1 | 35 | — | — |
-| 01-javascript-fundamentals/0006-scope-and-closures.html | 3594 | 16 | 5 | 1 | 30 | — | — |
-| 01-javascript-fundamentals/0007-dom-and-browser-apis.html | 3004 | 24 | 8 | 1 | 30 | — | — |
-| 01-javascript-fundamentals/0008-events.html | 2492 | 13 | 7 | 1 | 30 | — | — |
-| 01-javascript-fundamentals/0009-promises-and-async-await.html | 2232 | 8 | 9 | 1 | 30 | — | — |
-| 01-javascript-fundamentals/0010-arrays-and-objects.html | 2416 | 10 | 7 | 1 | 30 | — | — |
-| 01-javascript-fundamentals/0011-modern-javascript-es6.html | 2399 | 9 | 6 | 1 | 30 | — | — |
-| 01-javascript-fundamentals/0012-error-handling.html | 2880 | 10 | 8 | 1 | 30 | — | — |
+| 01-javascript-fundamentals/0001-what-is-javascript.html | 1332 | 6 | 4 | 1 | 25 | — | yes |
+| 01-javascript-fundamentals/0002-data-types.html | 1638 | 18 | 4 | 1 | 30 | — | yes |
+| 01-javascript-fundamentals/0003-functions.html | 2535 | 18 | 5 | 1 | 25 | — | yes |
+| 01-javascript-fundamentals/0004-conditionals.html | 2716 | 23 | 4 | 1 | 25 | — | yes |
+| 01-javascript-fundamentals/0005-loops.html | 2918 | 15 | 5 | 1 | 35 | — | yes |
+| 01-javascript-fundamentals/0006-scope-and-closures.html | 3594 | 16 | 5 | 1 | 30 | — | yes |
+| 01-javascript-fundamentals/0007-dom-and-browser-apis.html | 3004 | 24 | 8 | 1 | 30 | — | yes |
+| 01-javascript-fundamentals/0008-events.html | 2492 | 13 | 7 | 1 | 30 | — | yes |
+| 01-javascript-fundamentals/0009-promises-and-async-await.html | 2232 | 8 | 9 | 1 | 30 | — | yes |
+| 01-javascript-fundamentals/0010-arrays-and-objects.html | 2416 | 10 | 7 | 1 | 30 | — | yes |
+| 01-javascript-fundamentals/0011-modern-javascript-es6.html | 2399 | 9 | 6 | 1 | 30 | — | yes |
+| 01-javascript-fundamentals/0012-error-handling.html | 2876 | 10 | 8 | 1 | 30 | — | yes |
+| 01-javascript-fundamentals/0013-capstone-token-issuer.html | 3073 | 19 | 13 | 3 | 30 | — | yes |
 | 02-react-native/0001-expo-setup-and-eas-build.html | 1687 | 13 | 0 | 0 | 25 | — | — |
 | 02-react-native/0002-core-components.html | 2211 | 9 | 0 | 0 | 30 | — | — |
 | 02-react-native/0003-styling-and-flexbox.html | 2035 | 10 | 0 | 0 | 25 | — | — |

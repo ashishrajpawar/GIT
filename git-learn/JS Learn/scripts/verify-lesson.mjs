@@ -23,6 +23,21 @@
  *   --wrong <file.mjs>   a module exporting { alternatives, mistakes } to test
  *                        that other correct styles pass and each mistake fails
  *                        only the check it should.
+ *
+ * STAGED EXERCISES
+ * ----------------
+ * A lesson with one exercise names it `createSolution("exercise-…")` and puts
+ * the self-check in `createPlayground("pg-exercise", …)`. The capstone builds
+ * one program in three stages, each with its own exercise, so that single pair
+ * is not enough: `exercise-<name>` looks for `pg-exercise-<name>` first and
+ * falls back to `pg-exercise`. A one-exercise lesson is unaffected.
+ *
+ * A staged `--wrong` file exports `stages` instead of the flat pair:
+ *
+ *   export const stages = {
+ *     gen:   { alternatives: {...}, mistakes: {...} },   // -> pg-exercise-gen
+ *     store: { alternatives: {...}, mistakes: {...} }
+ *   };
  */
 
 import fs from "node:fs";
@@ -177,10 +192,19 @@ async function runLikePlayground(code, opts = {}) {
   return { logs, threw, dom: sandbox ? sandbox.serialize() : null };
 }
 
+/** Which playground carries a given exercise's self-check. `exercise-gen` uses
+ *  `pg-exercise-gen` when the lesson defines one, otherwise the lone
+ *  `pg-exercise` — which is every lesson written before the capstone. */
+function pairFor(solutionId) {
+  const suffix = solutionId.replace(/^exercise-?/, "");
+  return playgrounds[`pg-exercise-${suffix}`] ? `pg-exercise-${suffix}` : "pg-exercise";
+}
+const exercisePlaygrounds = new Set(Object.keys(solutions).map(pairFor));
+
 // ---- 2. playgrounds run ---------------------------------------------------
 console.log("\n2. playgrounds run (deliberate breakage is expected, hangs are not)");
 for (const [id, pg] of Object.entries(playgrounds)) {
-  if (id === "pg-exercise") continue; // covered by the self-check below
+  if (exercisePlaygrounds.has(id)) continue; // covered by the self-check below
   const t0 = Date.now();
   const { logs, threw } = await runLikePlayground(pg.code, pg.opts);
   const ms = Date.now() - t0;
@@ -228,12 +252,19 @@ ok(`${checked} executable predict-output questions verified`);
 // ---- 4. the revealed solution passes its own self-check -------------------
 console.log("\n4. revealed solution passes its self-check");
 const MARKER = "// --- Self-check: leave everything below this line alone ---";
+/* Strip the solution's own demo calls — the self-check supplies its own data.
+   Matched at column 0 only: an indented `const issuer = createIssuer(gen)`
+   inside a function body is part of the implementation, and stripping it
+   silently removes a line the self-check then blames the student for. */
+const stripDemo = (src) =>
+  src.split("\n").filter((l) => !/^(console\.log|const \w+ = (create|make))/.test(l)).join("\n");
+
 for (const [id, cfg] of Object.entries(solutions)) {
-  const pg = playgrounds["pg-exercise"];
-  if (!pg || !pg.code.includes(MARKER)) { fail(`${id}: no self-check found in pg-exercise`); continue; }
+  const pgId = pairFor(id);
+  const pg = playgrounds[pgId];
+  if (!pg || !pg.code.includes(MARKER)) { fail(`${id}: no self-check found in ${pgId}`); continue; }
   const selfCheck = pg.code.split(MARKER)[1];
-  // Strip the solution's own demo calls — the self-check supplies its own data.
-  const impl = cfg.solution.split("\n").filter((l) => !/^console\.log|^const \w+ = create|^const \w+ = make/.test(l.trim())).join("\n");
+  const impl = stripDemo(cfg.solution);
   const { logs, threw } = await runLikePlayground(impl + "\n" + selfCheck, pg.opts);
   if (threw) { fail(`${id}: self-check threw — ${threw}`); continue; }
   const bad = logs.filter((l) => l.startsWith("FAIL"));
@@ -245,20 +276,34 @@ for (const [id, cfg] of Object.entries(solutions)) {
 // ---- 5. optional: alternatives and mistakes -------------------------------
 if (wrongFile) {
   const cases = await import("file://" + path.resolve(ROOT, wrongFile));
-  const pg = playgrounds["pg-exercise"];
-  const selfCheck = pg.code.split(MARKER)[1];
-  const runCase = async (impl) => {
-    const { logs, threw } = await runLikePlayground(impl + "\n" + selfCheck, pg.opts);
-    return { fails: logs.filter((l) => l.startsWith("FAIL")).map((l) => l.slice(6).trim()), threw };
-  };
+
+  /* Flat form (one exercise) is the same thing with a single unnamed stage,
+     so both shapes go through one code path. */
+  const stages = cases.stages
+    ? Object.entries(cases.stages).map(([name, c]) => [`pg-exercise-${name}`, name, c])
+    : [["pg-exercise", null, { alternatives: cases.alternatives, mistakes: cases.mistakes }]];
+
   console.log("\n5. alternative correct styles also pass (behaviour, not resemblance)");
-  for (const [name, impl] of Object.entries(cases.alternatives || {})) {
-    const { fails, threw } = await runCase(impl);
-    if (threw || fails.length) fail(`${name}: ${threw || fails.join(" | ").slice(0, 90)}`);
-    else ok(name);
+  const mistakeRuns = [];
+  for (const [pgId, name, c] of stages) {
+    const pg = playgrounds[pgId];
+    if (!pg) { fail(`--wrong names stage "${name}" but the lesson has no ${pgId}`); continue; }
+    const selfCheck = pg.code.split(MARKER)[1];
+    const runCase = async (impl) => {
+      const { logs, threw } = await runLikePlayground(impl + "\n" + selfCheck, pg.opts);
+      return { fails: logs.filter((l) => l.startsWith("FAIL")).map((l) => l.slice(6).trim()), threw };
+    };
+    const label = (n) => (name ? `${name}: ${n}` : n);
+    for (const [n, impl] of Object.entries(c.alternatives || {})) {
+      const { fails, threw } = await runCase(impl);
+      if (threw || fails.length) fail(`${label(n)}: ${threw || fails.join(" | ").slice(0, 90)}`);
+      else ok(label(n));
+    }
+    for (const [n, m] of Object.entries(c.mistakes || {})) mistakeRuns.push([label(n), m, runCase]);
   }
+
   console.log("\n6. each mistake trips the check it should");
-  for (const [name, { impl, expect }] of Object.entries(cases.mistakes || {})) {
+  for (const [name, { impl, expect }, runCase] of mistakeRuns) {
     const { fails, threw } = await runCase(impl);
     const hit = threw ? threw : fails.join(" | ");
     if (!fails.length && !threw) fail(`${name}: passed everything — the self-check misses this mistake`);
@@ -266,6 +311,28 @@ if (wrongFile) {
     else ok(`${name} -> ${hit.slice(0, 70)}`);
   }
 }
+
+/* ---- record the run ------------------------------------------------------
+   audit.mjs reports a "Verified" column read from this file. It said 0 of 95
+   for as long as it existed, because nothing wrote it — while eight lessons
+   had in fact been verified by running them. A number nobody maintains is
+   worse than no number, so the verifier maintains it: one entry per lesson,
+   written only by an actual passing run, and cleared by a failing one. */
+const LOG_PATH = path.join(ROOT, "scripts", "verification-log.json");
+const log = fs.existsSync(LOG_PATH) ? JSON.parse(fs.readFileSync(LOG_PATH, "utf8")) : {};
+const lessonId = path.relative(ROOT, lessonPath).split(path.sep).join("/");
+
+if (failures) delete log[lessonId];
+else log[lessonId] = {
+  status: "verified",
+  at: new Date().toISOString().slice(0, 10),
+  solutions: Object.keys(solutions).length,
+  playgrounds: Object.keys(playgrounds).length,
+  wrongCases: wrongFile ? path.basename(wrongFile) : null,
+};
+
+const ordered = Object.fromEntries(Object.keys(log).sort().map((k) => [k, log[k]]));
+fs.writeFileSync(LOG_PATH, JSON.stringify(ordered, null, 2) + "\n");
 
 console.log(`\n${failures ? `FAIL — ${failures} problem(s)` : "OK — lesson verified"}\n`);
 process.exit(failures ? 1 : 0);

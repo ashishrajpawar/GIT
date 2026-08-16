@@ -1,0 +1,1665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Capstone: The Token Issuer — JS Learn</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">Module 1: JavaScript Fundamentals</a>
+      <span class="sep">›</span>
+      <span class="current">Capstone: The Token Issuer</span>
+    </nav>
+
+    <!-- Header -->
+    <span class="badge">Capstone</span>
+    <h1 style="margin-top:0.5rem;">The Token Issuer</h1>
+    <div class="lesson-meta">
+      <span>Module 1 finale</span>
+      <span>~90 min build</span>
+      <span>Nothing new — everything used</span>
+    </div>
+
+    <!-- Why this matters callout -->
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>Twelve lessons of examples end here, in the first code that stays. You are going to build the part of Token that decides everything: it makes a code, remembers it, applies the rules the owner set, and kills it on request. Generate, store, rule, revoke.</p>
+      <p>It runs in Node with no framework, no database and no network — about two hundred lines. The version in <code>api/</code> will be backed by Postgres and reached over HTTP, and it will make <em>the same four decisions</em> this one makes. That is why it is worth making them carefully now, while the whole thing fits on a screen and a mistake costs a re-read instead of a migration.</p>
+      <p>There is no new syntax in this lesson. Everything you need has already been taught — which is the point. This is the difference between having read about closures and being able to reach for one.</p>
+    </div>
+
+    <hr>
+
+    <!-- Spaced review -->
+    <h2>Before you start — five from the module</h2>
+
+    <p>Each of these is a tool you are about to use for real. If one does not land, the lesson it came from is worth ten minutes before you carry on.</p>
+
+    <div id="capstone-review"></div>
+
+    <hr>
+
+    <!-- What you are building -->
+    <h2>What you are building</h2>
+
+    <p>One file, <code>issuer.mjs</code>, exporting four things:</p>
+
+<pre><code>generateCode()                 // "MERC-8GH2-KP4X" — a fresh code
+isValidCode(raw)               // could this string have been issued by us?
+DENIED_MESSAGE                 // the one thing every rejected holder is told
+createIssuer()                 // one person's set of tokens</code></pre>
+
+    <p>And what an issuer can do:</p>
+
+<pre><code>const issuer = createIssuer();
+
+const token = issuer.issue({ label: "Grocery delivery", maxUses: 3 });
+token.code                     // "MERC-8GH2-KP4X" — give this to the shop
+
+issuer.redeem("merc-8gh2-kp4x")  // { ok: true, label: "Grocery delivery", usesLeft: 2 }
+issuer.revoke(token.code)        // { ok: true }
+issuer.redeem(token.code)        // { ok: false, message: "That code can't be used." }
+
+issuer.list()                    // what the owner sees
+issuer.events()                  // what happened, including the failed attempts</code></pre>
+
+    <p>You will build it in three stages, each with its own exercise and its own checks:</p>
+
+    <table>
+      <thead>
+        <tr><th>Stage</th><th>What it adds</th><th>Leans on</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>1 — generate</td><td><code>generateCode()</code></td><td>loops (5), strings and numbers (2), functions (3)</td></tr>
+        <tr><td>2 — store</td><td><code>createIssuer()</code> with <code>issue</code> and <code>list</code></td><td>closures (6), objects and copying (10), <code>??</code> (11)</td></tr>
+        <tr><td>3 — rule and revoke</td><td><code>redeem</code>, <code>revoke</code>, <code>events</code></td><td>conditionals (4), arrays (10), errors and the enumeration rule (12)</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout">
+      <div class="callout-title">This one goes in the repo</div>
+      <p>Every lesson so far ended in a playground. This one ends in <code>token/practice/01-token-issuer/</code> — a folder you run with <code>node</code>, commit, and never delete. The last section walks through it. The finished code is in this repo already, so if a stage defeats you, you can read the answer; do the stage first.</p>
+    </div>
+
+    <hr>
+
+    <!-- Stage 1 -->
+    <h2>Stage 1 — a code nobody can guess</h2>
+
+    <p>The alphabet is fixed and it is not negotiable:</p>
+
+<pre><code>23456789ABCDEFGHJKMNPQRSTUVWXYZ     // 31 characters</code></pre>
+
+    <p>That is the 36 letters and digits, minus five: <strong>0, O, 1, I and L</strong>. They are gone because a token code gets read aloud down a phone line, printed on a card, and typed by someone who has never seen it written down. A person who cannot tell <code>0</code> from <code>O</code> is not making a mistake — the two are the same shape in most fonts. Removing them costs you 5 characters of alphabet and saves you every support conversation that starts "it says invalid code".</p>
+
+    <p>The cost of that decision, since it is a real one: 31 characters instead of 36 makes the keyspace smaller. Twelve characters of a 31-letter alphabet is 31<sup>12</sup>, about 7.9 × 10<sup>17</sup> codes. At a million guesses a second — far more than any server would ever answer — working through them takes roughly 25,000 years. The five characters were not missed.</p>
+
+    <h3>Try it yourself</h3>
+
+    <div id="pg-alphabet"></div>
+
+    <h3>Try it yourself — this one is broken on purpose</h3>
+
+    <p>The obvious way to turn a random byte into a letter is to use it as an index. Run this and read what comes out before you fix it.</p>
+
+    <div id="pg-index-trap"></div>
+
+    <p>Nothing threw. That is the interesting part: <code>ALPHABET[200]</code> is <code>undefined</code>, and adding <code>undefined</code> to a string gives you the six letters <code>undefined</code> rather than an error. A bug that produces confident garbage is worse than one that crashes, and this is the shape of most of them.</p>
+
+    <p>The fix is <code>%</code> — the remainder operator — which folds any number back into the range 0 to 30:</p>
+
+<pre><code>ALPHABET[byte % ALPHABET.length]     // always a real character</code></pre>
+
+    <h3>Where <code>%</code> alone goes wrong</h3>
+
+    <p>That fix has a flaw, and it is worth the paragraph because it is invisible in testing and permanent in production.</p>
+
+    <p>A byte is 0 to 255 — 256 values. Divide by 31: <strong>256 / 31 = 8 remainder 8</strong>. So the bytes 0–247 spread evenly, eight per letter, and then there are 8 left over: 248 to 255. Those wrap around onto the first eight letters of the alphabet a ninth time.</p>
+
+<pre><code>byte 0   -> "2"      byte 248 -> "2"     ninth chance for "2"
+byte 1   -> "3"      byte 249 -> "3"     ninth chance for "3"
+...                  ...
+byte 7   -> "9"      byte 255 -> "9"     ninth chance for "9"
+byte 8   -> "A"      (nothing extra)     "A" only ever gets eight</code></pre>
+
+    <p><code>2 3 4 5 6 7 8 9</code> come up 9 times per 256 bytes and the other 23 characters come up 8 times: those eight are <strong>12.5% more likely</strong> than the rest, in every code, forever. No test notices. Nobody reports it. It simply makes the codes slightly easier to guess than the arithmetic above claims, and there is no way to fix it later for codes already issued.</p>
+
+    <p>The fix costs one line: throw away any byte of 248 or more and draw another.</p>
+
+<pre><code>const byte = nextByte();
+if (byte >= 248) continue;           // biased range — draw again
+letters += ALPHABET[byte % 31];</code></pre>
+
+    <p>Roughly 3% of draws are discarded. In exchange every character is exactly as likely as every other.</p>
+
+    <h3>Try it yourself</h3>
+
+    <div id="pg-bias"></div>
+
+    <h3>Where the bytes come from</h3>
+
+    <p><code>Math.random()</code> is the function you have used all module, and it is the wrong one here. It is fast and it is fine for shuffling a list or picking a demo colour, but it is <em>predictable</em>: it is a formula with a hidden counter, and someone who sees enough of its output can work out the counter and produce the rest. For a capability that grants access to a person, that is fatal.</p>
+
+    <p>The right one is built into every browser and into Node, and it is one line:</p>
+
+<pre><code>const bytes = new Uint8Array(1);
+crypto.getRandomValues(bytes);       // cryptographically random
+console.log(bytes[0]);               // 0 to 255</code></pre>
+
+    <p><code>Uint8Array</code> is an array whose slots hold one byte each; <code>getRandomValues</code> fills it in place, which is why nothing is assigned from it. There is no counter to work out and no sequence to predict.</p>
+
+    <div class="callout">
+      <div class="callout-title">The habit worth taking from this stage</div>
+      <p>Notice what the exercise asks for: <code>generateCode(nextByte)</code> takes its source of randomness as an argument, with a real one as the default. That is not decoration. Randomness you cannot control is randomness you cannot test — the only way to check an unbiased generator is to run it thousands of times and squint at the totals. Hand the bytes in and the same test becomes exact and instant. You will do the same thing with the clock in stage 3.</p>
+    </div>
+
+    <h3>Try it yourself</h3>
+
+    <div id="pg-crypto"></div>
+
+    <h2>Now build it — stage 1</h2>
+
+    <div id="exercise-gen"></div>
+
+    <h3>Check your work</h3>
+
+    <p>Write it in the playground below and press Run. Six checks. Two of them are the ones that matter: one feeds your generator the bytes 0 to 255 in order and counts the letters, and one freezes <code>Math.random</code> to prove you are not using it.</p>
+
+    <div id="pg-exercise-gen"></div>
+
+    <hr>
+
+    <!-- Stage 2 -->
+    <h2>Stage 2 — somewhere to keep them</h2>
+
+    <p>A code on its own is a string. A token is a code plus everything the owner decided about it:</p>
+
+<pre><code>{
+  code:      "MERC-8GH2-KP4X",
+  label:     "Grocery delivery",   // how the owner recognises it later
+  issuedAt:  1755300000000,
+  expiresAt: 1755321600000,        // or null for no expiry
+  maxUses:   3,                    // or null for unlimited
+  uses:      0,
+  revokedAt: null
+}</code></pre>
+
+    <p>Where does that live? The obvious answer is an array at the top of the file, and the obvious answer is wrong for a reason worth understanding.</p>
+
+<pre><code>// Anyone can reach this. Anyone can change it.
+export const tokens = [];</code></pre>
+
+    <p>An exported array is a shared, writable global. Any file that imports it can push a token nobody issued, or set <code>revokedAt</code> back to <code>null</code> on a token the owner killed. Nothing enforces the rules, because the rules live in functions the caller can simply go around.</p>
+
+    <p>Lesson 6's closure is the answer. A variable declared inside <code>createIssuer</code> lives as long as the functions that use it, and there is no expression anywhere that reaches it:</p>
+
+<pre><code>function createIssuer() {
+  const tokens = [];               // private, permanently
+
+  return {
+    issue(options, now) { /* can see tokens */ },
+    list(now)           { /* can see tokens */ }
+  };
+}</code></pre>
+
+    <h3>Try it yourself</h3>
+
+    <div id="pg-private"></div>
+
+    <h3>Try it yourself — this one is broken on purpose</h3>
+
+    <p>Privacy through a closure is easy to build and easy to hand away by accident. This issuer keeps its store private and then leaks it in the last place you would look.</p>
+
+    <div id="pg-store-leak"></div>
+
+    <p>The store was never reachable by name — and it did not need to be, because <code>list()</code> returned the array itself. Every caller got a live handle on the owner's data, and a <code>.pop()</code> written for a display list deleted a real token. <code>list()</code> must return copies:</p>
+
+<pre><code>list() {
+  return tokens.map((t) => ({ ...t }));    // a new array of new objects
+}</code></pre>
+
+    <p>That is lesson 10's spread, doing the job it exists for. A shallow copy is enough here only because a token record is flat — every value in it is a string, a number or <code>null</code>. Add a nested object to that record later and the copy stops protecting it, exactly as lesson 10's <code>pg-shallow</code> showed.</p>
+
+    <h3>Status is derived, never stored</h3>
+
+    <p>A token can be active, revoked, expired or exhausted. It is tempting to keep that as a field and update it. Do not.</p>
+
+    <p>A stored status has to be maintained by somebody. Who sets <code>status = "expired"</code>? Nothing happens at the moment a token expires — no code runs, because time passing is not an event. You would need a job sweeping every token every minute, and a token whose status was written by a sweep that has not run yet is simply wrong.</p>
+
+    <p>Derived status has none of that. It is a question you answer when someone asks:</p>
+
+<pre><code>function statusOf(token, now) {
+  if (token.revokedAt !== null) return "revoked";
+  if (token.expiresAt !== null &amp;&amp; now &gt;= token.expiresAt) return "expired";
+  if (token.maxUses !== null &amp;&amp; token.uses &gt;= token.maxUses) return "exhausted";
+  return "active";
+}</code></pre>
+
+    <p>Note <code>now</code> is a parameter, not a call to <code>Date.now()</code> inside the function. Same argument as the bytes in stage 1: a function that reads the clock itself can only be tested by waiting.</p>
+
+    <h3>Try it yourself</h3>
+
+    <div id="pg-derived"></div>
+
+    <h3>When to throw and when to return</h3>
+
+    <p>Lesson 12's distinction lands here for real. The issuer has two kinds of caller:</p>
+
+    <ul>
+      <li><code>issue()</code> is called by <em>our own app</em>. If the label is missing, that is a bug in a screen we wrote — nobody outside can cause it. It should <strong>throw</strong>, loudly, in development, where it gets fixed.</li>
+      <li><code>redeem()</code> is called with <em>whatever a stranger typed</em>. There is no bug to report. It must <strong>never throw</strong> — it returns a result, always.</li>
+    </ul>
+
+    <p>Same file, two opposite policies, and both are right.</p>
+
+    <h2>Now build it — stage 2</h2>
+
+    <div id="exercise-store"></div>
+
+    <h3>Check your work</h3>
+
+    <p>Eight checks. Several of them try to vandalise the store through the value <code>list()</code> gave them — that is the whole point of the stage.</p>
+
+    <div id="pg-exercise-store"></div>
+
+    <hr>
+
+    <!-- Stage 3 -->
+    <h2>Stage 3 — the rules, and the off switch</h2>
+
+    <p>Redemption is four questions in a row, and the order does not matter because the answer to any of them is the same. Is this even a code we could have issued? Do we have it? Is it still alive? Then — and only then — yes.</p>
+
+    <p>Write that as a list of ways to say no and you have built the wrong thing:</p>
+
+<pre><code>// Deny-list thinking — do not do this
+if (token.revokedAt !== null) return denied();
+if (token.expiresAt !== null &amp;&amp; now &gt;= token.expiresAt) return denied();
+return allowed();                   // everything else gets in</code></pre>
+
+    <p>That code grants access to every state you have not thought of yet. Add <code>maxUses</code> next month and forget one line here, and exhausted tokens quietly keep working. Deny-by-default inverts it — one way in, and it has to be earned:</p>
+
+<pre><code>if (statusOf(token, now) !== "active") return denied();
+return allowed();</code></pre>
+
+    <p>Now a new status is denied until somebody deliberately adds it to <code>statusOf</code> as an allowed one. This is the product's whole premise expressed in two lines: nobody reaches the user unless the user issued them something that is still good.</p>
+
+    <h3>Try it yourself — this one is broken on purpose</h3>
+
+    <div id="pg-deny-default"></div>
+
+    <h3>The answer that has to be vague</h3>
+
+    <p>Lesson 12 ended on this and the capstone is where it becomes a rule of the system rather than a rule of one function.</p>
+
+    <p>A holder whose redemption fails could be told exactly why: no such code, that one was revoked, that one is out of uses. It reads better. It is also a yes/no oracle — type codes until the wording changes, and the wording tells you when you have found a real one. The 25,000 years of keyspace assumes the answer carries no information; different messages hand out one bit per guess, and a bit per guess is what a search needs.</p>
+
+    <p>So every denial returns the identical string, and the reason goes somewhere the holder cannot see:</p>
+
+<pre><code>record({ type: "denied", code, at: now, reason: "revoked" });   // owner's log
+return { ok: false, message: DENIED_MESSAGE };                  // holder's screen</code></pre>
+
+    <p>The log is not a consolation prize. It is the other half of the defence: a uniform message means a guesser learns nothing, and the log means the <em>owner</em> sees them trying. A hundred <code>unknown</code> denials in a row is a shape you can act on.</p>
+
+    <h3>Try it yourself</h3>
+
+    <div id="pg-uniform"></div>
+
+    <h3>What a successful redemption gives back</h3>
+
+    <p>The last privacy decision in the file, and the easiest one to get wrong by being generous:</p>
+
+<pre><code>return { ok: true, label: token.label, usesLeft: ... };</code></pre>
+
+    <p>The holder gets the label the owner chose for them and nothing else. Not the owner's name, not the other tokens, not when this one was issued. Every extra field here is something a stranger learns about a person who deliberately did not give them a phone number — and once a field is in a response, removing it breaks whatever started depending on it.</p>
+
+    <h3>Try it yourself</h3>
+
+    <div id="pg-revoke"></div>
+
+    <h2>Now build it — stage 3</h2>
+
+    <div id="exercise-rules"></div>
+
+    <h3>Check your work</h3>
+
+    <p>Fifteen checks — the full lifecycle. This is the whole issuer, so paste your stage 2 answer in and grow it.</p>
+
+    <div id="pg-exercise-rules"></div>
+
+    <hr>
+
+    <!-- The repo -->
+    <h2>Put it in the repo</h2>
+
+    <p>The playground was scaffolding. This is the part that stays.</p>
+
+<pre><code>cd token/practice/01-token-issuer
+
+node demo.mjs      # one token's day: issued, used three times, exhausted
+node test.mjs      # 36 checks, all deterministic</code></pre>
+
+    <p>Three files, and the third is the one that will surprise you:</p>
+
+    <table>
+      <thead>
+        <tr><th>File</th><th>What it is</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>issuer.mjs</code></td><td>the module — the three stages you just built, with <code>export</code> in front of them</td></tr>
+        <tr><td><code>demo.mjs</code></td><td>a story you can read: issue, redeem, hit the limit, revoke, get guessed at</td></tr>
+        <tr><td><code>test.mjs</code></td><td>the self-checks from this lesson, as a file you can run any time</td></tr>
+      </tbody>
+    </table>
+
+    <p><code>.mjs</code> rather than <code>.js</code> so that <code>import</code> and <code>export</code> — lesson 11's modules — work with no <code>package.json</code> and nothing to install. That is the whole configuration.</p>
+
+    <h3>The test file is the point</h3>
+
+    <p>You have been running self-checks all module and they have been written for you. <code>test.mjs</code> is the same <code>check(label, passed, detail)</code> helper in a file you own, and it is the first thing in this project that will still be running in a year.</p>
+
+    <p>Its best test is the one you cannot do by reading:</p>
+
+<pre><code>const counts = {};
+for (const ch of ALPHABET) counts[ch] = 0;
+const nextByte = sequentialBytes();          // 0, 1, 2, ... 255, 0, 1, ...
+for (let i = 0; i &lt; 1000; i++) {
+  for (const ch of generateCode(nextByte).replace(/-/g, "")) counts[ch]++;
+}
+
+check("the alphabet is used evenly — no modulo bias",
+      Math.max(...tallies) - Math.min(...tallies) &lt;= 1, ...);</code></pre>
+
+    <p>Take the <code>if (byte &gt;= 248) continue;</code> line out of <code>issuer.mjs</code> and that check reports letter counts running from 375 to 422 — the 12.5% from stage 1, measured. Put it back and the spread is at most 1. A bias no human could see in the output is now a line of output that says <code>FAIL</code>.</p>
+
+    <h3>Commit it</h3>
+
+<pre><code>cd token
+git add practice/01-token-issuer
+git commit -m "Add the Module 01 capstone: a pure-JavaScript token issuer"</code></pre>
+
+    <p>That is the first code in the repo that is not a README. Everything after this is added to a project that already works.</p>
+
+    <div class="callout">
+      <div class="callout-title">What this deliberately does not do</div>
+      <p>It does not persist — restart the process and every token is gone. It has no users, no authentication and no network. Those are not oversights; they are Track B, and each one is a module. What it <em>does</em> have is the four decisions that survive the move to Postgres: unbiased codes, one denial message, injected time, and no references handed out into the store. The data structure gets thrown away. The decisions do not.</p>
+    </div>
+
+    <hr>
+
+    <!-- Quiz -->
+    <h2>Quick check — test yourself</h2>
+    <p>Twenty-five questions on what you just built. They are about your own code now, which makes the wrong answers sharper than usual.</p>
+
+    <div id="capstone-quiz"></div>
+
+    <hr>
+
+    <!-- Primary resources -->
+    <h2>Primary resources for this lesson</h2>
+    <ul>
+      <li><a href="https://javascript.info/closure" target="_blank" rel="noopener">javascript.info: Variable scope, closure</a> — the mechanism stage 2 rests on</li>
+      <li><a href="https://developer.mozilla.org/en-US/docs/Web/API/Crypto/getRandomValues" target="_blank" rel="noopener">MDN: Crypto.getRandomValues()</a> — including its own warning about not using <code>Math.random</code> for anything security-related</li>
+    </ul>
+
+    <!-- Reference callout -->
+    <div class="callout">
+      <div class="callout-title">Quick reference</div>
+      <p>The <a href="../../reference/js-basics-cheatsheet.html">JavaScript Basics Cheatsheet</a> covers every piece of syntax used here on one page.</p>
+    </div>
+
+    <!-- Ask teacher -->
+    <div class="ask-teacher">
+      <strong>Anything unclear? Ask your teacher.</strong>
+      The rejection-sampling loop is the part most people accept without believing. If <code>if (byte &gt;= 248) continue;</code> still feels like superstition, ask — being able to derive 256 / 31 = 8 remainder 8 yourself is worth more than remembering the number.
+    </div>
+
+    <hr>
+
+    <!-- Lesson nav -->
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="./0012-error-handling.html">← Lesson 12: Error Handling</a>
+      <a href="../02-react-native/README.html">Module 2: React Native →</a>
+    </nav>
+
+  </div><!-- .page-wrap -->
+
+  <!-- Load widgets and initialise -->
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script>
+    /* --- Spaced review: the module, not the last two lessons -------------- */
+
+    createQuiz("capstone-review", [
+      {
+        question: "From lesson 6 — why does a variable declared inside createIssuer() survive after createIssuer() has returned?",
+        options: [
+          "It does not; it is destroyed and the functions get a copy",
+          "Because it was declared with const",
+          "The functions returned still reference it, so the closure keeps it alive — and nothing outside has a name for it",
+          "Because it is stored on the window object"
+        ],
+        correct: 2,
+        explanation: "That combination — alive because it is used, unreachable because it was never exported — is exactly what private state means in JavaScript. Stage 2 is built on it."
+      },
+      {
+        type: "predict-output",
+        question: "From lesson 10 — copying. What does this print?",
+        code: "const token = { code: \"MERC-8GH2-KP4X\", uses: 0 };\nconst copy = { ...token };\ncopy.uses = 5;\nconsole.log(token.uses);",
+        answer: "0",
+        explanation: "Spread built a new object, so writing to the copy left the original alone. Stage 2's list() does this for every token, and the stage's broken playground shows what happens when it does not."
+      },
+      {
+        type: "predict-output",
+        question: "From lesson 2 — the remainder operator, which stage 1 needs. What does this print?",
+        code: "console.log(255 % 31);\nconsole.log(31 % 31);",
+        answer: "7\n0",
+        explanation: "% gives what is left after dividing. It is what folds a byte of 0-255 onto an alphabet of 31 — and the reason 255 and 7 land on the same letter is the bias this lesson spends a section on."
+      },
+      {
+        question: "From lesson 12 — a redemption fails because the token was revoked. What should the holder be told?",
+        options: [
+          "The same thing every other failure says, with the real reason recorded where only the owner can see it",
+          "\"That token was revoked\" — accurate and helpful",
+          "Nothing; return silently",
+          "\"Try again later\", so they retry"
+        ],
+        correct: 0,
+        explanation: "Accuracy to a stranger is a leak here. Different wording per failure turns the page into a tool for finding real codes. Stage 3 makes this a property of the whole issuer."
+      },
+      {
+        type: "predict-output",
+        question: "From lesson 11 — ?? . What does this print?",
+        code: "const options = { maxUses: 0 };\nconsole.log(options.maxUses ?? null);\nconsole.log(options.maxUses || null);",
+        answer: "0\nnull",
+        explanation: "?? only steps in for null and undefined; || steps in for any falsy value, and 0 is falsy. In an issuer that difference is a token with a limit of zero silently becoming a token with no limit at all."
+      }
+    ]);
+
+    /* --- Stage 1 practice ------------------------------------------------- */
+
+    createPlayground("pg-alphabet", `const ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+
+console.log("characters:", ALPHABET.length);
+console.log("index 0 :", ALPHABET[0]);
+console.log("index 26-30:", ALPHABET.slice(26));
+
+// The five that are missing, and why
+for (const ch of "0O1IL") {
+  console.log(ch + " in the alphabet? " + ALPHABET.includes(ch));
+}
+
+// How big is the space? 31 to the power of 12.
+const total = Math.pow(31, 12);
+console.log("possible codes:", total.toExponential(2));
+
+// At a million guesses a second, in years:
+const seconds = total / 1000000;
+console.log("years to exhaust:", Math.round(seconds / 60 / 60 / 24 / 365).toLocaleString());
+
+// Try it: what does the keyspace become if you put O, 0, I, 1 and L back
+// and use all 36? Change 31 to 36 above and compare the exponents.`);
+
+    createPlayground("pg-index-trap", `// BROKEN ON PURPOSE: a random byte used straight as an index.
+// Nothing throws. Read the output and work out what happened.
+
+const ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+
+function badCode() {
+  const bytes = new Uint8Array(12);
+  crypto.getRandomValues(bytes);
+
+  let letters = "";
+  for (const byte of bytes) {
+    letters += ALPHABET[byte];        // byte can be up to 255
+  }
+  return letters;
+}
+
+console.log(badCode());
+
+// A byte is 0-255 but the alphabet only has 31 slots, so most of the time
+// ALPHABET[byte] is undefined - and "" + undefined is the word "undefined".
+//
+// Fix it: use ALPHABET[byte % ALPHABET.length] instead, run again, and
+// count the characters you get. (You should get 12, not 14 - the dashes
+// come later.)`);
+
+    createPlayground("pg-bias", `// Measure the bias, rather than taking my word for it.
+// Every byte 0-255 exactly once, mapped both ways.
+
+const ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+
+const folded = {};
+const rejected = {};
+for (const ch of ALPHABET) { folded[ch] = 0; rejected[ch] = 0; }
+
+for (let byte = 0; byte < 256; byte++) {
+  folded[ALPHABET[byte % 31]]++;                       // keep every byte
+  if (byte < 248) rejected[ALPHABET[byte % 31]]++;     // throw the top 8 away
+}
+
+console.log("byte % 31, every byte kept:");
+console.log("  '2' appears " + folded["2"] + " times, 'A' appears " + folded["A"] + " times");
+console.log("  '2' is " + Math.round((folded["2"] / folded["A"] - 1) * 1000) / 10 + "% more likely than 'A'");
+
+console.log("bytes 248+ redrawn:");
+console.log("  '2' appears " + rejected["2"] + " times, 'A' appears " + rejected["A"] + " times");
+
+const counts = Object.values(rejected);
+console.log("  every letter the same? " + (Math.max(...counts) === Math.min(...counts)));
+
+// 256 / 31 = 8 remainder 8. Those 8 left over are the whole problem.
+console.log("256 / 31 =", Math.floor(256 / 31), "remainder", 256 % 31);`);
+
+    createPlayground("pg-crypto", `// Where the bytes come from. Run this a few times.
+
+function randomByte() {
+  const bytes = new Uint8Array(1);
+  crypto.getRandomValues(bytes);    // fills the array in place
+  return bytes[0];
+}
+
+console.log("four bytes:", randomByte(), randomByte(), randomByte(), randomByte());
+
+// getRandomValues fills whatever you hand it, so one call can do a whole code
+const many = new Uint8Array(12);
+crypto.getRandomValues(many);
+console.log("twelve at once:", Array.from(many).join(" "));
+
+// Math.random is a different tool for a different job. It is not secret:
+// given enough output, its next value can be worked out. Fine for picking
+// a demo colour, wrong for anything that grants access.
+console.log("Math.random:", Math.random());
+
+// Try it: write drawUntilBelow(limit) that keeps calling randomByte()
+// until it gets one below 248, and returns how many draws it took.
+// Run it ten times - roughly 3% of draws should be discarded.`);
+
+    createSolution("exercise-gen", {
+      exercise: `Write generateCode(nextByte).
+
+It returns a code in Token's format: 12 characters from the alphabet, in
+three groups of four separated by dashes.
+
+  MERC-8GH2-KP4X
+
+nextByte is a function that returns one whole number from 0 to 255. It is
+passed in so a test can hand you predictable bytes; default it to your own
+randomByte so that generateCode() with no argument still works.
+
+Rules:
+
+  1. Every character must come from
+     ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
+  2. A byte of 248 or more must be thrown away and another drawn. Do not
+     fold it back in with % - that is the 12.5% bias.
+  3. randomByte must use crypto.getRandomValues, not Math.random.
+
+Write all three: ALPHABET, randomByte, and generateCode.`,
+      hints: [
+        "Build a plain 12-character string first and add the dashes at the end with slice(0, 4) + \"-\" + slice(4, 8) + \"-\" + slice(8, 12). Trying to place dashes inside the loop means tracking two lengths at once.",
+        "A while loop that runs until the string is long enough is easier than a for loop here, because a rejected byte means one turn produced no character. `while (letters.length < 12)` with `continue` for a rejected byte reads exactly like the rule.",
+        "randomByte is three lines: make a `new Uint8Array(1)`, pass it to crypto.getRandomValues, return element 0. Then `function generateCode(nextByte = randomByte)` gives you the default the exercise asks for."
+      ],
+      solution: `const ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+
+// 256 / 31 = 8 remainder 8, so bytes 248-255 would give the first eight
+// letters a ninth chance. Throw them away instead.
+const REJECT_AT = 248;
+
+function randomByte() {
+  const bytes = new Uint8Array(1);
+  crypto.getRandomValues(bytes);
+  return bytes[0];
+}
+
+function generateCode(nextByte = randomByte) {
+  let letters = "";
+
+  while (letters.length < 12) {
+    const byte = nextByte();
+    if (byte >= REJECT_AT) continue;          // biased range - draw again
+    letters += ALPHABET[byte % ALPHABET.length];
+  }
+
+  return letters.slice(0, 4) + "-" +
+         letters.slice(4, 8) + "-" +
+         letters.slice(8, 12);
+}`
+    });
+
+    createPlayground("pg-exercise-gen", `// --- Write ALPHABET, randomByte and generateCode(nextByte) here ---
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label);
+  if (!passed && detail) console.log("      " + detail);
+}
+
+// The canonical alphabet, kept here so the checks test your codes against
+// Token's rule rather than against whatever you typed.
+const ISSUABLE = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+const SHAPE = /^[^-]{4}-[^-]{4}-[^-]{4}$/;
+
+function sequentialBytes() {
+  let n = 0;
+  return function () { return n++ % 256; };
+}
+
+try {
+  const codes = [];
+  for (let i = 0; i < 200; i++) codes.push(generateCode());
+
+  check("the shape is four-four-four with dashes",
+        codes.every(function (c) { return typeof c === "string" && SHAPE.test(c); }),
+        "first one that is not: " +
+        JSON.stringify(codes.find(function (c) { return !(typeof c === "string" && SHAPE.test(c)); })));
+
+  const strays = codes.join("").split("").filter(function (ch) {
+    return ch !== "-" && !ISSUABLE.includes(ch);
+  });
+  check("every character comes from the alphabet",
+        strays.length === 0,
+        "found " + strays.length + " character(s) that are not in " + ISSUABLE +
+        ", starting with " + JSON.stringify(strays.slice(0, 8).join("")) +
+        " - 0, O, 1, I and L are excluded on purpose");
+
+  check("200 codes are 200 different codes",
+        new Set(codes).size === 200,
+        "got " + new Set(codes).size + " distinct - a repeat this soon means " +
+        "the source is not really random");
+
+  const allZero = generateCode(function () { return 0; });
+  check("generateCode uses the byte source it is given",
+        allZero === "2222-2222-2222",
+        "fed nothing but the byte 0, the code should be every letter at index 0. " +
+        "Got " + JSON.stringify(allZero) + " - is nextByte being called at all?");
+
+  const counts = {};
+  for (const ch of ISSUABLE) counts[ch] = 0;
+  const next = sequentialBytes();
+  for (let i = 0; i < 1000; i++) {
+    for (const ch of generateCode(next).replace(/-/g, "")) {
+      if (ch in counts) counts[ch]++;
+    }
+  }
+  const tallies = Object.values(counts);
+  const spread = Math.max(...tallies) - Math.min(...tallies);
+  check("the alphabet is used evenly - no modulo bias",
+        spread <= 1,
+        "fed the bytes 0-255 in order, letter counts ran from " +
+        Math.min(...tallies) + " to " + Math.max(...tallies) + ". " +
+        "'2' came up " + counts["2"] + " times and 'A' came up " + counts["A"] +
+        " - bytes of 248 and over are being folded in with % instead of redrawn");
+
+  const realRandom = Math.random;
+  let stubbed;
+  try {
+    Math.random = function () { return 0.5; };
+    stubbed = [generateCode(), generateCode(), generateCode()];
+  } finally {
+    Math.random = realRandom;
+  }
+  check("the default source is crypto, not Math.random",
+        new Set(stubbed).size === 3,
+        "with Math.random frozen at 0.5 your generator produced " +
+        JSON.stringify(stubbed) + ". Identical codes mean Math.random is the " +
+        "source, and a predictable source is a guessable token");
+} catch (err) {
+  console.log("FAIL  " + err.name + ": " + err.message);
+  console.log("      Usually this means generateCode is missing or misspelt,");
+  console.log("      or it does not accept a nextByte argument.");
+}`);
+
+    /* --- Stage 2 practice ------------------------------------------------ */
+
+    createPlayground("pg-private", `// Private state, and what "private" actually means here.
+
+function createCounter() {
+  let count = 0;                    // no other expression can name this
+
+  return {
+    add() { count = count + 1; return count; },
+    read() { return count; }
+  };
+}
+
+const counter = createCounter();
+counter.add();
+counter.add();
+console.log("count:", counter.read());
+
+// Try to reach it the obvious ways:
+console.log("as a property:", counter.count);
+console.log("keys on the object:", Object.keys(counter).join(", "));
+
+// And writing to it does nothing useful - it makes a new, unrelated property
+counter.count = 99;
+console.log("after counter.count = 99, read() says:", counter.read());
+
+// Try it: add a reset() to the returned object, then try to write a
+// reset that works from OUTSIDE without touching createCounter. You cannot,
+// and that is the entire point of stage 2.`);
+
+    createPlayground("pg-store-leak", `// BROKEN ON PURPOSE: the store is private, and handed out anyway.
+
+function createIssuer() {
+  const tokens = [];                      // private...
+
+  return {
+    issue(label, code) {
+      tokens.push({ code: code, label: label, uses: 0 });
+      return tokens[tokens.length - 1];
+    },
+    list() {
+      return tokens;                      // ...and here it goes
+    }
+  };
+}
+
+const issuer = createIssuer();
+issuer.issue("Grocery delivery", "MERC-8GH2-KP4X");
+issuer.issue("Plumber", "DENT-9KRW-52HP");
+console.log("issued:", issuer.list().length);
+
+// Somewhere else entirely, a screen wants the newest token only.
+const screenList = issuer.list();
+screenList.pop();                          // "just trimming my own copy"
+
+console.log("after the screen trimmed ITS list:", issuer.list().length);
+console.log(issuer.list().map(function (t) { return t.label; }).join(", "));
+
+// The token was not revoked. It was not expired. It was deleted by code
+// that thought it was holding a copy.
+//
+// Fix it: return tokens.map(function (t) { return { ...t }; }) from list()
+// and run again. Then try the same thing one level down - change
+// screenList[0].label and see whether the real token changed too.`);
+
+    createPlayground("pg-derived", `// Status derived at read time, versus status stored in the token.
+
+const HOUR = 60 * 60 * 1000;
+const T0 = 1755300000000;
+
+const token = {
+  code: "MERC-8GH2-KP4X",
+  expiresAt: T0 + HOUR,
+  maxUses: 2,
+  uses: 0,
+  revokedAt: null,
+  status: "active"           // the stored version, for comparison
+};
+
+function statusOf(t, now) {
+  if (t.revokedAt !== null) return "revoked";
+  if (t.expiresAt !== null && now >= t.expiresAt) return "expired";
+  if (t.maxUses !== null && t.uses >= t.maxUses) return "exhausted";
+  return "active";
+}
+
+console.log("at 0h  derived:", statusOf(token, T0), " stored:", token.status);
+console.log("at 1h  derived:", statusOf(token, T0 + HOUR), " stored:", token.status);
+
+// Nothing ran between those two lines. No job, no timer, no event. The
+// token expired because time passed, and only the derived answer noticed.
+
+token.uses = 2;
+console.log("after 2 uses  derived:", statusOf(token, T0), " stored:", token.status);
+
+// Try it: revoke it by setting token.revokedAt = T0, then check both again.
+// Then work out what code would have to run, and how often, to keep the
+// stored version honest.`);
+
+    createSolution("exercise-store", {
+      exercise: `Write createIssuer(newCode).
+
+newCode() returns a fresh code - stage 1's generateCode, or anything else
+that returns one. It is passed in so a test can use predictable codes.
+
+Return an object with exactly two functions for now:
+
+  issue(options, now)   options is { label, maxUses, expiresAt }
+                        returns a COPY of the new token
+  list(now)             returns an array of copies, newest last
+
+A token record:
+
+  { code, label, issuedAt, expiresAt, maxUses, uses, revokedAt }
+
+  label       trimmed. maxUses and expiresAt default to null when left out.
+  issuedAt    the now you were given
+  uses        starts at 0
+  revokedAt   starts at null (stage 3 uses it)
+
+Rules:
+
+  1. The array of tokens is private. Nothing outside your returned object
+     may be able to reach or change it.
+  2. issue THROWS when label is missing, not a string, or blank - that is
+     our own bug, not a stranger's input - and the token is not stored.
+  3. list returns copies, in both directions: adding to or editing the
+     returned value must leave the store untouched.
+  4. Every token from list() carries a status, worked out from the now you
+     were handed at the moment you are asked - never stored on the record:
+       "expired"  expiresAt is not null and now is at or past it
+       "active"   otherwise
+     (revoked and exhausted arrive in stage 3.)`,
+      hints: [
+        "The store is one line: `const tokens = [];` inside createIssuer, before the return. That it is unreachable from outside is not something you add — it is what a local variable already is.",
+        "Write one small helper, describe(token, now), that returns { ...token, status: statusOf(token, now) }. Then issue and list both call it and there is only one place that can forget the copy.",
+        "For the defaults, `options.maxUses ?? null` is the one you want, not `||`. A maxUses of 0 is falsy, and `||` would turn a token that can never be used into a token with no limit at all — lesson 11's trap, with real consequences."
+      ],
+      solution: `function createIssuer(newCode) {
+  const tokens = [];                 // private for as long as the issuer lives
+
+  function statusOf(token, now) {
+    if (token.expiresAt !== null && now >= token.expiresAt) return "expired";
+    return "active";
+  }
+
+  // One place that builds the outside view, so there is one place that can
+  // forget to copy.
+  function describe(token, now) {
+    return { ...token, status: statusOf(token, now) };
+  }
+
+  return {
+    issue(options, now) {
+      const label = options && options.label;
+      if (typeof label !== "string" || label.trim() === "") {
+        throw new TypeError("issue() needs a label describing who the token is for");
+      }
+
+      const token = {
+        code: newCode(),
+        label: label.trim(),
+        issuedAt: now,
+        expiresAt: options.expiresAt ?? null,
+        maxUses: options.maxUses ?? null,
+        uses: 0,
+        revokedAt: null
+      };
+
+      tokens.push(token);
+      return describe(token, now);
+    },
+
+    list(now) {
+      return tokens.map(function (token) { return describe(token, now); });
+    }
+  };
+}`
+    });
+
+    createPlayground("pg-exercise-store", `// --- Write createIssuer(newCode) here, then press Run ---
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label);
+  if (!passed && detail) console.log("      " + detail);
+}
+
+const T0 = 1755300000000;
+const HOUR = 60 * 60 * 1000;
+
+function fixedCodes() {
+  const codes = Array.prototype.slice.call(arguments);
+  let i = 0;
+  return function () { return codes[i++ % codes.length]; };
+}
+
+try {
+  const issuer = createIssuer(fixedCodes("MERC-8GH2-KP4X", "DENT-9KRW-52HP"));
+  const token = issuer.issue({ label: "  Grocery delivery  " }, T0);
+
+  check("issue returns the new token",
+        token && token.code === "MERC-8GH2-KP4X" && token.label === "Grocery delivery",
+        "got " + JSON.stringify(token) +
+        " - the label is trimmed, and the code comes from newCode()");
+
+  check("a fresh token starts unused and unrevoked",
+        token && token.uses === 0 && token.revokedAt === null &&
+        token.issuedAt === T0 && token.status === "active",
+        "got " + JSON.stringify(token));
+
+  const beforeThrow = issuer.list(T0).length;
+  let threw = false;
+  try { issuer.issue({ label: "   " }, T0); } catch (e) { threw = true; }
+  check("issue throws on a blank label, and stores nothing",
+        threw && issuer.list(T0).length === beforeThrow,
+        threw
+          ? "it threw, but the token was stored anyway - throw before you push"
+          : "it did not throw. A missing label is a bug in our own screen, " +
+            "so it should be loud in development rather than saved as an empty token");
+
+  issuer.issue({ label: "Plumber" }, T0);
+  check("list returns one entry per token, in order",
+        issuer.list(T0).length === 2 &&
+        issuer.list(T0).map(function (t) { return t.label; }).join(",") ===
+          "Grocery delivery,Plumber",
+        "got " + JSON.stringify(issuer.list(T0).map(function (t) { return t.label; })));
+
+  check("nothing but functions is exposed",
+        Object.values(issuer).every(function (v) { return typeof v === "function"; }),
+        "the issuer exposes " +
+        Object.keys(issuer).filter(function (k) { return typeof issuer[k] !== "function"; })
+          .join(", ") +
+        " - a store reachable as a property is not private");
+
+  const stolen = issuer.list(T0);
+  stolen.push({ code: "WXYZ-2345-6789", label: "not issued" });
+  stolen.pop();
+  stolen.pop();
+  check("adding to or trimming list()'s result leaves the store alone",
+        issuer.list(T0).length === 2,
+        "the store now has " + issuer.list(T0).length +
+        " token(s) - list() handed out the array itself, so a caller's .pop() " +
+        "deleted a real token");
+
+  issuer.list(T0)[0].label = "vandalised";
+  issuer.list(T0)[0].uses = 99;
+  check("editing a token from list() leaves the real one alone",
+        issuer.list(T0)[0].label === "Grocery delivery" && issuer.list(T0)[0].uses === 0,
+        "got " + JSON.stringify(issuer.list(T0)[0]) +
+        " - the array was copied but the tokens inside it were not");
+
+  const timed = createIssuer(fixedCodes("VVRT-7PQ8-3MNK"));
+  timed.issue({ label: "Delivery window", expiresAt: T0 + HOUR }, T0);
+  check("status is worked out from now, not stored on the token",
+        timed.list(T0)[0].status === "active" &&
+        timed.list(T0 + HOUR - 1)[0].status === "active" &&
+        timed.list(T0 + HOUR)[0].status === "expired",
+        "the same token read at three clocks gave " +
+        [timed.list(T0)[0].status, timed.list(T0 + HOUR - 1)[0].status,
+         timed.list(T0 + HOUR)[0].status].join(", ") +
+        " - expected active, active, expired. Nothing runs at the expiry " +
+        "moment, so a stored status is simply wrong until something sweeps it");
+} catch (err) {
+  console.log("FAIL  " + err.name + ": " + err.message);
+  console.log("      Usually this means createIssuer is missing or misspelt,");
+  console.log("      or it does not take newCode and return { issue, list }.");
+}`);
+
+    /* --- Stage 3 practice ------------------------------------------------ */
+
+    createPlayground("pg-deny-default", `// BROKEN ON PURPOSE: a rule check written as a list of ways to say no.
+
+const T0 = 1755300000000;
+
+function canUseDenyList(token, now) {
+  if (token.revokedAt !== null) return false;
+  if (token.expiresAt !== null && now >= token.expiresAt) return false;
+  return true;                       // everything else is welcome
+}
+
+function canUseAllowList(token, now) {
+  return statusOf(token, now) === "active";
+}
+
+function statusOf(token, now) {
+  if (token.revokedAt !== null) return "revoked";
+  if (token.expiresAt !== null && now >= token.expiresAt) return "expired";
+  if (token.maxUses !== null && token.uses >= token.maxUses) return "exhausted";
+  return "active";
+}
+
+// A token that has been used up. maxUses was added to the product last
+// month; the deny-list above was written before it existed.
+const spent = {
+  code: "MERC-8GH2-KP4X",
+  revokedAt: null,
+  expiresAt: null,
+  maxUses: 1,
+  uses: 1
+};
+
+console.log("status:        ", statusOf(spent, T0));
+console.log("deny-list says:", canUseDenyList(spent, T0));
+console.log("allow-list says:", canUseAllowList(spent, T0));
+
+// The deny-list is not wrong about anything it was told. It grants access
+// to every state nobody remembered to add to it - and nothing fails, so
+// nobody finds out.
+//
+// Fix it: nothing to fix in canUseDenyList. Delete it. That is the lesson.`);
+
+    createPlayground("pg-uniform", `// The same three failures, answered two ways.
+
+const DENIED = "That code can't be used.";
+
+function chattyAnswer(reason) {
+  if (reason === "unknown") return "No token with that code.";
+  if (reason === "revoked") return "That token has been revoked.";
+  if (reason === "exhausted") return "That token is out of uses.";
+  return "Something went wrong.";
+}
+
+const attempts = [
+  { code: "WXYZ-2345-6789", reason: "unknown" },
+  { code: "MERC-8GH2-KP4X", reason: "revoked" },
+  { code: "DENT-9KRW-52HP", reason: "exhausted" }
+];
+
+console.log("chatty:");
+for (const a of attempts) console.log("  " + a.code + "  " + chattyAnswer(a.reason));
+
+console.log("uniform:");
+for (const a of attempts) console.log("  " + a.code + "  " + DENIED);
+
+// Read the chatty column as an attacker. Two of those three codes are real
+// and the wording says which - so guessing stops being a search through
+// 790,000,000,000,000,000 codes and becomes a search with a hint.
+//
+// The owner still gets the truth, in the log:
+console.log("owner's log:");
+for (const a of attempts) console.log("  denied " + a.code + " (" + a.reason + ")");`);
+
+    createPlayground("pg-revoke", `// Revocation, and what a redemption is allowed to hand back.
+
+const T0 = 1755300000000;
+const DENIED = "That code can't be used.";
+
+const token = {
+  code: "MERC-8GH2-KP4X",
+  label: "Grocery delivery",
+  owner: "Ashish",                  // the thing that must never leave here
+  phone: "+91 98765 43210",         // nor this
+  maxUses: null,
+  uses: 0,
+  revokedAt: null
+};
+
+function redeem(t, now) {
+  if (t.revokedAt !== null) return { ok: false, message: DENIED };
+  t.uses = t.uses + 1;
+  return { ok: true, label: t.label, usesLeft: t.maxUses === null ? null : t.maxUses - t.uses };
+}
+
+console.log("before:", JSON.stringify(redeem(token, T0)));
+
+token.revokedAt = T0 + 1000;
+console.log("after: ", JSON.stringify(redeem(token, T0 + 2000)));
+
+// Revocation is one field and one comparison. No message to send, no
+// account to close, no new phone number to hand out to everyone else.
+
+// Try it: change the success line to return the whole token instead -
+// { ok: true, token: t } - and run again. Read what the holder now knows
+// about a person who deliberately never gave them a phone number.`);
+
+    createSolution("exercise-rules", {
+      exercise: `Grow your stage 2 issuer into the whole thing.
+
+Keep issue and list. Extend statusOf so it knows all four states, and add:
+
+  redeem(rawCode, now)   what the holder's page calls
+  revoke(rawCode, now)   what the owner's app calls
+  events()               copies of an append-only log, oldest first
+
+statusOf, in this order:
+
+  "revoked"    revokedAt is not null
+  "expired"    expiresAt is not null and now is at or past it
+  "exhausted"  maxUses is not null and uses have reached it
+  "active"     otherwise
+
+redeem - it must NEVER throw, whatever it is handed:
+
+  trim and upper-case the input first
+  if it could not be one of our codes           deny, reason "malformed"
+  if we do not have it                          deny, reason "unknown"
+  if its status is not "active"                 deny, reason = the status
+  otherwise                                     count the use, and allow
+
+  allowed  { ok: true, label, usesLeft }   usesLeft is null when maxUses is
+  denied   { ok: false, message }          the SAME message every time, and
+                                           nothing else - no reason, no label
+
+revoke - the owner is allowed the truth:
+
+  { ok: true }                        it was active and is now revoked
+  { ok: false, reason: "unknown" }    no such code
+  { ok: false, reason: "already revoked" }
+
+events() - one entry per thing that happened, in order:
+
+  { type: "issued",   code, at }
+  { type: "redeemed", code, at }
+  { type: "revoked",  code, at }
+  { type: "denied",   code, at, reason }
+
+  Copies, like list(). A caller must not be able to edit or empty the log.`,
+      hints: [
+        "Write the four denial branches as four early returns rather than one nested if. Each one records its own event and then returns the same object literal — and the fact that the message is identical every time should be visible on the screen, not buried in an else.",
+        "Put the denied message in one constant at the top and use that constant in all four places. Two branches that happen to contain the same string today are two branches that drift apart the first time someone improves the wording of one of them.",
+        "For redeem's promise never to throw: the only line that can is the first one. String(rawCode ?? \"\").trim().toUpperCase() handles null, undefined, numbers and objects without a special case, because String() accepts anything."
+      ],
+      solution: `const DENIED_MESSAGE = "That code can't be used.";
+
+const CODE_PATTERN =
+  /^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}(-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}){2}$/;
+
+function normalizeCode(raw) {
+  return String(raw ?? "").trim().toUpperCase();
+}
+
+function createIssuer(newCode) {
+  const tokens = [];                 // private store
+  const log = [];                    // private, append-only
+
+  const find = function (code) {
+    return tokens.find(function (t) { return t.code === code; });
+  };
+
+  const record = function (entry) { log.push(entry); };
+
+  function statusOf(token, now) {
+    if (token.revokedAt !== null) return "revoked";
+    if (token.expiresAt !== null && now >= token.expiresAt) return "expired";
+    if (token.maxUses !== null && token.uses >= token.maxUses) return "exhausted";
+    return "active";
+  }
+
+  function describe(token, now) {
+    return { ...token, status: statusOf(token, now) };
+  }
+
+  return {
+    issue(options, now) {
+      const label = options && options.label;
+      if (typeof label !== "string" || label.trim() === "") {
+        throw new TypeError("issue() needs a label describing who the token is for");
+      }
+
+      const token = {
+        code: newCode(),
+        label: label.trim(),
+        issuedAt: now,
+        expiresAt: options.expiresAt ?? null,
+        maxUses: options.maxUses ?? null,
+        uses: 0,
+        revokedAt: null
+      };
+
+      tokens.push(token);
+      record({ type: "issued", code: token.code, at: now });
+      return describe(token, now);
+    },
+
+    list(now) {
+      return tokens.map(function (token) { return describe(token, now); });
+    },
+
+    // Called with whatever a stranger typed. Never throws, never rejects.
+    redeem(rawCode, now) {
+      const code = normalizeCode(rawCode);
+
+      if (!CODE_PATTERN.test(code)) {
+        record({ type: "denied", code: code, at: now, reason: "malformed" });
+        return { ok: false, message: DENIED_MESSAGE };
+      }
+
+      const token = find(code);
+      if (!token) {
+        record({ type: "denied", code: code, at: now, reason: "unknown" });
+        return { ok: false, message: DENIED_MESSAGE };
+      }
+
+      // Deny by default: one way in, and it has to be earned.
+      const status = statusOf(token, now);
+      if (status !== "active") {
+        record({ type: "denied", code: code, at: now, reason: status });
+        return { ok: false, message: DENIED_MESSAGE };
+      }
+
+      token.uses = token.uses + 1;
+      record({ type: "redeemed", code: code, at: now });
+
+      // Thin on purpose - the label the owner chose, and nothing else.
+      return {
+        ok: true,
+        label: token.label,
+        usesLeft: token.maxUses === null ? null : token.maxUses - token.uses
+      };
+    },
+
+    // Called by the owner's own app, so it can be honest.
+    revoke(rawCode, now) {
+      const token = find(normalizeCode(rawCode));
+
+      if (!token) return { ok: false, reason: "unknown" };
+      if (token.revokedAt !== null) return { ok: false, reason: "already revoked" };
+
+      token.revokedAt = now;
+      record({ type: "revoked", code: token.code, at: now });
+      return { ok: true };
+    },
+
+    events() {
+      return log.map(function (entry) { return { ...entry }; });
+    }
+  };
+}`
+    });
+
+    createPlayground("pg-exercise-rules", `// --- Write the whole createIssuer(newCode) here, then press Run ---
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label);
+  if (!passed && detail) console.log("      " + detail);
+}
+
+const T0 = 1755300000000;
+const HOUR = 60 * 60 * 1000;
+
+function fixedCodes() {
+  const codes = Array.prototype.slice.call(arguments);
+  let i = 0;
+  return function () { return codes[i++ % codes.length]; };
+}
+
+const keysOf = function (o) { return Object.keys(o || {}).sort().join(","); };
+
+try {
+  /* --- a token that works ------------------------------------------- */
+  const a = createIssuer(fixedCodes("MERC-8GH2-KP4X"));
+  a.issue({ label: "Grocery delivery", maxUses: 3 }, T0);
+
+  const good = a.redeem("MERC-8GH2-KP4X", T0);
+  check("a valid code is redeemed",
+        good && good.ok === true,
+        "got " + JSON.stringify(good));
+
+  check("the holder is told the label, the uses left, and nothing else",
+        keysOf(good) === "label,ok,usesLeft" &&
+        good.label === "Grocery delivery" && good.usesLeft === 2,
+        "got " + JSON.stringify(good) +
+        " - every extra field here is something a stranger learns about " +
+        "someone who deliberately did not give them a phone number");
+
+  check("the code is trimmed and upper-cased on the way in",
+        a.redeem("  merc-8gh2-kp4x  ", T0).ok === true,
+        "a code read off a printed card arrives with whatever spacing and " +
+        "case the person typed");
+
+  /* --- the rules ----------------------------------------------------- */
+  const b = createIssuer(fixedCodes("DENT-9KRW-52HP"));
+  b.issue({ label: "One-shot", maxUses: 1 }, T0);
+  const firstUse = b.redeem("DENT-9KRW-52HP", T0);
+  const secondUse = b.redeem("DENT-9KRW-52HP", T0);
+
+  check("a one-use token works once and then stops",
+        firstUse.ok === true && secondUse.ok === false,
+        "first use " + JSON.stringify(firstUse) + ", second " + JSON.stringify(secondUse));
+
+  check("the used-up token reads as exhausted to the owner",
+        b.list(T0)[0].status === "exhausted",
+        "got status " + JSON.stringify(b.list(T0)[0].status));
+
+  const c = createIssuer(fixedCodes("VVRT-7PQ8-3MNK"));
+  c.issue({ label: "Delivery window", expiresAt: T0 + HOUR }, T0);
+  check("expiry is the first instant the token is dead, not the last it is alive",
+        c.redeem("VVRT-7PQ8-3MNK", T0 + HOUR - 1).ok === true &&
+        c.redeem("VVRT-7PQ8-3MNK", T0 + HOUR).ok === false,
+        "at one millisecond before expiresAt it should still work, and at " +
+        "expiresAt exactly it should not");
+
+  /* --- revocation ---------------------------------------------------- */
+  const d = createIssuer(fixedCodes("MERC-8GH2-KP4X", "DENT-9KRW-52HP"));
+  d.issue({ label: "Plumber" }, T0);
+  d.issue({ label: "Landlord" }, T0);
+
+  check("revoking works, and works immediately",
+        d.revoke("MERC-8GH2-KP4X", T0).ok === true &&
+        d.redeem("MERC-8GH2-KP4X", T0).ok === false,
+        "revoke said " + JSON.stringify(d.revoke("MERC-8GH2-KP4X", T0)));
+
+  check("revoking one token leaves the others working",
+        d.redeem("DENT-9KRW-52HP", T0).ok === true,
+        "the second token should be untouched");
+
+  check("the owner is told the truth about a revoke that did nothing",
+        d.revoke("MERC-8GH2-KP4X", T0).ok === false &&
+        d.revoke("WXYZ-2345-6789", T0).ok === false,
+        "revoking twice, and revoking a code that was never issued, are both " +
+        "failures - revoke is called by our own app, so it may say so");
+
+  /* --- the answer that has to be vague -------------------------------- */
+  const e = createIssuer(fixedCodes("MERC-8GH2-KP4X"));
+  e.issue({ label: "Plumber", maxUses: 1 }, T0);
+  e.redeem("MERC-8GH2-KP4X", T0);
+  const exhausted = e.redeem("MERC-8GH2-KP4X", T0);
+  const unknown = e.redeem("WXYZ-2345-6789", T0);
+  const malformed = e.redeem("hello", T0);
+
+  check("every denial gives the holder the identical message",
+        typeof exhausted.message === "string" && exhausted.message !== "" &&
+        exhausted.message === unknown.message &&
+        unknown.message === malformed.message,
+        "exhausted said " + JSON.stringify(exhausted.message) +
+        ", unknown said " + JSON.stringify(unknown.message) +
+        ", malformed said " + JSON.stringify(malformed.message) +
+        " - wording that changes with the reason tells a guesser when a code is real");
+
+  check("a denial carries nothing but ok and message",
+        keysOf(unknown) === "message,ok",
+        "got " + JSON.stringify(unknown) +
+        " - the reason belongs in the owner's log, not in the response");
+
+  // A fresh issuer, so these attempts do not land in the log the next
+  // check is about to read.
+  const junkTarget = createIssuer(fixedCodes("MERC-8GH2-KP4X"));
+  check("redeem never throws, whatever it is handed",
+        [null, undefined, 42, {}, [], "'; DROP TABLE tokens; --"].every(function (junk) {
+          try { return junkTarget.redeem(junk, T0).ok === false; } catch (err) { return false; }
+        }),
+        "one of null, undefined, 42, {}, [] or an SQL injection string got " +
+        "through or threw - the argument comes from a stranger's keyboard");
+
+  /* --- the log -------------------------------------------------------- */
+  const denials = e.events().filter(function (ev) { return ev.type === "denied"; });
+  check("the owner's log records what the holder was not told",
+        denials.map(function (ev) { return ev.reason; }).join(",") ===
+          "exhausted,unknown,malformed",
+        "expected exhausted,unknown,malformed and got " +
+        JSON.stringify(denials.map(function (ev) { return ev.reason; })) +
+        " - a burst of unknown denials is what someone working through codes " +
+        "looks like from the inside");
+
+  const f = createIssuer(fixedCodes("MERC-8GH2-KP4X"));
+  f.issue({ label: "Plumber" }, T0);
+  f.redeem("MERC-8GH2-KP4X", T0 + 1);
+  f.revoke("MERC-8GH2-KP4X", T0 + 2);
+  check("the log is in order, and timestamped",
+        f.events().map(function (ev) { return ev.type; }).join(",") ===
+          "issued,redeemed,revoked" &&
+        f.events().map(function (ev) { return ev.at; }).join(",") ===
+          [T0, T0 + 1, T0 + 2].join(","),
+        "got " + JSON.stringify(f.events()));
+
+  const grabbed = f.events();
+  grabbed.length = 0;
+  grabbed.push({ type: "issued", code: "WXYZ-2345-6789", at: T0 });
+  check("the log cannot be emptied or added to through events()",
+        f.events().length === 3,
+        "the log now has " + f.events().length +
+        " entries - an append-only log a caller can truncate is not append-only");
+} catch (err) {
+  console.log("FAIL  " + err.name + ": " + err.message);
+  console.log("      Usually this means one of issue, list, redeem, revoke or");
+  console.log("      events is missing, or createIssuer does not take newCode.");
+}`);
+
+    /* --- Capstone quiz ---------------------------------------------------- */
+
+    createQuiz("capstone-quiz", [
+      {
+        question: "Why are 0, O, 1, I and L missing from the alphabet?",
+        options: [
+          "They are reserved for internal use by the API",
+          "They make codes longer than 12 characters",
+          "They are the pairs people misread and mistype when a code is spoken, printed or copied by hand",
+          "They are not valid in a URL"
+        ],
+        correct: 2,
+        explanation: "It is a human problem, not a technical one. A code gets read down a phone line and typed off a printed card; 0 and O are the same shape in most fonts. Removing five characters costs a little keyspace and saves every 'it says invalid code' conversation."
+      },
+      {
+        type: "predict-output",
+        question: "The arithmetic the whole rejection rule rests on. What does this print?",
+        code: "console.log(Math.floor(256 / 31), 256 % 31);",
+        answer: "8 8",
+        explanation: "Eight whole turns through the alphabet, with 8 values left over. Those 8 leftovers — bytes 248 to 255 — are the bias."
+      },
+      {
+        question: "What does rejecting bytes of 248 and over actually cost?",
+        options: [
+          "About 3% of draws are thrown away, so a code needs a few extra bytes",
+          "Roughly a third of the keyspace",
+          "Nothing at all — it is free",
+          "One byte per code"
+        ],
+        correct: 0,
+        explanation: "8 of 256 values are discarded, so about 3% of draws produce no character and the loop goes round again. In exchange every character in the alphabet is exactly as likely as every other, permanently."
+      },
+      {
+        type: "fill-blank",
+        question: "Fold a byte onto the alphabet safely:",
+        code: "letters += ALPHABET[byte ___ ALPHABET.length];",
+        answer: "%",
+        explanation: "The remainder operator maps any number into 0..30. On its own it is not enough — that is why the 248 check sits above this line — but without it, ALPHABET[200] is undefined and the code fills with the word 'undefined'."
+      },
+      {
+        type: "fill-blank",
+        question: "The rejection threshold, written out:",
+        code: "if (byte >= ___) continue;   // biased range, draw again",
+        answer: "248",
+        explanation: "256 - (256 % 31) = 256 - 8 = 248. Everything from 248 up would give the first eight letters a ninth chance."
+      },
+      {
+        question: "Math.random() is not used for token codes. Why not?",
+        options: [
+          "It is too slow to call twelve times",
+          "It returns a number rather than a byte",
+          "It cannot produce enough distinct values",
+          "It is predictable — it is a formula with a hidden counter, and enough output reveals the rest of the sequence"
+        ],
+        correct: 3,
+        explanation: "Fine for a shuffle or a demo colour, fatal for a capability. crypto.getRandomValues has no sequence to work out. The self-check catches this by freezing Math.random and seeing whether your codes stop varying."
+      },
+      {
+        type: "predict-output",
+        question: "What does this print?",
+        code: "const ALPHABET = \"23456789ABCDEFGHJKMNPQRSTUVWXYZ\";\nlet out = \"\";\nfor (const byte of [0, 200, 255]) out += ALPHABET[byte];\nconsole.log(out.length);",
+        answer: "19",
+        explanation: "ALPHABET[0] is \"2\", one character. ALPHABET[200] and ALPHABET[255] are both undefined, and adding undefined to a string gives you the nine letters \"undefined\". 1 + 9 + 9 = 19. Nothing threw — that is what makes this bug worth a playground of its own."
+      },
+      {
+        type: "order-steps",
+        question: "Put one character's worth of generation in order:",
+        steps: [
+          "draw a byte from the random source",
+          "if it is 248 or more, throw it away and draw again",
+          "fold the surviving byte onto 0..30 with %",
+          "append that character and check whether 12 have been collected"
+        ],
+        correctOrder: [0, 1, 2, 3],
+        explanation: "The rejection has to happen before the fold. Fold first and the bias is already baked in — there is no way to tell afterwards which characters came from the biased range."
+      },
+      {
+        question: "Why does createIssuer keep its tokens in a local variable rather than exporting the array?",
+        options: [
+          "A local variable that the returned functions still use stays alive, and nothing outside the closure has any name for it — so the rules cannot be gone around",
+          "Local variables are faster to read",
+          "Exported arrays cannot hold objects",
+          "So the garbage collector can free it sooner"
+        ],
+        correct: 0,
+        explanation: "An exported array is a shared, writable global: any importer could push a token nobody issued or undo a revocation. The closure is what makes the functions the only door."
+      },
+      {
+        type: "predict-output",
+        question: "Stage 2's copying rule, in miniature. What does this print?",
+        code: "const store = [{ code: \"MERC-8GH2-KP4X\", uses: 0 }];\nconst listed = store.map(function (t) { return { ...t }; });\nlisted[0].uses = 99;\nconsole.log(store[0].uses);",
+        answer: "0",
+        explanation: "A new array of new objects, so the caller's vandalism lands on their own copy. Return store itself, or map to the same objects, and this prints 99."
+      },
+      {
+        type: "spot-the-bug",
+        question: "The store is private. Where does it leak?",
+        code: "function createIssuer() {\n  const tokens = [];\n\n  return {\n    issue(label, code) {\n      tokens.push({ code, label, uses: 0 });\n    },\n    list() {\n      return tokens;\n    }\n  };\n}",
+        bugLine: 8,
+        options: ["Line 2 — the store should be `let`", "Line 5 — issue returns nothing", "Line 8 — list hands back the array itself", "Nothing is wrong"],
+        correct: 2,
+        explanation: "Every caller gets a live handle on the owner's data. A .pop() written for a display list deletes a real token. list() must return copies."
+      },
+      {
+        question: "A token's status is worked out at read time rather than stored on the record. What is the argument for that?",
+        options: [
+          "Derived values are faster to compute than to read",
+          "It uses less memory",
+          "Storing it would break JSON serialisation",
+          "Nothing runs at the moment a token expires — time passing is not an event — so a stored status is wrong until some sweep gets round to fixing it"
+        ],
+        correct: 3,
+        explanation: "A stored status needs a job to maintain it, and between the expiry and the sweep the record is simply lying. Derived status has no window in which it can be wrong."
+      },
+      {
+        type: "predict-output",
+        question: "Expiry is compared with >=. What does this print?",
+        code: "const expiresAt = 1000;\nconsole.log(999 >= expiresAt, 1000 >= expiresAt, 1001 >= expiresAt);",
+        answer: "false true true",
+        explanation: "expiresAt is the first instant the token is dead, not the last one it is alive. Using > instead lets it work for one more millisecond — a mistake nothing but a boundary test ever finds."
+      },
+      {
+        question: "issue() throws when the label is missing, but redeem() never throws whatever it is handed. Why the difference?",
+        options: [
+          "Because redeem is called more often",
+          "issue is called by our own app, so a bad argument is our bug and should be loud; redeem is called with whatever a stranger typed, where there is no bug to report",
+          "Because throwing inside an async function does not work",
+          "It is an inconsistency worth fixing"
+        ],
+        correct: 1,
+        explanation: "Lesson 12's rule, applied twice in one file with opposite results. Who called it decides whether a failure is a defect or an expected outcome."
+      },
+      {
+        type: "fill-blank",
+        question: "Make the first line of redeem() safe for null, undefined, numbers and objects alike:",
+        code: "const code = String(rawCode ___ \"\").trim().toUpperCase();",
+        answer: "??",
+        explanation: "String() accepts anything, so ?? only has to cover null and undefined — which would stringify to the words 'null' and 'undefined' rather than an empty string. This one line is why redeem cannot throw."
+      },
+      {
+        type: "order-steps",
+        question: "Put redeem's checks in the order the lesson uses:",
+        steps: [
+          "trim and upper-case whatever was typed",
+          "reject anything that could not be one of our codes at all",
+          "look the code up in the store",
+          "check the token's status is active",
+          "count the use and return the label"
+        ],
+        correctOrder: [0, 1, 2, 3, 4],
+        explanation: "Cheap checks first: format is a regex, the lookup is a scan, and the rules need the record. It also means a malformed guess never costs a lookup."
+      },
+      {
+        question: "Every denial returns the identical message. What does telling the holder the real reason actually give away?",
+        options: [
+          "The owner's phone number",
+          "Nothing — the codes are still 12 characters long",
+          "One bit per guess: whether the code exists. That turns guessing from a search of 7.9 × 10^17 codes into a search with feedback",
+          "The token's expiry date"
+        ],
+        correct: 2,
+        explanation: "The keyspace argument assumes the answer carries no information. Wording that changes with the reason is an oracle, and an oracle is exactly what a search needs."
+      },
+      {
+        question: "So the reason is thrown away?",
+        options: [
+          "Yes — it must not exist anywhere",
+          "No — it goes in the owner's log, where a burst of 'unknown' denials is visible as the shape of someone working through codes",
+          "No — it is returned but marked private",
+          "Yes, unless the holder asks twice"
+        ],
+        correct: 1,
+        explanation: "Uniform message and detailed log are two halves of one defence: the guesser learns nothing, and the owner can see them trying."
+      },
+      {
+        type: "spot-the-bug",
+        question: "maxUses was added to the product last month. What is wrong here?",
+        code: "function canUse(token, now) {\n  if (token.revokedAt !== null) return false;\n  if (token.expiresAt !== null && now >= token.expiresAt) return false;\n  return true;\n}",
+        bugLine: 4,
+        options: ["Line 2 — revokedAt should be a boolean", "Line 3 — the comparison is backwards", "Nothing; it handles both cases correctly", "Line 4 — everything not explicitly denied is allowed, including states this function has never heard of"],
+        correct: 3,
+        explanation: "A deny-list grants access to every case nobody remembered to add. Deny-by-default inverts it: `statusOf(token, now) === \"active\"` and a new status is refused until someone deliberately allows it."
+      },
+      {
+        type: "which-breaks",
+        question: "One of these throws. Which?",
+        variants: [
+          "const bytes = new Uint8Array(1);\ncrypto.getRandomValues(bytes);\nconsole.log(bytes[0]);",
+          "console.log(crypto.getRandomValues(12));",
+          "const bytes = new Uint8Array(12);\ncrypto.getRandomValues(bytes);\nconsole.log(bytes.length);"
+        ],
+        correct: 1,
+        explanation: "getRandomValues fills a typed array you give it — it does not take a length and it does not return a fresh array. Passing a number throws a TypeError."
+      },
+      {
+        question: "What does a successful redemption hand back?",
+        options: [
+          "The whole token record",
+          "The owner's contact details, so the holder can get in touch",
+          "The label the owner chose, the uses left, and nothing else",
+          "Just true"
+        ],
+        correct: 2,
+        explanation: "Every extra field is something a stranger learns about a person who deliberately did not give them a phone number — and once a field is in a response, removing it breaks whatever started depending on it."
+      },
+      {
+        type: "predict-output",
+        question: "events() returns copies. What does this print?",
+        code: "const log = [{ type: \"issued\" }, { type: \"denied\" }];\nconst events = function () { return log.map(function (e) { return { ...e }; }); };\nconst grabbed = events();\ngrabbed.length = 0;\nconsole.log(events().length);",
+        answer: "2",
+        explanation: "The caller emptied their own array. Return `log` itself and this prints 0 — an append-only log anyone can truncate is not append-only."
+      },
+      {
+        question: "The files are named .mjs rather than .js. What does that buy?",
+        options: [
+          "Faster startup",
+          "Automatic TypeScript checking",
+          "import and export work with no package.json and nothing to install",
+          "Access to the DOM from Node"
+        ],
+        correct: 2,
+        explanation: "Node treats .mjs as an ES module unconditionally. That is the whole configuration of this project — lesson 11's modules, running for real."
+      },
+      {
+        question: "test.mjs proves the generator is unbiased without running it thousands of times. How?",
+        options: [
+          "It inspects the source code for the 248 check",
+          "It feeds the generator the bytes 0 to 255 in order and counts how often each letter comes out — an exact result, not a statistical one",
+          "It compares two generators against each other",
+          "It cannot; the test is approximate"
+        ],
+        correct: 1,
+        explanation: "That is what taking nextByte as an argument was for. With a predictable source the answer is arithmetic: every letter equally often, or the first eight ahead by exactly 12.5%."
+      },
+      {
+        question: "The whole thing is rewritten against Postgres in Track B. What is the point of building this version?",
+        options: [
+          "Nothing — it is a warm-up exercise",
+          "The four decisions in it survive the rewrite: unbiased codes, one denial message, injected time, and no references handed out into the store. The data structure does not",
+          "To benchmark JavaScript against SQL",
+          "So the app can run without a server"
+        ],
+        correct: 1,
+        explanation: "Decisions are the expensive part. Making them here, where the whole thing fits on a screen, is cheaper than discovering them in a migration — and the codes already issued under a biased generator can never be fixed."
+      }
+    ]);
+
+  </script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+</body>
+</html>

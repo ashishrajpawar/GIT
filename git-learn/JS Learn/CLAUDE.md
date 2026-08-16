@@ -109,7 +109,8 @@ No monorepo tooling — plain folders with tsconfig path aliases.
 ```
 index.html                          ← course home page
 modules/
-  01-javascript-fundamentals/       ← 12 lessons; 1-4 retrofitted with practice
+  01-javascript-fundamentals/       ← 12 lessons + `0013` capstone (see PROGRESS.md
+                                       for what carries practice and what is verified)
   02-react-native/                  ← 14 lessons, written (no practice yet)
   x1-git-dev-environment/           ← 3 lessons, complete
   a2-typescript/                    ← 3 lessons, complete
@@ -540,9 +541,26 @@ Write the wrong-answer cases in `scripts/cases/<lesson>.mjs` — `alternatives`
 `expect` names the check it should trip). A mistake that trips *every* check
 means the self-check has poor diagnostics, not that the student is very wrong.
 
-Two traps this has already caught:
+A passing run records itself in `scripts/verification-log.json`, which is where
+the audit's "Verified" column comes from; a failing run deletes the entry. The
+file is **generated** — never hand-edit it, and never claim a lesson is verified
+without running the verifier over it.
+
+**Staged exercises** — a page that builds one program in several steps names its
+exercises `exercise-<stage>` and their self-checks `pg-exercise-<stage>`
+(`exercise-gen` → `pg-exercise-gen`). One-exercise lessons keep the original
+`pg-exercise` and are unaffected. The matching `--wrong` file exports `stages`
+keyed by stage name instead of a flat `alternatives`/`mistakes` pair. Only
+`0013` does this so far; three staged exercises beat one 100-line exercise for
+a build a beginner is meant to finish.
+
+Three traps this has already caught:
 
 - A literal `</script>` inside a JS string silently kills the whole block.
+- **A backtick inside a `createSolution` exercise string.** The exercise text is
+  a template literal, so marking up `` `now` `` the way you would in Markdown
+  ends the string and the whole block fails to parse. Hints are ordinary quoted
+  strings and are safe; the `exercise` and `solution` fields are not.
 - **Never build lesson content through a shell.** Escape-heavy strings passed
   through `bash -c` or `node -e` get mangled — `\"` becomes `\\"` and terminates
   the string early, or `\n` becomes a real newline. Use the editor tools, or a

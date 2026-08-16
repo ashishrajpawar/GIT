@@ -626,6 +626,80 @@ for E2EE — they are schema design work, not typo fixes.
 - §9's per-module quiz table restated counts the audit computes. Superseded by
   `PROGRESS.md` — see the precedence rule in `CLAUDE.md`.
 
+### Session of 2026-08-16 — the Module 01 capstone, and the repo's first code
+
+Phase 1.2. The Token repo had been scaffolded on 2026-08-15 and contained
+nothing but READMEs and ADRs; it now contains a program.
+
+**`token/practice/01-token-issuer/`** — `issuer.mjs`, `demo.mjs`, `test.mjs`,
+`README.md`. Generate, store, apply rules, revoke, in memory, no dependencies.
+`node test.mjs` runs 36 deterministic checks. `.mjs` throughout so `import`
+works with no `package.json`, which keeps the whole configuration of the
+project at zero.
+
+**`modules/01-javascript-fundamentals/0013-capstone-token-issuer.html`** —
+three staged exercises rather than one. A single hundred-line exercise on
+lesson 13 is where a beginner stops; `generateCode`, then the store, then the
+rules, each with its own self-check, is where they finish.
+
+#### Why the generator uses a CSPRNG
+
+The easy version of this lesson uses `Math.random()` and leaves the real thing
+to Track B. That would have been wrong in a way the course could not undo:
+codes already issued under a biased or predictable generator cannot be fixed
+retroactively. So the capstone teaches `crypto.getRandomValues` with rejection
+sampling, and spends a section deriving 256 / 31 = 8 remainder 8 rather than
+asserting it.
+
+The proof is in `test.mjs`, and it is exact rather than statistical: feed the
+generator the bytes 0–255 in order and count the letters. Correct code uses
+every letter equally often. Deleting the `if (byte >= 248) continue;` line
+makes the counts run 375 to 422 — the 12.5%, measured. Detecting the same
+thing against real randomness would have needed tens of thousands of samples
+and still been flaky.
+
+That test only exists because **`generateCode` takes its byte source as an
+argument**, and the same move is made again with `now` on every issuer method.
+Both are stated in the lesson as the reason the tests can be exact, not as a
+style preference.
+
+#### The two mistakes it is built around
+
+Both produce output that looks correct, which is the whole argument for the
+`--wrong` cases:
+
+- **Modulo bias.** Every code looks perfect. Eight of the thirty-one
+  characters are 12.5% more likely than the rest, permanently.
+- **Chatty denial messages.** Every rule enforced correctly, and the page is
+  friendlier to use. It is also a code-guessing oracle — different wording per
+  reason hands out one bit per guess, which is exactly what a search needs.
+
+22 mistakes and 11 alternative correct styles are checked, each mistake
+against the specific check it should trip.
+
+#### Tooling
+
+- **Staged exercises.** `verify-lesson.mjs` paired every `createSolution` with
+  the one playground `pg-exercise`, so a multi-exercise page was unverifiable.
+  `exercise-<stage>` now looks for `pg-exercise-<stage>` and falls back to the
+  old name; `--wrong` files may export `stages`. Every earlier lesson
+  re-verified unchanged.
+- **The demo-stripping filter was matching indented lines.** `const issuer =
+  createIssuer(gen)` inside a solution's function body would have been deleted
+  before the self-check ran, and the student blamed for the failure. Anchored
+  to column 0.
+- **`Verified` in the audit had read 0 since the column existed** — nothing
+  ever wrote `scripts/verification-log.json`. It is now written by a passing
+  verifier run and cleared by a failing one, and all 13 Module 01 lessons were
+  re-run to fill it. A number nobody maintains is worse than no number.
+
+#### New gotcha
+
+A backtick inside a `createSolution` **exercise** or **solution** string ends
+the template literal and kills the entire `<script>` block. Hints are ordinary
+quoted strings and are safe. This is the `</script>` trap's sibling and it is
+now in CLAUDE.md beside it.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees
