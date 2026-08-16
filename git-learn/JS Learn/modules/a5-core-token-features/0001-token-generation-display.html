@@ -40,7 +40,7 @@
         <tr><td>Unpredictable</td><td>Crypto-random source (not <code>Math.random()</code>)</td></tr>
         <tr><td>Speakable</td><td>Uppercase letters + digits, no ambiguous chars (0/O, 1/I/L)</td></tr>
         <tr><td>Short enough to type</td><td>12 characters → 3 groups of 4</td></tr>
-        <tr><td>Collision-resistant</td><td>28-char alphabet × 12 = 28<sup>12</sup> ≈ 1.2 × 10<sup>17</sup> possibilities</td></tr>
+        <tr><td>Collision-resistant</td><td>31-char alphabet × 12 = 31<sup>12</sup> ≈ 7.9 × 10<sup>17</sup> possibilities</td></tr>
         <tr><td>URL-safe</td><td>Alphanumeric only, dashes are separators not part of the code</td></tr>
       </tbody>
     </table>
@@ -66,54 +66,130 @@ function generateTokenCode(): string {
   const bytes = randomBytes(12);
   let code = '';
   for (let i = 0; i < 12; i++) {
-    code += ALPHABET[bytes[i] % ALPHABET.length];
+    code += ALPHABET[bytes[i] % ALPHABET.length];   // biased - fixed below
   }
   // Format: XXXX-XXXX-XXXX
   return `${code.slice(0, 4)}-${code.slice(4, 8)}-${code.slice(8, 12)}`;
 }</code></pre>
 
-    <h3>On the client (React Native / browser)</h3>
+    <p>
+      That is the obvious version and it has a flaw the next section is about.
+      Read on before copying it.
+    </p>
 
-    <pre><code>import * as Crypto from 'expo-crypto';
+    <h3>On the client — and why it does not generate codes</h3>
 
+    <p>
+      An earlier version of this lesson generated a code on the device as a
+      "preview" while the API call was in flight, then replaced it with the
+      server's. It is worth understanding why that is wrong, because it looks
+      like good UX.
+    </p>
+
+    <pre><code>// What this lesson used to do. Do not do this.
 async function generateTokenCode(): Promise&lt;string&gt; {
-  const ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
   const bytes = await Crypto.getRandomBytesAsync(12);
   let code = '';
-  for (let i = 0; i < 12; i++) {
-    code += ALPHABET[bytes[i] % ALPHABET.length];
+  for (let i = 0; i &lt; 12; i++) {
+    code += ALPHABET[bytes[i] % ALPHABET.length];   // and biased, see below
   }
   return `${code.slice(0, 4)}-${code.slice(4, 8)}-${code.slice(8, 12)}`;
 }</code></pre>
 
-    <p><strong>Why both?</strong> The server generates the real code (stored in the database). The client generates a preview for instant UI feedback while the API call is in-flight. But only the server's code is canonical — the client replaces its preview with the server's response.</p>
+    <ul>
+      <li>
+        <strong>It shows the user a code that does not exist.</strong> For a few
+        hundred milliseconds the screen displays something real-looking. Copy it,
+        screenshot it, or read it aloud in that window and you have shared a
+        code the system has never heard of — and the person you gave it to gets
+        "that code can't be used", with no way to find out why.
+      </li>
+      <li>
+        <strong>Two generators drift.</strong> There is exactly one alphabet,
+        one length and one rejection rule, and keeping a second implementation
+        of them in sync is a bug waiting for a refactor. B7.1 is the generator.
+      </li>
+      <li>
+        It also had the modulo bias the next section is about — in the same
+        file, above the explanation.
+      </li>
+    </ul>
+
+    <p>
+      The instant feedback is worth having; it just is not a code. Show the
+      label, a spinner and a disabled Share button, and fill in the code when
+      the server answers. <strong>The client validates codes and formats them.
+      It never invents them.</strong>
+    </p>
 
     <h2>The modulo bias problem</h2>
 
     <p>Using <code>bytes[i] % ALPHABET.length</code> introduces a slight bias when 256 doesn't divide evenly by the alphabet length. With 31 characters: 256 / 31 = 8 remainder 8. The first 8 characters appear with probability 9/256, the rest with 8/256 — those 8 are about 12.5% more likely than the others.</p>
 
-    <p>For Token, this is acceptable. The bias doesn't help an attacker guess codes because:</p>
+    <p>
+      This lesson used to conclude that the bias was acceptable — the entropy
+      is still large, positions are independent, rate limiting covers brute
+      force. Every one of those statements is true, and the conclusion was
+      still wrong. <strong>Token rejects the biased range</strong>, and it is
+      worth being clear about why, because "it is fine" is a tempting answer
+      that costs nothing to say.
+    </p>
+
     <ul>
-      <li>The absolute entropy is still massive (>55 bits)</li>
-      <li>Each position is independent — knowing one doesn't help guess another</li>
-      <li>Rate limiting on the redemption endpoint prevents brute force</li>
+      <li>
+        <strong>The fix is four lines.</strong> Everything on the "acceptable"
+        side of the scale is arguing that a small permanent flaw is cheaper
+        than a <code>continue</code> statement.
+      </li>
+      <li>
+        <strong>It cannot be fixed later.</strong> Codes already issued keep
+        whatever distribution they were born with. There is no migration, no
+        backfill, no version 2 — unlike almost every other decision in this
+        course, this one is only available now.
+      </li>
+      <li>
+        <strong>"Rate limiting covers it" makes one defence depend on
+        another.</strong> The rate limiter is a separate system with its own
+        config, its own outage, and its own Redis. Keyspace arithmetic that
+        only holds while a second component is healthy is not the guarantee it
+        sounds like.
+      </li>
+      <li>
+        <strong>The claim would be false in print.</strong> "Every code is
+        equally likely from 7.9 × 10<sup>17</sup> possibilities" is what the
+        product implies. With the fold, eight characters are 12.5% more common
+        and the real figure is smaller than the one advertised. Being able to
+        state the guarantee exactly is worth four lines on its own.
+      </li>
     </ul>
 
-    <p>If you wanted zero bias, you'd use rejection sampling:</p>
+    <p>
+      So the generator throws away bytes of 248 and up. Roughly 3% of draws are
+      discarded; nothing else changes:
+    </p>
 
-    <pre><code>// Rejection sampling — unbiased but slightly slower
-function unbiasedRandomChar(bytes: Uint8Array, offset: number): string {
-  const ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
-  const limit = 256 - (256 % ALPHABET.length); // largest multiple ≤ 256
-  let value = bytes[offset];
-  while (value >= limit) {
-    // reject and re-roll (need fresh random bytes)
-    value = crypto.getRandomValues(new Uint8Array(1))[0];
+    <pre><code>const REJECT_AT = 248;   // 256 - (256 % 31)
+
+function generateTokenCode(): string {
+  let letters = '';
+  while (letters.length &lt; 12) {
+    const bytes = randomBytes(12);          // a block at a time
+    for (const byte of bytes) {
+      if (letters.length === 12) break;
+      if (byte &gt;= REJECT_AT) continue;      // biased range - draw again
+      letters += ALPHABET[byte % ALPHABET.length];
+    }
   }
-  return ALPHABET[value % ALPHABET.length];
+  return `${letters.slice(0, 4)}-${letters.slice(4, 8)}-${letters.slice(8, 12)}`;
 }</code></pre>
 
-    <p>We'll use the simpler modulo approach. The math says it's fine for our use case.</p>
+    <p>
+      This is the same generator as B7.1 because it <em>is</em> B7.1 — the
+      server owns generation and there is one implementation of it. Module 01's
+      capstone builds the same thing by hand, and its test proves the
+      distribution by feeding the generator the bytes 0–255 in order and
+      counting the letters.
+    </p>
 
     <h2>Shared code in <code>shared/</code></h2>
 
@@ -183,7 +259,7 @@ export default router;</code></pre>
 
     <h2>Handling collisions</h2>
 
-    <p>With 1.7 × 10<sup>17</sup> possible codes, a collision is astronomically unlikely. But the database enforces UNIQUE on the <code>code</code> column — if it happens, you get a constraint violation. Handle it with a retry:</p>
+    <p>With 7.9 × 10<sup>17</sup> possible codes, a collision is astronomically unlikely. The database enforces UNIQUE on <code>code_hash</code> — the code itself is never stored (ADR-0007) — so a collision surfaces as a constraint violation. Let it, and retry:</p>
 
     <pre><code>async function createToken(userId: number, label: string) {
   const MAX_RETRIES = 3;
@@ -192,10 +268,10 @@ export default router;</code></pre>
     const code = generateTokenCode();
     try {
       const result = await db.query(
-        `INSERT INTO tokens (code, user_id, label)
-         VALUES ($1, $2, $3)
-         RETURNING id, code, label, status, created_at`,
-        [code, userId, label]
+        `INSERT INTO tokens (user_id, code_hash, code_enc, label)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, label, max_uses, uses, expires_at, created_at`,
+        [userId, hashCode(code), encryptCode(code), label]
       );
       return result.rows[0];
     } catch (err: any) {
@@ -478,17 +554,207 @@ export function TokensStack() {
     <pre><code>{
   "data": {
     "id": 42,
-    "code": "MERC-8GH2-KP4X",
+    "code": "MERC-8GH2-KP4X",     // the only time this is ever sent unasked
     "label": "Amazon Delivery",
-    "status": "active",
-    "max_uses": 0,
-    "use_count": 0,
+    "max_uses": null,              // null = unlimited. 0 would be a dead token
+    "uses": 0,
     "expires_at": null,
+    "revoked_at": null,
+    "paused_at": null,
     "created_at": "2026-08-07T10:30:00.000Z"
   }
 }</code></pre>
 
-    <p>The client stores this in local state and displays the code. No second fetch needed.</p>
+    <div class="callout warning">
+      <div class="callout-title">This is the only response that contains the code</div>
+      <p>
+        The server stores a hash for lookup and an encrypted copy for display
+        (ADR-0007) — it does not keep the code in a readable column, so
+        <code>GET /tokens</code> and <code>GET /tokens/:id</code> come back
+        without one. Every list and detail screen shows the label and the
+        state, never the code.
+      </p>
+      <p>
+        Showing it again is a deliberate, separate request:
+        <code>api.revealCode(id)</code>, which decrypts server-side and logs
+        that it happened. Which means <strong>this screen has to be designed as
+        the one moment the code is on screen without being asked for</strong> —
+        and the "show it again" path has to be findable, or users will
+        screenshot it here out of self-defence.
+      </p>
+    </div>
+
+    <hr>
+
+    <h2>Why this way (and what was rejected)</h2>
+
+    <h3>The screen that has to warn you about sharing</h3>
+
+    <p>
+      This is the product rule, and it is the one thing on this screen that is
+      not a technical decision:
+    </p>
+    <p>
+      <strong>A token must never travel over a channel that already identifies
+      the user.</strong>
+    </p>
+    <p>
+      Think about what a Share button does. It opens the system sheet, the user
+      picks WhatsApp, and the code arrives at the delivery driver — <em>from
+      the user's phone number</em>. They have just handed over the exact thing
+      the token existed to withhold, using the feature the app gave them, in
+      one tap. The same is true of SMS and email.
+    </p>
+
+    <pre><code>// A generic share sheet is the wrong default here.
+const IDENTIFYING = ['whatsapp', 'sms', 'mail', 'telegram'];
+
+async function shareToken(code: string) {
+  const target = await pickShareTarget();
+
+  if (IDENTIFYING.some(app =&gt; target.id.includes(app))) {
+    const proceed = await confirm({
+      title: 'This will reveal your number',
+      body: 'Sending through ' + target.name + ' shows them your phone number, '
+          + 'which is what the token exists to avoid. Show a QR code instead?',
+      confirmLabel: 'Send anyway',
+      cancelLabel: 'Show QR code',
+    });
+    if (!proceed) return showQrCode(code);
+  }
+
+  await Share.share({ message: code });
+}</code></pre>
+
+    <p>The four ways a code can travel without leaking anything, in the order the UI should offer them:</p>
+
+    <ol>
+      <li><strong>QR code on screen</strong> — they scan it, nothing is transmitted by you at all</li>
+      <li><strong>Typed into their form</strong> — pasted where a site asks for a phone number</li>
+      <li><strong>Spoken or printed</strong> — read aloud, on a card, in a listing</li>
+      <li><strong>Request-a-token</strong> — the business publishes a link and the app delivers the code from inside the system</li>
+    </ol>
+
+    <p>
+      The warning is not paternalism; it is the feature. A privacy product whose
+      Share button quietly defeats the privacy is worse than one with no Share
+      button, because the user believes they are protected.
+    </p>
+
+    <h3>The clipboard is a shared surface</h3>
+
+    <p>
+      <code>Clipboard.setStringAsync(code)</code> is the obvious convenience and
+      it puts a capability somewhere every other app on the device can read.
+      That is not a hypothetical: clipboard reads are unrestricted on Android
+      below 10, iOS shows a banner precisely <em>because</em> apps were doing
+      it, and both platforms now sync the clipboard across a user's devices —
+      so the code can arrive on a laptop the user is not holding.
+    </p>
+
+    <pre><code>// Copy, then take it back.
+await Clipboard.setStringAsync(code);
+setToast('Code copied - the clipboard will be cleared in 60 seconds');
+
+setTimeout(async () =&gt; {
+  // Only clear it if it is still ours - the user may have copied
+  // something else since, and wiping that would be rude and confusing.
+  if (await Clipboard.getStringAsync() === code) {
+    await Clipboard.setStringAsync('');
+  }
+}, 60_000);</code></pre>
+
+    <h3>The display format is a readability decision</h3>
+
+    <p>
+      Three groups of four, monospaced, generously spaced. The grouping is what
+      makes a 12-character string speakable — "MERC, 8GH2, KP4X" — and
+      monospace is what keeps the remaining ambiguous pairs apart. The alphabet
+      already removed <code>0/O</code> and <code>1/I/L</code>; a proportional
+      font puts <code>5</code> and <code>S</code>, or <code>2</code> and
+      <code>Z</code>, back in play at small sizes.
+    </p>
+
+    <hr>
+
+    <h2>When this breaks</h2>
+
+    <h3>The screenshot that goes to the cloud</h3>
+
+    <p>
+      A code on screen is a code one button-combination away from the photo
+      library — which syncs to iCloud or Google Photos, is backed up, and is
+      searchable by OCR in both. A user screenshotting their token to keep it
+      safe has copied a live capability into the least private storage on the
+      device.
+    </p>
+    <p>
+      They do it because they are afraid of losing the code, so the answer is
+      mostly product rather than technical: <strong>make "show me that code
+      again" obvious</strong> and the screenshot stops being necessary.
+      <code>expo-screen-capture</code> can block the gesture outright on
+      Android and detect it on iOS, and blocking without providing the
+      alternative just moves the problem to a photograph of the screen taken
+      with another phone.
+    </p>
+
+    <h3>The user leaves the screen and the code is gone</h3>
+
+    <p>
+      This is new with ADR-0007 and it will generate support questions if the
+      UI does not anticipate it. The code lives in this screen's state and
+      nowhere else on the device. Navigate away, background the app, or get a
+      phone call, and the only way back to it is a network request. On a bad
+      connection, right after creating a token, the user cannot see the code
+      they just made.
+    </p>
+    <p>
+      So the creation screen should not be dismissible by accident, and the
+      reveal path needs its own visible entry point on the token's detail
+      screen — not buried in a menu.
+    </p>
+
+    <h3>The optimistic UI that shows a fictional code</h3>
+
+    <p>
+      Covered above and worth restating as a general rule: optimistic updates
+      are for things the client can predict. A label, a toggle, the position of
+      a row — fine. <strong>Anything the server generates cannot be predicted,
+      and showing a guess of it is showing something false.</strong> The right
+      optimistic UI here is the label and a spinner where the code will be.
+    </p>
+
+    <hr>
+
+    <h2>What this costs you</h2>
+
+    <table>
+      <thead>
+        <tr><th>Decision</th><th>What you pay</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Only the server generates codes</td>
+          <td>Creating a token requires a working connection, and there is no offline path. For an app used on Indian mobile networks that is a real limitation — and the alternative, a device-generated code the server accepts later, would mean the client choosing its own capability. Not worth it.</td>
+        </tr>
+        <tr>
+          <td>Warning on identifying share channels</td>
+          <td>Friction in the primary action, on the step the user most wants to get through. Some will tap "Send anyway" every time, which is their right — the goal is that nobody does it without knowing.</td>
+        </tr>
+        <tr>
+          <td>Clearing the clipboard</td>
+          <td>A code copied and pasted 90 seconds later is gone, which will feel like a bug to the person it happens to. 60 seconds is a guess; it needs the toast to say what will happen.</td>
+        </tr>
+        <tr>
+          <td>The code only being shown here</td>
+          <td>A support burden and a UI obligation: the reveal path must be obvious or users will screenshot defensively, which is worse than either. Every "show me the code" is also a decrypt and a log entry on the server.</td>
+        </tr>
+        <tr>
+          <td>Blocking screenshots</td>
+          <td>Android's <code>FLAG_SECURE</code> also blanks the app in the recent-apps switcher, which users read as the app being broken. iOS cannot block at all, only detect. Partial protection with a real usability cost — worth taking on this screen and nowhere else.</td>
+        </tr>
+      </tbody>
+    </table>
 
     <hr>
 
@@ -589,10 +855,10 @@ router.post('/tokens', requireAuth, async (req, res) => {
     const code = generateTokenCode();
     try {
       const result = await db.query(
-        \`INSERT INTO tokens (code, user_id, label)
-         VALUES ($1, $2, $3)
-         RETURNING id, code, label, status, max_uses, use_count, expires_at, created_at\`,
-        [code, req.user.id, label.trim()]
+        \`INSERT INTO tokens (user_id, code_hash, code_enc, label)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, label, max_uses, uses, expires_at, created_at\`,
+        [req.user.id, hashCode(code), encryptCode(code), label.trim()]
       );
       return res.status(201).json({ data: result.rows[0] });
     } catch (err: any) {

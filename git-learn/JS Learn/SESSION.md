@@ -673,6 +673,46 @@ B2 rewrite.
 
 Two premise-in-comment quiz questions fixed.
 
+#### `a5/0001` token generation UI — done, 1,617 → 3,241 words
+
+**This lesson argued against the fix the capstone and B7.1 teach.** It
+explained modulo bias correctly, then concluded "for Token, this is
+acceptable… we'll use the simpler modulo approach." Every supporting statement
+was true and the conclusion was wrong. Rewritten with the four reasons that
+actually decide it: the fix is four lines; **it cannot be applied later**
+because issued codes keep the distribution they were born with; "rate limiting
+covers it" makes one defence depend on a separate system with its own outage;
+and the advertised guarantee — every code equally likely out of
+7.9 × 10<sup>17</sup> — is simply false with the fold.
+
+**The client generated codes.** A "preview" while the API call was in flight,
+replaced by the server's answer. It shows the user a code that does not exist:
+copy or screenshot it in that window and the holder gets "that code can't be
+used" with no way to find out why. Also a second implementation of the
+alphabet to drift, and it carried the very bias the section below it explains.
+Generalised in the lesson: **optimistic UI is for things the client can
+predict; anything the server generates cannot be, and showing a guess of it is
+showing something false.**
+
+**The product rule was missing entirely.** CLAUDE.md says a token must never
+travel over a channel that already identifies the user — and a plain Share
+button hands the code to WhatsApp *from the user's phone number*, defeating the
+whole point in one tap, using the feature the app provided. Added the warning
+flow and the four safe paths in the order the UI should offer them.
+
+Also: the clipboard is a surface every other app can read and both platforms
+now sync across devices — copy now clears after 60s; screenshots put a live
+capability in a cloud-synced photo library, and the answer is mostly to make
+"show me that code again" obvious rather than to block the gesture; and
+ADR-0007's consequence for this screen — **this is the only response that ever
+contains the code**, so the reveal path must be findable or users will
+screenshot defensively.
+
+Fixed alongside: a wrong keyspace figure (`28^12 ≈ 1.2 × 10^17` in the
+requirements table, `1.7 × 10^17` in the collision section — both should be
+`31^12 ≈ 7.9 × 10^17`), `max_uses: 0`, a `status` field, and INSERTs writing a
+plaintext `code` column.
+
 #### Trap that bit twice
 
 **Two escaping failures while writing `b3/0003`, both caught by the verifier**, both
