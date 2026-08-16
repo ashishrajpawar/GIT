@@ -37,7 +37,7 @@ const res = await fetch(API_URL + '/tokens', {
 });
 
 // TokenDetailScreen.tsx
-const res = await fetch(API_URL + '/tokens/' + code, {
+const res = await fetch(API_URL + '/tokens/' + id, {
   headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
 });
 
@@ -53,7 +53,8 @@ type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE';
 interface ApiClientConfig {
   baseUrl: string;
   getAccessToken: () =&gt; string | null;
-  onUnauthorized: () =&gt; void;  // trigger refresh or logout
+  onUnauthorized: () =&gt; Promise&lt;void&gt;;   // refresh, or log out - see below
+  timeoutMs?: number;                     // default 15s
 }
 
 export function createApiClient(config: ApiClientConfig) {
@@ -75,25 +76,56 @@ export function createApiClient(config: ApiClientConfig) {
       headers['Content-Type'] = 'application/json';
     }
 
-    const response = await fetch(config.baseUrl + path, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    // A phone on a train does not get a connection error - it gets nothing,
+    // forever. Without a deadline the screen spins until the app is killed.
+    const abort = new AbortController();
+    const timer = setTimeout(() =&gt; abort.abort(), config.timeoutMs ?? 15000);
+
+    let response: Response;
+    try {
+      response = await fetch(config.baseUrl + path, {
+        method,
+        headers,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal: abort.signal,
+      });
+    } catch (err: any) {
+      if (err?.name === 'AbortError') throw new ApiError(0, 'The request timed out.', true);
+      throw new ApiError(0, 'Could not reach the server.', true);
+    } finally {
+      clearTimeout(timer);
+    }
 
     if (response.status === 401) {
-      config.onUnauthorized();
+      await config.onUnauthorized();
       throw new ApiError(401, 'Authentication required');
+    }
+
+    if (response.status === 429) {
+      // The server said how long to wait. Passing it up lets the screen say
+      // "try again in 12 minutes" instead of inviting another attempt.
+      const reset = Number(response.headers.get('RateLimit-Reset'));
+      throw new ApiError(429, 'Too many attempts.', true,
+                         Number.isFinite(reset) ? reset : undefined);
     }
 
     if (response.status === 204) {
       return null as T;
     }
 
-    const json = await response.json();
+    // A 502 from the proxy is an HTML page, not JSON. Parsing it blind turns
+    // a useful "server error" into "Unexpected token &lt; in JSON".
+    let json: any = null;
+    if ((response.headers.get('content-type') || '').includes('application/json')) {
+      try { json = await response.json(); } catch { json = null; }
+    }
 
     if (!response.ok) {
-      throw new ApiError(response.status, json.error || 'Request failed');
+      throw new ApiError(
+        response.status,
+        json?.error || 'Request failed',
+        response.status &gt;= 500        // 5xx is worth retrying, 4xx is not
+      );
     }
 
     return json as T;
@@ -107,11 +139,18 @@ export function createApiClient(config: ApiClientConfig) {
   };
 }
 
+// Carries the two things a screen needs in order to decide what to show:
+// whether trying again could possibly help, and when.
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  retryable: boolean;
+  retryAfterSeconds?: number;
+
+  constructor(status: number, message: string, retryable = false, retryAfterSeconds?: number) {
     super(message);
     this.status = status;
+    this.retryable = retryable;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }</code></pre>
 
@@ -134,28 +173,35 @@ export function createTokenApi(client: ReturnType&lt;typeof createApiClient&gt;)
       return client.get&lt;ApiResponse&lt;Paginated&lt;TokenListItem&gt;&gt;&gt;(`/tokens${params}`);
     },
 
-    getToken(code: string) {
-      return client.get&lt;ApiResponse&lt;Token&gt;&gt;(`/tokens/${code}`);
+    getToken(id: number) {
+      return client.get&lt;ApiResponse&lt;Token&gt;&gt;(`/tokens/${id}`);
+    },
+
+    // The code comes back once, at creation. This is how the owner sees it
+    // again - decrypted server-side, one token at a time, and logged.
+    revealCode(id: number) {
+      return client.get&lt;ApiResponse&lt;{ code: string }&gt;&gt;(`/tokens/${id}/code`);
     },
 
     createToken(input: CreateTokenInput) {
       return client.post&lt;ApiResponse&lt;Token&gt;&gt;('/tokens', input);
     },
 
-    updateToken(code: string, input: UpdateTokenInput) {
-      return client.patch&lt;ApiResponse&lt;Token&gt;&gt;(`/tokens/${code}`, input);
+    updateToken(id: number, input: UpdateTokenInput) {
+      return client.patch&lt;ApiResponse&lt;Token&gt;&gt;(`/tokens/${id}`, input);
     },
 
-    revokeToken(code: string) {
-      return client.delete(`/tokens/${code}`);
+    // POST, not DELETE: the row stays and keeps recording attempts.
+    revokeToken(id: number) {
+      return client.post(`/tokens/${id}/revoke`);
     },
 
-    pauseToken(code: string) {
-      return client.post&lt;ApiResponse&lt;Token&gt;&gt;(`/tokens/${code}/pause`);
+    pauseToken(id: number) {
+      return client.post&lt;ApiResponse&lt;Token&gt;&gt;(`/tokens/${id}/pause`);
     },
 
-    resumeToken(code: string) {
-      return client.post&lt;ApiResponse&lt;Token&gt;&gt;(`/tokens/${code}/resume`);
+    resumeToken(id: number) {
+      return client.post&lt;ApiResponse&lt;Token&gt;&gt;(`/tokens/${id}/resume`);
     },
 
     // Conversations
@@ -205,9 +251,9 @@ function TokenListScreen() {
     });
   }, []);
 
-  const handleRevoke = async (code: string) =&gt; {
-    await api.revokeToken(code);
-    setTokens(prev =&gt; prev.filter(t =&gt; t.code !== code));
+  const handleRevoke = async (id: number) =&gt; {
+    await api.revokeToken(id);
+    setTokens(prev =&gt; prev.filter(t =&gt; t.id !== id));
   };
 }</code></pre>
 
@@ -232,8 +278,10 @@ export { client };</code></pre>
 
 async function handleCreateToken() {
   try {
-    const result = await api.createToken({ label: inputValue, maxUses: 0 });
-    navigation.navigate('TokenDetail', { tokenCode: result.data.code });
+    // maxUses: null means unlimited. 0 would be a token nobody can use,
+    // and the server rejects it.
+    const result = await api.createToken({ label: inputValue, maxUses: null });
+    navigation.navigate('TokenDetail', { tokenId: result.data.id });
   } catch (err) {
     if (err instanceof ApiError) {
       if (err.status === 400) {
@@ -257,6 +305,159 @@ async function handleCreateToken() {
       <li><strong>Shared between app and web</strong> — <code>shared/api-client.ts</code> works in both, only config differs.</li>
       <li><strong>Testable</strong> — mock the client in tests, not fetch globally.</li>
     </ul>
+
+    <hr>
+
+    <h2>Why this way (and what was rejected)</h2>
+
+    <h3>Ids in paths, because the client is the other half of that decision</h3>
+
+    <p>
+      B3.3 took token codes out of URLs, because a path is written into the
+      proxy's access log, browser history, the <code>Referer</code> header and
+      every crash report. That decision is only worth anything if the client
+      respects it: a server that accepts <code>/tokens/:id</code> and a client
+      that builds <code>/tokens/MERC-8GH2-KP4X</code> gives you the logging
+      problem back, and this file is where 30 screens get their URLs from.
+    </p>
+    <p>
+      It also means the app holds ids, not codes. The code is returned once, at
+      creation, and after that it has to be asked for explicitly — which is
+      what <code>revealCode()</code> is, and why it is a separate call rather
+      than a field on the token.
+    </p>
+
+    <h3>One refresh, not one per request</h3>
+
+    <p>
+      The obvious implementation of <code>onUnauthorized</code> is "refresh the
+      access token". The obvious implementation is a serious bug, and it only
+      appears when the app is doing something real.
+    </p>
+    <p>
+      A token list screen fires six requests at once. The access token has just
+      expired, so all six come back 401, and all six call
+      <code>onUnauthorized</code> — six simultaneous refreshes with the same
+      refresh token. Refresh rotation (B4.2) invalidates the old refresh token
+      the moment one succeeds, so the other five present a token that is now
+      revoked. A rotation scheme worth having treats that as theft and kills the
+      session. <strong>The user is logged out by opening a screen.</strong>
+    </p>
+
+    <pre><code>// shared/auth-refresh.ts — one in-flight refresh, shared by every caller
+let inFlight: Promise&lt;void&gt; | null = null;
+
+export function refreshOnce(doRefresh: () =&gt; Promise&lt;void&gt;): Promise&lt;void&gt; {
+  if (!inFlight) {
+    inFlight = doRefresh().finally(() =&gt; { inFlight = null; });
+  }
+  return inFlight;          // the other five await the first one's result
+}</code></pre>
+
+    <p>
+      Six callers, one network request, one rotation. The five that arrived late
+      await the same promise and then retry with the token it produced.
+    </p>
+
+    <h3>A timeout, because the network does not always answer</h3>
+
+    <p>
+      <code>fetch</code> has no default timeout. On a train, in a lift, on a
+      phone that has switched from wifi to mobile mid-request, the promise
+      simply never settles — no error, no rejection, nothing to catch. Every
+      loading spinner in the app is waiting on it.
+    </p>
+    <p>
+      15 seconds is a deliberate choice for the Indian mobile networks this app
+      is for: long enough that a slow 3G handshake completes, short enough that
+      the user gets an answer while still holding the phone.
+    </p>
+
+    <hr>
+
+    <h2>When this breaks</h2>
+
+    <h3>Retrying a POST creates two of something</h3>
+
+    <p>
+      A timeout means "no answer", not "it did not happen". The request may have
+      reached the server, created a token, and had its response lost on the way
+      back. Retry that automatically and the user has two tokens, one of which
+      they will never see the code for.
+    </p>
+    <p>
+      So <code>retryable</code> is a <em>hint to the screen</em>, not a licence
+      for the client to retry by itself. GET is safe to retry; POST is not,
+      unless the request carries an idempotency key the server can recognise as
+      a repeat. That is a real feature with a table behind it, and it is
+      deliberately not in this lesson — what belongs here is knowing that
+      "retry on failure" is wrong for exactly the requests that matter most.
+    </p>
+
+    <h3>The 502 that says "Unexpected token &lt;"</h3>
+
+    <p>
+      When the API container is restarting, Coolify's proxy answers with an HTML
+      error page. The original client called <code>response.json()</code> on
+      every response, so the user saw a JSON parse error and the actual status —
+      502, the server is briefly down — never reached the screen. Checking
+      <code>content-type</code> before parsing is two lines and it is the
+      difference between "we're having trouble, try again" and gibberish.
+    </p>
+
+    <h3>Ignoring 429 makes the lockout longer</h3>
+
+    <p>
+      A screen that retries on failure, against an endpoint that is rate
+      limited, extends its own window every time it tries. The client now reads
+      <code>RateLimit-Reset</code> and passes it up, so the UI can disable the
+      button and count down instead of guessing.
+    </p>
+
+    <h3>Web storage is readable by any script on the page</h3>
+
+    <p>
+      The web config reads the access token from <code>sessionStorage</code>.
+      That is convenient and it means any injected script — a compromised
+      dependency, an XSS in a rendered label — can read the token and use it
+      elsewhere. The safer shape is the access token in a JavaScript variable
+      (gone on reload, unreachable from other origins) and the refresh token in
+      an <code>httpOnly</code> cookie the page's own code cannot read at all.
+      A8 builds the redemption page; make the decision there deliberately rather
+      than inheriting this line.
+    </p>
+
+    <hr>
+
+    <h2>What this costs you</h2>
+
+    <table>
+      <thead>
+        <tr><th>Decision</th><th>What you pay</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>A shared client layer</td>
+          <td>One more layer between a screen and the network, and a bug in it is a bug in every screen at once. The trade is that a fix is also a fix everywhere at once — but it means this file deserves tests, not just care.</td>
+        </tr>
+        <tr>
+          <td>A single in-flight refresh</td>
+          <td>Module-level mutable state in something that otherwise looks purely functional. It has to be reset in a <code>finally</code>, or one failed refresh leaves every future request waiting on a promise that will never resolve.</td>
+        </tr>
+        <tr>
+          <td>A 15-second timeout</td>
+          <td>Requests that would have succeeded at 20 seconds now fail. On a bad connection the app gives up on work the network was still doing — and the user's retry starts from zero. There is no setting that is right for both a fibre connection and a crowded cell tower.</td>
+        </tr>
+        <tr>
+          <td>Types shared with the server</td>
+          <td>The one that bites mobile specifically: <strong>you cannot force an app update.</strong> Someone will be running last year's build in two years, holding types from last year. The API has to keep working for it, which means additive changes only — new optional fields, never renamed or removed ones — for far longer than feels necessary.</td>
+        </tr>
+        <tr>
+          <td>Ids instead of codes in the client</td>
+          <td>Screens must carry ids through navigation params, and a support conversation cannot start from a URL. Revealing a code is now a deliberate, logged network call rather than reading a field you already had.</td>
+        </tr>
+      </tbody>
+    </table>
 
     <hr>
 
@@ -380,10 +581,10 @@ export function TokenListScreen() {
       },
       {
         type: "predict-output",
-        question: "The access token expires. What happens when the app calls api.listTokens()?",
-        code: "// Server returns 401\n// createApiClient has: onUnauthorized: () => triggerRefresh()",
-        answer: "The request function catches the 401, calls onUnauthorized(), and throws an ApiError(401, 'Authentication required')",
-        explanation: "The client detects 401, calls the onUnauthorized callback (which triggers the refresh token flow), and throws so the calling component can show an appropriate state. The component doesn't need to know about auth — the client layer handles it."
+        question: "Six screens fire requests at once, the access token has just expired, and onUnauthorized refreshes it. How many refresh requests go out — with refreshOnce, and without it?",
+        code: "let inFlight = null;\nlet refreshes = 0;\n\nfunction doRefresh() {\n  refreshes++;\n  return Promise.resolve();\n}\n\nfunction refreshOnce() {\n  if (!inFlight) inFlight = doRefresh().finally(function () { inFlight = null; });\n  return inFlight;\n}\n\nconst six = [1, 2, 3, 4, 5, 6];\nPromise.all(six.map(function () { return refreshOnce(); })).then(function () {\n  console.log('with refreshOnce:', refreshes);\n  refreshes = 0;\n  six.forEach(function () { doRefresh(); });\n  console.log('without it:', refreshes);\n});",
+        answer: "with refreshOnce: 1\nwithout it: 6",
+        explanation: "Six is not just wasteful — it is a logout. Refresh rotation invalidates the old refresh token as soon as the first refresh succeeds, so the other five present a revoked token, and a rotation scheme worth having treats that as theft and kills the session. The user is signed out by opening a screen. One shared in-flight promise makes all six callers await the same refresh."
       },
       {
         type: "spot-the-bug",

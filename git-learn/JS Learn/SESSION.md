@@ -126,7 +126,8 @@ prints `n/a` for that lesson rather than counting it as verified.
 
 **Student decided the pace: full depth on all 15 remaining.** Order — thinnest
 and most load-bearing first: ~~`b3/0003` REST design~~ **done**, ~~`b4/0003`
-rate limiting~~ **done**, `a3/0002` API client (845), `b3/0004` validation (858),
+rate limiting~~ **done**, ~~`a3/0002` API client~~ **done**, `b3/0004`
+validation (858),
 `a4/0002` auth context (865), `b4/0002` JWT rotation (923), `a10/0001` secure
 storage (982), `b7/0002` (1,126), `b7/0003` (1,139), then `b9/0002`, `b6/0001`,
 `b9/0001`, `b10/0001`, `a5/0001`, `a5/0004`.
@@ -216,6 +217,53 @@ traffic to protect capacity is just the outage arriving sooner.
 pattern SESSION.md already warned about: comment-only code with a prose answer,
 so they print nothing. Two became multiple-choice, three became runnable. They
 were invisible until the verifier ran over this lesson for the first time.
+
+#### `a3/0002` API client — done, 845 → 2,164 words
+
+The client is the other half of B3.3 and B4.3, and it was undoing both.
+
+**The single worst bug in the four lessons so far: the refresh stampede.** The
+obvious `onUnauthorized: () => refresh()` means six simultaneous 401s trigger
+six refreshes with the same refresh token. Rotation (B4.2) invalidates the
+old one as soon as the first succeeds, so the other five present a revoked
+token — and any rotation scheme worth having treats that as theft and kills
+the session. **The user is logged out by opening a screen that loads six
+things.** Fixed with a single shared in-flight promise; the quiz question is
+now runnable and prints `1` versus `6`.
+
+Three more, all of which only show on a real network:
+
+- **No timeout.** `fetch` has no default one, so a phone that switches from
+  wifi to mobile mid-request leaves a promise that never settles — no error to
+  catch, and every spinner in the app waiting on it. Now `AbortController` at
+  15s, chosen for Indian mobile networks: long enough for a slow 3G handshake,
+  short enough to answer while the user is still holding the phone.
+- **`response.json()` on everything.** A restarting container gets an HTML
+  error page from Coolify's proxy, so the user saw `Unexpected token <` and
+  the actual 502 never reached the screen. Now checks `content-type` first.
+- **429 ignored.** A screen that retries against a rate-limited endpoint
+  extends its own lockout. `ApiError` now carries `retryable` and
+  `retryAfterSeconds` from `RateLimit-Reset`, so the UI can count down.
+
+Endpoints moved from `/tokens/${code}` to `/tokens/${id}`, `revokeToken` from
+DELETE to POST, and `revealCode(id)` added — the client is where 30 screens
+get their URLs, so B3.3's decision lives or dies here.
+
+**`retryable` is deliberately a hint to the screen, not a licence for the
+client to retry.** A timeout means "no answer", not "it did not happen" — the
+request may have created a token whose response was lost. Auto-retrying a POST
+gives the user two tokens, one of whose codes they will never see.
+
+Also flagged rather than fixed: the web config reads the access token from
+`sessionStorage`, where any injected script can read it. The safer shape is
+in-memory access token plus an `httpOnly` refresh cookie. **A8 builds the
+redemption page — make that decision there deliberately rather than inheriting
+this line.**
+
+The cost worth remembering from the new table: **you cannot force a mobile app
+update.** Someone will run today's build in two years, so shared types mean
+additive API changes only — new optional fields, never renamed or removed —
+for far longer than feels necessary.
 
 #### Trap that bit twice
 
