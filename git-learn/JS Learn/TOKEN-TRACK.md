@@ -1,7 +1,7 @@
 # Token — Two-Track Course Plan
 
 > **SUPERSEDED IN PART — read this box before the tables below.**
-> Reviewed 2026-08-15 (`COURSE-REVIEW.md`); resequenced after the student
+> Reviewed 2026-08-15; resequenced after the student
 > settled seven open decisions the same day (`HANDOFF.md`).
 >
 > The A/B tables below still describe **what exists on disk**, which is why they
@@ -14,7 +14,7 @@
 > 1. **Ten modules of coverage are missing entirely** — architecture/ADRs,
 >    testing, CI/CD, trust & safety, data/media/offline, E2EE, scale &
 >    performance, observability, analytics, and launch/support/ops. ~36 lessons.
->    Specified as C0–C9 in `COURSE-REVIEW.md` §6.
+>    Specified as C0–C9 in the work plan at the end of this file.
 > 2. **B2 and B5 need rewriting, not deepening.** E2EE lands in v1, so the
 >    messaging schema stores ciphertext; and the WebSocket layer is multi-node
 >    from the start rather than single-node-then-fixed.
@@ -327,3 +327,67 @@ Phase 8 — Ship and operate
 | **B5 — WebSocket Server** | Multi-node from the start: Redis pub/sub fan-out, presence as TTL keys, no node-local socket registry |
 | **A7/0004 — Incoming calls** | Imports `@react-native-firebase/messaging`, contradicting both the no-Firebase constraint and B8's Expo Notifications |
 | **All of Track A** | Written against Expo SDK 49 (mid-2023); camera, notifications, and secure-store APIs have all moved |
+
+---
+
+# The work plan
+
+Moved here on 2026-08-16 from `COURSE-REVIEW.md`, the 2026-08-15 audit. That
+file's findings are fixed and its narrative is in
+`docs/archive/handoff-2026-08-14-to-15.md`; this plan was the only part still
+live, and it belongs beside the sequence it operates on. The file itself was
+removed — it is in git history.
+
+**Status lives in two places and neither is here.** Per-item status is in
+`SESSION.md`; anything countable is in `PROGRESS.md`, which is generated.
+Do not add a status column below — a fact with three homes has three chances
+to be wrong, and that is the failure the audit was written about.
+
+**As of 2026-08-16: Phase 0 done. Phase 1 done except 1.5. Phase 2 done.
+Phases 3 and 4 not started, deliberately.**
+
+## Phase 0 — Repair the map
+
+| # | Work |
+|---|---|
+| 0.1 | Create the Token repo — `app/ web/ api/ shared/`, first commit |
+| 0.2 | `ARCHITECTURE.md` + ADRs — the whole-system view and the decisions behind it |
+| 0.3 | Add the missing modules to this file as placeholders |
+| 0.4 | Fix the `@react-native-firebase` contradiction in `a7/0004` |
+| + | Async playground and loop guard; delete the stale `lessons/` duplicate; fix five broken nav links; fix 18 broken quiz questions and the invalid canonical token |
+
+## Phase 1 — Unblock where the student actually is
+
+| # | Work |
+|---|---|
+| 1.1 | Retrofit practice into `01/0005`–`01/0012`, one or two at a time |
+| 1.2 | A capstone at the end of Module 01 — a pure-JS token issuer, the repo's first real commit |
+| 1.3 | One "explain it in your own words" prompt per lesson |
+| 1.4 | Open each lesson with ~5 questions from the previous two lessons |
+| 1.5 | The same retrofit for Module 02, just-in-time |
+
+## Phase 2 — Deepen the spine
+
+Each spine lesson gains three sections — **Why this way (and what was
+rejected)** · **When this breaks** · **What this costs you** — and has its code
+verified by execution.
+
+The spine, as deepened: `b7/0001` · `b3/0003` · `b4/0003` · `a3/0002` ·
+`b3/0004` · `a4/0002` · `b4/0002` · `a10/0001` · `b7/0002` · `b7/0003` ·
+`b9/0002` · `b6/0001` · `b9/0001` · `b10/0001` · `a5/0001` · `a5/0004`.
+
+**Sixteen, not twenty.** `b2/0001`, `b2/0003`, `b5/0001` and `b5/0002` are
+rewrites (see the table above), so deepening them is work that gets discarded.
+
+## Phase 3 — Insert the missing modules
+
+The ten C-modules, each written **just-in-time** at the point in the sequence
+above where the student reaches it. Never batched ahead — writing 36 lessons
+now would repeat exactly the mistake that produced 95 unverified ones.
+
+## Phase 4 — The operating track
+
+C7, C8, C6 and C9 together are the "operate Token" half: observability,
+analytics, scale, launch and support. Studied after launch, but **built into
+the product from Phase 3 onward** — instrumentation retrofitted is
+instrumentation that never happens.

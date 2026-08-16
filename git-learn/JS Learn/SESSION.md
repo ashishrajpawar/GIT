@@ -12,7 +12,7 @@ how far it got.
 ## In progress — PHASE 1
 
 Phase 0 is done (see `HANDOFF.md` for the 10 steps and their commits).
-Phase 1 is COURSE-REVIEW.md §6 item 1.1: retrofit practice into `01/0005`–`01/0012`,
+Phase 1 item 1.1 (see `TOKEN-TRACK.md`'s work plan): retrofit practice into `01/0005`–`01/0012`,
 one or two lessons at a time, never batched ahead.
 
 | Lesson | Status |
@@ -191,7 +191,7 @@ to be historical.
 
 ### Unit 8 — Phase 1.2, the Module 01 capstone — DONE
 
-`COURSE-REVIEW.md` §6 item 1.2: a pure-JavaScript token issuer — generate,
+Phase 1 item 1.2: a pure-JavaScript token issuer — generate,
 store, apply rules, revoke — as the Token repo's **first real commit**.
 
 Shape decided before writing:
@@ -290,7 +290,7 @@ every error type correctly, returns the right shape, never throws, and is
 `MERC-8GH2-KP4O` as a negative fixture: correct length, correct grouping, and
 impossible, because `O` is not in the alphabet. The playground explains why
 right underneath it. This is the deliberate-negative-fixture case
-`COURSE-REVIEW.md` §12.5 anticipates — **do not "fix" it**; removing it would
+CLAUDE.md's alphabet note anticipates — **do not "fix" it**; removing it would
 delete the only place in the course that teaches the alphabet constraint as a
 validation rule rather than a piece of trivia.
 
@@ -512,7 +512,7 @@ node scripts/verify-lesson.mjs modules/01-javascript-fundamentals/0007-dom-and-b
 capstone, all carrying practice and all verified by execution — see
 `PROGRESS.md` for the counts, which are now computed rather than asserted.
 
-What remains in COURSE-REVIEW.md §6 Phase 1:
+What remains in Phase 1 (`TOKEN-TRACK.md` § work plan):
 
 | # | Work | Status |
 |---|---|---|

@@ -27,14 +27,13 @@ Five steps, in order:
 | `CLAUDE.md` (this file) | Architecture invariants, conventions, product rules | Hand |
 | `HANDOFF.md` | Narrative — why decisions were made, what failed, session log | Hand, appended each session |
 | `ARCHITECTURE.md` + `docs/adr/` | Technical design and the decisions behind it | Hand |
-| `COURSE-REVIEW.md` | The 2026-08-15 audit and the phase **plan** — what the work is, never how far it has got | Hand |
-| `TOKEN-TRACK.md` | Lesson map and sequencing | Hand |
+| `TOKEN-TRACK.md` | Lesson map, sequencing, and the phase **plan** — what the work is, never how far it has got | Hand |
 
-**Where "how far along are we?" is answered:** the phase-level headline is at
-the top of `COURSE-REVIEW.md` §6, per-item status is in `SESSION.md`, and every
+**Where "how far along are we?" is answered:** the phase-level headline is in
+`TOKEN-TRACK.md`'s work plan, per-item status is in `SESSION.md`, and every
 countable thing is in `PROGRESS.md`. Three files, three different questions —
-and deliberately no status column in `COURSE-REVIEW.md`'s tables, because a
-fact with three homes has three chances to be wrong.
+and deliberately no status column in the phase tables, because a fact with
+three homes has three chances to be wrong.
 
 **The rule that prevents drift: this file and `HANDOFF.md` never restate a
 number the audit can compute.** They point at `PROGRESS.md` instead. Prose
@@ -94,8 +93,10 @@ Derived figures, so nobody recomputes them wrongly again:
 - indices 26–30 are `V, W, X, Y, Z`
 
 Note ~15 other example tokens still contain excluded characters. Some are
-accidental; some look like deliberate negative fixtures. See `COURSE-REVIEW.md`
-§12.5 — do not bulk-rewrite them without reading each in context.
+accidental; some look like deliberate negative fixtures — `TEST-1234`,
+`NOPE-0000`, `IJKL-3333`, where being invalid is the point. Telling them apart
+needs reading each in context: rewriting a fixture meant to be rejected breaks
+its lesson. **Do not bulk-rewrite them.**
 
 **The audit now guards the alphabet itself, not just example codes.** Three
 lessons — including `b7/0001`, the server that actually generates codes —
@@ -166,10 +167,11 @@ assets/
   search-index.json                 ← static search index (title, module, path, keywords)
 reference/
   js-basics-cheatsheet.html
-TOKEN-BRIEF.md                      ← product brief (supersedes old CLAUDE.md app section)
+docs/archive/                       ← closed session logs, split out of HANDOFF.md
 TOKEN-TRACK.md                      ← full two-track plan with sequencing
-TOKEN-ASSETS-TASK.md                ← course tooling upgrade spec (separate session)
-COURSE-REVIEW.md                    ← 2026-08-15 audit: gaps, plan, verified defects
+MISSION.md  NOTES.md  RESOURCES.md  ← the `teach` skill's interface; it reads
+                                       these by name. CLAUDE.md wins on any
+                                       overlap — see the note in each
 HANDOFF.md                          ← project handoff / state summary
 ```
 
@@ -255,8 +257,7 @@ captured `console.log` output displayed below. Errors shown in red.
 Two limits described here for months — async output swallowed, no infinite-loop
 guard — **were fixed in `5b07d93`** and the paragraph saying otherwise survived
 two more lessons. `await` and `.then()` now print, and a runaway loop is stopped
-by a 2s budget plus a 1000-line output cap. `COURSE-REVIEW.md` §7.2 is likewise
-history, not a to-do.
+by a 2s budget plus a 1000-line output cap.
 
 #### DOM playgrounds — `options.dom`
 
@@ -545,7 +546,8 @@ summarised here rather than left in the ADR:
    **Verify keys by executing them.** Every `predict-output` question whose
    code runs without a browser, DB or React Native should be run and its
    output compared to `answer`. Doing this to the 188 executable ones found
-   8 wrong keys — a 4.3% error rate. The recipe is in `COURSE-REVIEW.md` §10.
+   8 wrong keys — a 4.3% error rate. `verify-lesson.mjs` now does this
+   automatically for every executable question; that audit is why it exists.
 
 6. **Lesson nav** at the bottom with prev/next links using the planned
    filename even if the next lesson doesn't exist yet.
@@ -762,13 +764,28 @@ RootStack (headerShown: false)
 
 ## Token sharing — the product rule
 
-A token must **never** travel over a channel that already identifies the user.
-Valid sharing paths:
+**The bootstrap problem this solves:** if the user sends a token over their own
+WhatsApp or email, the recipient already has their number and the token has
+protected nothing. So — a token must **never** travel over a channel that
+already identifies the user.
+
+Valid sharing paths, in priority order:
 1. Request-a-token (reverse flow) — business publishes a link, user's app
-   generates and delivers the token from inside the system
-2. QR code — shown on user's screen, scanned by holder
-3. Typed into their form field — pasted where a site asks for a phone number
+   generates and delivers the token from inside the system. **A core v1 flow**,
+   not a later nice-to-have
+2. QR code — shown on user's screen, scanned by holder. No channel at all
+3. Typed into their form field — pasted where a site asks for a phone number.
+   The channel is theirs, not the user's
 4. Spoken or printed — read aloud, on a card or listing
 
-The app should **warn** when sharing via an identifying channel. Onboarding
-must teach this rule.
+Consequences for the build:
+- **QR generation and scanning are core**, not optional
+- The app must **warn** when sharing via an identifying channel — a Share
+  button that silently hands the code to WhatsApp defeats the product in one
+  tap, using a feature the app provided. See `a5/0001`
+- Onboarding must teach this rule, or users conclude the product does not work
+
+**Where the product is worth most**, which is what lesson examples should
+reach for: handing a number to an entity that does not know the user and will
+keep it forever — e-commerce checkout, property listings, job applications,
+service bookings. **Worth least:** people who already have the number.

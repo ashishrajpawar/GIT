@@ -134,7 +134,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 - modules/b6-webrtc-signalling/0002-coturn-setup.html q18: 3 blanks but one answer
 - link (legacy): modules/07-store-compliance-and-safety/0005-data-export-and-terms.html -> ./privacy-policy.html
 - token: "UTIL-4KQ9-ZT7M" uses characters excluded from the alphabet (3 file(s))
-- token: "DELI-2XN5-QW8R" uses characters excluded from the alphabet (3 file(s))
+- token: "DELI-2XN5-QW8R" uses characters excluded from the alphabet (2 file(s))
 - token: "BOLT-3KP9" uses characters excluded from the alphabet (3 file(s))
 - token: "WAVE-1MN4" uses characters excluded from the alphabet (3 file(s))
 - token: "MERC-8GH2-KP4O" uses characters excluded from the alphabet (3 file(s))
@@ -142,7 +142,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 - token: "XPRT-4KL9" uses characters excluded from the alphabet (2 file(s))
 - token: "PRYA-4KL9" uses characters excluded from the alphabet (2 file(s))
 - token: "SHOP-4FD9" uses characters excluded from the alphabet (2 file(s))
-- token: "CAFE-2KL7" uses characters excluded from the alphabet (3 file(s))
+- token: "CAFE-2KL7" uses characters excluded from the alphabet (2 file(s))
 - token: "MERC-11AB" uses characters excluded from the alphabet (2 file(s))
 - token: "DELI-9XK2" uses characters excluded from the alphabet (2 file(s))
 - token: "SHOP-2AX4" uses characters excluded from the alphabet (2 file(s))

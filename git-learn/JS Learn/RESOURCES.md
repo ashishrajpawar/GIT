@@ -2,6 +2,10 @@
 
 All open source or free to read. No paid SDKs, no commercial licences.
 
+*Read by the `teach` skill to ground lessons in real sources rather than
+recalled knowledge. Lessons cite from here. `CLAUDE.md` owns what is in
+and out of scope — nothing Firebase, Agora, Twilio or Prisma belongs below.*
+
 ## JavaScript & TypeScript
 
 - [The Modern JavaScript Tutorial (javascript.info)](https://javascript.info)
