@@ -328,6 +328,210 @@ const jwtSecret = process.env.JWT_SECRET;</code></pre>
     <p><strong>Rule:</strong> if a value changes between environments (dev/staging/prod) or is secret,
     it goes in an environment variable. If it's the same everywhere, it goes in code.</p>
 
+    <h2>Shutting down without dropping every conversation</h2>
+
+    <p>
+      This is the part a Dockerfile makes possible and does not do for you.
+      Every deploy stops the running container, and Token's containers are
+      holding live WebSocket connections — people mid-conversation, calls in
+      progress. What happens to them is decided by twenty lines of your code.
+    </p>
+
+    <p>
+      The sequence Docker uses is fixed: <code>SIGTERM</code>, wait, then
+      <code>SIGKILL</code>. The wait defaults to <strong>10 seconds</strong>.
+    </p>
+
+    <pre><code>// api/src/server.ts
+const server = app.listen(PORT);
+
+let shuttingDown = false;
+
+async function shutdown(signal: string) {
+  if (shuttingDown) return;         // a second SIGTERM must not restart this
+  shuttingDown = true;
+  logger.info({ signal }, 'shutting down');
+
+  // 1. Fail readiness first, so the proxy stops sending new requests
+  //    BEFORE we start refusing them. Out of rotation, then closing.
+  setNotReady();
+  await sleep(2000);
+
+  // 2. Tell WebSocket clients to reconnect. They will land on another
+  //    replica - or on the new container a moment later.
+  for (const ws of allSockets()) {
+    ws.send(JSON.stringify({ type: 'server_shutdown', reconnect: true }));
+    ws.close(1012, 'server restarting');    // 1012 = Service Restart
+  }
+
+  // 3. Stop accepting connections and let in-flight requests finish.
+  await new Promise&lt;void&gt;((resolve) =&gt; server.close(() =&gt; resolve()));
+
+  // 4. Now the dependencies, in the order that cannot strand work.
+  await pool.end();
+  await redis.quit();
+
+  process.exit(0);
+}
+
+process.on('SIGTERM', () =&gt; shutdown('SIGTERM'));   // Docker / Coolify
+process.on('SIGINT', () =&gt; shutdown('SIGINT'));     // Ctrl-C locally</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">Without that handler, SIGTERM does nothing at all</div>
+      <p>
+        Not "nothing much" — nothing. The kernel treats <strong>PID 1</strong>
+        specially: signals with no registered handler are discarded rather than
+        applying their default action. <code>CMD ["node", "dist/server.js"]</code>
+        makes Node PID 1, so a container with no <code>SIGTERM</code> listener
+        ignores the polite request entirely.
+      </p>
+      <p>
+        Docker then waits its ten seconds and sends <code>SIGKILL</code>, which
+        cannot be caught. Every deploy takes ten seconds longer than it should
+        and ends by shooting the process — sockets severed with no close frame,
+        in-flight requests abandoned, database connections dropped rather than
+        returned. It looks like it works, because the new container comes up.
+      </p>
+    </div>
+
+    <hr>
+
+    <h2>Why this way (and what was rejected)</h2>
+
+    <h3>Multi-stage, so the toolchain never ships</h3>
+
+    <p>
+      The builder needs TypeScript, the source, and every devDependency. None of
+      it is needed to run <code>node dist/server.js</code>, and all of it is
+      attack surface sitting in production: a compiler, a package manager with
+      a network, and your source code. Copying just <code>dist/</code> forward
+      is a smaller image and, more usefully, a container with almost nothing in
+      it to use.
+    </p>
+
+    <h3>A non-root user, even inside a container</h3>
+
+    <p>
+      "It is isolated anyway" is the argument for skipping <code>USER token</code>,
+      and it holds right up until it does not. Container escapes exist, volume
+      mounts cross the boundary by design, and root in the container is root on
+      the host for anything shared. Two lines to make an escape land as an
+      unprivileged user is a good trade at any odds.
+    </p>
+
+    <h3>Alpine, with a caveat worth testing rather than trusting</h3>
+
+    <p>
+      Alpine is small because it uses musl instead of glibc, and that is exactly
+      where it bites. Native modules — <code>argon2</code> is the one this
+      project depends on — publish prebuilt binaries compiled against glibc. On
+      Alpine they are rejected and npm falls back to compiling from source,
+      which needs a toolchain the image does not have. The failure appears
+      during <code>docker build</code>, which is the good outcome; the bad one
+      is a build that quietly succeeds against a different fallback and behaves
+      oddly at runtime.
+    </p>
+
+    <pre><code># If argon2 or any native dep fails to install on Alpine
+RUN apk add --no-cache --virtual .build python3 make g++ \
+ &amp;&amp; npm ci \
+ &amp;&amp; apk del .build            # remove the toolchain from the layer
+
+# Or use the Debian-slim image and accept ~40MB more for a quieter life:
+# FROM node:20-slim</code></pre>
+
+    <hr>
+
+    <h2>When this breaks</h2>
+
+    <h3>The timezone the rules engine depends on</h3>
+
+    <p>
+      B7.2 evaluates time-window rules with
+      <code>Intl.DateTimeFormat(..., { timeZone: 'Asia/Kolkata' })</code>. That
+      needs timezone data inside the container, and slim base images have
+      historically shipped without the full set — with a failure mode of
+      falling back to UTC rather than throwing.
+    </p>
+    <p>
+      Which would mean a rule reading "contactable 09:00–18:00" silently
+      enforcing 09:00–18:00 <em>UTC</em>: five and a half hours out, every day,
+      for every user. The token works at the wrong times and nothing anywhere
+      reports an error.
+    </p>
+    <p>
+      <strong>Do not take anyone's word for which images are affected — check
+      the image you are actually shipping:</strong>
+    </p>
+
+    <pre><code>docker run --rm node:20-alpine node -e \
+  "console.log(new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit'}).format(new Date()))"
+
+# Correct: the current time in India (UTC+5:30)
+# Wrong:   UTC, or a RangeError about an invalid time zone
+# If wrong:  RUN apk add --no-cache tzdata   (and re-run the check)</code></pre>
+
+    <p>
+      Worth making a habit of: any behaviour your app depends on that comes
+      from the operating system rather than your code — timezones, locales,
+      certificates, fonts — is a thing to verify in the image, not to assume
+      from the base tag.
+    </p>
+
+    <h3><code>.dockerignore</code> is not optional, and its absence is silent</h3>
+
+    <p>
+      Without it, <code>COPY . .</code> takes the local <code>node_modules</code>
+      — built for your laptop's OS, overwriting the ones installed for Alpine —
+      along with <code>.git</code> and any <code>.env</code> sitting in the
+      directory. <strong>The <code>.env</code> is the one that matters:</strong>
+      it is now a layer in an image, and anyone who can pull that image can
+      read every secret in it, including from a registry, months later.
+      Deleting the file in a later layer does not remove it; layers are
+      additive.
+    </p>
+
+    <h3>Layer caching that never hits</h3>
+
+    <p>
+      <code>COPY package*.json ./</code> before <code>RUN npm ci</code> exists
+      so that editing a source file does not reinstall every dependency. Put
+      <code>COPY . .</code> first and every build downloads the internet again
+      — two minutes instead of five seconds, on every push, forever. It is the
+      single highest-leverage line ordering in the file.
+    </p>
+
+    <hr>
+
+    <h2>What this costs you</h2>
+
+    <table>
+        <tr><th>Decision</th><th>What you pay</th></tr>
+        <tr>
+          <td>Multi-stage builds</td>
+          <td>A longer, less obvious Dockerfile, and <code>npm ci --omit=dev</code> runs a second time in the production stage rather than copying <code>node_modules</code> forward — slower builds, in exchange for a production image that provably contains no devDependency.</td>
+        </tr>
+        <tr>
+          <td>Alpine</td>
+          <td>musl. Native modules need a toolchain or a different base, and a class of bug exists that only appears on Alpine. The ~40MB saved over <code>node:20-slim</code> is rarely worth an afternoon.</td>
+        </tr>
+        <tr>
+          <td>Graceful shutdown</td>
+          <td>Deploys take longer by design — you are waiting for connections to drain rather than cutting them. That is the trade, and it is why the readiness flag flips first: the wait should be spent draining, not receiving new work.</td>
+        </tr>
+        <tr>
+          <td>Running as a non-root user</td>
+          <td>The container cannot bind ports below 1024, cannot write outside the paths you granted, and file permissions become something you think about. All correct, all occasionally irritating.</td>
+        </tr>
+        <tr>
+          <td>Config through environment variables</td>
+          <td>Nothing is validated by the platform. A typo in a variable name is a value of <code>undefined</code> at runtime — which is why B9.2 validates the whole set at startup and exits rather than discovering it on the first request that needs one.</td>
+        </tr>
+    </table>
+
+    <hr>
+
     <h2>Playground: Docker Layer Caching</h2>
     <div id="playground-1"></div>
 
@@ -538,10 +742,14 @@ CMD ["node", "dist/server.js"]
                 explanation: "EXPOSE documents which port the container listens on. It doesn't actually publish the port — you still need -p 3000:3000 at runtime or ports: in docker-compose. It's metadata for other developers and tools."
             },
             {
-                type: "predict-output",
-                question: "What is the final value of NODE_ENV in the running container?",
-                code: "// Dockerfile:\n// ENV NODE_ENV=production\n//\n// docker run -e NODE_ENV=development token-api\nconsole.log(process.env.NODE_ENV);",
-                answer: "development",
+                question: "The Dockerfile has ENV NODE_ENV=production. You run: docker run -e NODE_ENV=development token-api. What does process.env.NODE_ENV read inside the container?",
+                options: [
+                  "\"production\" — the image's ENV wins, since it was set first",
+                  "\"development\" — a runtime -e overrides the image's ENV",
+                  "undefined — the two cancel out",
+                  "Both, as a comma-separated string"
+                ],
+                correct: 1,
                 explanation: "Runtime environment variables (-e flag or environment: in compose) override ENV values set in the Dockerfile. The Dockerfile sets defaults; runtime flags take precedence."
             },
             {

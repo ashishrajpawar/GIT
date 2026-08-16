@@ -589,6 +589,43 @@ explicit that holders never become rows in `users`. The two lessons disagree
 about what a holder is; it belongs to the B2 rewrite alongside the `calls` and
 `participants` orphan tables.
 
+#### `b9/0001` Docker — done, 1,243 → 2,403 words
+
+**The best-written lesson of the twelve so far** — multi-stage, non-root user,
+exec-form `CMD`, pinned base, a `.dockerignore` section. So the deepening is
+mostly genuine depth rather than repair, and the depth is about what a
+Dockerfile *cannot* do for you.
+
+**Graceful shutdown, and the PID 1 trap.** Every deploy stops a container
+holding live WebSocket conversations and calls. `CMD ["node", …]` makes Node
+PID 1 — and the kernel treats PID 1 specially: **a signal with no registered
+handler is discarded rather than applying its default action.** So a container
+with no `SIGTERM` listener ignores the polite request completely; Docker waits
+its ten seconds and sends `SIGKILL`. Every deploy takes ten seconds longer than
+it should and ends by shooting the process, with sockets severed and no close
+frame. It looks fine, because the new container comes up. Added the handler,
+in the order that matters: fail readiness → tell sockets to reconnect (close
+code 1012) → stop accepting → drain → close pool and Redis.
+
+**The cross-lesson catch:** B7.2 evaluates time-window rules with
+`Intl.DateTimeFormat(…, { timeZone: 'Asia/Kolkata' })`, which needs timezone
+data *inside the container* — and the failure mode of missing data is falling
+back to UTC rather than throwing. A rule reading "contactable 09:00–18:00"
+would silently enforce it in UTC: five and a half hours out, every day, no
+error anywhere. Rather than assert which images are affected, the lesson gives
+the one-line `docker run` that checks the image you are actually shipping, and
+generalises the habit: anything your app depends on that comes from the OS —
+timezones, locales, certificates, fonts — is verified in the image, not
+assumed from the base tag.
+
+Also added: Alpine's musl breaking prebuilt native modules (`argon2` is the one
+this project uses), with the toolchain-then-`apk del` fix and `node:20-slim` as
+the quieter alternative; and why a stray `.env` in a build context is
+permanent — layers are additive, so deleting it later does not remove it, and
+anyone who can pull the image can read it months on.
+
+One premise-in-comment quiz question converted to multiple-choice.
+
 #### Trap that bit twice
 
 **Two escaping failures while writing `b3/0003`, both caught by the verifier**, both
