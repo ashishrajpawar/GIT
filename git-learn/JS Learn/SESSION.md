@@ -26,6 +26,95 @@ one or two lessons at a time, never batched ahead.
 | `01/0011-modern-javascript-es6` | done |
 | `01/0012-error-handling` | done — **Module 01 and Phase 1.1 complete** |
 
+### Unit 11 — Phase 2 begins: the spine, and a wrong alphabet — IN PROGRESS
+
+Phase 2 is 20 spine lessons × 3 sections (**Why this way / When this breaks /
+What this costs you**) plus verifying their code. This unit did the assessment,
+one lesson, and the systemic defect the assessment turned up.
+
+#### Four of the 20 should not be deepened yet
+
+`TOKEN-TRACK.md`'s revised sequence marks **B2 (schema) and B5 (WebSocket) as
+REWRITES** — B2 for ciphertext and partitioning, B5 for multi-node and Redis.
+That is `b2/0001`, `b2/0003`, `b5/0001`, `b5/0002`. Deepening a lesson that is
+scheduled to be rewritten is work thrown away, and C5 (E2EE, which must precede
+B2) is not written yet. **Deepenable set: 16.**
+
+#### The alphabet was wrong in three lessons
+
+Found by reading `b7/0001` rather than its word count. It taught:
+
+```
+const CHARSET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I/L
+```
+
+That comment is false — the string contains **L**, and it is 32 characters,
+not 31. `a2/0001` and `b3/0001` carried the same literal. Meanwhile `a5/0001`,
+`a5/0002` and all of Module 01 use the canonical 31, so **the server generated
+codes the client's own validator rejects.**
+
+The keyspace arithmetic was wrong too, and not by a little: the lesson claimed
+32<sup>12</sup> = 1,099,511,627,776 (~1.1 trillion). That is 32<sup>8</sup>.
+The real figure is 31<sup>12</sup> = 787,662,783,788,549,761 — about
+7.9 × 10<sup>17</sup>, six orders of magnitude out, and four quiz keys were
+built on the wrong number.
+
+**Why 32 was tempting, and why it loses:** 256 divides evenly by 32, so
+`byte % 32` needs no rejection sampling. The only way to reach 32 is to put an
+ambiguous character back. That is now written into the lesson as the rejected
+alternative rather than left as a silent bug.
+
+**The audit now guards alphabets, not just codes** — any 20+ character
+`A-Z0-9` literal that looks like an alphabet must equal the canonical one, as
+an **error**. Escape hatch `audit-allow-alphabet` for a deliberate
+counter-example, so a legitimate teaching case never trains anyone to ignore
+the check. One false positive found and excluded on the way: the plain English
+A–Z pasted into a `maxLength` question in `02/0004`; a token alphabet has
+digits in it.
+
+#### `b7/0001` deepened — 709 → 2,190 words
+
+The three sections carry real material, not padding:
+
+- **Why this way** — 31 vs 32; the unique index rather than the retry loop as
+  the actual collision guarantee (check-then-insert is a TOCTOU race, so the
+  correct shape is insert-and-catch `23505`); holder JWT rather than a guest
+  account.
+- **When this breaks** — `FOR UPDATE` through `pool.query()` **does nothing**,
+  because the lock dies with the implicit single-statement transaction and the
+  next query is a different pooled connection. The lesson body shipped that
+  bug while its own exercise solution did it correctly. Plus the
+  count-then-insert race on `max_uses`, which unlike a code collision is
+  *likely*; two clocks; and the holder JWT outliving revocation.
+- **What this costs you** — a table: rejection sampling, random-key index
+  write amplification, redemptions of one token serialising under the row
+  lock, plaintext codes making a database dump a set of working capabilities,
+  and 12 characters being the human ceiling.
+
+**One open decision surfaced and deliberately not taken:** whether to store a
+deterministic peppered hash of the code instead of the code. It is written up
+as a fork with its costs (lookup by hash means bcrypt/argon2 are impossible;
+the code can never be shown again) and marked *decide this in an ADR first* —
+smuggling a schema change into a lesson edit is exactly what ADRs exist to
+prevent.
+
+Also fixed a malformed fill-blank (two blanks, one answer) — warnings 52 → 51.
+
+#### Tooling: `--unverifiable "<reason>"`
+
+Track B solutions are Express routes needing Postgres. The verifier previously
+had two options: fail forever, or lie. It now takes a mandatory reason, records
+`status: "unverifiable"` with it, and still runs everything else — `b7/0001`'s
+2 playgrounds and 5 executable `predict-output` answers all pass. The audit
+prints `n/a` for that lesson rather than counting it as verified.
+
+**Remaining: 15 of the 16 deepenable spine lessons.** At roughly this depth
+each, that is several sessions. Order to work in — thinnest and most
+load-bearing first: `b3/0003` REST design (713), `b4/0003` rate limiting (794),
+`a3/0002` API client (845), `b3/0004` validation (858), `a4/0002` auth context
+(865), `b4/0002` JWT rotation (923), `a10/0001` secure storage (982),
+`b7/0002` (1,126), `b7/0003` (1,139), then the rest.
+
 ### Unit 10 — Phase 1.3, "explain it in your own words" — DONE
 
 One prompt per lesson, all 13 of Module 01. New component

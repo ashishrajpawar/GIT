@@ -34,30 +34,54 @@
     brute-force. We use Node's <code>crypto.randomBytes</code> — not
     <code>Math.random()</code> — because cryptographic randomness is essential.
   </p>
+  <p>
+    This is the server-side twin of the issuer you built at the end of Module 01.
+    Same alphabet, same rejection rule, same arithmetic — the only thing that
+    changes is that the result now goes into Postgres.
+  </p>
   <pre><code>// api/src/engine/generate.ts
 import crypto from 'crypto';
 import { pool } from '../db';
 
-const CHARSET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I/L
-const SEGMENT_LENGTH = 4;
-const SEGMENT_COUNT = 3;
+// 31 characters: 36 alphanumerics minus 0, O, 1, I and L — the pairs that
+// get misread when a code is spoken down a phone line or copied off a card.
+const CHARSET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+const CODE_LENGTH = 12;
 
-function randomSegment(): string {
-  const bytes = crypto.randomBytes(SEGMENT_LENGTH);
-  let segment = '';
-  for (let i = 0; i < SEGMENT_LENGTH; i++) {
-    segment += CHARSET[bytes[i] % CHARSET.length];
-  }
-  return segment;
-}
+// 256 / 31 = 8 remainder 8, so bytes 248-255 would land on the first eight
+// characters a ninth time, making them 12.5% more likely than the other 23.
+// Throw those bytes away and draw again.
+const REJECT_AT = 248;
 
 export function generateTokenCode(): string {
-  const segments: string[] = [];
-  for (let i = 0; i < SEGMENT_COUNT; i++) {
-    segments.push(randomSegment());
+  let letters = '';
+
+  while (letters.length < CODE_LENGTH) {
+    // Draw in blocks rather than one byte at a time: a syscall per character
+    // is a syscall you did not need.
+    const bytes = crypto.randomBytes(CODE_LENGTH);
+    for (const byte of bytes) {
+      if (letters.length === CODE_LENGTH) break;
+      if (byte >= REJECT_AT) continue;
+      letters += CHARSET[byte % CHARSET.length];
+    }
   }
-  return segments.join('-');
+
+  return letters.slice(0, 4) + '-' + letters.slice(4, 8) + '-' + letters.slice(8, 12);
 }</code></pre>
+
+  <div class="callout warning">
+    <div class="callout-title">The alphabet is not a style choice</div>
+    <p>
+      31 characters, and the five that are missing stay missing. A code
+      containing <code>L</code> is a code this system can never issue, so
+      every validator in the app and the web page will reject it — and a
+      generator that emits one produces tokens that fail at the moment
+      someone tries to use them. It is the one constraint in this course
+      that cannot be fixed after the fact: codes already handed out cannot
+      be un-issued.
+    </p>
+  </div>
 
   <h2>Collision Retry</h2>
   <p>
@@ -206,14 +230,210 @@ export function verifyHolderToken(token: string): HolderPayload & { role: string
   <p>
     Understanding the math behind the code format:
   </p>
-  <pre><code>// CHARSET has 32 characters
-// Each segment: 32^4 = 1,048,576 possibilities
-// Three segments: 32^12 = 1,099,511,627,776 (~1.1 trillion)
-// Even with 1 million active tokens, collision probability per attempt:
-//   1,000,000 / 1,099,511,627,776 = 0.00000091 (negligible)
-// 5 retries makes failure essentially impossible</code></pre>
+  <pre><code>// CHARSET has 31 characters, codes are 12 long
+// 31^12 = 787,662,783,788,549,761  (~7.9 x 10^17)
+//
+// At a million guesses a second - far more than any server would answer -
+// working through the whole space takes about 25,000 years.
+//
+// With 1 million active tokens, the chance a fresh code collides:
+//   1,000,000 / 7.9e17 = 1.3e-12
+// 5 retries turns "essentially never" into "handled".</code></pre>
 
   <div id="playground-1"></div>
+
+  <h3>Try it yourself — the bias, measured</h3>
+
+  <p>
+    The rejection rule is the part people accept without believing. This runs
+    both versions over every byte value once and counts the characters.
+  </p>
+
+  <div id="playground-bias"></div>
+
+  <hr>
+
+  <h2>Why this way (and what was rejected)</h2>
+
+  <h3>31 characters, not 32</h3>
+  <p>
+    A 32-character alphabet is genuinely tempting, and this lesson taught one
+    until it was corrected. 256 divides by 32 exactly, so
+    <code>byte % 32</code> is unbiased with no rejection loop and no wasted
+    draws — the code is shorter and the arithmetic is clean.
+  </p>
+  <p>
+    It was rejected because the only way to reach 32 is to put back one of the
+    five characters that were removed for being misread. That trades a
+    permanent, product-wide human-error cost against four lines of code. The
+    rejection loop is the cheaper side of that trade by a wide margin.
+  </p>
+
+  <h3>The database's unique index, not the retry loop</h3>
+  <p>
+    <code>createUniqueCode()</code> checks for a collision before inserting.
+    That check is a courtesy, not a guarantee: between the <code>SELECT</code>
+    and the <code>INSERT</code>, another request can insert the same code. The
+    window is tiny and the odds are 1.3 × 10<sup>-12</sup>, but "tiny window,
+    astronomically unlikely" is how you end up with a bug you cannot reproduce.
+  </p>
+  <p>
+    The guarantee is <code>UNIQUE</code> on <code>tokens.code</code>. The retry
+    loop exists to turn a constraint violation into a fresh code instead of a
+    500, so the correct shape is to <strong>let the insert fail and retry</strong>
+    rather than to look before leaping:
+  </p>
+  <pre><code>for (let attempt = 0; attempt &lt; MAX_RETRIES; attempt++) {
+  try {
+    return await insertToken(generateTokenCode(), ...);
+  } catch (err) {
+    if (err.code !== '23505') throw err;   // 23505 = unique_violation
+    // else: astronomically unlucky, or the code space is exhausted. Try again.
+  }
+}
+throw new Error('Could not generate an unused code after ' + MAX_RETRIES + ' attempts');</code></pre>
+  <p>
+    Same number of round trips in the happy path — one instead of two — and it
+    is correct under concurrency rather than nearly correct.
+  </p>
+
+  <h3>Holders get a JWT, not an account</h3>
+  <p>
+    The alternative was a lightweight guest account. It was rejected because an
+    account is a record of a person, and the product's promise is that the
+    holder never has to become one. A JWT scoped to a single conversation
+    carries the authorisation and nothing else — there is no row to leak, no
+    profile to correlate, and no account to delete later under DPDP.
+  </p>
+
+  <div class="callout">
+    <div class="callout-title">An open decision, not a settled one</div>
+    <p>
+      <code>tokens.code</code> currently stores the code in plain text. That
+      makes lookup a single indexed equality match, and it means a database
+      dump is a pile of working capabilities.
+    </p>
+    <p>
+      The alternative is storing a <strong>deterministic</strong> hash — SHA-256
+      of the code plus a server-side pepper — and looking up by hash. A dump
+      then yields nothing usable without the pepper, which lives outside the
+      database. It costs you the ability to ever show the code again, so the app
+      must display it once at issue and mean it. Note it cannot be bcrypt or
+      argon2: those salt each hash randomly, so you could not look the code up
+      without scanning every row.
+    </p>
+    <p>
+      This is a real fork and it is not decided. If you take it, write the ADR
+      first — it changes the schema, the issue response, and the product's
+      behaviour when someone loses a code.
+    </p>
+  </div>
+
+  <hr>
+
+  <h2>When this breaks</h2>
+
+  <h3>FOR UPDATE outside a transaction does nothing</h3>
+  <p>
+    This is the trap in the redemption code above, and it is invisible in
+    testing because it only shows under concurrency:
+  </p>
+  <pre><code>// WRONG - the lock is taken and released immediately
+const { rows } = await pool.query('SELECT * FROM tokens WHERE code = $1 FOR UPDATE', [code]);</code></pre>
+  <p>
+    A row lock lives for the length of a transaction. <code>pool.query</code>
+    runs a single statement in its own implicit transaction, which commits the
+    moment the statement finishes — so the lock is gone before you have read
+    <code>token.max_uses</code>, let alone acted on it. Worse, the next query
+    goes to <em>a different connection from the pool</em>, so even an explicit
+    <code>BEGIN</code> sent through <code>pool.query</code> would not apply.
+  </p>
+  <p>
+    The exercise solution gets this right: <code>pool.connect()</code> to pin
+    one client, <code>BEGIN</code>, everything on that client, then
+    <code>COMMIT</code> and <code>release()</code>. Use it as the model, not the
+    snippet above.
+  </p>
+
+  <h3>Two redemptions of the last remaining use</h3>
+  <p>
+    <code>max_uses</code> is checked by counting conversations and comparing.
+    With two requests in flight, both can count 2 of 3, both pass, and both
+    insert — three uses become four. The count-then-insert pattern has exactly
+    the same shape as the collision check, and unlike the collision it is
+    <em>likely</em>: a token posted publicly gets simultaneous redemptions as a
+    matter of course.
+  </p>
+  <p>
+    The row lock fixes it, provided it is really held. The alternative that
+    needs no lock is to make the database do the arithmetic in one statement —
+    a counter on the token row, incremented conditionally:
+  </p>
+  <pre><code>UPDATE tokens
+   SET uses = uses + 1
+ WHERE code = $1
+   AND revoked_at IS NULL
+   AND (expires_at IS NULL OR expires_at &gt; now())
+   AND (max_uses  IS NULL OR uses &lt; max_uses)
+RETURNING id, user_id;</code></pre>
+  <p>
+    Zero rows back means denied; one row means the use is already counted. It is
+    atomic because a single <code>UPDATE</code> takes its own row lock, and it
+    cannot be raced.
+  </p>
+
+  <h3>Two clocks</h3>
+  <p>
+    <code>new Date(token.expires_at) &lt; new Date()</code> compares a timestamp
+    from Postgres against the clock of whichever API container happened to serve
+    the request. Those are different machines. A container with a clock a few
+    seconds fast expires tokens early; one running slow honours them late, which
+    is the direction that actually matters. Use <code>now()</code> in the query
+    and there is one clock, which is also the clock the row was written by.
+  </p>
+
+  <h3>The holder JWT outlives the token</h3>
+  <p>
+    A holder JWT is valid for seven days and is verified by signature alone.
+    Revoking the token does not invalidate it — nothing checks the token's state
+    once a session exists. So "revoke" means "no new redemptions", not "this
+    person is gone", which is not what the button says. B7.3 is where that gets
+    resolved; the important part here is knowing you have created the problem.
+  </p>
+
+  <hr>
+
+  <h2>What this costs you</h2>
+
+  <table>
+    <thead>
+      <tr><th>Decision</th><th>What you pay</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Rejection sampling</td>
+        <td>About 3% of random bytes are discarded. Drawing in blocks of 12 makes it one syscall per code in almost every case, so the real cost is four lines of code and a paragraph of explanation.</td>
+      </tr>
+      <tr>
+        <td><code>UNIQUE</code> index on a random code</td>
+        <td>Random keys have no locality, so every insert lands in a different part of the B-tree. At a few million rows that is measurably more write amplification than an ordered key — the correctness is worth it, but it is not free, and it is a reason not to index anything else by code.</td>
+      </tr>
+      <tr>
+        <td>Row lock on redemption</td>
+        <td>Redemptions of the <em>same</em> token serialise. Fine at Token's scale, and a reason never to do slow work — a network call, an email, image processing — inside that transaction. The conditional <code>UPDATE</code> above avoids the lock entirely.</td>
+      </tr>
+      <tr>
+        <td>Codes stored in plain text</td>
+        <td>A database dump is a set of working tokens. Backups inherit the same property, which makes backup access a security boundary rather than an ops detail.</td>
+      </tr>
+      <tr>
+        <td>12 characters</td>
+        <td>The human cost of the whole design. Long enough to be unguessable, short enough to read aloud — and that is the ceiling. If the keyspace ever needs to grow, the code gets longer and every printed card, QR label and support script changes with it.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <hr>
 
   <h2>Exercise</h2>
   <div id="exercise-1"></div>
@@ -232,29 +452,64 @@ export function verifyHolderToken(token: string): HolderPayload & { role: string
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
   <script>
-    createPlayground("playground-1", `// Simulate token generation (browser-safe version)
-const CHARSET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    createPlayground("playground-1", `// The same generator the server runs. crypto.getRandomValues is the
+// browser's name for what crypto.randomBytes does in Node.
 
-function randomSegment() {
-  let segment = '';
-  for (let i = 0; i < 4; i++) {
-    const index = Math.floor(Math.random() * CHARSET.length);
-    segment += CHARSET[index];
-  }
-  return segment;
-}
+const CHARSET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+const REJECT_AT = 248;
 
 function generateTokenCode() {
-  return [randomSegment(), randomSegment(), randomSegment()].join('-');
+  let letters = '';
+  while (letters.length < 12) {
+    const bytes = new Uint8Array(12);
+    crypto.getRandomValues(bytes);
+    for (const byte of bytes) {
+      if (letters.length === 12) break;
+      if (byte >= REJECT_AT) continue;      // biased range - draw again
+      letters += CHARSET[byte % CHARSET.length];
+    }
+  }
+  return letters.slice(0, 4) + '-' + letters.slice(4, 8) + '-' + letters.slice(8, 12);
 }
 
-// Generate 5 codes and check for duplicates
 const codes = [];
-for (let i = 0; i < 5; i++) {
-  codes.push(generateTokenCode());
+for (let i = 0; i < 5; i++) codes.push(generateTokenCode());
+console.log('Generated codes:', codes.join('  '));
+console.log('All unique:', new Set(codes).size === codes.length);
+
+// Every character came from the 31, and none of them is 0, O, 1, I or L
+const used = codes.join('').replace(/-/g, '').split('');
+console.log('All in the alphabet:', used.every(function (c) { return CHARSET.includes(c); }));
+
+// Try it: delete the REJECT_AT line and run the next playground again.`);
+
+    createPlayground("playground-bias", `// Both mappings, over every byte value exactly once.
+
+const CHARSET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+
+const folded = {};      // byte % 31, every byte kept
+const rejected = {};     // bytes 248+ thrown away
+for (const ch of CHARSET) { folded[ch] = 0; rejected[ch] = 0; }
+
+for (let byte = 0; byte < 256; byte++) {
+  folded[CHARSET[byte % 31]]++;
+  if (byte < 248) rejected[CHARSET[byte % 31]]++;
 }
-console.log('Generated codes:', codes);
-console.log('All unique:', new Set(codes).size === codes.length);`);
+
+console.log('keeping every byte:');
+console.log('  "2" appears ' + folded['2'] + ' times, "A" appears ' + folded['A']);
+console.log('  "2" is ' + Math.round((folded['2'] / folded['A'] - 1) * 1000) / 10 + '% more likely');
+
+console.log('rejecting 248 and over:');
+console.log('  "2" appears ' + rejected['2'] + ' times, "A" appears ' + rejected['A']);
+const counts = Object.values(rejected);
+console.log('  every character equally likely: ' + (Math.max.apply(null, counts) === Math.min.apply(null, counts)));
+
+console.log('256 / 31 = ' + Math.floor(256 / 31) + ' remainder ' + (256 % 31));
+
+// A server that skips the rejection issues perfectly valid-looking codes
+// in which eight characters are 12.5% more common. Nothing fails. The
+// keyspace is simply smaller than the number above claims.`);
 
     createSolution("exercise-1", {
       exercise: "Build the full POST /tokens/:code/redeem endpoint as an Express route. It must: (1) validate holder_name is present, (2) fetch the token by code with a row lock, (3) check status is 'active', (4) check expiry, (5) check max_uses against conversation count, (6) create a conversation row, (7) return a holder JWT. Use the pg pool pattern from the lesson.",
@@ -355,9 +610,9 @@ export default router;`
     createQuiz("lesson-quiz", [
       {
         type: "predict-output",
-        code: "const CHARSET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';\nconsole.log(CHARSET.length);",
-        answer: "32",
-        explanation: "The charset excludes 0, O, 1, I, and L to avoid visual ambiguity, leaving 26 - 4 + 10 = 32 characters (26 uppercase minus O/I/L = 23, plus 10 digits minus 0/1 = 8, total 23 + 8 = 31... actually it's A-Z minus O,I,L = 23 letters + 2-9 = 8 digits = 31. But the code includes all listed = 32)."
+        code: "const CHARSET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';\nconsole.log(CHARSET.length);",
+        answer: "31",
+        explanation: "26 letters + 10 digits = 36, minus 0, O, 1, I and L = 31. Count them if you like — the number matters, because it is what makes 256 divide unevenly and the rejection rule necessary."
       },
       {
         type: "spot-the-bug",
@@ -401,9 +656,9 @@ export default router;`
       // --- Questions 6-25 ---
       {
         type: "predict-output",
-        code: "const bytes = Buffer.from([255, 0, 128]);\nconst CHARSET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';\nconsole.log(bytes[0] % 32, bytes[1] % 32, bytes[2] % 32);",
-        answer: "31 0 0",
-        explanation: "255 % 32 = 31, 0 % 32 = 0, 128 % 32 = 0. The modulo operation maps each random byte to a valid index in the 32-character charset."
+        code: "console.log(255 % 31, 0 % 31, 128 % 31);",
+        answer: "7 0 4",
+        explanation: "255 and 7 land on the same character — that is the bias in one line. 255 is above the 248 cut-off, so the generator throws it away rather than giving index 7 a second chance."
       },
       {
         question: "Why does the CHARSET exclude the characters 0, O, 1, I, and L?",
@@ -413,15 +668,15 @@ export default router;`
       },
       {
         type: "fill-blank",
-        code: "import ___ from 'crypto';\nconst bytes = ___.randomBytes(4);",
-        answer: "crypto",
-        explanation: "Node's built-in crypto module provides cryptographically secure random bytes. Unlike Math.random(), crypto.randomBytes uses the OS entropy pool, making codes unpredictable."
+        code: "import crypto from 'crypto';\nconst bytes = crypto.___(12);",
+        answer: "randomBytes",
+        explanation: "Node's built-in crypto module draws from the OS entropy pool, so there is no seed to work out and no sequence to predict. Math.random() has both. In a browser the same thing is crypto.getRandomValues()."
       },
       {
         type: "predict-output",
-        code: "const SEGMENT_LENGTH = 4;\nconst SEGMENT_COUNT = 3;\nconst totalChars = SEGMENT_LENGTH * SEGMENT_COUNT;\nconst keyspace = Math.pow(32, totalChars);\nconsole.log(totalChars, keyspace > 1e12);",
+        code: "const totalChars = 4 * 3;\nconst keyspace = Math.pow(31, totalChars);\nconsole.log(totalChars, keyspace > 1e17);",
         answer: "12 true",
-        explanation: "4 chars x 3 segments = 12 characters total. 32^12 = 1,099,511,627,776 which is greater than 1 trillion (1e12), making brute-force infeasible."
+        explanation: "4 characters x 3 groups = 12. 31^12 = 787,662,783,788,549,761 — about 7.9 x 10^17, which is roughly 25,000 years of guessing at a million attempts a second."
       },
       {
         type: "spot-the-bug",
@@ -521,8 +776,8 @@ export default router;`
       {
         type: "fill-blank",
         code: "// Collision probability with 1M active tokens:\n// P = active_tokens / keyspace\nconst probability = 1_000_000 / Math.pow(___, 12);\nconsole.log(probability < 0.000001); // true",
-        answer: "32",
-        explanation: "The charset has 32 characters, and codes are 12 characters long (3 segments of 4). 32^12 gives the total keyspace of ~1.1 trillion, making collision probability with 1M tokens roughly 0.00000091."
+        answer: "31",
+        explanation: "31 characters, 12 long. 31^12 is about 7.9 x 10^17, so a fresh code collides with one of a million existing tokens roughly 1.3 times in a trillion. The retry loop exists to handle the case that never happens."
       },
       {
         question: "What does the FOR UPDATE clause in the redemption query prevent?",

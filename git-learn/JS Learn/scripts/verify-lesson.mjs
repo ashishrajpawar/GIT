@@ -24,6 +24,25 @@
  *                        that other correct styles pass and each mistake fails
  *                        only the check it should.
  *
+ *   --unverifiable "<reason>"
+ *                        the revealed solution cannot be executed here — it is
+ *                        an Express route needing Postgres, a React Native
+ *                        screen needing a device, a Dockerfile needing a VPS.
+ *                        Section 4 records the reason instead of failing, and
+ *                        the log entry is `unverifiable` rather than
+ *                        `verified`, which is what the audit reports.
+ *
+ *                        Everything else still runs and still fails on error:
+ *                        the inline blocks must parse, the playgrounds must
+ *                        run, and every executable predict-output answer must
+ *                        match. A lesson full of SQL usually still has a dozen
+ *                        checkable claims in it.
+ *
+ *                        The reason is mandatory and it is stored. "Cannot be
+ *                        verified" with no reason is how a lesson nobody ever
+ *                        checked ends up looking the same as one that cannot
+ *                        be checked.
+ *
  * STAGED EXERCISES
  * ----------------
  * A lesson with one exercise names it `createSolution("exercise-…")` and puts
@@ -61,6 +80,13 @@ const args = process.argv.slice(2);
 const lessonArg = args.find((a) => !a.startsWith("--"));
 const wrongIdx = args.indexOf("--wrong");
 const wrongFile = wrongIdx >= 0 ? args[wrongIdx + 1] : null;
+const unverIdx = args.indexOf("--unverifiable");
+const unverifiableReason = unverIdx >= 0 ? args[unverIdx + 1] : null;
+
+if (unverIdx >= 0 && (!unverifiableReason || unverifiableReason.startsWith("--"))) {
+  console.error('--unverifiable needs a reason: --unverifiable "the route needs Postgres"');
+  process.exit(2);
+}
 
 if (!lessonArg) {
   console.error("usage: node scripts/verify-lesson.mjs <lesson.html> [--wrong <cases.mjs>]");
@@ -262,6 +288,7 @@ const stripDemo = (src) =>
 for (const [id, cfg] of Object.entries(solutions)) {
   const pgId = pairFor(id);
   const pg = playgrounds[pgId];
+  if (unverifiableReason) { ok(`${id}: not executed — ${unverifiableReason}`); continue; }
   if (!pg || !pg.code.includes(MARKER)) { fail(`${id}: no self-check found in ${pgId}`); continue; }
   const selfCheck = pg.code.split(MARKER)[1];
   const impl = stripDemo(cfg.solution);
@@ -324,7 +351,8 @@ const lessonId = path.relative(ROOT, lessonPath).split(path.sep).join("/");
 
 if (failures) delete log[lessonId];
 else log[lessonId] = {
-  status: "verified",
+  status: unverifiableReason ? "unverifiable" : "verified",
+  reason: unverifiableReason || undefined,
   at: new Date().toISOString().slice(0, 10),
   solutions: Object.keys(solutions).length,
   playgrounds: Object.keys(playgrounds).length,
@@ -334,5 +362,10 @@ else log[lessonId] = {
 const ordered = Object.fromEntries(Object.keys(log).sort().map((k) => [k, log[k]]));
 fs.writeFileSync(LOG_PATH, JSON.stringify(ordered, null, 2) + "\n");
 
-console.log(`\n${failures ? `FAIL — ${failures} problem(s)` : "OK — lesson verified"}\n`);
+const verdict = failures
+  ? `FAIL — ${failures} problem(s)`
+  : unverifiableReason
+    ? `OK — everything runnable checked; solution recorded UNVERIFIABLE (${unverifiableReason})`
+    : "OK — lesson verified";
+console.log(`\n${verdict}\n`);
 process.exit(failures ? 1 : 0);

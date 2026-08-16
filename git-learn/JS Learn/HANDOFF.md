@@ -832,6 +832,87 @@ All 13 lessons re-verified afterwards; the audit is unchanged.
 retrofit, written against the lesson as it will be rather than the pre-pivot
 version — otherwise they get written twice.
 
+### Session of 2026-08-16 — Phase 2 opens, and the server was using the wrong alphabet
+
+Phase 2 is "deepen the ~20 spine lessons". The assessment that precedes it
+found something worth more than the deepening.
+
+#### The defect
+
+`b7/0001` — the lesson that builds the server-side code generator — taught:
+
+```
+const CHARSET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I/L
+```
+
+The comment is false. The literal contains **L** and is 32 characters. The same
+literal was in `a2/0001` and `b3/0001`. Module 01, `a5/0001` and `a5/0002` all
+use the canonical 31 — so **the server generated codes the client rejects**.
+
+This is the `MERC-8GH2-LP4X` failure one level up. That was one bad example
+code; this was a bad *generator*, producing an unlimited supply of them.
+
+The arithmetic was wrong with it: the lesson claimed 32<sup>12</sup> ≈ 1.1
+trillion. 32<sup>12</sup> is 1.15 × 10<sup>18</sup>; 1.1 trillion is
+32<sup>8</sup>. The correct figure for the real alphabet is 31<sup>12</sup> =
+787,662,783,788,549,761. Four quiz keys were derived from the wrong number.
+
+**The audit now checks alphabets, not just codes**, as an error, with an
+`audit-allow-alphabet` opt-out for deliberate counter-examples. The check that
+existed could only catch a wrong code — which is why this survived: no example
+code in the lesson was wrong, because the lesson never printed one.
+
+#### Why 32 was tempting
+
+Worth recording, because it is now the "what was rejected" paragraph in the
+lesson rather than a silent bug: 256 divides evenly by 32, so `byte % 32` needs
+no rejection sampling at all. The only way to get to 32 characters is to put an
+ambiguous one back. Four lines of rejection loop against a permanent human-error
+cost is not a close call — but it explains how someone got there.
+
+#### What was deepened
+
+`b7/0001`, 709 → 2,190 words. The three sections are load-bearing, and the
+sharpest is in **When this breaks**: the lesson's own body used
+
+```
+await pool.query('SELECT * FROM tokens WHERE code = $1 FOR UPDATE', [code]);
+```
+
+A row lock lives as long as its transaction. `pool.query` runs one statement in
+an implicit transaction that commits immediately, so the lock is released before
+the next line reads `max_uses` — and the next query comes from a different
+pooled connection anyway. The lesson shipped that while its own exercise
+solution did `connect()` / `BEGIN` / `COMMIT` correctly. Both are now in the
+lesson, one as the trap and one as the model.
+
+The other correction of substance: `createUniqueCode()` does SELECT-then-INSERT,
+which is a TOCTOU race. The guarantee is the `UNIQUE` index; the correct shape
+is insert-and-catch `23505`, which is also one round trip instead of two.
+
+#### An open decision, deliberately not taken
+
+Whether `tokens.code` should store a deterministic peppered hash instead of the
+code. Written into the lesson as a fork with its real costs — the code can never
+be displayed again, and bcrypt/argon2 are impossible because random salts make
+lookup impossible — and marked *ADR first*. A schema change smuggled in as a
+lesson edit is precisely what the ADR rule exists to stop.
+
+#### Tooling: `--unverifiable "<reason>"`
+
+Track B solutions need Postgres. The verifier could previously only fail or lie.
+It now takes a mandatory reason, records `status: "unverifiable"` in the log,
+and still runs everything else — parse, playgrounds, executable predict-output.
+The audit prints `n/a` rather than counting the lesson verified.
+
+#### Scope note for whoever continues
+
+Four of the twenty must **not** be deepened yet: `b2/0001`, `b2/0003`,
+`b5/0001`, `b5/0002` are marked REWRITE in the revised sequence (E2EE for B2,
+multi-node Redis for B5), and C5 has not been written. Deepening them is work
+that gets thrown away. Fifteen of the remaining sixteen are still to do;
+`SESSION.md` carries the suggested order, thinnest and most load-bearing first.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees

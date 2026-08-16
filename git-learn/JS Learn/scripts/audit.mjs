@@ -311,6 +311,46 @@ for (const file of [...lessonFiles, ...walk(ROOT).filter((p) => p.endsWith(".md"
 for (const [t, files] of badTokens)
   warn(`token: "${t}" uses characters excluded from the alphabet (${[...files].length} file(s))`);
 
+/* The check above catches a bad *code*. It cannot catch a bad *alphabet* — and
+   an alphabet defect is worse, because it generates an unlimited supply of bad
+   codes rather than one wrong example. Three lessons taught
+   `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` as "no 0/O/1/I/L" while including L, so
+   the server generated codes the client's validator rejects.
+
+   Anything that looks like a code alphabet — a long unbroken run of A-Z0-9 in
+   a string literal — must be the canonical one. This is an ERROR, not a
+   warning: the alphabet is the one constraint in CLAUDE.md that cannot be
+   fixed retroactively for codes already issued. */
+const alphabetOffenders = new Map();
+for (const file of lessonFiles) {
+  if (isLegacy(file)) continue;
+  const html = read(file);
+  /* A lesson that shows a wrong alphabet on purpose — to teach why L is not in
+     it — is doing the right thing. Marking the file opts it out, so a genuine
+     counter-example never trains anyone to ignore this check. */
+  if (html.includes("audit-allow-alphabet")) continue;
+  for (const m of html.matchAll(/['"`]([A-Z0-9]{20,})['"`]/g)) {
+    const literal = m[1];
+    if (literal === TOKEN_ALPHABET) continue;
+    /* A token alphabet contains digits. Without this, the plain English
+       A-Z — pasted into a maxLength question in 02/0004 — reads as one. */
+    if (!/[0-9]/.test(literal)) continue;
+    // Only judge strings that are plausibly an alphabet: mostly the canonical
+    // characters, in ascending runs. A base64 blob or a hash is neither.
+    const shared = [...new Set(literal)].filter((c) => TOKEN_ALPHABET.includes(c)).length;
+    if (shared < 20) continue;
+    const excluded = [...new Set(literal)].filter((c) => "0O1IL".includes(c));
+    if (!alphabetOffenders.has(literal)) alphabetOffenders.set(literal, { files: new Set(), excluded });
+    alphabetOffenders.get(literal).files.add(rel(file));
+  }
+}
+for (const [literal, { files, excluded }] of alphabetOffenders) {
+  const why = excluded.length
+    ? `includes ${excluded.join(", ")}, which the alphabet excludes`
+    : `is ${literal.length} characters, not ${TOKEN_ALPHABET.length}`;
+  err(`alphabet: "${literal}" ${why} — ${[...files].join(", ")}`);
+}
+
 // ---------------------------------------------------------------- report
 
 const track = lessons.filter((l) => !l.legacy);

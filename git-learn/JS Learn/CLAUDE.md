@@ -91,6 +91,16 @@ Note ~15 other example tokens still contain excluded characters. Some are
 accidental; some look like deliberate negative fixtures. See `COURSE-REVIEW.md`
 §12.5 — do not bulk-rewrite them without reading each in context.
 
+**The audit now guards the alphabet itself, not just example codes.** Three
+lessons — including `b7/0001`, the server that actually generates codes —
+taught `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` and commented it "no 0/O/1/I/L"
+while including **L**. A wrong example code is one bad code; a wrong alphabet
+is an unlimited supply of them, and the server was emitting codes the client's
+validator rejects. Any string literal of 20+ `A-Z0-9` characters that looks
+like an alphabet must now equal the canonical one, or the audit **errors**.
+A lesson that shows a wrong alphabet deliberately opts out by containing the
+string `audit-allow-alphabet`.
+
 ### Token repo layout (one git repo, four folders)
 ```
 token/
@@ -595,6 +605,19 @@ A passing run records itself in `scripts/verification-log.json`, which is where
 the audit's "Verified" column comes from; a failing run deletes the entry. The
 file is **generated** — never hand-edit it, and never claim a lesson is verified
 without running the verifier over it.
+
+**Lessons whose solution cannot run here** — an Express route needing Postgres,
+a React Native screen needing a device, a Dockerfile needing a VPS — take
+`--unverifiable "<reason>"`. The reason is mandatory and stored, and the log
+entry becomes `unverifiable` (the audit prints `n/a`) rather than `verified`.
+Everything else still runs and still fails: blocks must parse, playgrounds must
+run, executable `predict-output` answers must match. A lesson full of SQL
+usually still has a dozen checkable claims in it.
+
+```bash
+node scripts/verify-lesson.mjs modules/b7-token-engine/0001-token-generation-redemption.html \
+     --unverifiable "the revealed solution is an Express route needing Postgres"
+```
 
 **Staged exercises** — a page that builds one program in several steps names its
 exercises `exercise-<stage>` and their self-checks `pg-exercise-<stage>`

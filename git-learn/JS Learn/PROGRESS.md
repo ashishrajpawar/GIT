@@ -14,13 +14,13 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1481 words |
+| Avg teaching prose per track lesson | 1497 words |
 | Lessons with a playground | 54 / 96 |
 | Lessons with an exercise | 82 / 96 |
-| **Deepened** (all 3 spine sections) | 0 / 96 |
+| **Deepened** (all 3 spine sections) | 1 / 96 |
 | **Verified** (code executed) | 13 / 96 |
 | Errors | 3 |
-| Warnings | 52 |
+| Warnings | 51 |
 
 Student-completed lessons are **not** tracked here — that comes from the student
 or from `progress.js` localStorage, and is never inferred from the files.
@@ -66,7 +66,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | 02-react-native | 14 | 2311 | 0 | 0 | 355 | 0/14 | 0/14 |
 | a10-device-security | 2 | 1277 | 2 | 2 | 50 | 0/2 | 0/2 |
 | a11-polish-publish | 5 | 1229 | 0 | 5 | 125 | 0/5 | 0/5 |
-| a2-typescript | 3 | 716 | 2 | 3 | 76 | 0/3 | 0/3 |
+| a2-typescript | 3 | 727 | 2 | 3 | 76 | 0/3 | 0/3 |
 | a3-api-consumption | 4 | 774 | 1 | 4 | 111 | 0/4 | 0/4 |
 | a4-auth-client | 3 | 879 | 0 | 3 | 80 | 0/3 | 0/3 |
 | a5-core-token-features | 5 | 1690 | 5 | 5 | 148 | 0/5 | 0/5 |
@@ -77,11 +77,11 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b1-sql-fundamentals | 4 | 905 | 0 | 4 | 103 | 0/4 | 0/4 |
 | b10-security-compliance | 2 | 1831 | 2 | 2 | 50 | 0/2 | 0/2 |
 | b2-schema-design | 3 | 1032 | 0 | 3 | 81 | 0/3 | 0/3 |
-| b3-node-http-server | 4 | 816 | 1 | 4 | 117 | 0/4 | 0/4 |
+| b3-node-http-server | 4 | 822 | 1 | 4 | 117 | 0/4 | 0/4 |
 | b4-auth-server | 3 | 874 | 0 | 3 | 81 | 0/3 | 0/3 |
 | b5-websocket-server | 3 | 1427 | 3 | 3 | 77 | 0/3 | 0/3 |
 | b6-webrtc-signalling | 2 | 1381 | 2 | 2 | 52 | 0/2 | 0/2 |
-| b7-token-engine | 3 | 991 | 3 | 3 | 77 | 0/3 | 0/3 |
+| b7-token-engine | 3 | 1485 | 4 | 3 | 77 | 1/3 | 0/3 |
 | b8-push-notifications | 1 | 1206 | 1 | 1 | 25 | 0/1 | 0/1 |
 | b9-docker-deployment | 3 | 1389 | 3 | 3 | 77 | 0/3 | 0/3 |
 | x1-git-dev-environment | 3 | 698 | 1 | 3 | 76 | 0/3 | 0/3 |
@@ -104,7 +104,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 - schema: table "deletion_queue" is queried in 1 lesson(s) but never created
 - schema: table "calls" is queried in 2 lesson(s) but never created
 
-## Warnings (52)
+## Warnings (51)
 
 - modules/02-react-native/0002-core-components.html q7: 3 blanks but one answer
 - modules/02-react-native/0002-core-components.html q27: 3 blanks but one answer
@@ -132,7 +132,6 @@ or from `progress.js` localStorage, and is never inferred from the files.
 - modules/b4-auth-server/0001-password-hashing-registration.html q7: 2 blanks but one answer
 - modules/b4-auth-server/0003-rate-limiting.html q2: 2 blanks but one answer
 - modules/b6-webrtc-signalling/0002-coturn-setup.html q18: 3 blanks but one answer
-- modules/b7-token-engine/0001-token-generation-redemption.html q7: 2 blanks but one answer
 - link (legacy): modules/07-store-compliance-and-safety/0005-data-export-and-terms.html -> ./privacy-policy.html
 - token: "UTIL-4KQ9-ZT7M" uses characters excluded from the alphabet (3 file(s))
 - token: "DELI-2XN5-QW8R" uses characters excluded from the alphabet (3 file(s))
@@ -146,7 +145,8 @@ or from `progress.js` localStorage, and is never inferred from the files.
 - token: "CAFE-2KL7" uses characters excluded from the alphabet (3 file(s))
 - token: "MERC-11AB" uses characters excluded from the alphabet (2 file(s))
 - token: "DELI-9XK2" uses characters excluded from the alphabet (2 file(s))
-- …and 12 more
+- token: "SHOP-2AX4" uses characters excluded from the alphabet (2 file(s))
+- …and 11 more
 
 ## Per-lesson detail
 
@@ -186,7 +186,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a11-polish-publish/0003-forms-validation.html | 1340 | 9 | 0 | 1 | 25 | — | — |
 | a11-polish-publish/0004-environment-config.html | 904 | 13 | 0 | 1 | 25 | — | — |
 | a11-polish-publish/0005-store-submission.html | 1227 | 9 | 0 | 1 | 25 | — | — |
-| a2-typescript/0001-types-and-interfaces.html | 699 | 9 | 1 | 1 | 26 | — | — |
+| a2-typescript/0001-types-and-interfaces.html | 733 | 9 | 1 | 1 | 26 | — | — |
 | a2-typescript/0002-generics-utility-types.html | 702 | 11 | 1 | 1 | 25 | — | — |
 | a2-typescript/0003-typescript-react-native.html | 747 | 9 | 0 | 1 | 25 | — | — |
 | a3-api-consumption/0001-fetch-http-fundamentals.html | 616 | 8 | 1 | 1 | 29 | — | — |
@@ -224,7 +224,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b2-schema-design/0001-token-schema.html | 1090 | 8 | 0 | 1 | 26 | — | — |
 | b2-schema-design/0002-messaging-schema.html | 1075 | 8 | 0 | 1 | 26 | — | — |
 | b2-schema-design/0003-migrations.html | 932 | 11 | 0 | 1 | 29 | — | — |
-| b3-node-http-server/0001-nodejs-fundamentals.html | 781 | 10 | 1 | 1 | 29 | — | — |
+| b3-node-http-server/0001-nodejs-fundamentals.html | 806 | 10 | 1 | 1 | 29 | — | — |
 | b3-node-http-server/0002-express-fastify-setup.html | 912 | 13 | 0 | 1 | 30 | — | — |
 | b3-node-http-server/0003-rest-api-design.html | 713 | 7 | 0 | 1 | 28 | — | — |
 | b3-node-http-server/0004-input-validation-error-handling.html | 858 | 8 | 0 | 1 | 30 | — | — |
@@ -236,7 +236,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b5-websocket-server/0003-presence-typing.html | 1424 | 9 | 1 | 1 | 26 | — | — |
 | b6-webrtc-signalling/0001-signalling-server.html | 1616 | 8 | 1 | 1 | 26 | — | — |
 | b6-webrtc-signalling/0002-coturn-setup.html | 1145 | 9 | 1 | 1 | 26 | — | — |
-| b7-token-engine/0001-token-generation-redemption.html | 709 | 6 | 1 | 1 | 25 | — | — |
+| b7-token-engine/0001-token-generation-redemption.html | 2190 | 9 | 2 | 1 | 25 | yes | n/a |
 | b7-token-engine/0002-access-rules-engine.html | 1126 | 7 | 1 | 1 | 26 | — | — |
 | b7-token-engine/0003-revocation-pause.html | 1139 | 8 | 1 | 1 | 26 | — | — |
 | b8-push-notifications/0001-fcm-apns-expo.html | 1206 | 11 | 1 | 1 | 25 | — | — |
