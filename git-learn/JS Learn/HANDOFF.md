@@ -941,6 +941,103 @@ multi-node Redis for B5), and C5 has not been written. Deepening them is work
 that gets thrown away. Fifteen of the remaining sixteen are still to do;
 `SESSION.md` carries the suggested order, thinnest and most load-bearing first.
 
+### Session of 2026-08-16 — Phase 2 finished: 16 spine lessons
+
+The opening entry above covers `b7/0001` and the alphabet. This covers the
+other fifteen and, more usefully, what they had in common.
+
+#### The finding that matters more than any individual fix
+
+**Almost every serious defect lived in the seam between two lessons, not
+inside one.** Each lesson was internally consistent and looked correct in
+isolation. The bugs were disagreements:
+
+| Lesson A said | Lesson B said | Consequence |
+|---|---|---|
+| `b7/0001` generated from a 32-char alphabet with `L` | `a5/0001` validated against the canonical 31 | Server issued codes the client rejects |
+| `b3/0003` routed `/tokens/:id` | `a3/0002` built `/tokens/${code}` | Codes back into access logs |
+| `b4/0002` rotated refresh tokens | `a3/0002` refreshed once per 401 | Six concurrent 401s logged the user out |
+| `b7/0002` reads `rule.start_time` | `a5/0004` writes `rule.start` | Time windows silently do nothing |
+| `b7/0001`, `b7/0002` use `revoked_at` | `b7/0003` used a `status` enum | Two models of the same state |
+| `b4/0002`, `a4/0002` say access token in memory | `a10/0001` stored it in SecureStore | An extra copy to steal |
+| `a5/0001` called modulo bias "acceptable" | capstone and `b7/0001` reject it | A lesson arguing against the fix |
+
+None of these is findable by reading one file carefully. They surfaced because
+the lessons were deepened **in dependency order**, so each one was read with
+the previous one's decisions still in mind. That is the method worth keeping,
+not the individual corrections.
+
+#### Recurring defect families
+
+- **Node-local state that ADR-0003 forbids** — `b7/0003`'s socket registry and
+  `b6/0001`'s call registry were both process-local `Map`s. Both report success
+  while doing nothing when the other party is on a different replica: revoke
+  answers 200 and the conversation stays live; a call never rings. Works
+  perfectly on one box, fails silently on two.
+- **Authorisation checked once, at the door** — redemption checks token state;
+  the message path (`b7/0002`) and the call path (`b6/0001`) did not. Revoking
+  a token stopped new redemptions and nothing else. Generalised into the
+  lessons as: *every path that lets a holder reach the user is an
+  authorisation point.*
+- **Count-then-act races** — `max_uses` in `b7/0001`, contact limits in
+  `b7/0002`, failed logins in `b4/0003`. Same shape three times, and `b7/0002`
+  carried the comment "correctness matters more than speed here" directly above
+  the racy version.
+- **Enumeration oracles** — `b3/0003` returned 403 for another user's token,
+  `b4/0003` said "account locked" and leaked existence by response timing.
+- **`maxUses: 0`** appeared in four lessons. 0 is a token nobody can use;
+  `null` is unlimited.
+- **Premise-in-comment quiz questions** — about a dozen, all invisible until
+  the verifier ran over a Track B lesson for the first time.
+
+#### The ADR-0007 thread
+
+The one decision taken during this phase, and it propagated further than
+expected. Token codes are stored as `code_hash` (lookup) and `code_enc`
+(display), never in the clear. Everything downstream followed:
+
+`b7/0001` lookups and the reveal endpoint → `b3/0003` taking codes out of URLs
+so the proxy log does not undo it → `a3/0002` building those URLs → `b9/0002`
+the two secrets as required env vars, validated at startup, and a backup story
+where the dump and the keys must be recoverable together and stored apart →
+`b10/0001` the culmination: after all that, one `logger.info({ body: req.body })`
+puts the code in a plain-text file. **The body became the sensitive part
+precisely because we moved the code there.**
+
+#### Tooling
+
+`--unverifiable "<reason>"` was added in the first unit and used by all
+sixteen: Track B solutions need Postgres, so the verifier previously could only
+fail forever or lie. Everything else still runs — and did catch real breakage
+twice, including two escaping failures I introduced with scripted edits.
+
+Two `predict-output` questions asserted browser console formatting
+(`[false, true, true]`, `Set(0) {}`) that the verifier disagrees with. Rewritten
+to print unambiguous values rather than papered over — how a host renders a
+`Set` is trivia about the host.
+
+#### Deliberately not done
+
+- **`b2/0001`, `b2/0003`, `b5/0001`, `b5/0002`** — marked REWRITE in the
+  revised sequence. Deepening work scheduled for deletion is work thrown away.
+- **Three contradictions recorded for the B2 rewrite** rather than invented
+  here: the `calls`, `participants` and `deletion_queue` orphan tables; whether
+  a holder is a row in `users` (`b6/0001` assumes yes, `b7/0001` says never);
+  and `access_rules` rows versus `tokens.rules` JSONB (`a5/0004` versus
+  `b7/0002`). Guessing at any of them would give B2 something wrong to be
+  consistent with.
+- **Row-level security.** Every ownership check in the course is
+  `WHERE user_id = $2` — a habit, not a mechanism. One query written without it
+  is a silent access-control bug. Named in `b10/0001`; the fix belongs to B2.
+
+#### Where this leaves the course
+
+`PROGRESS.md` has the numbers. Phase 1 has one item left (1.5, Module 02's
+retrofit, deliberately just-in-time), Phase 2 is done, and Phase 3 is the ten
+new modules — also just-in-time. The student is on lesson 5 or 6 of Module 01,
+so nothing above is anywhere near them yet; it is groundwork that stops being
+cheap to lay once lessons are being studied.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees

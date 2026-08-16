@@ -26,742 +26,53 @@ one or two lessons at a time, never batched ahead.
 | `01/0011-modern-javascript-es6` | done |
 | `01/0012-error-handling` | done — **Module 01 and Phase 1.1 complete** |
 
-### Unit 11 — Phase 2 begins: the spine, and a wrong alphabet — IN PROGRESS
-
-Phase 2 is 20 spine lessons × 3 sections (**Why this way / When this breaks /
-What this costs you**) plus verifying their code. This unit did the assessment,
-one lesson, and the systemic defect the assessment turned up.
-
-#### Four of the 20 should not be deepened yet
-
-`TOKEN-TRACK.md`'s revised sequence marks **B2 (schema) and B5 (WebSocket) as
-REWRITES** — B2 for ciphertext and partitioning, B5 for multi-node and Redis.
-That is `b2/0001`, `b2/0003`, `b5/0001`, `b5/0002`. Deepening a lesson that is
-scheduled to be rewritten is work thrown away, and C5 (E2EE, which must precede
-B2) is not written yet. **Deepenable set: 16.**
-
-#### The alphabet was wrong in three lessons
-
-Found by reading `b7/0001` rather than its word count. It taught:
-
-```
-const CHARSET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I/L
-```
-
-That comment is false — the string contains **L**, and it is 32 characters,
-not 31. `a2/0001` and `b3/0001` carried the same literal. Meanwhile `a5/0001`,
-`a5/0002` and all of Module 01 use the canonical 31, so **the server generated
-codes the client's own validator rejects.**
-
-The keyspace arithmetic was wrong too, and not by a little: the lesson claimed
-32<sup>12</sup> = 1,099,511,627,776 (~1.1 trillion). That is 32<sup>8</sup>.
-The real figure is 31<sup>12</sup> = 787,662,783,788,549,761 — about
-7.9 × 10<sup>17</sup>, six orders of magnitude out, and four quiz keys were
-built on the wrong number.
-
-**Why 32 was tempting, and why it loses:** 256 divides evenly by 32, so
-`byte % 32` needs no rejection sampling. The only way to reach 32 is to put an
-ambiguous character back. That is now written into the lesson as the rejected
-alternative rather than left as a silent bug.
-
-**The audit now guards alphabets, not just codes** — any 20+ character
-`A-Z0-9` literal that looks like an alphabet must equal the canonical one, as
-an **error**. Escape hatch `audit-allow-alphabet` for a deliberate
-counter-example, so a legitimate teaching case never trains anyone to ignore
-the check. One false positive found and excluded on the way: the plain English
-A–Z pasted into a `maxLength` question in `02/0004`; a token alphabet has
-digits in it.
-
-#### `b7/0001` deepened — 709 → 2,190 words
-
-The three sections carry real material, not padding:
-
-- **Why this way** — 31 vs 32; the unique index rather than the retry loop as
-  the actual collision guarantee (check-then-insert is a TOCTOU race, so the
-  correct shape is insert-and-catch `23505`); holder JWT rather than a guest
-  account.
-- **When this breaks** — `FOR UPDATE` through `pool.query()` **does nothing**,
-  because the lock dies with the implicit single-statement transaction and the
-  next query is a different pooled connection. The lesson body shipped that
-  bug while its own exercise solution did it correctly. Plus the
-  count-then-insert race on `max_uses`, which unlike a code collision is
-  *likely*; two clocks; and the holder JWT outliving revocation.
-- **What this costs you** — a table: rejection sampling, random-key index
-  write amplification, redemptions of one token serialising under the row
-  lock, plaintext codes making a database dump a set of working capabilities,
-  and 12 characters being the human ceiling.
-
-**The open decision was put to the student and taken: ADR-0007.** `tokens`
-stores `code_hash` (SHA-256 of the normalised code plus a server-side pepper,
-indexed, for lookup) and `code_enc` (AES-256-GCM, decrypted only when the owner
-asks to see one token). The bare code is never stored.
-
-Hash-only was the other serious option and lost on **product** grounds, not
-security ones — it makes re-showing a code or its QR impossible forever. It
-stays right for anything nobody needs to see twice, which is why refresh tokens
-should use it.
-
-The lesson's code paths were rewritten to match, because prose teaching one
-thing while the samples do another is the drift this project exists to stop:
-`codeStore.ts` helpers, insert-and-catch-`23505` instead of check-then-insert,
-every lookup on `code_hash`, and a `GET /tokens/:id/code` reveal endpoint —
-one token, its owner, logged, never a list. Four quiz fixtures updated with it.
-709 → 3,021 words.
-
-**Cost written into the ADR and the deployment follow-on:** the pepper and key
-become critical operational state. Lose them and every token is dead. They go
-in the disaster-recovery plan, backed up somewhere the database backups are
-not. Rotating the pepper rewrites every row — possible only because the
-plaintext stays recoverable.
-
-Also fixed a malformed fill-blank (two blanks, one answer) — warnings 52 → 51.
-
-#### Tooling: `--unverifiable "<reason>"`
-
-Track B solutions are Express routes needing Postgres. The verifier previously
-had two options: fail forever, or lie. It now takes a mandatory reason, records
-`status: "unverifiable"` with it, and still runs everything else — `b7/0001`'s
-2 playgrounds and 5 executable `predict-output` answers all pass. The audit
-prints `n/a` for that lesson rather than counting it as verified.
-
-**Student decided the pace: full depth on all 15 remaining.** Order — thinnest
-and most load-bearing first: ~~`b3/0003` REST design~~ **done**, ~~`b4/0003`
-rate limiting~~ **done**, ~~`a3/0002` API client~~ **done**, ~~`b3/0004`
-validation~~ **done**, ~~`a4/0002` auth context~~ **done**,
-~~`b4/0002` JWT rotation~~ **done**, ~~`a10/0001` secure
-storage~~ **done**, `b7/0002` (1,126), `b7/0003` (1,139), then `b9/0002`, `b6/0001`,
-`b9/0001`, `b10/0001`, `a5/0001`, `a5/0004`.
-
-#### `b3/0003` REST design — done, 713 → 2,091 words
-
-The deepening turned up a design defect, not just thinness. Every owner-facing
-endpoint addressed tokens as `/api/tokens/:code`.
-
-**A URL is the least private part of a request.** The path is written down by
-the reverse proxy's access log, browser history, the `Referer` header sent to
-whatever the next page loads, crash reporters and APM traces (which capture
-URLs by default and bodies almost never), and any CDN in front. Bodies get none
-of that. So ADR-0007's care — never storing the code in the database — would
-have been undone one layer up by nginx writing it to disk in plain text.
-
-Owner endpoints now take `:id`. Redemption takes the code in a **POST body**;
-the holder has nothing else to identify themselves with, and the redemption
-*page* is still `tokn.app/t/CODE` because a person has to type it — it reads
-the code from the path and sends it onward in a body.
-
-Three more corrections of substance:
-
-- **`403` on someone else's token is an enumeration oracle.** The lesson had
-  `if (!token) 404; if (token.user_id !== me) 403;` — so any account could walk
-  ids and learn which are real. Fixed by scoping the query with
-  `AND user_id = $2` and returning 404 for both. A resource you may not see
-  does not exist.
-- **`DELETE` → `POST /revoke`.** Revocation keeps the row and records every
-  later attempt against it; a verb meaning "remove this" invites someone to
-  implement the removal it promises. It also sits consistently with
-  `/pause` and `/resume`.
-- **The exercise generated codes with `randomBytes(9).toString('base64url')
-  .toUpperCase()`** — which yields `0`, `O`, `1`, `I`, `L`, underscores and
-  stray hyphens. Every code it produced was one the system rejects. Now imports
-  B7's generator. The new alphabet guard could not catch this one: there is no
-  alphabet literal to check, which is worth knowing about the guard's reach.
-
-Also documented: `JSON.parse` on a client-supplied cursor turns `?cursor=hello`
-into a **500** rather than a 400, and `{"id":"abc"}` into a Postgres error;
-`COALESCE` in PATCH cannot distinguish "field absent" from "set to null", so
-clearing an expiry silently does nothing. The solution now uses
-`'label' in req.body`.
-
-#### `b4/0003` rate limiting — done, 794 → 2,314 words
-
-Three defects, one of which the quiz was actively teaching as correct.
-
-**The limiter key was `${req.ip}:${req.body.email}`, described as "IP + email
-so we cover both". It covers neither** — the attacker supplies both halves.
-Vary the email and one host works through many accounts five at a time; vary
-the IP and a botnet works on one account. Replaced with **two independent
-limiters**, both of which must pass: one keyed by IP alone, one by the account
-alone. Then there is nothing left to vary. The quiz question that taught the
-composite key as the fix was rewritten — it had the reasoning backwards.
-
-**The in-memory store contradicted ADR-0003.** Redis was a commented-out
-"production consideration"; with N replicas, five attempts is five per replica,
-and a deploy resets every counter. Now Redis-backed, with the ADR named.
-
-**Login leaked account existence twice**, and fixing the message does not fix
-the second one. "Account locked, try again after 14:32" confirms the email is
-registered — obvious. Less obvious: `if (!user) throw` returns in a
-millisecond while a real account spends ~100ms in argon2, so **the clock
-answers the question the message refused to.** Now one message for every
-failure and a dummy-hash verification when there is no user, so both paths
-cost the same. Also made the failure counter atomic — read-then-write loses
-increments exactly when attempts overlap, which is the case it exists for.
-
-Two things worth keeping from the new sections:
-
-- **CGNAT is not an edge case for this product.** Indian mobile networks put
-  thousands of subscribers behind one address. An IP limit of 5/15min locks out
-  a neighbourhood because one person mistyped. Hence IP loose (20) and account
-  strict (5) — the account limiter carries the security, the IP limiter is a
-  coarse net.
-- **`trust proxy` breaks in both directions.** Unset, everyone shares the
-  proxy's bucket and the fifth failed login anywhere locks out the world. Set
-  to `true`, a client can forge `X-Forwarded-For` and mint unlimited buckets.
-  `1` means "exactly one proxy in front of me".
-
-Also recorded as a real decision rather than a default: **if Redis is down,
-auth fails closed and the general API limiter fails open** — refusing all
-traffic to protect capacity is just the outage arriving sooner.
-
-**Five pre-existing broken quiz questions surfaced**, all the premise-in-comment
-pattern SESSION.md already warned about: comment-only code with a prose answer,
-so they print nothing. Two became multiple-choice, three became runnable. They
-were invisible until the verifier ran over this lesson for the first time.
-
-#### `a3/0002` API client — done, 845 → 2,164 words
-
-The client is the other half of B3.3 and B4.3, and it was undoing both.
-
-**The single worst bug in the four lessons so far: the refresh stampede.** The
-obvious `onUnauthorized: () => refresh()` means six simultaneous 401s trigger
-six refreshes with the same refresh token. Rotation (B4.2) invalidates the
-old one as soon as the first succeeds, so the other five present a revoked
-token — and any rotation scheme worth having treats that as theft and kills
-the session. **The user is logged out by opening a screen that loads six
-things.** Fixed with a single shared in-flight promise; the quiz question is
-now runnable and prints `1` versus `6`.
-
-Three more, all of which only show on a real network:
-
-- **No timeout.** `fetch` has no default one, so a phone that switches from
-  wifi to mobile mid-request leaves a promise that never settles — no error to
-  catch, and every spinner in the app waiting on it. Now `AbortController` at
-  15s, chosen for Indian mobile networks: long enough for a slow 3G handshake,
-  short enough to answer while the user is still holding the phone.
-- **`response.json()` on everything.** A restarting container gets an HTML
-  error page from Coolify's proxy, so the user saw `Unexpected token <` and
-  the actual 502 never reached the screen. Now checks `content-type` first.
-- **429 ignored.** A screen that retries against a rate-limited endpoint
-  extends its own lockout. `ApiError` now carries `retryable` and
-  `retryAfterSeconds` from `RateLimit-Reset`, so the UI can count down.
-
-Endpoints moved from `/tokens/${code}` to `/tokens/${id}`, `revokeToken` from
-DELETE to POST, and `revealCode(id)` added — the client is where 30 screens
-get their URLs, so B3.3's decision lives or dies here.
-
-**`retryable` is deliberately a hint to the screen, not a licence for the
-client to retry.** A timeout means "no answer", not "it did not happen" — the
-request may have created a token whose response was lost. Auto-retrying a POST
-gives the user two tokens, one of whose codes they will never see.
-
-Also flagged rather than fixed: the web config reads the access token from
-`sessionStorage`, where any injected script can read it. The safer shape is
-in-memory access token plus an `httpOnly` refresh cookie. **A8 builds the
-redemption page — make that decision there deliberately rather than inheriting
-this line.**
-
-The cost worth remembering from the new table: **you cannot force a mobile app
-update.** Someone will run today's build in two years, so shared types mean
-additive API changes only — new optional fields, never renamed or removed —
-for far longer than feels necessary.
-
-#### `b3/0004` validation — done, 858 → 2,190 words
-
-**The sanitization section taught the wrong model and had to go.** It stripped
-tags with `input.replace(/<[^>]*>/g, '')` — a regex that loses the arms race
-(`<img src=x onerror=…` with no closing bracket walks past it) and, worse,
-destroys data: a label of `Mum <3` is stored as `Mum`, permanently, and nobody
-finds out until the user asks. Replaced with the rule that actually holds:
-**validate on input, escape on output, per destination.** React escapes text
-nodes, `$1` stops SQL parsing it, JSON encoding handles the response — the
-only place needing care is hand-built HTML or URLs. Plus the note that with
-E2EE the server *cannot* filter message content, as a fact about the
-architecture rather than a policy.
-
-Three schema defects, all of which the earlier lessons had already implied:
-
-- **`maxUses: z.number().int().min(0).default(0)`** — third lesson carrying
-  this. 0 is a token nobody can use and b7/0001 rejects it; null means
-  unlimited. Now `min(1).nullable().default(null)` in the schema *and* the
-  solution.
-- **`cursor: z.string().optional()`** is validation in name only — it checks a
-  string is a string and hands `?cursor=hello` to `JSON.parse`, which is the
-  500 identified in b3/0003. The decode now happens *inside* the schema via
-  `transform` + `ctx.addIssue`, so a bad cursor is a 400 from the validator.
-  General rule written down: **anything decoded after validation is still
-  unvalidated input.**
-- **`payload: z.record(z.unknown())` with the comment "validated per type in
-  the service layer"** — which means validated nowhere the day someone
-  forgets, and the type system cannot help because `unknown` accepts anything.
-  Now a `discriminatedUnion`.
-
-Added `redeemSchema`, which is where the alphabet regex belongs on the public
-endpoint, with the denial wording matching every other denial.
-
-Also written up: `.optional()` cannot express "clear this field" (the PATCH
-ambiguity from B3.3 — the handler needs `'expiresAt' in req.body`); Zod's
-`details` array describes your schema to strangers, so public endpoints should
-return the message only; middleware order is cheapest-first (limit → auth →
-validate) so an attacker does not get Zod parsing for free; and
-`console.error` with no request id means "it failed around 3pm" is
-untraceable.
-
-#### `a4/0002` auth context — done, 865 → 2,143 words
-
-Five defects, and the first one ships to users.
-
-- **`fetch('http://localhost:3000/api/auth/login')` in the context.** That
-  address is in the production build; every install would try to reach a server
-  on the phone itself. It also bypassed everything A3.2 built — no timeout, no
-  401 handling, no envelope. Auth is not a special case deserving its own
-  networking; it is the part most worth doing consistently.
-- **Offline was treated as logged out.** `restoreSession` caught every error
-  the same way, so opening the app on a train sends the user to Login with a
-  perfectly good session. Now checks `err.retryable` — the flag added in A3.2
-  is what makes the distinction available here.
-- **Logout did not log out.** It sent the refresh token in the `Authorization`
-  header, where the server expects an access token; the call fails, `catch {}`
-  hides it, local tokens are cleared, and it *looks* like it worked. **The
-  refresh token stays valid on the server** — anyone with a copy keeps a
-  working session while the user believes they are protected.
-- **`register` then called `login`.** Separately rate limited (B4.3), so the
-  register can succeed and the login be refused: account created, user sees an
-  error, tries again, "email already taken". Register now returns a session.
-- **Context value rebuilt every render**, so every screen re-renders on any
-  provider change. `useMemo`, one line.
-
-Also added the wiring the two lessons had been describing separately: the
-client's `onUnauthorized` now calls A3.2's `refreshOnce`, with a module-level
-session-lost handler so a 401 can be handled when no component is mounted.
-
-#### `b4/0002` JWT rotation — done, 923 → 2,688 words
-
-**The lesson claimed theft detection it did not implement.** The comment said
-"possible theft — revoke ALL user's tokens"; the code did neither thing:
-
-- the lookup filtered `revoked_at IS NULL`, so a reused token produced *no
-  row* — indistinguishable from one never issued. The only signal worth having
-  was discarded before it was read.
-- the "revoke all" query matched `token_hash = $1 AND revoked_at IS NULL`, the
-  condition that had just failed. **It updated zero rows, every time.**
-
-Fixed properly, which needed a schema change: `family_id` on
-`refresh_tokens`, one family per login. Look the token up unconditionally,
-treat `revoked_at IS NOT NULL` as reuse, revoke the family. The insight worth
-keeping is that **rotation only detects anything because revoked rows are
-kept** — delete them and a reused token looks like a token that never existed.
-
-Four more:
-
-- **Rotation was two statements with no transaction.** If the insert fails
-  after the revoke, the user has no session and nothing logged why. Now one
-  transaction with `FOR UPDATE`, which also stops two concurrent refreshes
-  both rotating.
-- **Logout revoked every device.** Signing out on the phone ended the session
-  on the redemption web page mid-conversation. Now family-scoped, with
-  `logout-all` as a separate deliberate action. It also sat behind
-  `requireAuth`, so logout failed exactly when the access token was stale —
-  which is when people log out. The refresh token in the body is the
-  credential.
-- **`jwt.verify(token, secret)` with no `algorithms`** lets the token say how
-  it should be checked — the shape of `alg: none` and RS256→HS256 confusion.
-  Pinned.
-- **`require('crypto')` inside an ESM module** is a ReferenceError.
-
-**The honest problem I wrote up rather than solved:** a client that times out
-and retries a refresh presents a token the server already rotated. That is
-indistinguishable from theft, so the family dies and a user on a bad
-connection is logged out for doing nothing wrong. The mitigation is a
-few-second grace window returning the same new pair — which permits replay
-inside it. Recorded as a decision to take deliberately, not discover from
-support tickets. It is also why A3.2's single-flight refresh matters.
-
-Two quiz questions fixed: one premise-in-comment, and one whose stated answer
-was the old revoke-everything behaviour.
-
-#### `a10/0001` secure storage — done, 982 → 2,162 words
-
-**The one that could destroy a user's history.** The error handler caught any
-Keychain read failure and called `clearAllSecureData()`, which deleted the
-E2EE identity key along with the tokens. But a read fails for two different
-reasons — *transient* (device locked, Keystore busy) and *permanent* (restored
-to a new device) — and treating the first as the second **deletes the key that
-makes every message on the device readable, because the phone was locked when
-a background task ran.** There is no recovery. Reads now return `null` and
-delete nothing; clearing is something the user asks for, and the identity key
-is not in the session-clear list at all.
-
-**The privacy one:** the identity key was stored with default accessibility,
-so iOS syncs it to iCloud Keychain and both platforms put it in device
-backups. ADR-0002 says the server cannot read messages; a private key synced
-to iCloud is **a key Apple holds a copy of**. Nobody attacked anything — the
-default did it. Now `WHEN_UNLOCKED_THIS_DEVICE_ONLY`, which is also precisely
-why key backup has to be a designed v1 feature rather than a platform
-accident.
-
-Three more:
-
-- **The access token was stored in SecureStore**, contradicting B4.2 and A4.2
-  which both say memory-only. It lives 15 minutes; persisting it adds a copy
-  to steal and saves nothing, since the refresh token replaces it in one
-  request.
-- **`value.length > 2048` against a byte limit.** `.length` is UTF-16 code
-  units — `नमस्ते` is 6 units and 18 bytes. A guard that passes everything an
-  English-speaking developer tests with and fails on a real user's data, in an
-  app built for the Indian market. Now `TextEncoder`.
-- **Migration was treated as the fix.** Moving a secret out of AsyncStorage
-  limits future exposure and un-leaks nothing: it sat in plain text, and any
-  backup taken since still has it. Session credentials are now dropped and
-  re-issued by a fresh login; the identity key moves and is treated as
-  compromised. **Moving it is housekeeping; rotating it is the fix.**
-
-Also replaced a duplicated `AuthProvider` with a pointer to A4.2 — two
-versions of the same component in two lessons is how they drift.
-
-#### `b7/0002` access rules engine — done, 1,126 → 2,621 words
-
-**A lesson titled "deny-by-default" that allowed by default in four ways.**
-
-The biggest: `evaluateRules` selected one column — `rules` — and never asked
-whether the token was still alive. Redemption checks `revoked_at`, so it looked
-covered. It is not. **Redemption happens once; messages happen forever.** A
-holder who redeemed in March has a conversation, a JWT and a live socket;
-revoking in June sets a column nothing on the message path reads. The owner
-presses the button the entire product is built around, watches the token vanish
-from their list, and the messages keep arriving. State is now checked first, on
-every action, before any rule.
-
-The other three:
-
-- **The `evaluateRulesSafe` wrapper was never called.** It caught exceptions;
-  the integration code called `evaluateRules` directly. *A safe version that
-  can be bypassed is not a safe version* — the try/catch now lives inside the
-  one function everyone calls.
-- **Unknown rule types were skipped.** Deploys are not atomic, so a new client
-  writing `{"geo_fence": …}` hits old replicas that ignore the restriction the
-  owner just set, silently, on a subset of requests.
-- **Unreadable `rules` read as "no rules"** — corruption treated as consent.
-
-Three correctness bugs:
-
-- **Overnight windows allowed nothing.** `currentTime < start || >= end` is
-  right for 09:00–18:00 and false at every minute of the day for 22:00–06:00,
-  which is an ordinary do-not-disturb window.
-- **The daily counter reset at 05:30 IST** — `setUTCHours(0,0,0,0)` while the
-  time window used the owner's timezone. Ten messages at 9pm, ten more at half
-  past five: "10 per day" quietly means up to 20 in one Indian day.
-- **Count-then-allow race**, the same shape as `max_uses` in B7.1 — with the
-  comment "correctness matters more than speed here" sitting directly above
-  the racy version. Believing you chose correctness is not the same as having
-  it.
-
-Recorded rather than solved: `calls` is queried and created by no migration
-(one of the audit's three orphan tables). Left to the B2 rewrite instead of
-inventing a shape B2 would then have to be consistent with.
-
-**Also written down so nobody optimises it away:** rules are deliberately not
-cached, because `ARCHITECTURE.md` lists immediate revocation as one of four
-properties everything else follows from. A 60-second cache makes revocation
-take up to 60 seconds, and the difference between those two words is the
-product. If reads ever hurt, make the truth faster — never let a stale answer
-stand.
-
-#### `b7/0003` revocation and pause — done, 1,139 → 2,569 words
-
-**A named ADR-0003 violation at the centre of it.** The socket registry was a
-`Map` in one process. Revoke arrives at replica A, the holder's socket is on
-replica B, `getSocketsByTokenId` finds nothing, the loop does nothing, and the
-endpoint answers **200 OK**. The owner is told the token is revoked; the
-conversation stays live. Nothing errors, nothing logs, and it works perfectly
-on a laptop with one process. ADR-0003 says it outright — stateless API, *no
-node-local socket registry*, Redis required — and this is the case it was
-written for. Now: local map of this replica's own sockets, decision broadcast
-over Redis pub/sub.
-
-**The correction that matters most is conceptual.** It is tempting to read the
-lesson as "revocation works because we close the sockets". It does not — a
-holder can reconnect a second later with a JWT valid for seven more days.
-**What enforces revocation is the check on connect and on every action (B7.2);
-the socket close is a courtesy that makes it immediate and visible.** Get that
-backwards and the security property depends on a broadcast being delivered.
-It is also why the whole thing survives a replica being mid-restart when the
-message goes out.
-
-Three more:
-
-- **Not idempotent.** Revoke twice returned `400 Cannot transition from
-  'revoked' to 'revoked'`. That happens when a user on a bad connection taps
-  Revoke, sees nothing, and taps again — the app shows an error for the most
-  safety-critical action in the product, and they conclude it did not work.
-  Now `WHERE revoked_at IS NULL` and a 204 either way.
-- **`PATCH /tokens/:id` with a `status` field**, contradicting B3.3's
-  `POST /:id/revoke|pause|resume`. These are actions with consequences, not a
-  field being edited.
-- **`status` enum instead of `revoked_at`/`paused_at`**, contradicting B7.1 and
-  B7.2. Timestamps answer *when*, which the audit needs, and the transition
-  rules become `WHERE` clauses the database enforces rather than a lookup table
-  two concurrent requests can both pass.
-- **`ws.send()` then `ws.close()` on the next line** can drop the frame, so the
-  holder sees an unexplained disconnect and reconnects thinking it was a blip.
-
-**A verifier-vs-browser disagreement, handled properly.** Two `predict-output`
-questions asserted `[false, true, true]` and `Set(0) {}` — correct in a browser
-console, wrong under the verifier, which stringifies with `JSON.stringify`.
-Rather than paper over it, both questions were rewritten to print unambiguous
-values: how a host renders a `Set` is trivia about the host, not the concept.
-
-#### `b9/0002` Coolify — done, 1,097 → 2,663 words
-
-**ADR-0007's follow-on is now discharged.** `TOKEN_CODE_PEPPER` and
-`TOKEN_CODE_KEY` are required environment variables, validated at startup with
-`exit(1)` so a missing secret is a container that never becomes healthy rather
-than one that fails on the first request that needs it.
-
-**The lesson deployed a database and never mentioned backing it up.** On
-managed hosting that omission is survivable because someone else made the
-decision; on a VPS it is total — one disk, one machine, no snapshots unless
-you asked. Added a backup section, and the three parts that are easy to skip:
-restore drills (an untested backup is a belief), the fact that `pg_dump`
-captures `code_hash` and `code_enc` and *nothing that makes them meaningful*,
-and the awkward requirement that the secrets be recoverable **together with**
-the dump and stored **apart from** it.
-
-Three more:
-
-- **`prestart` migrations run in every container.** Two replicas start
-  together and both apply the same migration. One `pg_advisory_lock` and the
-  second finds nothing to do — dead code on one box, the difference between a
-  deploy and an outage on two. ADR-0003 in a paragraph.
-- **No pgbouncer**, though CLAUDE.md requires it. Postgres allocates a process
-  per connection and defaults to ~100; the failure mode is new connections
-  refused while existing ones work, so the API looks healthy and half the
-  requests fail. Retrofitting it means re-testing everything that assumed a
-  session.
-- **Health checks that test every dependency are a trap.** If `/health` fails
-  on a Redis blip, the orchestrator kills containers *because a dependency is
-  unwell*. Liveness ("is this wedged?") should test almost nothing; readiness
-  may check Postgres; Redis belongs in neither, because sockets degrade
-  without it and HTTP does not.
-
-Also made the cost table honest: **TURN relay bandwidth is missing and is the
-most likely surprise on the bill** — with `iceTransportPolicy: 'relay'` every
-call's media crosses your server rather than going peer to peer. And the
-single-box ceiling from CLAUDE.md is now written into "what this costs you"
-rather than living only in the orientation doc.
-
-#### `b6/0001` signalling — done, 1,616 → 2,873 words
-
-**The Token-specific point this lesson was missing entirely:** WebRTC is
-peer-to-peer, and a peer connection means each side learns the other's **IP
-address**. Someone holding a code — who by design knows no name, number or
-email — places a call and their client logs an address that geolocates to a
-neighbourhood. Nothing is hacked; that is how WebRTC works.
-`iceTransportPolicy: 'relay'` is the line that prevents it, and it is now
-explained as the privacy/bandwidth trade it actually is rather than mentioned
-in passing as "when privacy matters".
-
-A quiz question asserted the opposite as its takeaway — *"zero audio/video
-through your server"* — which is true of default WebRTC and false for Token.
-Rewritten.
-
-**Node-local `Map` again, and it fails harder here than in B7.3.**
-`isInCall(calleeId)` consults one replica's memory, so busy detection silently
-stops working, and `call:incoming` is looked up in a socket table that does not
-contain the callee. **Calls between users on different replicas never connect**
-— caller waits, callee's phone never rings, nothing errors. Moved to Redis.
-
-Which introduced the next failure, so it is covered too: cleanup runs in the
-hangup handler, and a process killed mid-call never reaches it. Without a TTL
-both participants stay marked busy **forever** and can never call again. Every
-piece of state a crash can orphan needs an expiry chosen as a deliberate upper
-bound — an hour is not "how long calls last", it is "how long is it acceptable
-to be wrong".
-
-**The rules engine was never consulted on the call path.** A token whose owner
-turned video off, paused it, restricted it to office hours, or revoked it last
-week could still place a call, because the conversation existed and nothing
-re-asked. Same shape as the B7.2 finding, second location — generalised in the
-lesson as: **every path that lets a holder reach the user is an authorisation
-point**, not just the door they came in through.
-
-Recorded, not patched: the code treats `holder_id` as a user id while B7.1 is
-explicit that holders never become rows in `users`. The two lessons disagree
-about what a holder is; it belongs to the B2 rewrite alongside the `calls` and
-`participants` orphan tables.
-
-#### `b9/0001` Docker — done, 1,243 → 2,403 words
-
-**The best-written lesson of the twelve so far** — multi-stage, non-root user,
-exec-form `CMD`, pinned base, a `.dockerignore` section. So the deepening is
-mostly genuine depth rather than repair, and the depth is about what a
-Dockerfile *cannot* do for you.
-
-**Graceful shutdown, and the PID 1 trap.** Every deploy stops a container
-holding live WebSocket conversations and calls. `CMD ["node", …]` makes Node
-PID 1 — and the kernel treats PID 1 specially: **a signal with no registered
-handler is discarded rather than applying its default action.** So a container
-with no `SIGTERM` listener ignores the polite request completely; Docker waits
-its ten seconds and sends `SIGKILL`. Every deploy takes ten seconds longer than
-it should and ends by shooting the process, with sockets severed and no close
-frame. It looks fine, because the new container comes up. Added the handler,
-in the order that matters: fail readiness → tell sockets to reconnect (close
-code 1012) → stop accepting → drain → close pool and Redis.
-
-**The cross-lesson catch:** B7.2 evaluates time-window rules with
-`Intl.DateTimeFormat(…, { timeZone: 'Asia/Kolkata' })`, which needs timezone
-data *inside the container* — and the failure mode of missing data is falling
-back to UTC rather than throwing. A rule reading "contactable 09:00–18:00"
-would silently enforce it in UTC: five and a half hours out, every day, no
-error anywhere. Rather than assert which images are affected, the lesson gives
-the one-line `docker run` that checks the image you are actually shipping, and
-generalises the habit: anything your app depends on that comes from the OS —
-timezones, locales, certificates, fonts — is verified in the image, not
-assumed from the base tag.
-
-Also added: Alpine's musl breaking prebuilt native modules (`argon2` is the one
-this project uses), with the toolchain-then-`apk del` fix and `node:20-slim` as
-the quieter alternative; and why a stray `.env` in a build context is
-permanent — layers are additive, so deleting it later does not remove it, and
-anyone who can pull the image can read it months on.
-
-One premise-in-comment quiz question converted to multiple-choice.
-
-#### `b10/0001` hardening — done, 1,708 → 2,987 words
-
-**The culmination point the spine had been building toward and nobody had
-written down: the logs.**
-
-Trace what has been done to protect a token code. Kept out of URLs, because a
-path reaches access logs, browser history and `Referer` (B3.3). Kept out of the
-database as a hash plus an encrypted copy (ADR-0007). Backups arranged so the
-data and the keys never travel together (B9.2). Then one line of ordinary,
-sensible middleware — `logger.info({ body: req.body })` — puts the code in a
-plain-text file on the same box.
-
-**The body became the sensitive part precisely because we moved the code
-there.** The decision that protected it from one exposure moved it into
-another, and the second is easier to make by accident. Added: redaction, the
-argument for allow-list over deny-list logging (a deny-list is a list of the
-mistakes you already thought of), and the note that Sentry/GlitchTip attach
-request bodies to exceptions by default — so an unhandled error in the redeem
-handler ships the code to a second system with its own retention and its own
-operator.
-
-Four more:
-
-- **`npm audit` is not supply-chain security.** It compares against
-  vulnerabilities already published; the realistic attack is a compromised
-  maintainer account shipping a `postinstall` script that runs in your CI with
-  your environment variables before there is anything to report.
-  `npm ci --ignore-scripts`.
-- **HSTS `preload: true` is close to irreversible** — hard-coded into shipped
-  browsers, removal is a request plus a release cycle. Right for `tokn.app`,
-  and a decision rather than a snippet to copy.
-- **CORS is not access control.** It tells a *browser* which origins may read a
-  response and does nothing about curl, a script, or the mobile app. Worth
-  being blunt about because the name suggests otherwise.
-- **Security headers on the API are close to decoration** — the clients that
-  matter are not browsers. They earn their keep on the redemption page, which
-  should use `no-referrer` rather than the API's
-  `strict-origin-when-cross-origin`, because its own path is a capability.
-
-Also named a real structural risk rather than papering over it: every ownership
-check in this course is `WHERE user_id = $2`, which is a habit rather than a
-mechanism — one query written without it is a broken-access-control bug that
-fails silently. The durable fix is row-level security, and it belongs with the
-B2 rewrite.
-
-Two premise-in-comment quiz questions fixed.
-
-#### `a5/0001` token generation UI — done, 1,617 → 3,241 words
-
-**This lesson argued against the fix the capstone and B7.1 teach.** It
-explained modulo bias correctly, then concluded "for Token, this is
-acceptable… we'll use the simpler modulo approach." Every supporting statement
-was true and the conclusion was wrong. Rewritten with the four reasons that
-actually decide it: the fix is four lines; **it cannot be applied later**
-because issued codes keep the distribution they were born with; "rate limiting
-covers it" makes one defence depend on a separate system with its own outage;
-and the advertised guarantee — every code equally likely out of
-7.9 × 10<sup>17</sup> — is simply false with the fold.
-
-**The client generated codes.** A "preview" while the API call was in flight,
-replaced by the server's answer. It shows the user a code that does not exist:
-copy or screenshot it in that window and the holder gets "that code can't be
-used" with no way to find out why. Also a second implementation of the
-alphabet to drift, and it carried the very bias the section below it explains.
-Generalised in the lesson: **optimistic UI is for things the client can
-predict; anything the server generates cannot be, and showing a guess of it is
-showing something false.**
-
-**The product rule was missing entirely.** CLAUDE.md says a token must never
-travel over a channel that already identifies the user — and a plain Share
-button hands the code to WhatsApp *from the user's phone number*, defeating the
-whole point in one tap, using the feature the app provided. Added the warning
-flow and the four safe paths in the order the UI should offer them.
-
-Also: the clipboard is a surface every other app can read and both platforms
-now sync across devices — copy now clears after 60s; screenshots put a live
-capability in a cloud-synced photo library, and the answer is mostly to make
-"show me that code again" obvious rather than to block the gesture; and
-ADR-0007's consequence for this screen — **this is the only response that ever
-contains the code**, so the reveal path must be findable or users will
-screenshot defensively.
-
-Fixed alongside: a wrong keyspace figure (`28^12 ≈ 1.2 × 10^17` in the
-requirements table, `1.7 × 10^17` in the collision section — both should be
-`31^12 ≈ 7.9 × 10^17`), `max_uses: 0`, a `status` field, and INSERTs writing a
-plaintext `code` column.
-
-#### `a5/0004` access rules UI — done, 1,856 → 3,120 words. **Phase 2 complete.**
-
-**The client and the engine disagreed about field names.** This lesson wrote
-`{ start, end }`; B7.2 reads `rule.start_time` and `rule.end_time`. Both files
-are internally consistent and both look right in review — and together they
-produce a time window that does nothing resembling what the user set, because
-the engine compares against `undefined`. Nothing throws, and the screen that
-wrote the rule displays it back correctly. **The strongest argument in the
-course for one schema in `shared/`, imported by both sides, so a rename is a
-compile error rather than a behaviour change.**
-
-The B7.2 deepening created a constraint this screen sits on the wrong end of:
-the engine now **refuses rule types it does not recognise**, so shipping a new
-rule editor client-first denies every token that gets one — including, during
-a rolling deploy, on some of your own servers. And app releases cannot be
-recalled. **Server first, always**, which for mobile means a release or two of
-distance.
-
-Three more:
-
-- **Optimistic toggles on a privacy control.** A user turns off video, sees it
-  off, puts the phone down; the request failed. The screen now says something
-  false about who can reach them, and unlike a failed "like" they never find
-  out. Rule controls show pending until the server confirms.
-- **A time picker validating `end > start`** makes the overnight window B7.2
-  now supports impossible to create — the capability exists and no user can
-  reach it.
-- **`allowed` and `blocked` as two lists** can contradict each other; three
-  booleans cannot. The state that cannot exist needs no rule for resolving it.
-
-Also removed `expiry` as a rule type — it duplicates `expires_at` on the token
-(B7.1), and two places to set "when does this stop working?" is two answers.
-
-**Recorded, not resolved:** this lesson describes an `access_rules` table with
-one row per rule; B7.2 evaluates a `tokens.rules` JSONB column. Both are
-defensible, having both is not, and it belongs to the B2 rewrite.
-
-#### Trap that bit twice
-
-**Two escaping failures while writing `b3/0003`, both caught by the verifier**, both
-the same family as the `</script>` trap: a scripted edit put real newlines
-inside a double-quoted JS string, and an unescaped backtick inside the
-`solution:` template literal ended it early. Neither is visible by reading —
-run `verify-lesson.mjs` after *every* scripted edit, not at the end.
-
-**ADR-0007 has follow-on work in three of them.** `b7/0002` and `b7/0003` look
-tokens up by code and must use `code_hash`; `b9/0002` (Coolify) must add
-`TOKEN_CODE_PEPPER` and `TOKEN_CODE_KEY` as required environment variables and
-put them in the backup runbook. Do not deepen those without applying it.
+### Unit 11 — Phase 2: the ~20 spine lessons — DONE
+
+**16 of 16 deepenable lessons carry Why this way / When this breaks / What
+this costs you, and every one was re-verified.** `PROGRESS.md` has the counts;
+`HANDOFF.md` has the narrative — what was found, why each decision went the
+way it did, and the cross-cutting patterns. It is not repeated here.
+
+| Lesson | Commit |
+|---|---|
+| `b7/0001` token generation & redemption | `ba7c06f`, `6cbbf9f` |
+| `b3/0003` REST design | `7bb515d` |
+| `b4/0003` rate limiting | `8100de7` |
+| `a3/0002` API client | `f2756a0` |
+| `b3/0004` validation | `3e496a2` |
+| `a4/0002` auth context | `7fa401a` |
+| `b4/0002` JWT rotation | `047f292` |
+| `a10/0001` secure storage | `524b850` |
+| `b7/0002` access rules engine | `1e8a2bc` |
+| `b7/0003` revocation & pause | `0d1e6f4` |
+| `b9/0002` Coolify | `f195c8f` |
+| `b6/0001` signalling | `4f26ea7` |
+| `b9/0001` Docker | `b823ef4` |
+| `b10/0001` hardening | `d4a9346` |
+| `a5/0001` token generation UI | `6acf1e3` |
+| `a5/0004` access rules UI | (this unit) |
+
+**Four spine lessons deliberately skipped:** `b2/0001`, `b2/0003`, `b5/0001`,
+`b5/0002` are marked REWRITE in `TOKEN-TRACK.md`'s revised sequence — B2 for
+ciphertext and partitioning, B5 for multi-node Redis — and C5 (E2EE, which
+must precede B2) is not written. Deepening them is work that gets discarded.
+
+**One decision was taken during the phase and it propagated:** ADR-0007, token
+codes hashed for lookup and encrypted for display. Its follow-on work is
+complete — `b7/0001`, `b3/0003`, `a3/0002`, `b9/0002` and `b10/0001` all
+carry it.
+
+**Three contradictions are recorded for the B2 rewrite** rather than guessed
+at here: the `calls` / `participants` / `deletion_queue` orphan tables; whether
+a holder is a row in `users` (`b6/0001` assumes yes, `b7/0001` says never); and
+`access_rules` rows versus `tokens.rules` JSONB (`a5/0004` versus `b7/0002`).
+Also open: row-level security, since every ownership check in the course is a
+hand-written `WHERE user_id = $2`.
+
+**Tooling added:** `verify-lesson.mjs --unverifiable "<reason>"`, used by all
+sixteen — Track B solutions need Postgres, and the verifier could previously
+only fail forever or lie. Everything else still runs, and caught real breakage
+twice.
 
 ### Unit 10 — Phase 1.3, "explain it in your own words" — DONE
 
@@ -1211,25 +522,22 @@ What remains in COURSE-REVIEW.md §6 Phase 1:
 | 1.4 | Spaced review from the previous two lessons | **done** — built into each retrofit |
 | 1.5 | Same retrofit for Module 02, just-in-time | not started |
 
-**Phase 1 is now done except 1.5**, which is deliberately just-in-time.
+**Phase 1 is done except 1.5, and Phase 2 is complete.**
 
-**Recommended next: 1.5, when the student actually reaches Module 02** — and
-it is a bigger job than 1.1 was per lesson, because Module 02 needs the
-practice retrofit *and* the Token reframe (the WhatsApp clone, Priya, read
-ticks) in one pass. The Firebase half is already done. Before writing any of
-it, decide how a React Native exercise gets verified: `verify-lesson.mjs`
-cannot run RN, so either the self-checks target plain functions the screens
-call, or Module 02 exercises are recorded `unverifiable` with a reason. That
-decision comes first, not after the lessons are written.
+**Recommended next: 1.5, when the student actually reaches Module 02.** It is
+a bigger job than 1.1 was per lesson, because Module 02 needs the practice
+retrofit *and* the Token reframe (the WhatsApp clone, Priya, read ticks) in one
+pass. The Firebase half is already done.
 
-Phase 2 (deepen the ~20 spine lessons) is the other candidate, and it does not
-depend on where the student is.
+**Decide this before writing any of it:** `verify-lesson.mjs` cannot run React
+Native, so either the self-checks target plain functions the screens call, or
+Module 02's exercises are recorded `unverifiable` with a reason. That decision
+comes first, not after the lessons are written.
 
-**Do not start Module 02 (1.5) yet.** The student is on lesson 5 or 6 of 12;
-Module 02 is just-in-time work and writing it now is exactly the batching-ahead
-the working discipline forbids. When it does start, note that `verify-lesson.mjs`
-cannot run React Native code — Module 02's exercises will need a different
-verification story, and deciding what it is comes before writing the lessons.
+The other candidate is **Phase 3** — the ten new modules (C0–C9) — which is
+also explicitly just-in-time and should not be started ahead of the student.
+If neither is due, the honest answer is that the course does not need more
+written material right now; it needs the student to reach lesson 7.
 
 **When the student reaches the capstone**, they need Node 19+ on the machine
 (`node -v`) — `crypto.getRandomValues` as a global is the only environment
@@ -1239,9 +547,10 @@ than at the exercise.
 Two things to check before writing any further lesson, both of which have now
 bitten more than once:
 
-- **Premise-in-comment questions** (`// Given: <div>…`, `// User clicks`).
-  Found in 0007 (3) and 0008 (all 5); absent in 0009 and 0010. Cheap to grep:
-  `grep -c "// Given\|// User \|// Assume"`.
+- **Premise-in-comment questions** (`// Given: <div>…`, `// User clicks`) —
+  comment-only code with a prose answer, so the question prints nothing.
+  `verify-lesson.mjs` now catches every one automatically, which is how about
+  a dozen were found across Phase 2. No grep needed; just run the verifier.
 - **Token codes with excluded characters.** Found in 0009 (`TOKEN-ABC`) and
   0010 (`BANK-4FJ1`, `SHOP-9KL3`). Worth running the alphabet check over any
   lesson before and after editing it — including on codes you write yourself.
