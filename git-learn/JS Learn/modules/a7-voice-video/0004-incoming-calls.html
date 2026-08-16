@@ -161,23 +161,39 @@ async function setupCallChannel() {
 // In AndroidManifest.xml (via app.config.js plugin):
 // &lt;uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" /&gt;
 
-// The FCM handler:
-import messaging from '@react-native-firebase/messaging';
+// The background handler. FCM carries the message; expo-notifications
+// receives it. No Firebase SDK — see the note below.
+import * as TaskManager from 'expo-task-manager';
 
-messaging().setBackgroundMessageHandler(async (remoteMessage) =&gt; {
-  if (remoteMessage.data?.type === 'incoming_call') {
-    // Show full-screen notification
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: 'Incoming Call',
-        body: remoteMessage.data.callerName,
-        categoryIdentifier: 'call',
-        sound: 'ringtone.wav',
-      },
-      trigger: null,  // immediate
-    });
-  }
-});</code></pre>
+const INCOMING_CALL_TASK = 'token-incoming-call';
+
+TaskManager.defineTask(INCOMING_CALL_TASK, async ({ data, error }) =&gt; {
+  if (error) return;
+
+  const payload = data?.notification?.data ?? data;
+  if (payload?.type !== 'incoming_call') return;
+
+  // Show full-screen notification
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: 'Incoming Call',
+      body: payload.callerName,
+      categoryIdentifier: 'call',
+      sound: 'ringtone.wav',
+    },
+    trigger: null,  // immediate
+  });
+});
+
+// Register it once, at startup, before any call can arrive
+Notifications.registerTaskAsync(INCOMING_CALL_TASK);</code></pre>
+
+    <div class="callout">
+      <div class="callout-title">FCM the transport, not Firebase the platform</div>
+      <p>This is the one place the two get confused, so it is worth being exact. <strong>Only Apple and Google can wake a backgrounded app</strong> — APNs on iOS, FCM on Android. There is no way around that and no open-source substitute, which is why push is the single third party Token accepts.</p>
+      <p>What Token does <em>not</em> use is the Firebase <em>platform</em> — no Auth, no Firestore, no Storage, no Cloud Functions — and it does not pull in the <code>@react-native-firebase</code> native SDK to receive a push. <code>expo-notifications</code> already speaks to FCM and APNs for you, so the SDK buys nothing and costs you a native dependency, a Google config file in the repo, and an analytics client you did not ask for.</p>
+      <p>Your server sends a <strong>data-only</strong>, high-priority message to FCM. Android wakes the app, the task above runs, and your own code decides what the screen shows. Google routes the bytes and learns that a device received a message; it never sees who is calling whom, because that lives in the payload your API built.</p>
+    </div>
 
     <h2>The IncomingCall screen</h2>
 
@@ -318,7 +334,7 @@ const platforms = {
     ui: 'Custom full-screen notification',
     lockScreen: 'Full-screen intent',
     requirement: 'Not mandatory but essential',
-    library: 'react-native-callkeep + @react-native-firebase/messaging',
+    library: 'react-native-callkeep + expo-notifications',
   },
 };
 
