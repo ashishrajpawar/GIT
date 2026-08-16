@@ -72,67 +72,121 @@
         <td style="padding:0.5rem;">User ID or IP</td>
       </tr>
       <tr>
-        <td style="padding:0.5rem;">POST /redeem/:code</td>
+        <td style="padding:0.5rem;">POST /api/redeem</td>
         <td style="padding:0.5rem;">10 attempts</td>
         <td style="padding:0.5rem;">1 hour</td>
         <td style="padding:0.5rem;">IP</td>
       </tr>
     </table>
 
+    <p>
+      Read the last row again, because it is the one that is load-bearing for
+      the whole product. Every token code is one of roughly
+      7.9 × 10<sup>17</sup>, and that number is the reason guessing is
+      hopeless — <em>at a given rate</em>. Ten attempts an hour is what turns
+      "hopeless in theory" into "hopeless in practice". Without it, the
+      arithmetic is just arithmetic.
+    </p>
+
     <h2>Implementation with express-rate-limit</h2>
 
-    <pre><code>npm install express-rate-limit</code></pre>
+    <pre><code>npm install express-rate-limit rate-limit-redis ioredis</code></pre>
+
+    <p>
+      <strong>Redis is not optional here</strong> (ADR-0003). The default store
+      counts in the process's own memory, which means every replica keeps its
+      own tally — five attempts becomes five per replica — and a deploy resets
+      all of them. The counter has to live somewhere all replicas share.
+    </p>
 
     <pre><code>// api/src/middleware/rate-limit.ts
 import rateLimit from 'express-rate-limit';
+import RedisStore from 'rate-limit-redis';
+import Redis from 'ioredis';
 
-// Strict limiter for auth endpoints
-export const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,  // 15 minutes
-  max: 5,                      // 5 attempts per window
-  message: {
-    error: 'Too many attempts. Please try again in 15 minutes.',
-    success: false,
-  },
-  standardHeaders: true,       // Return rate limit info in headers
+const redis = new Redis(process.env.REDIS_URL!);
+
+const store = (prefix: string) =&gt; new RedisStore({
+  prefix,
+  sendCommand: (...args: string[]) =&gt; redis.call(...args),
+});
+
+const TOO_MANY = {
+  error: 'Too many attempts. Please try again later.',
+  success: false,
+};
+
+// Two limiters on login, not one. Both must pass.
+//
+//   by IP      - stops one host working through many accounts
+//   by email   - stops many hosts working on one account
+//
+// A single key of `ip:email` does neither: the attacker controls both
+// halves, so changing either one buys a fresh allowance.
+
+export const loginByIp = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,                       // one host, all accounts
+  message: TOO_MANY,
+  standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) =&gt; {
-    // Key by IP + email to prevent targeting one account from many IPs
-    return `${req.ip}:${req.body?.email || 'unknown'}`;
-  },
+  store: store('rl:login:ip:'),
 });
 
-// Registration limiter
+export const loginByAccount = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,                        // one account, all hosts
+  message: TOO_MANY,
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: store('rl:login:acct:'),
+  keyGenerator: (req) =&gt; String(req.body?.email || '').trim().toLowerCase(),
+  skip: (req) =&gt; !req.body?.email,   // no email: the IP limiter still applies
+});
+
 export const registerLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,   // 1 hour
-  max: 3,                       // 3 registrations per IP per hour
-  message: {
-    error: 'Too many registrations. Please try again later.',
-    success: false,
-  },
+  windowMs: 60 * 60 * 1000,
+  max: 3,
+  message: TOO_MANY,
+  store: store('rl:register:'),
 });
 
-// General API limiter
 export const apiLimiter = rateLimit({
-  windowMs: 60 * 1000,         // 1 minute
-  max: 100,                     // 100 requests per minute
-  message: {
-    error: 'Rate limit exceeded. Please slow down.',
-    success: false,
-  },
+  windowMs: 60 * 1000,
+  max: 100,
+  message: { error: 'Rate limit exceeded. Please slow down.', success: false },
+  store: store('rl:api:'),
+});
+
+// The enumeration defence. Keyed by IP only - keying by code would let an
+// attacker have a fresh allowance for every code they try, which is
+// precisely the thing being defended against.
+export const redeemLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  message: TOO_MANY,
+  store: store('rl:redeem:'),
 });</code></pre>
 
     <h2>Applying rate limiters</h2>
 
     <pre><code>// api/src/server.ts
-import { authLimiter, registerLimiter, apiLimiter } from './middleware/rate-limit.js';
+import {
+  loginByIp, loginByAccount, registerLimiter, apiLimiter, redeemLimiter
+} from './middleware/rate-limit.js';
+
+// Express must know it is behind Coolify's proxy, or every request appears
+// to come from the proxy and shares one bucket. See "When this breaks".
+app.set('trust proxy', 1);
 
 // General limit on all API routes
 app.use('/api', apiLimiter);
 
-// Strict limits on auth
-app.use('/api/auth/login', authLimiter);
+// Both login limiters apply, in order. The body has to be parsed before
+// loginByAccount can read the email from it.
+app.use('/api/auth/login', loginByIp, loginByAccount);
 app.use('/api/auth/register', registerLimiter);
+app.use('/api/redeem', redeemLimiter);
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -152,11 +206,21 @@ RateLimit-Reset: 1700001234 // when the window resets (Unix timestamp)</code></p
 
     <p>Beyond rate limiting, lock accounts after repeated failures:</p>
 
-    <pre><code>// In the login handler, track failures per account:
+    <pre><code>// In the login handler, track failures per account.
 const MAX_FAILURES = 10;
 const LOCKOUT_MINUTES = 30;
 
-router.post('/login', authLimiter, async (req, res, next) =&gt; {
+// One message for every way this can fail. Anything more specific tells a
+// stranger whether an email is registered on the platform.
+const SAME_ANSWER = 'Invalid email or password';
+
+// A hash of a value nobody will ever type, verified against when the account
+// does not exist. Without it, "no such user" returns in a millisecond while a
+// real account spends ~100ms in argon2 - and the clock answers the question
+// the message refused to.
+const DUMMY_HASH = await argon2.hash(crypto.randomUUID());
+
+router.post('/login', async (req, res, next) =&gt; {
   try {
     const { email, password } = loginSchema.parse(req.body);
 
@@ -164,30 +228,30 @@ router.post('/login', authLimiter, async (req, res, next) =&gt; {
       'SELECT * FROM users WHERE email = $1', [email]
     );
     const user = rows[0];
-    if (!user) throw ApiError.unauthorized('Invalid email or password');
 
-    // Check if account is locked
-    if (user.locked_until && new Date(user.locked_until) &gt; new Date()) {
-      throw ApiError.unauthorized(
-        `Account locked. Try again after ${new Date(user.locked_until).toLocaleTimeString()}`
-      );
-    }
+    // Always do the work, whether or not the account exists.
+    const valid = await argon2.verify(user?.password_hash ?? DUMMY_HASH, password);
 
-    const valid = await argon2.verify(user.password_hash, password);
+    if (!user) throw ApiError.unauthorized(SAME_ANSWER);
 
-    if (!valid) {
-      // Increment failure count
-      const newCount = (user.failed_login_attempts || 0) + 1;
-      const lockUntil = newCount &gt;= MAX_FAILURES
-        ? new Date(Date.now() + LOCKOUT_MINUTES * 60 * 1000)
-        : null;
-
-      await pool.query(
-        `UPDATE users SET failed_login_attempts = $1, locked_until = $2 WHERE id = $3`,
-        [newCount, lockUntil, user.id]
-      );
-
-      throw ApiError.unauthorized('Invalid email or password');
+    const locked = user.locked_until && new Date(user.locked_until) &gt; new Date();
+    if (locked || !valid) {
+      if (!locked) {
+        // Atomic: read-then-write loses increments when attempts overlap,
+        // and overlapping attempts are exactly what this counts.
+        await pool.query(
+          `UPDATE users
+              SET failed_login_attempts = failed_login_attempts + 1,
+                  locked_until = CASE
+                    WHEN failed_login_attempts + 1 &gt;= $2
+                    THEN now() + ($3 || ' minutes')::interval
+                    ELSE locked_until
+                  END
+            WHERE id = $1`,
+          [user.id, MAX_FAILURES, LOCKOUT_MINUTES]
+        );
+      }
+      throw ApiError.unauthorized(SAME_ANSWER);
     }
 
     // Success — reset failure count
@@ -200,6 +264,22 @@ router.post('/login', authLimiter, async (req, res, next) =&gt; {
   } catch (err) { next(err); }
 });</code></pre>
 
+    <div class="callout warning">
+      <div class="callout-title">Everything about a failed login is the same answer</div>
+      <p>
+        Wrong password, no such account, and locked account all return the
+        identical message, and all take roughly the same time. Telling someone
+        "account locked" is friendlier and it confirms the email is registered —
+        which is the first half of credential stuffing, and something the person
+        who owns that email never agreed to publish.
+      </p>
+      <p>
+        This is the same rule as the redemption page's single denial message,
+        applied to accounts instead of tokens. In both places the useful detail
+        goes to the logs, where the owner can see it and a stranger cannot.
+      </p>
+    </div>
+
     <h2>Migration for lockout fields</h2>
 
     <pre><code>-- 006_add_lockout_fields.sql
@@ -208,23 +288,183 @@ ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN locked_until TIMESTAMPTZ;
 COMMIT;</code></pre>
 
-    <h2>Production considerations</h2>
+    <hr>
+
+    <h2>Why this way (and what was rejected)</h2>
+
+    <h3>Two limiters, because one composite key defends nothing</h3>
+
+    <p>
+      The tempting design is a single limiter keyed by
+      <code>`${req.ip}:${req.body.email}`</code>, described as "IP + email so we
+      cover both". It covers neither, and the reason is worth sitting with:
+      <strong>the attacker supplies both halves of that key.</strong>
+    </p>
 
     <ul>
-      <li><strong>Redis store</strong> — in production with multiple server instances, use Redis instead of the default in-memory store so rate limits are shared across all servers.</li>
-      <li><strong>IP behind proxy</strong> — if behind Nginx/Cloudflare, set <code>app.set('trust proxy', 1)</code> so Express reads the real IP from <code>X-Forwarded-For</code>.</li>
-      <li><strong>Distributed attacks</strong> — IP-based limiting doesn't stop botnets (thousands of IPs). Account-based limiting (per email) is the second defense layer.</li>
+      <li>
+        Trying many accounts from one host? Change the email each time. Every
+        request is a different key, so every request gets a fresh allowance of
+        five. The limiter never fires.
+      </li>
+      <li>
+        Trying one account from a botnet? Every host is a different IP, so again
+        every request is a different key. The limiter never fires.
+      </li>
     </ul>
 
-    <pre><code>// Trust proxy (required behind Nginx/Coolify)
-app.set('trust proxy', 1);
+    <p>
+      Two independent limiters, both of which must pass, do what the composite
+      key claimed to: one keyed by IP alone caps how much any single host can
+      try in total, and one keyed by the account alone caps how much punishment
+      any single account can take no matter how many hosts are involved. The
+      attacker can only vary the half that the <em>other</em> limiter is
+      counting.
+    </p>
 
-// For production with multiple instances:
-// npm install rate-limit-redis ioredis
-// import RedisStore from 'rate-limit-redis';
-// import Redis from 'ioredis';
-// const redis = new Redis(process.env.REDIS_URL);
-// const store = new RedisStore({ sendCommand: (...args) => redis.call(...args) });</code></pre>
+    <h3>Redis, because the limit has to be one number</h3>
+
+    <p>
+      <code>express-rate-limit</code> counts in the process's memory by default,
+      and that is wrong here for two separate reasons. Run three replicas and
+      "five attempts" is fifteen, because each process counts its own. Deploy,
+      and every counter resets to zero — so the way past a lockout is to wait
+      for a release.
+    </p>
+    <p>
+      This is ADR-0003 in miniature: the API is stateless, and anything that
+      needs to be true across replicas lives in Redis. A rate limit that each
+      replica interprets privately is not a rate limit.
+    </p>
+
+    <h3>The redemption limiter is keyed by IP, never by code</h3>
+
+    <p>
+      It looks natural to limit attempts per token code. It is exactly backwards:
+      someone guessing codes uses a <em>different</em> code every time, so a
+      per-code key hands them an unlimited budget. The thing to count is the
+      thing they cannot cheaply vary, which is the host making the requests.
+    </p>
+
+    <h3>Lockout, and why it is not the first line</h3>
+
+    <p>
+      Locking an account after ten failures is the classic answer and it comes
+      with a gift for attackers: <strong>anyone who knows your email can lock
+      you out of your own account, on demand, forever, by failing to log in.</strong>
+      A protection that a stranger can trigger against you is also a weapon.
+    </p>
+    <p>
+      So rate limiting is the primary defence and lockout is the backstop, with
+      a deliberately long threshold (10, not 3) and a short duration (30 minutes,
+      not "until support unlocks it"). The alternative worth knowing about is
+      exponential backoff per account — 1s, 2s, 4s, 8s — which makes automated
+      guessing impossible while never fully closing the door on the real owner.
+    </p>
+
+    <hr>
+
+    <h2>When this breaks</h2>
+
+    <h3><code>trust proxy</code>, in both directions</h3>
+
+    <p>
+      Behind Coolify's proxy, every request arrives from the proxy's address.
+      Forget <code>app.set('trust proxy', 1)</code> and all users share one
+      bucket: the fifth failed login <em>anywhere in the world</em> locks out
+      everybody. The limiter appears to work perfectly in development, where
+      there is no proxy.
+    </p>
+    <p>
+      Now the other direction, which is worse because it looks like the fix.
+      Setting <code>trust proxy</code> to <code>true</code> tells Express to
+      believe the whole <code>X-Forwarded-For</code> chain — including the part
+      the client wrote. An attacker sends a different forged value on every
+      request and has an unlimited number of buckets. <strong>The number matters:
+      <code>1</code> means "trust exactly one proxy in front of me".</strong>
+    </p>
+
+    <h3>Carrier-grade NAT, which is most of your users</h3>
+
+    <p>
+      An IP address is not a person. On Indian mobile networks in particular,
+      thousands of subscribers share one public address through CGNAT — and a
+      corporate office, a college campus or a café is the same story at smaller
+      scale. An IP limit of five logins per fifteen minutes can lock out an
+      entire neighbourhood because one person mistyped their password.
+    </p>
+    <p>
+      This is why the IP limiter is set at 20 rather than 5 while the
+      per-account limiter holds the strict number. The account limiter is the
+      one doing the security work; the IP limiter is a coarse net for obvious
+      floods, and it has to be loose enough not to catch a shared exit.
+    </p>
+
+    <h3>The lockout message and the clock both answer the question</h3>
+
+    <p>
+      Two leaks in the original handler, and the second one survives fixing the
+      first. "Account locked, try again after 14:32" confirms the email is
+      registered — that is the obvious one. Less obvious: <code>if (!user)
+      throw</code> returns in about a millisecond, while a real account spends
+      ~100ms inside argon2. <strong>Timing answers the question the message
+      refused to.</strong> Hence verifying against a dummy hash so both paths
+      cost the same.
+    </p>
+
+    <h3>Counting failures with read-then-write</h3>
+
+    <pre><code>const newCount = (user.failed_login_attempts || 0) + 1;   // read
+await pool.query('UPDATE users SET failed_login_attempts = $1 ...');  // write</code></pre>
+
+    <p>
+      Two attempts arriving together both read 4, both write 5, and one failure
+      vanishes. The counter that exists to notice a burst of attempts undercounts
+      precisely when attempts come in a burst. <code>SET x = x + 1</code> in the
+      database is atomic; the read-modify-write in application code is not.
+    </p>
+
+    <h3>IPv6, where an attacker owns 18 quintillion addresses</h3>
+
+    <p>
+      Limiting per exact IPv6 address is close to no limit at all — a typical
+      residential allocation is a /64, which is 2<sup>64</sup> addresses to
+      rotate through. IPv6 keys need truncating to the /64 (or /56) before
+      counting. Express's <code>req.ip</code> gives you the full address, so
+      this is something you do deliberately or not at all.
+    </p>
+
+    <hr>
+
+    <h2>What this costs you</h2>
+
+    <table>
+      <thead>
+        <tr><th>Decision</th><th>What you pay</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Redis on the login path</td>
+          <td>A hard dependency on the most important request in the system, and a decision you must make deliberately: <strong>if Redis is down, does login fail open or closed?</strong> Fail open and an outage becomes an unlimited brute-force window. Fail closed and a Redis restart logs nobody in. Token fails <em>closed</em> on auth and <em>open</em> on the general API limiter — the general one is protecting capacity, and refusing all traffic to protect capacity is just the outage arriving sooner.</td>
+        </tr>
+        <tr>
+          <td>Two limiters instead of one</td>
+          <td>Two Redis round trips per login, two sets of counters to reason about, and a support question that is genuinely harder to answer: "which limit did I hit?" The response is deliberately vague about that, so the logs have to say.</td>
+        </tr>
+        <tr>
+          <td>Constant-time login</td>
+          <td>Every login attempt with an unknown email now costs a full argon2 verification — deliberately expensive work, done on behalf of someone typing nonsense. That is a small amplification lever, and it is why the IP limiter sits in front of it.</td>
+        </tr>
+        <tr>
+          <td>Account lockout</td>
+          <td>A denial-of-service lever pointed at your own users, in exchange for a backstop against slow guessing. Bounded by keeping the duration short and the threshold high.</td>
+        </tr>
+        <tr>
+          <td><code>standardHeaders</code></td>
+          <td>The response tells the caller the limit, what is left, and when it resets — including callers who are attacking you, who can now pace themselves perfectly. Accepted: a legitimate client that can say "try again in 12 minutes" is worth more than the small obscurity given up.</td>
+        </tr>
+      </tbody>
+    </table>
 
     <hr>
 
@@ -257,18 +497,41 @@ app.set('trust proxy', 1);
         "Test: for i in {1..6}; do curl -X POST -H 'Content-Type: application/json' -d '{\"email\":\"test@example.com\",\"password\":\"wrong\"}' localhost:3000/api/auth/login; done"
       ],
       solution: `// 1. Install
-// npm install express-rate-limit
+// npm install express-rate-limit rate-limit-redis ioredis
 
 // 2. api/src/middleware/rate-limit.ts
 import rateLimit from 'express-rate-limit';
+import RedisStore from 'rate-limit-redis';
+import Redis from 'ioredis';
 
-export const authLimiter = rateLimit({
+const redis = new Redis(process.env.REDIS_URL);
+const TOO_MANY = { error: 'Too many attempts. Please try again later.', success: false };
+
+const store = (prefix) => new RedisStore({
+  prefix,
+  sendCommand: (...args) => redis.call(...args),
+});
+
+// Two limiters, both applied. Neither key is one the attacker can vary
+// without running into the other.
+export const loginByIp = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5,
-  message: { error: 'Too many login attempts. Try again in 15 minutes.', success: false },
+  max: 20,                        // loose: CGNAT means one IP is many people
+  message: TOO_MANY,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => \`\${req.ip}:\${req.body?.email || 'unknown'}\`,
+  store: store('rl:login:ip:'),
+});
+
+export const loginByAccount = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,                         // strict: this is the security-carrying one
+  message: TOO_MANY,
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: store('rl:login:acct:'),
+  keyGenerator: (req) => String(req.body?.email || '').trim().toLowerCase(),
+  skip: (req) => !req.body?.email,
 });
 
 export const registerLimiter = rateLimit({
@@ -284,12 +547,16 @@ export const apiLimiter = rateLimit({
 });
 
 // 3. Apply in server.ts:
-app.set('trust proxy', 1);
+app.set('trust proxy', 1);            // 1, not true - true lets a client forge its IP
 app.use('/api', apiLimiter);
-app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/login', loginByIp, loginByAccount);
 app.use('/api/auth/register', registerLimiter);
+app.use('/api/redeem', redeemLimiter);
 
-// 4. Account lockout in login handler (see lesson code above)
+// 4. Account lockout in login handler (see lesson code above).
+//    Same message for wrong password, no such account, and locked -
+//    and verify against a dummy hash when there is no user, so the
+//    response time does not answer what the message would not.
 
 // 5. Migration:
 // BEGIN;
@@ -309,24 +576,28 @@ app.use('/api/auth/register', registerLimiter);
 
     createQuiz("lesson-quiz", [
       {
-        type: "predict-output",
-        question: "A user sends 6 login requests in 15 minutes (all with wrong passwords). What happens?",
-        code: "// Rate limit: 5 per 15 minutes\n// Request 1-5: processed (return 401)\n// Request 6: ???",
-        answer: "HTTP 429 Too Many Requests with the rate limit error message (request never reaches the login handler)",
-        explanation: "The rate limiter middleware blocks the request BEFORE it reaches your login code. The response includes RateLimit-Reset telling the client when they can try again. This prevents brute-force even if your password hashing is somehow compromised."
+        question: "The account limiter allows 5 login attempts per 15 minutes. A user sends a 6th, still with the wrong password. What does the login handler see?",
+        options: [
+          "A 6th call, which it rejects with 401 as usual",
+          "Nothing — the limiter answers 429 before the request ever reaches the handler",
+          "A 6th call, but with req.rateLimited set to true",
+          "Nothing, and the connection is closed without a response"
+        ],
+        correct: 1,
+        explanation: "The limiter is middleware, so it runs before the route. That is the point: the expensive part of a login — an argon2 verification, deliberately slow — never happens for a request that is over the limit. The 429 carries RateLimit-Reset so a legitimate client can say when to try again."
       },
       {
         type: "spot-the-bug",
         question: "What's wrong with this rate limiter key?",
-        code: "keyGenerator: (req) => req.ip",
+        code: "keyGenerator: (req) => `${req.ip}:${req.body.email}`",
         options: [
           "req.ip doesn't exist in Express",
-          "Only keying by IP lets an attacker try 5 passwords on EACH account — should include the email",
+          "The attacker supplies both halves, so varying either one buys a fresh allowance — it stops neither attack",
           "IP-based limiting is illegal under GDPR",
           "The key should be a number, not a string"
         ],
         correct: 1,
-        explanation: "With only IP as the key, an attacker gets 5 attempts per 15 minutes across ALL accounts. They could try 5 passwords on account A, then 5 on account B, etc. Keying by IP + email means 5 attempts per account per IP."
+        explanation: "Changing the email gives a new key, so one host can work through many accounts five at a time. Changing the IP gives a new key, so a botnet can work on one account. A composite key of two attacker-controlled values defends against neither. Two independent limiters — one keyed by IP alone, one by the account alone — leave nothing for the attacker to vary."
       },
       {
         type: "fill-blank",
@@ -370,9 +641,9 @@ app.use('/api/auth/register', registerLimiter);
       {
         type: "predict-output",
         question: "What response headers does express-rate-limit send with each response?",
-        code: "// express-rate-limit with windowMs: 900000, max: 5\n// After 3 requests in this window:\n// RateLimit-Limit: ???\n// RateLimit-Remaining: ???\n// RateLimit-Reset: ???",
-        answer: "RateLimit-Limit: 5, RateLimit-Remaining: 2, RateLimit-Reset: (seconds until window resets)",
-        explanation: "express-rate-limit sends standardized headers: RateLimit-Limit (max requests allowed), RateLimit-Remaining (how many left), and RateLimit-Reset (seconds until the window resets). Clients can use these to implement intelligent retry logic."
+        code: "const max = 5;\nconst used = 3;\nconsole.log('RateLimit-Limit:', max);\nconsole.log('RateLimit-Remaining:', max - used);",
+        answer: "RateLimit-Limit: 5\nRateLimit-Remaining: 2",
+        explanation: "Three standard headers go out with every response: RateLimit-Limit, RateLimit-Remaining, and RateLimit-Reset (seconds until the window clears). The client uses them to say \"try again in 12 minutes\" instead of guessing — and so, of course, can anyone pacing an attack. That trade is made deliberately; see \"What this costs you\"."
       },
       {
         question: "What is the key difference between a fixed window and a sliding window rate limiting algorithm?",
@@ -468,8 +739,8 @@ app.use('/api/auth/register', registerLimiter);
       {
         type: "predict-output",
         question: "An account is locked after 10 failures with a 30-minute lockout. What happens if the user tries to log in with the CORRECT password during lockout?",
-        code: "// Account locked at 14:00 (lockout duration: 30 min)\n// User tries correct password at 14:15\n// locked_until = '14:30'\n// Current time = '14:15'\n// Is locked_until > now? ???",
-        answer: "Login is REJECTED — the account is still locked even though the password is correct. The user must wait until 14:30.",
+        code: "const lockedUntil = new Date('2026-08-16T14:30:00Z');\nconst now = new Date('2026-08-16T14:15:00Z');\nconst locked = lockedUntil > now;\nconsole.log('still locked:', locked);\nconsole.log('password even checked:', !locked);",
+        answer: "still locked: true\npassword even checked: false",
         explanation: "Account lockout blocks ALL login attempts, including correct passwords. This is by design — if correct passwords bypassed lockout, an attacker would know they found the right password (the error message would change). The user must wait for the lockout to expire, ensuring the attacker can't distinguish correct from incorrect attempts."
       },
       {
@@ -533,11 +804,15 @@ app.use('/api/auth/register', registerLimiter);
         explanation: "Revealing the exact unlock time (e.g. '2024-03-15T14:30:00Z') lets an attacker set a timer and resume the attack the instant lockout expires — no guessing needed. Return a vague message like 'Account temporarily locked. Try again later.' or 'Try again in approximately 30 minutes.' to introduce uncertainty."
       },
       {
-        type: "predict-output",
-        question: "What happens when the lockout expires and the user tries again?",
-        code: "// locked_until = '2024-03-15T14:00:00'\n// Current time = '2024-03-15T14:01:00'\n// failed_login_attempts = 10\n// User sends correct password\n\n// Is locked_until > now? false (lockout expired)\n// Proceed to password check...\n// Password correct → what happens to failed_login_attempts?",
-        answer: "failed_login_attempts resets to 0 and locked_until is set to NULL — the account is fully unlocked",
-        explanation: "After lockout expires, the next successful login should reset the slate completely: zero out the failure counter and clear the lock timestamp. Without this reset, the counter stays at 10 and one more failure would immediately re-lock the account (since 11 > 10 threshold)."
+        question: "A lockout has expired, failed_login_attempts is still 10, and the user finally types the right password. What must the success path do — and what goes wrong if it forgets?",
+        options: [
+          "Nothing; the expired lockout is enough on its own",
+          "Only clear locked_until — the counter is harmless once the lock has lapsed",
+          "Reset failed_login_attempts to 0 and clear locked_until; forget it and the very next typo re-locks the account instantly",
+          "Delete the row and let the user register again"
+        ],
+        correct: 2,
+        explanation: "Leave the counter at 10 and the account is one mistyped character from being locked again, permanently, because every future failure is the eleventh. The success path has to wipe the slate — not just the lock, but the count that produced it."
       },
       {
         type: "fill-blank",
@@ -591,8 +866,8 @@ app.use('/api/auth/register', registerLimiter);
       {
         type: "predict-output",
         question: "A sliding window rate limiter with a 1-minute window and max 3 requests. Requests arrive at t=0s, t=30s, t=45s, t=61s. Which requests are allowed?",
-        code: "// Window: 60 seconds, max: 3\n// t=0s:  request 1 → window [0s-60s] has 1 request\n// t=30s: request 2 → window [0s-60s] has 2 requests\n// t=45s: request 3 → window [0s-60s] has 3 requests\n// t=61s: request 4 → window [1s-61s] has ??? requests",
-        answer: "All 4 requests are ALLOWED. At t=61s, the sliding window covers [1s-61s], so t=0s has expired. Only 2 requests remain in the window (t=30s, t=45s). Request 4 is the 3rd in this window — under the max.",
+        code: "const WINDOW = 60, MAX = 3;\nconst arrivals = [0, 30, 45];\nconst now = 61;\nconst stillCounted = arrivals.filter(function (t) { return t > now - WINDOW; });\nconsole.log('in window at t=61:', stillCounted.join(','));\nconsole.log('allowed:', stillCounted.length < MAX);",
+        answer: "in window at t=61: 30,45\nallowed: true",
         explanation: "This is the key advantage of sliding window over fixed window. The window slides with time — it's always 'the last 60 seconds from now'. Old requests age out as time passes, so the user organically regains capacity. There's no hard reset boundary that could be exploited."
       }
     ]);

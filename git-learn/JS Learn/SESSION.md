@@ -125,8 +125,8 @@ had two options: fail forever, or lie. It now takes a mandatory reason, records
 prints `n/a` for that lesson rather than counting it as verified.
 
 **Student decided the pace: full depth on all 15 remaining.** Order — thinnest
-and most load-bearing first: ~~`b3/0003` REST design~~ **done**, `b4/0003` rate
-limiting (794), `a3/0002` API client (845), `b3/0004` validation (858),
+and most load-bearing first: ~~`b3/0003` REST design~~ **done**, ~~`b4/0003`
+rate limiting~~ **done**, `a3/0002` API client (845), `b3/0004` validation (858),
 `a4/0002` auth context (865), `b4/0002` JWT rotation (923), `a10/0001` secure
 storage (982), `b7/0002` (1,126), `b7/0003` (1,139), then `b9/0002`, `b6/0001`,
 `b9/0001`, `b10/0001`, `a5/0001`, `a5/0004`.
@@ -171,7 +171,55 @@ into a **500** rather than a 400, and `{"id":"abc"}` into a Postgres error;
 clearing an expiry silently does nothing. The solution now uses
 `'label' in req.body`.
 
-**Two escaping failures while writing it, both caught by the verifier**, both
+#### `b4/0003` rate limiting — done, 794 → 2,314 words
+
+Three defects, one of which the quiz was actively teaching as correct.
+
+**The limiter key was `${req.ip}:${req.body.email}`, described as "IP + email
+so we cover both". It covers neither** — the attacker supplies both halves.
+Vary the email and one host works through many accounts five at a time; vary
+the IP and a botnet works on one account. Replaced with **two independent
+limiters**, both of which must pass: one keyed by IP alone, one by the account
+alone. Then there is nothing left to vary. The quiz question that taught the
+composite key as the fix was rewritten — it had the reasoning backwards.
+
+**The in-memory store contradicted ADR-0003.** Redis was a commented-out
+"production consideration"; with N replicas, five attempts is five per replica,
+and a deploy resets every counter. Now Redis-backed, with the ADR named.
+
+**Login leaked account existence twice**, and fixing the message does not fix
+the second one. "Account locked, try again after 14:32" confirms the email is
+registered — obvious. Less obvious: `if (!user) throw` returns in a
+millisecond while a real account spends ~100ms in argon2, so **the clock
+answers the question the message refused to.** Now one message for every
+failure and a dummy-hash verification when there is no user, so both paths
+cost the same. Also made the failure counter atomic — read-then-write loses
+increments exactly when attempts overlap, which is the case it exists for.
+
+Two things worth keeping from the new sections:
+
+- **CGNAT is not an edge case for this product.** Indian mobile networks put
+  thousands of subscribers behind one address. An IP limit of 5/15min locks out
+  a neighbourhood because one person mistyped. Hence IP loose (20) and account
+  strict (5) — the account limiter carries the security, the IP limiter is a
+  coarse net.
+- **`trust proxy` breaks in both directions.** Unset, everyone shares the
+  proxy's bucket and the fifth failed login anywhere locks out the world. Set
+  to `true`, a client can forge `X-Forwarded-For` and mint unlimited buckets.
+  `1` means "exactly one proxy in front of me".
+
+Also recorded as a real decision rather than a default: **if Redis is down,
+auth fails closed and the general API limiter fails open** — refusing all
+traffic to protect capacity is just the outage arriving sooner.
+
+**Five pre-existing broken quiz questions surfaced**, all the premise-in-comment
+pattern SESSION.md already warned about: comment-only code with a prose answer,
+so they print nothing. Two became multiple-choice, three became runnable. They
+were invisible until the verifier ran over this lesson for the first time.
+
+#### Trap that bit twice
+
+**Two escaping failures while writing `b3/0003`, both caught by the verifier**, both
 the same family as the `</script>` trap: a scripted edit put real newlines
 inside a double-quoted JS string, and an unescaped backtick inside the
 `solution:` template literal ended it early. Neither is visible by reading —
