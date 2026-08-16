@@ -128,7 +128,7 @@ prints `n/a` for that lesson rather than counting it as verified.
 and most load-bearing first: ~~`b3/0003` REST design~~ **done**, ~~`b4/0003`
 rate limiting~~ **done**, ~~`a3/0002` API client~~ **done**, ~~`b3/0004`
 validation~~ **done**, ~~`a4/0002` auth context~~ **done**,
-`b4/0002` JWT rotation (923), `a10/0001` secure
+~~`b4/0002` JWT rotation~~ **done**, `a10/0001` secure
 storage (982), `b7/0002` (1,126), `b7/0003` (1,139), then `b9/0002`, `b6/0001`,
 `b9/0001`, `b10/0001`, `a5/0001`, `a5/0004`.
 
@@ -333,6 +333,51 @@ Five defects, and the first one ships to users.
 Also added the wiring the two lessons had been describing separately: the
 client's `onUnauthorized` now calls A3.2's `refreshOnce`, with a module-level
 session-lost handler so a 401 can be handled when no component is mounted.
+
+#### `b4/0002` JWT rotation — done, 923 → 2,688 words
+
+**The lesson claimed theft detection it did not implement.** The comment said
+"possible theft — revoke ALL user's tokens"; the code did neither thing:
+
+- the lookup filtered `revoked_at IS NULL`, so a reused token produced *no
+  row* — indistinguishable from one never issued. The only signal worth having
+  was discarded before it was read.
+- the "revoke all" query matched `token_hash = $1 AND revoked_at IS NULL`, the
+  condition that had just failed. **It updated zero rows, every time.**
+
+Fixed properly, which needed a schema change: `family_id` on
+`refresh_tokens`, one family per login. Look the token up unconditionally,
+treat `revoked_at IS NOT NULL` as reuse, revoke the family. The insight worth
+keeping is that **rotation only detects anything because revoked rows are
+kept** — delete them and a reused token looks like a token that never existed.
+
+Four more:
+
+- **Rotation was two statements with no transaction.** If the insert fails
+  after the revoke, the user has no session and nothing logged why. Now one
+  transaction with `FOR UPDATE`, which also stops two concurrent refreshes
+  both rotating.
+- **Logout revoked every device.** Signing out on the phone ended the session
+  on the redemption web page mid-conversation. Now family-scoped, with
+  `logout-all` as a separate deliberate action. It also sat behind
+  `requireAuth`, so logout failed exactly when the access token was stale —
+  which is when people log out. The refresh token in the body is the
+  credential.
+- **`jwt.verify(token, secret)` with no `algorithms`** lets the token say how
+  it should be checked — the shape of `alg: none` and RS256→HS256 confusion.
+  Pinned.
+- **`require('crypto')` inside an ESM module** is a ReferenceError.
+
+**The honest problem I wrote up rather than solved:** a client that times out
+and retries a refresh presents a token the server already rotated. That is
+indistinguishable from theft, so the family dies and a user on a bad
+connection is logged out for doing nothing wrong. The mitigation is a
+few-second grace window returning the same new pair — which permits replay
+inside it. Recorded as a decision to take deliberately, not discover from
+support tickets. It is also why A3.2's single-flight refresh matters.
+
+Two quiz questions fixed: one premise-in-comment, and one whose stated answer
+was the old revoke-everything behaviour.
 
 #### Trap that bit twice
 

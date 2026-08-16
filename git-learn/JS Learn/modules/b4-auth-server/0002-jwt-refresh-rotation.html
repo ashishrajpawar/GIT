@@ -89,7 +89,7 @@ npm install -D @types/jsonwebtoken</code></pre>
 
     <pre><code>// api/src/services/auth.ts
 import jwt from 'jsonwebtoken';
-import { randomBytes } from 'crypto';
+import { randomBytes, createHash } from 'crypto';   // ESM: import it, do not require() it
 import { pool } from '../db/pool.js';
 
 const ACCESS_SECRET = process.env.JWT_SECRET!;
@@ -109,22 +109,30 @@ export function signAccessToken(user: { id: number; email: string }): string {
   );
 }
 
-export async function createRefreshToken(userId: number): Promise&lt;string&gt; {
+// A refresh token is 40 random bytes - 320 bits. Plain SHA-256 is the right
+// hash here and argon2 would be wrong: slow hashing exists to make GUESSING
+// expensive, and nobody guesses a 320-bit random value. The database stores
+// the hash so a dump yields nothing usable. (ADR-0007 calls this "hash-only",
+// the option token codes could not take because a code must be re-showable.)
+function hashToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+// familyId ties every rotation of one login together. It is what makes reuse
+// detection possible - see "When this breaks".
+export async function createRefreshToken(
+  client: PoolClient, userId: number, familyId?: string
+): Promise&lt;string&gt; {
   const token = randomBytes(40).toString('hex');
   const expiresAt = new Date(Date.now() + REFRESH_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
 
-  await pool.query(
-    `INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
-     VALUES ($1, $2, $3)`,
-    [userId, hashToken(token), expiresAt]
+  await client.query(
+    `INSERT INTO refresh_tokens (user_id, family_id, token_hash, expires_at)
+     VALUES ($1, COALESCE($2, gen_random_uuid()), $3, $4)`,
+    [userId, familyId ?? null, hashToken(token), expiresAt]
   );
 
   return token;
-}
-
-function hashToken(token: string): string {
-  const { createHash } = require('crypto');
-  return createHash('sha256').update(token).digest('hex');
 }</code></pre>
 
     <h3>The refresh_tokens table</h3>
@@ -133,14 +141,19 @@ function hashToken(token: string): string {
 CREATE TABLE refresh_tokens (
   id          SERIAL PRIMARY KEY,
   user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  -- One family per login. Every rotation adds a row with the same family_id,
+  -- so "this session" is a thing you can revoke without touching the others.
+  family_id   UUID NOT NULL,
   token_hash  TEXT NOT NULL UNIQUE,
   expires_at  TIMESTAMPTZ NOT NULL,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   revoked_at  TIMESTAMPTZ
 );
 
-CREATE INDEX idx_refresh_tokens_user ON refresh_tokens(user_id);
-CREATE INDEX idx_refresh_tokens_hash ON refresh_tokens(token_hash);</code></pre>
+CREATE INDEX idx_refresh_tokens_user   ON refresh_tokens(user_id);
+CREATE INDEX idx_refresh_tokens_family ON refresh_tokens(family_id);
+-- token_hash is already UNIQUE, which indexes it. A second index on the same
+-- column costs writes and buys nothing.</code></pre>
 
     <p>Store the <strong>hash</strong> of the refresh token, not the token itself. If the database is breached, attackers can't use the hashed values as refresh tokens.</p>
 
@@ -161,7 +174,8 @@ CREATE INDEX idx_refresh_tokens_hash ON refresh_tokens(token_hash);</code></pre>
 
     const user = rows[0];
     const accessToken = signAccessToken(user);
-    const refreshToken = await createRefreshToken(user.id);
+    // A fresh login starts a new family - no familyId passed.
+    const refreshToken = await createRefreshToken(pool, user.id);
 
     res.json({
       data: {
@@ -182,43 +196,82 @@ CREATE INDEX idx_refresh_tokens_hash ON refresh_tokens(token_hash);</code></pre>
     if (!refreshToken) throw ApiError.unauthorized('Refresh token required');
 
     const tokenHash = hashToken(refreshToken);
+    const client = await pool.connect();
 
-    // Find the token in the database
-    const { rows } = await pool.query(
-      `SELECT rt.*, u.email, u.display_name
-       FROM refresh_tokens rt
-       JOIN users u ON rt.user_id = u.id
-       WHERE rt.token_hash = $1 AND rt.revoked_at IS NULL AND rt.expires_at > NOW()`,
-      [tokenHash]
-    );
+    try {
+      await client.query('BEGIN');
 
-    if (!rows[0]) {
-      // Token not found or revoked — possible theft. Revoke ALL user's tokens.
-      await pool.query(
-        `UPDATE refresh_tokens SET revoked_at = NOW()
-         WHERE token_hash = $1 AND revoked_at IS NULL`,
+      // Look it up WITHOUT filtering on revoked_at. A revoked row is the
+      // whole point: it means this token was already used once.
+      const { rows } = await client.query(
+        `SELECT rt.*, u.email
+           FROM refresh_tokens rt
+           JOIN users u ON rt.user_id = u.id
+          WHERE rt.token_hash = $1
+          FOR UPDATE OF rt`,
         [tokenHash]
       );
-      throw ApiError.unauthorized('Invalid refresh token');
+
+      const record = rows[0];
+
+      // Unknown token: nothing to revoke, nothing to learn from.
+      if (!record) {
+        await client.query('ROLLBACK');
+        throw ApiError.unauthorized('Invalid refresh token');
+      }
+
+      // REUSE. Someone presented a token that was already rotated away.
+      // Either it was stolen, or the legitimate client is retrying - and the
+      // server cannot tell which, so it assumes the worse one and kills the
+      // whole family. The other sessions are untouched.
+      if (record.revoked_at !== null) {
+        await client.query(
+          `UPDATE refresh_tokens SET revoked_at = NOW()
+            WHERE family_id = $1 AND revoked_at IS NULL`,
+          [record.family_id]
+        );
+        await client.query('COMMIT');
+        throw ApiError.unauthorized('Invalid refresh token');
+      }
+
+      if (new Date(record.expires_at) &lt;= new Date()) {
+        await client.query('ROLLBACK');
+        throw ApiError.unauthorized('Invalid refresh token');
+      }
+
+      // Rotate. Both statements are in one transaction: revoking the old
+      // token and issuing the new one must succeed or fail together, or a
+      // failed insert leaves the user with nothing.
+      await client.query(
+        'UPDATE refresh_tokens SET revoked_at = NOW() WHERE id = $1',
+        [record.id]
+      );
+
+      const newAccessToken = signAccessToken({ id: record.user_id, email: record.email });
+      const newRefreshToken = await createRefreshToken(client, record.user_id, record.family_id);
+
+      await client.query('COMMIT');
+
+      res.json({
+        data: { accessToken: newAccessToken, refreshToken: newRefreshToken },
+        success: true,
+      });
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() =&gt; {});
+      throw err;
+    } finally {
+      client.release();
     }
-
-    const record = rows[0];
-
-    // Rotation: revoke old token, issue new pair
-    await pool.query(
-      'UPDATE refresh_tokens SET revoked_at = NOW() WHERE id = $1',
-      [record.id]
-    );
-
-    const newAccessToken = signAccessToken({ id: record.user_id, email: record.email });
-    const newRefreshToken = await createRefreshToken(record.user_id);
-
-    res.json({
-      data: { accessToken: newAccessToken, refreshToken: newRefreshToken },
-      success: true,
-    });
   } catch (err) { next(err); }
 });</code></pre>
+
+    <p>
+      <code>FOR UPDATE</code> inside the transaction is what stops two refreshes
+      racing: the second waits for the first to commit, then sees a revoked row
+      and treats it as reuse. Without the lock both could read
+      <code>revoked_at IS NULL</code> and both rotate, leaving two live tokens
+      in one family — which is exactly the state rotation exists to prevent.
+    </p>
 
     <h2>Auth middleware — verifying access tokens</h2>
 
@@ -235,7 +288,12 @@ export function requireAuth(req, res, next) {
   const token = header.slice(7);
 
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET!) as { sub: string; email: string };
+    // Pin the algorithm. Without this, verify() accepts whatever the token's
+    // own header claims - which is how "alg: none" and RS256-to-HS256
+    // confusion attacks worked. Never let the token choose how it is checked.
+    const payload = jwt.verify(token, process.env.JWT_SECRET!, {
+      algorithms: ['HS256'],
+    }) as { sub: string; email: string };
     req.user = { id: parseInt(payload.sub, 10), email: payload.email };
     next();
   } catch (err) {
@@ -248,16 +306,227 @@ export function requireAuth(req, res, next) {
 
     <h2>Logout — revoking refresh tokens</h2>
 
-    <pre><code>router.post('/logout', requireAuth, async (req, res, next) =&gt; {
+    <pre><code>// No requireAuth. The access token is 15 minutes old at most, and a user
+// pressing "Log out" after leaving the app open overnight has an expired
+// one - demanding a valid access token means logout fails exactly when it
+// matters. The refresh token in the body is the credential here.
+router.post('/logout', async (req, res, next) =&gt; {
   try {
-    // Revoke all refresh tokens for this user
+    const { refreshToken } = req.body;
+    if (!refreshToken) throw ApiError.badRequest('refreshToken is required');
+
+    // Revoke THIS session's family, not every session the user has.
+    // Logging out on the phone should not sign them out of the web page.
+    await pool.query(
+      `UPDATE refresh_tokens SET revoked_at = NOW()
+        WHERE family_id = (SELECT family_id FROM refresh_tokens WHERE token_hash = $1)
+          AND revoked_at IS NULL`,
+      [hashToken(refreshToken)]
+    );
+
+    // Always 204, whether or not the token existed. "That token was not
+    // real" is not information a stranger needs.
+    res.status(204).end();
+  } catch (err) { next(err); }
+});
+
+// Logging out everywhere is a different, deliberate action - and this one
+// does need proof of identity.
+router.post('/logout-all', requireAuth, async (req, res, next) =&gt; {
+  try {
     await pool.query(
       'UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL',
       [req.user.id]
     );
-    res.json({ success: true });
+    res.status(204).end();
   } catch (err) { next(err); }
 });</code></pre>
+
+    <hr>
+
+    <h2>Why this way (and what was rejected)</h2>
+
+    <h3>Two tokens, because one cannot be both</h3>
+
+    <p>
+      A single long-lived JWT is simpler and it cannot be taken back. The
+      server verifies a signature; there is no lookup, so there is nowhere to
+      record that this one is no longer welcome. Someone who copies it has
+      access until it expires, and if it expires quickly the user logs in every
+      hour.
+    </p>
+    <p>
+      A single opaque session token in the database is revocable and costs a
+      query on every request — which contradicts the stateless API in ADR-0003
+      only mildly (the query is cheap) but does put the database on the path of
+      every call.
+    </p>
+    <p>
+      The pair takes the useful half of each: a signed access token verified
+      with no lookup, short enough that a stolen one is a nuisance rather than a
+      breach, plus a refresh token that <em>is</em> a database row and can be
+      killed. The cost is honest and worth stating: <strong>revocation is not
+      instant.</strong> It stops the next refresh, so there is a window of up to
+      the access token's lifetime — 15 minutes — where a revoked session still
+      works.
+    </p>
+
+    <h3>Rotation, and the family that makes it mean something</h3>
+
+    <p>
+      Rotating on every refresh is what turns a stolen refresh token from a
+      week of access into a detectable event. The mechanism is not the
+      rotation itself, though — it is that <strong>the old token stays in the
+      table, marked revoked, instead of being deleted.</strong>
+    </p>
+    <p>
+      A deleted row and a token that never existed look identical. A revoked
+      row is evidence: the only way to present one is to have held a copy that
+      was already exchanged. Either the thief is using their copy after the
+      real client rotated, or the real client is using theirs after the thief
+      did. The server cannot tell which — so it kills the whole family, and
+      both of them have to log in. The legitimate user knows their password.
+    </p>
+
+    <h3>Plain SHA-256 for the refresh token, argon2 for the password</h3>
+
+    <p>
+      Using a fast hash on a credential looks like the mistake B4.1 spent a
+      lesson warning about. It is not, and the difference is where the value
+      came from. A password is chosen by a human and might be
+      <code>monsoon2024</code>; argon2 is slow so that trying millions of
+      guesses costs real money. A refresh token is 40 bytes from the CSPRNG —
+      320 bits, unguessable at any speed. Slow hashing would add latency to
+      every refresh and defend against nothing.
+    </p>
+
+    <hr>
+
+    <h2>When this breaks</h2>
+
+    <h3>The reuse detection that detected nothing</h3>
+
+    <p>
+      This lesson shipped with a comment promising theft detection and code
+      that could not deliver it:
+    </p>
+
+    <pre><code>WHERE rt.token_hash = $1 AND rt.revoked_at IS NULL AND rt.expires_at &gt; NOW()
+// ...
+if (!rows[0]) {
+  // "possible theft — revoke ALL user's tokens"
+  UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = $1 AND revoked_at IS NULL
+}</code></pre>
+
+    <p>Two failures stacked on top of each other:</p>
+
+    <ul>
+      <li>
+        The lookup filters out revoked rows, so a reused token produces
+        <em>no row</em> — indistinguishable from a token that was never issued.
+        The one signal worth having is discarded before it is read.
+      </li>
+      <li>
+        The "revoke all" query matches on the same hash with
+        <code>revoked_at IS NULL</code> — the condition that just failed. It
+        updates zero rows, every time. The comment describes an action the code
+        does not take.
+      </li>
+    </ul>
+
+    <p>
+      Both are fixed by looking the token up unconditionally, treating
+      <code>revoked_at IS NOT NULL</code> as the theft signal, and revoking by
+      <code>family_id</code> — which is why the family column exists.
+    </p>
+
+    <h3>Rotation without a transaction can log the user out</h3>
+
+    <p>
+      Revoke-then-insert as two separate statements has a gap. If the insert
+      fails — a constraint, a dropped connection, the process being restarted
+      mid-deploy — the old token is revoked and no new one exists. The user's
+      session is gone, and nothing anywhere logged an error that explains it.
+      One transaction, so both happen or neither does.
+    </p>
+
+    <h3>The retry that looks exactly like theft</h3>
+
+    <p>
+      This is the uncomfortable one, and it is why A3.2's timeout matters here.
+      The client sends a refresh, the server rotates and replies, and the reply
+      is lost on a bad connection. The client times out and retries with the
+      only token it has — the old one, which the server has already revoked.
+      <strong>That is reuse, and the family gets killed.</strong> A user on a
+      poor connection is logged out for doing nothing wrong.
+    </p>
+    <p>
+      Nobody has a perfect answer. The usual mitigation is a short grace window:
+      remember the token that <em>replaced</em> each revoked one, and if a
+      revoked token is presented within a few seconds of its rotation, return
+      the same new pair again rather than declaring theft. It makes replay
+      inside that window possible, which is a real cost — and it is a smaller
+      cost than logging people out on a train. Decide it deliberately; do not
+      discover it from support tickets.
+    </p>
+
+    <h3>Verifying a token the token gets to describe</h3>
+
+    <p>
+      <code>jwt.verify(token, secret)</code> with no options lets the token's
+      own header say how it should be checked. That is the shape of the
+      <code>alg: none</code> and RS256-to-HS256 confusion attacks. The library
+      guards against the worst of it now, and pinning
+      <code>algorithms: ['HS256']</code> costs one line and does not depend on
+      the library staying careful.
+    </p>
+
+    <h3>Logging out of one device logged you out of all of them</h3>
+
+    <p>
+      The original revoked every refresh token the user had. Signing out on a
+      phone would end the session on the redemption web page mid-conversation.
+      Logout revokes the family; <code>logout-all</code> exists separately for
+      when that is what someone means.
+    </p>
+    <p>
+      It also sat behind <code>requireAuth</code>, so logging out required a
+      valid access token — which the user does not have if the app has been
+      closed for an hour. Logout failing precisely when the session is stale is
+      the wrong way round. The refresh token in the body is the credential.
+    </p>
+
+    <hr>
+
+    <h2>What this costs you</h2>
+
+    <table>
+      <thead>
+        <tr><th>Decision</th><th>What you pay</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Access tokens verified by signature</td>
+          <td>They cannot be revoked. Every "kill this session" is really "kill it within 15 minutes", and anything needing instant effect — a revoked token's live WebSocket, an account being locked — has to be enforced somewhere other than the JWT.</td>
+        </tr>
+        <tr>
+          <td>Rotation</td>
+          <td>A write on every refresh, and a table that grows by one row per refresh per user. At 15-minute access tokens that is ~96 rows per user per day; expired rows need a periodic sweep or the table becomes the biggest thing in the database.</td>
+        </tr>
+        <tr>
+          <td>Family-wide revocation on reuse</td>
+          <td>Every false positive is a forced logout. A flaky network produces false positives, which is the grace window's whole reason for existing — and the grace window in turn is a few seconds where a stolen token still works.</td>
+        </tr>
+        <tr>
+          <td><code>FOR UPDATE</code> on refresh</td>
+          <td>Concurrent refreshes of the same session serialise. Harmless at Token's scale, and a reason the client should not be firing several at once — which is what A3.2's single-flight refresh is for.</td>
+        </tr>
+        <tr>
+          <td>A 7-day refresh lifetime</td>
+          <td>A user who does not open the app for a week logs in again. Longer is friendlier and widens the window a stolen token stays useful; there is no correct number, only a chosen one.</td>
+        </tr>
+      </tbody>
+    </table>
 
     <hr>
 
@@ -334,11 +603,15 @@ curl -X POST http://localhost:3000/api/auth/logout \\
         explanation: "Login gives you both tokens. Access token authenticates requests. When it expires, the refresh token gets you a new pair without re-entering the password. Logout invalidates all refresh tokens so no new access tokens can be issued."
       },
       {
-        type: "predict-output",
-        question: "An attacker steals a refresh token and uses it. Then the real user tries to refresh. What happens?",
-        code: "// Attacker uses stolen refresh token → gets new pair, old is revoked\n// Real user tries to use their (now-revoked) refresh token\n// Server sees: token exists but is revoked",
-        answer: "Server detects reuse of a revoked token and revokes ALL tokens for that user, forcing re-login",
-        explanation: "Refresh token rotation detects theft. When a revoked token is reused, it means someone has a copy they shouldn't. The safest response is to revoke everything — both the attacker's new tokens and any other sessions. The real user must re-login."
+        question: "An attacker steals a refresh token and uses it, so the old one is rotated away. Then the real user tries to refresh with theirs. What does the server do?",
+        options: [
+          "Nothing special — the real user's token simply fails and they log in again",
+          "It sees a row that exists but is revoked, treats that as reuse, and revokes the whole family — that session ends for both of them, other sessions are untouched",
+          "It revokes every refresh token the user has on every device",
+          "It cannot tell, because revoked tokens are deleted from the table"
+        ],
+        correct: 1,
+        explanation: "The signal is that the row exists and is revoked — which is only possible if two parties hold the same token. The server cannot tell which one is the thief, so it ends that session for both and the real user logs in again with a password the attacker does not have. Scope matters: the family, not every device. Revoking everything would sign the user out of the redemption page mid-conversation for a theft on their phone. And note this only works because revoked rows are kept — delete them and a reused token is indistinguishable from one that never existed."
       },
       {
         type: "spot-the-bug",
@@ -433,10 +706,14 @@ curl -X POST http://localhost:3000/api/auth/logout \\
         explanation: "Hardcoding the secret in source code is a critical vulnerability. If your repo is public (or leaked), anyone can forge valid JWTs for any user. Always use environment variables. The HS256 and RS256 approaches are both fine — what matters is that the secret/key isn't embedded in code."
       },
       {
-        type: "predict-output",
-        question: "A user's access token expired 2 seconds ago. They make an API request. What does the middleware return?",
-        code: "try {\n  const payload = jwt.verify(expiredToken, secret);\n  console.log('Authenticated:', payload.sub);\n} catch (err) {\n  console.log(err.name);\n}",
-        answer: "TokenExpiredError",
+        question: "A user's access token expired 2 seconds ago. They make an API request. What does jwt.verify do, and what should the middleware send back?",
+        options: [
+          "Returns the payload with an expired flag set; the middleware passes it through",
+          "Returns null; the middleware treats it as anonymous",
+          "Throws with err.name === 'TokenExpiredError'; the middleware answers 401 so the client refreshes and retries",
+          "Throws with err.name === 'JsonWebTokenError'; the middleware answers 403"
+        ],
+        correct: 2,
         explanation: "jwt.verify() checks the exp claim against the current time. If the token is expired — even by 1 second — it throws a TokenExpiredError. The client should catch 401 responses and use the refresh token to get a new access token, then retry the original request."
       },
       {
