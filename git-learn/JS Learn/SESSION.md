@@ -549,6 +549,46 @@ call's media crosses your server rather than going peer to peer. And the
 single-box ceiling from CLAUDE.md is now written into "what this costs you"
 rather than living only in the orientation doc.
 
+#### `b6/0001` signalling — done, 1,616 → 2,873 words
+
+**The Token-specific point this lesson was missing entirely:** WebRTC is
+peer-to-peer, and a peer connection means each side learns the other's **IP
+address**. Someone holding a code — who by design knows no name, number or
+email — places a call and their client logs an address that geolocates to a
+neighbourhood. Nothing is hacked; that is how WebRTC works.
+`iceTransportPolicy: 'relay'` is the line that prevents it, and it is now
+explained as the privacy/bandwidth trade it actually is rather than mentioned
+in passing as "when privacy matters".
+
+A quiz question asserted the opposite as its takeaway — *"zero audio/video
+through your server"* — which is true of default WebRTC and false for Token.
+Rewritten.
+
+**Node-local `Map` again, and it fails harder here than in B7.3.**
+`isInCall(calleeId)` consults one replica's memory, so busy detection silently
+stops working, and `call:incoming` is looked up in a socket table that does not
+contain the callee. **Calls between users on different replicas never connect**
+— caller waits, callee's phone never rings, nothing errors. Moved to Redis.
+
+Which introduced the next failure, so it is covered too: cleanup runs in the
+hangup handler, and a process killed mid-call never reaches it. Without a TTL
+both participants stay marked busy **forever** and can never call again. Every
+piece of state a crash can orphan needs an expiry chosen as a deliberate upper
+bound — an hour is not "how long calls last", it is "how long is it acceptable
+to be wrong".
+
+**The rules engine was never consulted on the call path.** A token whose owner
+turned video off, paused it, restricted it to office hours, or revoked it last
+week could still place a call, because the conversation existed and nothing
+re-asked. Same shape as the B7.2 finding, second location — generalised in the
+lesson as: **every path that lets a holder reach the user is an authorisation
+point**, not just the door they came in through.
+
+Recorded, not patched: the code treats `holder_id` as a user id while B7.1 is
+explicit that holders never become rows in `users`. The two lessons disagree
+about what a holder is; it belongs to the B2 rewrite alongside the `calls` and
+`participants` orphan tables.
+
 #### Trap that bit twice
 
 **Two escaping failures while writing `b3/0003`, both caught by the verifier**, both

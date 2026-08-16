@@ -14,10 +14,10 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1655 words |
+| Avg teaching prose per track lesson | 1668 words |
 | Lessons with a playground | 54 / 96 |
 | Lessons with an exercise | 82 / 96 |
-| **Deepened** (all 3 spine sections) | 11 / 96 |
+| **Deepened** (all 3 spine sections) | 12 / 96 |
 | **Verified** (code executed) | 13 / 96 |
 | Errors | 3 |
 | Warnings | 51 |
@@ -27,12 +27,12 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 ## Answer-position distribution — **authored order, not what the student sees**
 
-1331 keyed questions (multiple-choice, spot-the-bug, which-breaks).
+1332 keyed questions (multiple-choice, spot-the-bug, which-breaks).
 
 > **This clustering is expected and already handled. Do not "fix" it again.**
 > `quiz.js` shuffles options at render time (`optionDisplayOrder`), so the
 > displayed distribution is roughly even — measured at 26.9 / 28.5 / 26.9 / 17.6
-> across all 1331 questions, versus the authored figures below. Index 3 sits
+> across all 1332 questions, versus the authored figures below. Index 3 sits
 > lower only because many questions have three options.
 >
 > The numbers here read `correct` straight from the lesson data, which is
@@ -43,7 +43,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Position | Count | Share |
 |---|---|---|
 | index 0 | 125 | 9.4% |
-| index 1 | 837 | 62.9% |
+| index 1 | 838 | 62.9% |
 | index 2 | 338 | 25.4% |
 | index 3 | 31 | 2.3% |
 
@@ -51,8 +51,8 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Type | Count |
 |---|---|
-| multiple-choice | 659 |
-| predict-output | 515 |
+| multiple-choice | 660 |
+| predict-output | 514 |
 | fill-blank | 454 |
 | spot-the-bug | 371 |
 | which-breaks | 301 |
@@ -80,7 +80,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b3-node-http-server | 4 | 1500 | 1 | 4 | 117 | 2/4 | 0/4 |
 | b4-auth-server | 3 | 1969 | 0 | 3 | 81 | 2/3 | 0/3 |
 | b5-websocket-server | 3 | 1427 | 3 | 3 | 77 | 0/3 | 0/3 |
-| b6-webrtc-signalling | 2 | 1381 | 2 | 2 | 52 | 0/2 | 0/2 |
+| b6-webrtc-signalling | 2 | 2009 | 2 | 2 | 52 | 1/2 | 0/2 |
 | b7-token-engine | 3 | 2737 | 4 | 3 | 77 | 3/3 | 0/3 |
 | b8-push-notifications | 1 | 1206 | 1 | 1 | 25 | 0/1 | 0/1 |
 | b9-docker-deployment | 3 | 1911 | 3 | 3 | 77 | 1/3 | 0/3 |
@@ -234,7 +234,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b5-websocket-server/0001-ws-connection-lifecycle.html | 1548 | 11 | 1 | 1 | 25 | — | — |
 | b5-websocket-server/0002-message-routing.html | 1309 | 10 | 1 | 1 | 26 | — | — |
 | b5-websocket-server/0003-presence-typing.html | 1424 | 9 | 1 | 1 | 26 | — | — |
-| b6-webrtc-signalling/0001-signalling-server.html | 1616 | 8 | 1 | 1 | 26 | — | — |
+| b6-webrtc-signalling/0001-signalling-server.html | 2873 | 9 | 1 | 1 | 26 | yes | n/a |
 | b6-webrtc-signalling/0002-coturn-setup.html | 1145 | 9 | 1 | 1 | 26 | — | — |
 | b7-token-engine/0001-token-generation-redemption.html | 3021 | 12 | 2 | 1 | 25 | yes | n/a |
 | b7-token-engine/0002-access-rules-engine.html | 2621 | 7 | 1 | 1 | 26 | yes | n/a |

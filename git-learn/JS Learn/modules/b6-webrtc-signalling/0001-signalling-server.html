@@ -111,43 +111,69 @@ a=rtpmap:96 VP8/90000</code></pre>
 
     <h2>Active call tracking</h2>
 
+    <div class="callout warning">
+      <div class="callout-title">Call state cannot live in one process</div>
+      <p>
+        A <code>Map</code> here has the same problem the socket registry had in
+        B7.3, and it fails harder. "Is this person already in a call?" answered
+        from one replica's memory is answered <em>wrong</em> whenever the other
+        person is connected elsewhere — so busy detection silently stops
+        working, and the callee's <code>call:incoming</code> is sent to a socket
+        table that does not contain them. <strong>Calls between users on
+        different replicas do not connect at all.</strong>
+      </p>
+      <p>ADR-0003 again: nothing shared lives in process memory.</p>
+    </div>
+
     <pre><code>// api/src/ws/calls.ts
+import { redis } from '../redis';
+
 interface ActiveCall {
   callerId: number;
   calleeId: number;
   conversationId: number;
-  startedAt: Date;
+  tokenId: number;
+  startedAt: string;
   type: 'voice' | 'video';
 }
 
-const activeCalls = new Map&lt;string, ActiveCall&gt;();
+const CALL_TTL_SECONDS = 60 * 60;   // a call nobody ended cannot outlive this
 
 export function createCallId(userId1: number, userId2: number): string {
-  // Deterministic: always same ID regardless of who calls whom
+  // Deterministic: always the same ID regardless of who calls whom
   const sorted = [userId1, userId2].sort((a, b) =&gt; a - b);
   return `call:${sorted[0]}:${sorted[1]}`;
 }
 
-export function getActiveCall(userId: number): ActiveCall | undefined {
-  for (const call of activeCalls.values()) {
-    if (call.callerId === userId || call.calleeId === userId) {
-      return call;
-    }
-  }
-  return undefined;
+// Two keys per call: the record, and a marker per participant so "is this
+// person busy?" is one lookup rather than a scan of every call in the system.
+export async function startCall(callId: string, call: ActiveCall) {
+  await redis
+    .multi()
+    .set(callId, JSON.stringify(call), 'EX', CALL_TTL_SECONDS)
+    .set(`busy:${call.callerId}`, callId, 'EX', CALL_TTL_SECONDS)
+    .set(`busy:${call.calleeId}`, callId, 'EX', CALL_TTL_SECONDS)
+    .exec();
 }
 
-export function startCall(callId: string, call: ActiveCall) {
-  activeCalls.set(callId, call);
+export async function endCall(callId: string) {
+  const raw = await redis.get(callId);
+  if (!raw) return;
+  const call: ActiveCall = JSON.parse(raw);
+  await redis.del(callId, `busy:${call.callerId}`, `busy:${call.calleeId}`);
 }
 
-export function endCall(callId: string) {
-  activeCalls.delete(callId);
-}
-
-export function isInCall(userId: number): boolean {
-  return getActiveCall(userId) !== undefined;
+export async function isInCall(userId: number): Promise&lt;boolean&gt; {
+  return (await redis.exists(`busy:${userId}`)) === 1;
 }</code></pre>
+
+    <p>
+      The TTL is doing real work. A process killed mid-call never runs its
+      cleanup, and without an expiry both participants are marked busy forever
+      — permanently unable to make or receive a call, with no error anywhere
+      explaining why. <strong>Every piece of state that a crash can orphan needs
+      an expiry, chosen as a deliberate upper bound rather than left off.</strong>
+    </p>
 
     <h2>The signalling handlers</h2>
 
@@ -173,7 +199,7 @@ export async function handleCallInitiate(ws: AuthenticatedSocket, payload: {
 
   // Validate: is caller part of this conversation?
   const conv = await db.query(
-    'SELECT issuer_id, holder_id FROM conversations WHERE id = $1',
+    'SELECT issuer_id, holder_id, token_id FROM conversations WHERE id = $1',
     [conversationId]
   );
   if (conv.rows.length === 0) {
@@ -189,12 +215,23 @@ export async function handleCallInitiate(ws: AuthenticatedSocket, payload: {
 
   const calleeId = ws.userId === issuer_id ? holder_id : issuer_id;
 
+  // The rules engine decides whether this call is allowed AT ALL. Without
+  // this, a paused token, a revoked token, one outside its time window, or
+  // one whose owner turned video off can still place a call - because
+  // redemption happened months ago and nothing has re-asked since.
+  const ruleCheck = await evaluateRules(conv.rows[0].token_id,
+                                        type === 'video' ? 'video_call' : 'voice_call');
+  if (!ruleCheck.allowed) {
+    sendTo(ws, 'call:denied', { reason: ruleCheck.reason });
+    return;
+  }
+
   // Check if either party is already in a call
-  if (isInCall(ws.userId)) {
+  if (await isInCall(ws.userId)) {
     sendTo(ws, 'call:busy', { reason: 'You are already in a call' });
     return;
   }
-  if (isInCall(calleeId)) {
+  if (await isInCall(calleeId)) {
     sendTo(ws, 'call:busy', { reason: 'User is busy' });
     return;
   }
@@ -389,10 +426,167 @@ setTimeout(() =&gt; {
       <li><strong>Check token status</strong> — if the token is paused or revoked, reject the call initiation.</li>
       <li><strong>Rate limit</strong> — prevent call spam. Limit to N call attempts per minute per user.</li>
       <li><strong>SDP is opaque</strong> — don't parse or validate SDP contents. Just relay it. Parsing SDP safely is complex and unnecessary for signalling.</li>
-      <li><strong>ICE candidates may contain IPs</strong> — this is normal. The relay-only mode (A7 lesson 5) hides IPs behind TURN when privacy matters.</li>
+      <li><strong>ICE candidates contain IP addresses</strong> — and for this product that is not a footnote. See below.</li>
     </ul>
 
     <div id="playground-1"></div>
+
+    <hr>
+
+    <h2>Why this way (and what was rejected)</h2>
+
+    <h3>Relay-only ICE, because a call otherwise reveals where you live</h3>
+
+    <p>
+      WebRTC is peer-to-peer by design, and that is the problem. To connect
+      directly, both sides exchange ICE candidates — and <strong>a candidate is
+      an IP address</strong>. Your device's, and theirs.
+    </p>
+    <p>
+      Think about what Token promises. Someone was given a code. They do not
+      know the user's name, number or email — that is the entire product. Then
+      they place a call, and their client logs an IP address that geolocates to
+      a neighbourhood. The stranger the user deliberately kept at arm's length
+      now knows roughly where they are, and nothing was hacked: that is how
+      WebRTC works.
+    </p>
+
+    <pre><code>// Sent to both clients at call setup
+{
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'turn:turn.tokn.app:3478', username: '...', credential: '...' }
+  ],
+  iceTransportPolicy: 'relay'    // the line that matters
+}</code></pre>
+
+    <p>
+      <code>'relay'</code> tells the browser to discard host and
+      server-reflexive candidates entirely and use only the TURN server. Each
+      side sees the relay's address and never the other's. It is the difference
+      between a privacy product and a product with a privacy page.
+    </p>
+    <p>
+      The rejected alternative is the default, <code>'all'</code>: better call
+      quality, lower latency, and no bandwidth bill — paid for with the one
+      thing the user came here to protect.
+    </p>
+
+    <h3>Our own signalling server, not a third party</h3>
+
+    <p>
+      Signalling is a handful of JSON messages relayed between two clients —
+      offer, answer, candidates, hangup. Renting that from Firebase or a
+      realtime-as-a-service vendor would work and would hand a third party the
+      one thing E2EE cannot hide anyway: <strong>who called whom, when, and for
+      how long.</strong> Message contents are encrypted; call metadata is not
+      the sort of thing that can be. Keeping it on hardware you rent is the
+      only way it stays yours.
+    </p>
+
+    <h3>Relay SDP, never parse it</h3>
+
+    <p>
+      The server is a postbox. It does not read the SDP, validate it, or rewrite
+      it — parsing an attacker-supplied SDP blob is a real attack surface bought
+      for no benefit, since the server has no decision to make based on its
+      contents. What the server <em>does</em> check is who is allowed to send
+      it, which is a question about the conversation, not the payload.
+    </p>
+
+    <hr>
+
+    <h2>When this breaks</h2>
+
+    <h3>The other person is on another replica</h3>
+
+    <p>
+      <code>activeCalls</code> as a process-local <code>Map</code> is the B7.3
+      failure again and it fails harder here. <code>isInCall(calleeId)</code>
+      consults one replica's memory, so busy detection quietly stops working —
+      and the <code>call:incoming</code> notification is looked up in a local
+      socket table that does not contain the callee. <strong>Calls between
+      users on different replicas never connect</strong>, with no error on
+      either side: the caller waits, the callee's phone never rings.
+    </p>
+
+    <h3>A crash marks two people busy forever</h3>
+
+    <p>
+      Move the state to Redis and a new failure appears: cleanup runs in the
+      hangup handler, and a process killed mid-call never gets there. Without
+      an expiry, both participants keep a <code>busy:</code> marker
+      permanently and can never make or receive another call — and nothing logs
+      anything, because from the system's point of view they are simply on a
+      call that has lasted three weeks.
+    </p>
+    <p>
+      Every piece of state a crash can orphan needs a TTL, picked as a
+      deliberate upper bound. An hour is not "how long calls last"; it is "how
+      long is it acceptable to be wrong".
+    </p>
+
+    <h3>The rules engine was never consulted</h3>
+
+    <p>
+      Nothing in the original initiate handler called
+      <code>evaluateRules</code>. A token whose owner turned video off, or
+      paused it, or restricted it to office hours, or <em>revoked it last
+      week</em>, could still place a call — because the conversation already
+      existed and the call path never re-asked. Redemption checked once, months
+      ago.
+    </p>
+    <p>
+      Same shape as the B7.2 finding, in a second place. It is worth stating
+      generally: <strong>every path that lets a holder reach the user is an
+      authorisation point.</strong> Messages, calls, and anything added later.
+      Not just the door they came in through.
+    </p>
+
+    <h3>A schema contradiction, left for B2</h3>
+
+    <p>
+      This code reads <code>issuer_id</code> and <code>holder_id</code> from
+      <code>conversations</code> and treats both as user ids. But B7.1 is
+      explicit that <strong>holders do not have accounts</strong> — they get a
+      JWT scoped to one conversation, and never become a row in
+      <code>users</code>. The two lessons disagree about what a holder is.
+      Recorded rather than patched here: it belongs to the B2 rewrite, along
+      with the <code>calls</code> and <code>participants</code> tables the audit
+      already flags as queried-but-never-created.
+    </p>
+
+    <hr>
+
+    <h2>What this costs you</h2>
+
+    <table>
+      <thead>
+        <tr><th>Decision</th><th>What you pay</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>iceTransportPolicy: 'relay'</code></td>
+          <td>Every call's audio and video crosses your TURN server instead of going peer to peer. That is the bandwidth bill B9.2 flags as the most likely surprise on the invoice — a video call is roughly 1–2 Mbit/s <em>each way</em>, through your machine, for its whole duration. It also adds latency and gives you a single point of failure for media.</td>
+        </tr>
+        <tr>
+          <td>Running your own signalling</td>
+          <td>You own reconnection, timeouts, busy states, and every edge case a vendor would have handled — the code in this lesson is the cheap part, and the fiddly part is everything that happens when one side's network changes mid-call.</td>
+        </tr>
+        <tr>
+          <td>Call state in Redis</td>
+          <td>Two round trips before a call can start, and Redis is now on the critical path for calls as well as sockets. It is already required by ADR-0003, so this adds a dependency on something you had rather than a new one.</td>
+        </tr>
+        <tr>
+          <td>Consulting the rules engine per call</td>
+          <td>A database read before the phone rings, which is nothing next to establishing a call — and it means a call can be refused for a reason the caller cannot see. The client has to render <code>call:denied</code> as something a human understands.</td>
+        </tr>
+        <tr>
+          <td>One call id per pair</td>
+          <td>Deterministic ids are simple and mean a stale entry blocks that specific pair until it expires. The TTL bounds it; a per-call UUID would remove it entirely at the cost of a lookup.</td>
+        </tr>
+      </tbody>
+    </table>
 
     <hr>
 
@@ -475,11 +669,15 @@ console.log('After that: 0 messages through the server (P2P)');`);
 
     createQuiz("lesson-quiz", [
       {
-        type: "predict-output",
-        question: "How many signalling messages go through the server for a typical 5-minute video call?",
-        code: "// initiate: 1\n// incoming: 1\n// offer: 1\n// answer: 1\n// ICE candidates: ~4-8 (varies)\n// hangup: 1\n// Total signalling messages: ~9-12\n// Audio/video data through server: ???",
-        answer: "About 10 signalling messages. Zero audio/video data through server.",
-        explanation: "Signalling is just the setup — a handful of small JSON messages. Once ICE completes and the P2P connection opens, all audio/video flows directly between devices. The server is completely out of the media path. A 5-minute call sends gigabytes of media data — none of it touches your server."
+        question: "A typical 5-minute video call. What crosses your infrastructure?",
+        options: [
+          "About 10 signalling messages, and nothing else — WebRTC is peer to peer",
+          "About 10 signalling messages, plus every byte of audio and video, because iceTransportPolicy: 'relay' routes all media through your TURN server",
+          "Only the offer and answer; ICE candidates go direct",
+          "All of it through the signalling server, including the media"
+        ],
+        correct: 1,
+        explanation: "Signalling really is just a handful of small JSON messages, and in a default WebRTC app the media then flows directly between devices with the server out of the path entirely. Token gives that up on purpose: a direct connection means each side learns the other's IP address, and the product exists so a stranger holding a code learns nothing about the user. iceTransportPolicy: 'relay' forces every packet through TURN — roughly 1-2 Mbit/s each way, for the length of the call, on your bandwidth bill. Privacy bought with money."
       },
       {
         type: "spot-the-bug",
