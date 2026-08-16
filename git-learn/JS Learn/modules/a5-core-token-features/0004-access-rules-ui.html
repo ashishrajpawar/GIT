@@ -36,7 +36,10 @@
   id          SERIAL PRIMARY KEY,
   token_id    INTEGER NOT NULL REFERENCES tokens(id) ON DELETE CASCADE,
   rule_type   TEXT NOT NULL
-              CHECK (rule_type IN ('time_window', 'contact_limit', 'channel_restrict', 'expiry')),
+              -- 'expiry' is NOT a rule: it is expires_at on the token itself
+              -- (B7.1). Two places to set the same thing is two answers to
+              -- "when does this stop working?".
+              CHECK (rule_type IN ('time_window', 'contact_limit', 'channel_restrict')),
   payload     JSONB NOT NULL,
   enabled     BOOLEAN NOT NULL DEFAULT TRUE,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -45,7 +48,7 @@
     <p>The <code>payload</code> is JSONB — each rule type has a different shape:</p>
 
     <pre><code>// time_window
-{ "days": [1,2,3,4,5], "start": "09:00", "end": "18:00", "timezone": "Asia/Kolkata" }
+{ "days": [1,2,3,4,5], "start_time": "09:00", "end_time": "18:00", "timezone": "Asia/Kolkata" }
 
 // contact_limit
 { "max_per_day": 3, "type": "messages" }  // or "calls"
@@ -60,23 +63,30 @@
 
     <pre><code>// shared/src/rules.ts
 
-export type RuleType = 'time_window' | 'contact_limit' | 'channel_restrict' | 'expiry';
+// These names are the contract with the rules engine in B7.2. It reads
+// rule.start_time; a client that writes rule.start produces `undefined` on
+// the server - see "When this breaks".
+export type RuleType = 'time_window' | 'contact_limit' | 'channel_restrict';
 
 export interface TimeWindowPayload {
-  days: number[];       // 0=Sun, 1=Mon, ... 6=Sat
-  start: string;        // "HH:MM" 24h format
-  end: string;          // "HH:MM" 24h format
-  timezone: string;     // IANA timezone
+  days: number[];         // 0=Sun, 1=Mon, ... 6=Sat
+  start_time: string;     // "HH:MM" 24h
+  end_time: string;       // "HH:MM" 24h - may be EARLIER than start (overnight)
+  timezone: string;       // IANA, e.g. 'Asia/Kolkata'
 }
 
 export interface ContactLimitPayload {
-  max_per_day: number;
-  type: 'messages' | 'calls';
+  max_messages_per_day: number;
+  max_calls_per_day: number;
 }
 
+// One list, not two. `allowed` and `blocked` can disagree, and then the
+// screen and the engine have to decide which wins - a question with no
+// good answer that simply should not exist.
 export interface ChannelRestrictPayload {
-  allowed: ('text' | 'voice' | 'video')[];
-  blocked: ('text' | 'voice' | 'video')[];
+  allow_text: boolean;
+  allow_voice: boolean;
+  allow_video: boolean;
 }
 
 export interface ExpiryPayload {
@@ -218,9 +228,12 @@ export function TimeWindowSection({ tokenId, rule, onUpdate }: TimeWindowSection
   async function handleSave() {
     const payload: TimeWindowPayload = {
       days,
-      start,
-      end,
-      timezone: 'Asia/Kolkata',
+      start_time: start,
+      end_time: end,
+      // The token's timezone is stored WITH the rule, not read from the
+      // device. A user in London still has their tokens behave on the hours
+      // they set at home - see "Why this way".
+      timezone: tokenTimezone,
     };
 
     if (rule) {
@@ -597,6 +610,164 @@ export default router;</code></pre>
 
     <hr>
 
+    <hr>
+
+    <h2>Why this way (and what was rejected)</h2>
+
+    <h3>The timezone is stored with the rule, not read from the device</h3>
+
+    <p>
+      <code>Intl.DateTimeFormat().resolvedOptions().timeZone</code> gives the
+      device's current zone, and using it would be wrong in a way that only
+      appears on holiday. A user sets "contactable 9 to 6" at home in Bengaluru,
+      then flies to London. Read the device and their tokens silently shift five
+      and a half hours — the delivery driver in Bengaluru can now reach them at
+      2:30pm local, which is not what they agreed to, and nothing on screen has
+      changed.
+    </p>
+    <p>
+      Storing the zone with the rule means the token keeps behaving the way it
+      was configured. It also means the UI has to <em>show</em> the zone, or the
+      same user will wonder why their rules look wrong while they are away.
+    </p>
+
+    <h3>Rules only ever narrow</h3>
+
+    <p>
+      Every rule is combined with AND (B7.2), so adding one can only take access
+      away. That is worth surfacing in the interface, not just the engine: a
+      user experimenting with restrictions can never accidentally grant
+      something, which is what makes it safe to let them experiment.
+    </p>
+    <p>
+      It also fixes the copy. "Allow calls between 9 and 6" is misleading —
+      the rule does not allow anything. "Block calls outside 9 to 6" is what it
+      does, and the difference matters the moment a second rule exists.
+    </p>
+
+    <h3>One list of channels, not <code>allowed</code> and <code>blocked</code></h3>
+
+    <p>
+      Two lists can disagree — <code>allowed: ['voice']</code> with
+      <code>blocked: ['voice']</code> is representable, and then the screen and
+      the engine each have to decide which wins. Three booleans cannot contradict
+      themselves, and the state that cannot exist needs no rule for resolving it.
+    </p>
+
+    <hr>
+
+    <h2>When this breaks</h2>
+
+    <h3>The client and the engine disagreed about field names</h3>
+
+    <p>
+      This lesson wrote <code>{ start, end }</code>. B7.2 reads
+      <code>rule.start_time</code> and <code>rule.end_time</code>. Both files
+      are internally consistent, both look right in review, and together they
+      produce a rule that does nothing resembling what the user set — the
+      engine compares the current time against <code>undefined</code>, and
+      depending on the comparison either allows everything or blocks
+      everything.
+    </p>
+    <p>
+      Nothing throws. The user sees their time window saved and displayed
+      correctly on the screen that wrote it. This is the strongest argument in
+      the course for the shape B3.4 describes: <strong>one schema in
+      <code>shared/</code>, imported by both sides, so a rename is a compile
+      error rather than a behaviour change.</strong>
+    </p>
+
+    <h3>Shipping a new rule type client-first now denies everything</h3>
+
+    <p>
+      B7.2 was changed to <strong>refuse rule types it does not recognise</strong>
+      rather than skip them — the right call, because silently ignoring a
+      restriction the owner set is worse than failing. It creates a deploy-order
+      constraint that this screen is on the wrong end of:
+    </p>
+    <p>
+      Add a <code>geo_fence</code> editor, ship the app, and every token that
+      gets one is denied by every server that has not been updated — including,
+      for a few minutes during a rolling deploy, some of yours. And app releases
+      cannot be recalled.
+    </p>
+    <p>
+      <strong>Server first, always.</strong> The rule type must be understood
+      and deployed everywhere before any client can write it, which for a mobile
+      app means a release or two of distance, not an afternoon.
+    </p>
+
+    <h3>Optimistic toggles on a privacy control</h3>
+
+    <p>
+      Flipping a switch and rendering the new state immediately is standard
+      practice and wrong here. A user turns off video, sees it off, and puts the
+      phone down; the request failed on a bad connection. <strong>The screen now
+      says something false about who can reach them</strong> — and unlike a
+      failed "like", they will not find out.
+    </p>
+    <p>
+      Rule controls show a pending state until the server confirms, and a
+      failure has to be loud. This is the same rule as the token code in A5.1,
+      for the same reason: optimistic UI is fine when being wrong is cosmetic.
+    </p>
+
+    <h3>An overnight window the UI will not let you enter</h3>
+
+    <p>
+      B7.2 now handles <code>22:00–06:00</code> — a normal do-not-disturb
+      inverse. A time picker that validates <code>end &gt; start</code>, which is
+      the obvious validation to write, makes that rule impossible to create. The
+      engine supports it and the interface forbids it, so the capability exists
+      and no user can reach it.
+    </p>
+
+    <h3>Two storage models, and this lesson picked the other one</h3>
+
+    <p>
+      This lesson describes an <code>access_rules</code> table with one row per
+      rule. B7.2 evaluates <code>tokens.rules</code>, a JSONB column. Both are
+      defensible — rows give you constraints, indexes and history; JSONB gives
+      you one read and no join on the hottest path — and having both is not.
+      Recorded here rather than silently resolved: it belongs to the B2 rewrite,
+      which is already scheduled. What the client sends is the same either way;
+      what it must not do is assume.
+    </p>
+
+    <hr>
+
+    <h2>What this costs you</h2>
+
+    <table>
+      <thead>
+        <tr><th>Decision</th><th>What you pay</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Rules stored with a timezone</td>
+          <td>The UI has to display it, and a user who genuinely moves must edit every token by hand. The alternative — following the device — is worse in a way they would not notice, which is the deciding factor.</td>
+        </tr>
+        <tr>
+          <td>No optimistic toggles</td>
+          <td>The screen feels slower than every other app, on the controls users touch most. That is the correct trade for a control whose whole job is telling the truth about access — and it means the pending state needs designing rather than defaulting to a spinner over the whole page.</td>
+        </tr>
+        <tr>
+          <td>Server-first deploys for new rule types</td>
+          <td>A feature is split across two releases with weeks between them, and the client half has to be feature-flagged or held back. That is the cost of the engine refusing what it does not understand, and it is cheaper than the alternative.</td>
+        </tr>
+        <tr>
+          <td>Rules that only narrow</td>
+          <td>No "allow this one thing" escape hatch. A user who wants an exception has to express it as a narrower restriction, or issue a second token — which is usually the better answer anyway, and needs saying in the UI.</td>
+        </tr>
+        <tr>
+          <td>Each rule editor as its own component</td>
+          <td>Adding a rule type means a component, a payload type, a summary formatter and an engine branch. Four places, and the compiler only catches two of them — which is what the discriminated union in B3.4 is for.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <hr>
+
     <h2>Exercise</h2>
 
     <div id="exercise-1"></div>
@@ -742,8 +913,8 @@ console.log(formatTimeWindow({ days: [0, 6], start: '10:00', end: '20:00' }));`)
       {
         type: "predict-output",
         question: "What does this toggleDay function produce?",
-        code: "let days = [1, 2, 3, 4, 5];\n\nfunction toggleDay(days, day) {\n  return days.includes(day)\n    ? days.filter(d => d !== day)\n    : [...days, day].sort();\n}\n\nconsole.log(toggleDay(days, 3));\nconsole.log(toggleDay(days, 0));",
-        answer: "[1, 2, 4, 5]\n[0, 1, 2, 3, 4, 5]",
+        code: "let days = [1, 2, 3, 4, 5];\n\nfunction toggleDay(days, day) {\n  return days.includes(day)\n    ? days.filter(d => d !== day)\n    : [...days, day].sort();\n}\n\nconsole.log(toggleDay(days, 3).join(','));\nconsole.log(toggleDay(days, 0).join(','));",
+        answer: "1,2,4,5\n0,1,2,3,4,5",
         explanation: "toggleDay(days, 3) removes Wednesday (3 is already in the array), producing [1,2,4,5]. toggleDay(days, 0) adds Sunday (0 is not in the array), then sorts, producing [0,1,2,3,4,5]. The sort() ensures display order stays consistent regardless of which day was added last."
       },
       {
@@ -854,8 +1025,8 @@ console.log(formatTimeWindow({ days: [0, 6], start: '10:00', end: '20:00' }));`)
       {
         type: "predict-output",
         question: "What does this reducer produce for the given action?",
-        code: "function rulesReducer(state, action) {\n  switch (action.type) {\n    case 'TOGGLE_DAY': {\n      const { day } = action;\n      const days = state.days.includes(day)\n        ? state.days.filter(d => d !== day)\n        : [...state.days, day].sort((a, b) => a - b);\n      return { ...state, days };\n    }\n    default:\n      return state;\n  }\n}\n\nlet state = { days: [1, 3, 5], start: '09:00', end: '17:00' };\nstate = rulesReducer(state, { type: 'TOGGLE_DAY', day: 2 });\nstate = rulesReducer(state, { type: 'TOGGLE_DAY', day: 3 });\nconsole.log(state.days);",
-        answer: "[1, 2, 5]",
+        code: "function rulesReducer(state, action) {\n  switch (action.type) {\n    case 'TOGGLE_DAY': {\n      const { day } = action;\n      const days = state.days.includes(day)\n        ? state.days.filter(d => d !== day)\n        : [...state.days, day].sort((a, b) => a - b);\n      return { ...state, days };\n    }\n    default:\n      return state;\n  }\n}\n\nlet state = { days: [1, 3, 5], start_time: '09:00', end_time: '17:00' };\nstate = rulesReducer(state, { type: 'TOGGLE_DAY', day: 2 });\nstate = rulesReducer(state, { type: 'TOGGLE_DAY', day: 3 });\nconsole.log(state.days.join(','));",
+        answer: "1,2,5",
         explanation: "First action adds day 2: [1,3,5] does not include 2, so we spread and sort: [1,2,3,5]. Second action removes day 3: [1,2,3,5] includes 3, so we filter it out: [1,2,5]. The reducer handles both add and remove in a single action type, keeping the array sorted."
       },
       {

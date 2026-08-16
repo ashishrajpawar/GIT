@@ -14,12 +14,12 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1710 words |
+| Avg teaching prose per track lesson | 1722 words |
 | Lessons with a playground | 54 / 96 |
 | Lessons with an exercise | 82 / 96 |
-| **Deepened** (all 3 spine sections) | 15 / 96 |
+| **Deepened** (all 3 spine sections) | 16 / 96 |
 | **Verified** (code executed) | 13 / 96 |
-| Errors | 5 |
+| Errors | 3 |
 | Warnings | 51 |
 
 Student-completed lessons are **not** tracked here — that comes from the student
@@ -27,12 +27,12 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 ## Answer-position distribution — **authored order, not what the student sees**
 
-1333 keyed questions (multiple-choice, spot-the-bug, which-breaks).
+1334 keyed questions (multiple-choice, spot-the-bug, which-breaks).
 
 > **This clustering is expected and already handled. Do not "fix" it again.**
 > `quiz.js` shuffles options at render time (`optionDisplayOrder`), so the
 > displayed distribution is roughly even — measured at 26.9 / 28.5 / 26.9 / 17.6
-> across all 1333 questions, versus the authored figures below. Index 3 sits
+> across all 1334 questions, versus the authored figures below. Index 3 sits
 > lower only because many questions have three options.
 >
 > The numbers here read `correct` straight from the lesson data, which is
@@ -43,16 +43,16 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Position | Count | Share |
 |---|---|---|
 | index 0 | 125 | 9.4% |
-| index 1 | 839 | 62.9% |
-| index 2 | 338 | 25.4% |
+| index 1 | 840 | 63.0% |
+| index 2 | 338 | 25.3% |
 | index 3 | 31 | 2.3% |
 
 ## Question types
 
 | Type | Count |
 |---|---|
-| multiple-choice | 661 |
-| predict-output | 513 |
+| multiple-choice | 662 |
+| predict-output | 512 |
 | fill-blank | 454 |
 | spot-the-bug | 371 |
 | which-breaks | 301 |
@@ -69,7 +69,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a2-typescript | 3 | 727 | 2 | 3 | 76 | 0/3 | 0/3 |
 | a3-api-consumption | 4 | 1103 | 1 | 4 | 111 | 1/4 | 0/4 |
 | a4-auth-client | 3 | 1305 | 0 | 3 | 80 | 1/3 | 0/3 |
-| a5-core-token-features | 5 | 2015 | 5 | 5 | 148 | 1/5 | 0/5 |
+| a5-core-token-features | 5 | 2246 | 5 | 5 | 148 | 2/5 | 0/5 |
 | a6-chat-realtime | 3 | 1387 | 3 | 3 | 78 | 0/3 | 0/3 |
 | a7-voice-video | 5 | 980 | 5 | 5 | 138 | 0/5 | 0/5 |
 | a8-redemption-web | 4 | 1216 | 4 | 4 | 115 | 0/4 | 0/4 |
@@ -92,16 +92,14 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Check | Result |
 |---|---|
 | Inline `<script>` blocks parse | ok |
-| Quiz structure valid | FAIL |
+| Quiz structure valid | ok |
 | Tables queried but never created | participants, deletion_queue, calls |
 | Broken relative links | ok |
 | search-index.json | 96 entries, 0 dead, 0 unindexed |
 | Example tokens valid under alphabet | 24 invalid |
 
-## Errors (5)
+## Errors (3)
 
-- modules/b10-security-compliance/0001-security-hardening.html q23: missing answer
-- modules/b10-security-compliance/0001-security-hardening.html q23: missing code
 - schema: table "participants" is queried in 2 lesson(s) but never created
 - schema: table "deletion_queue" is queried in 1 lesson(s) but never created
 - schema: table "calls" is queried in 2 lesson(s) but never created
@@ -201,7 +199,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a5-core-token-features/0001-token-generation-display.html | 3241 | 14 | 1 | 1 | 30 | yes | n/a |
 | a5-core-token-features/0002-qr-generation-scanning.html | 1740 | 16 | 1 | 1 | 30 | — | — |
 | a5-core-token-features/0003-token-list-management.html | 1760 | 16 | 1 | 1 | 30 | — | — |
-| a5-core-token-features/0004-access-rules-ui.html | 1856 | 12 | 1 | 1 | 29 | — | — |
+| a5-core-token-features/0004-access-rules-ui.html | 3011 | 12 | 1 | 1 | 29 | yes | n/a |
 | a5-core-token-features/0005-share-path-warnings.html | 1479 | 5 | 1 | 1 | 29 | — | — |
 | a6-chat-realtime/0001-websocket-client.html | 1260 | 10 | 1 | 1 | 26 | — | — |
 | a6-chat-realtime/0002-message-thread-ui.html | 1620 | 10 | 1 | 1 | 26 | — | — |

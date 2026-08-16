@@ -713,6 +713,43 @@ requirements table, `1.7 × 10^17` in the collision section — both should be
 `31^12 ≈ 7.9 × 10^17`), `max_uses: 0`, a `status` field, and INSERTs writing a
 plaintext `code` column.
 
+#### `a5/0004` access rules UI — done, 1,856 → 3,120 words. **Phase 2 complete.**
+
+**The client and the engine disagreed about field names.** This lesson wrote
+`{ start, end }`; B7.2 reads `rule.start_time` and `rule.end_time`. Both files
+are internally consistent and both look right in review — and together they
+produce a time window that does nothing resembling what the user set, because
+the engine compares against `undefined`. Nothing throws, and the screen that
+wrote the rule displays it back correctly. **The strongest argument in the
+course for one schema in `shared/`, imported by both sides, so a rename is a
+compile error rather than a behaviour change.**
+
+The B7.2 deepening created a constraint this screen sits on the wrong end of:
+the engine now **refuses rule types it does not recognise**, so shipping a new
+rule editor client-first denies every token that gets one — including, during
+a rolling deploy, on some of your own servers. And app releases cannot be
+recalled. **Server first, always**, which for mobile means a release or two of
+distance.
+
+Three more:
+
+- **Optimistic toggles on a privacy control.** A user turns off video, sees it
+  off, puts the phone down; the request failed. The screen now says something
+  false about who can reach them, and unlike a failed "like" they never find
+  out. Rule controls show pending until the server confirms.
+- **A time picker validating `end > start`** makes the overnight window B7.2
+  now supports impossible to create — the capability exists and no user can
+  reach it.
+- **`allowed` and `blocked` as two lists** can contradict each other; three
+  booleans cannot. The state that cannot exist needs no rule for resolving it.
+
+Also removed `expiry` as a rule type — it duplicates `expires_at` on the token
+(B7.1), and two places to set "when does this stop working?" is two answers.
+
+**Recorded, not resolved:** this lesson describes an `access_rules` table with
+one row per rule; B7.2 evaluates a `tokens.rules` JSONB column. Both are
+defensible, having both is not, and it belongs to the B2 rewrite.
+
 #### Trap that bit twice
 
 **Two escaping failures while writing `b3/0003`, both caught by the verifier**, both
