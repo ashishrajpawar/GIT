@@ -128,8 +128,8 @@ prints `n/a` for that lesson rather than counting it as verified.
 and most load-bearing first: ~~`b3/0003` REST design~~ **done**, ~~`b4/0003`
 rate limiting~~ **done**, ~~`a3/0002` API client~~ **done**, ~~`b3/0004`
 validation~~ **done**, ~~`a4/0002` auth context~~ **done**,
-~~`b4/0002` JWT rotation~~ **done**, `a10/0001` secure
-storage (982), `b7/0002` (1,126), `b7/0003` (1,139), then `b9/0002`, `b6/0001`,
+~~`b4/0002` JWT rotation~~ **done**, ~~`a10/0001` secure
+storage~~ **done**, `b7/0002` (1,126), `b7/0003` (1,139), then `b9/0002`, `b6/0001`,
 `b9/0001`, `b10/0001`, `a5/0001`, `a5/0004`.
 
 #### `b3/0003` REST design — done, 713 → 2,091 words
@@ -378,6 +378,45 @@ support tickets. It is also why A3.2's single-flight refresh matters.
 
 Two quiz questions fixed: one premise-in-comment, and one whose stated answer
 was the old revoke-everything behaviour.
+
+#### `a10/0001` secure storage — done, 982 → 2,162 words
+
+**The one that could destroy a user's history.** The error handler caught any
+Keychain read failure and called `clearAllSecureData()`, which deleted the
+E2EE identity key along with the tokens. But a read fails for two different
+reasons — *transient* (device locked, Keystore busy) and *permanent* (restored
+to a new device) — and treating the first as the second **deletes the key that
+makes every message on the device readable, because the phone was locked when
+a background task ran.** There is no recovery. Reads now return `null` and
+delete nothing; clearing is something the user asks for, and the identity key
+is not in the session-clear list at all.
+
+**The privacy one:** the identity key was stored with default accessibility,
+so iOS syncs it to iCloud Keychain and both platforms put it in device
+backups. ADR-0002 says the server cannot read messages; a private key synced
+to iCloud is **a key Apple holds a copy of**. Nobody attacked anything — the
+default did it. Now `WHEN_UNLOCKED_THIS_DEVICE_ONLY`, which is also precisely
+why key backup has to be a designed v1 feature rather than a platform
+accident.
+
+Three more:
+
+- **The access token was stored in SecureStore**, contradicting B4.2 and A4.2
+  which both say memory-only. It lives 15 minutes; persisting it adds a copy
+  to steal and saves nothing, since the refresh token replaces it in one
+  request.
+- **`value.length > 2048` against a byte limit.** `.length` is UTF-16 code
+  units — `नमस्ते` is 6 units and 18 bytes. A guard that passes everything an
+  English-speaking developer tests with and fails on a real user's data, in an
+  app built for the Indian market. Now `TextEncoder`.
+- **Migration was treated as the fix.** Moving a secret out of AsyncStorage
+  limits future exposure and un-leaks nothing: it sat in plain text, and any
+  backup taken since still has it. Session credentials are now dropped and
+  re-issued by a fresh login; the identity key moves and is treated as
+  compromised. **Moving it is housekeeping; rotating it is the fix.**
+
+Also replaced a duplicated `AuthProvider` with a pointer to A4.2 — two
+versions of the same component in two lessons is how they drift.
 
 #### Trap that bit twice
 

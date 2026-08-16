@@ -49,7 +49,7 @@
             <tr>
                 <td><strong>Use for</strong></td>
                 <td>Preferences, cache, non-sensitive data</td>
-                <td>JWT, refresh token, encryption keys</td>
+                <td>Refresh token, identity key &mdash; not the access token, which stays in memory</td>
             </tr>
             <tr>
                 <td><strong>Availability</strong></td>
@@ -76,28 +76,39 @@ npx expo install expo-secure-store</code></pre>
     <pre><code>import * as SecureStore from 'expo-secure-store';
 
 // Store a value (must be a string, max 2048 bytes on iOS)
-await SecureStore.setItemAsync('auth_token', jwtToken);
+await SecureStore.setItemAsync('token_refresh', refreshToken);
 
 // Retrieve a value (returns null if not found)
-const token = await SecureStore.getItemAsync('auth_token');
+const token = await SecureStore.getItemAsync('token_refresh');
 
 // Delete a value
-await SecureStore.deleteItemAsync('auth_token');
+await SecureStore.deleteItemAsync('token_refresh');
 
 // Options: control when the item is accessible
-await SecureStore.setItemAsync('refresh_token', refreshToken, {
-  // WHEN_UNLOCKED — accessible only when device is unlocked (default)
-  // AFTER_FIRST_UNLOCK — accessible after first unlock since boot
-  // ALWAYS — accessible even when locked (least secure)
-  keychainAccessible: SecureStore.WHEN_UNLOCKED,
+// The refresh token has to be readable by a background refresh while the
+// phone is in a pocket, so WHEN_UNLOCKED is too strict for it.
+await SecureStore.setItemAsync('token_refresh', refreshToken, {
+  keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
+});
+
+// The identity private key is different, and the suffix is the whole point:
+// THIS_DEVICE_ONLY keeps it out of iCloud Keychain and out of device
+// backups. Without it, the key that makes messages unreadable to the server
+// is quietly copied to Apple - see "When this breaks".
+await SecureStore.setItemAsync('token_identity_key', privateKey, {
+  keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
 });</code></pre>
 
     <h2>What to Store Where</h2>
-    <pre><code>// SECURE STORE — secrets that grant access
+    <pre><code>// MEMORY ONLY — never written anywhere
+//   accessToken   lives ~15 minutes. Persisting it creates a second copy
+//                 to steal and saves the user nothing: if it is gone, the
+//                 refresh token gets another in one request.
+
+// SECURE STORE — secrets that must survive a restart
 const SECURE_KEYS = {
-  AUTH_TOKEN: 'token_auth_jwt',
-  REFRESH_TOKEN: 'token_refresh_jwt',
-  ENCRYPTION_KEY: 'token_e2e_key',
+  REFRESH_TOKEN: 'token_refresh',       // AFTER_FIRST_UNLOCK: background refresh
+  IDENTITY_KEY:  'token_identity_key',  // THIS_DEVICE_ONLY: must never sync
   BIOMETRIC_SECRET: 'token_bio_secret',
 };
 
@@ -128,9 +139,14 @@ export class SecureStorageError extends Error {
 export const secureStorage = {
   async set(key: string, value: string): Promise&lt;void&gt; {
     try {
-      if (value.length > 2048) {
+      // .length counts UTF-16 code units, not bytes. "नमस्ते" is 6 units and
+      // 18 bytes; an emoji is 2 units and 4 bytes. For an app built for the
+      // Indian market, checking .length against a BYTE limit is a check that
+      // passes right up until it fails on a real user's data.
+      const bytes = new TextEncoder().encode(value).length;
+      if (bytes > 2048) {
         throw new SecureStorageError(
-          `Value exceeds 2048 byte iOS limit (${value.length} bytes)`,
+          `Value exceeds the 2048-byte iOS limit (${bytes} bytes)`,
           key
         );
       }
@@ -193,10 +209,17 @@ export async function migrateSensitiveData(): Promise&lt;void&gt; {
   const alreadyMigrated = await AsyncStorage.getItem(MIGRATION_FLAG);
   if (alreadyMigrated === 'done') return;
 
+  // Session credentials are NOT migrated. They sat in plain text, so any
+  // backup taken since still has them - moving them limits future exposure
+  // and un-leaks nothing. Drop them and make the user log in again, which
+  // issues fresh ones and lets the server revoke the old.
+  await AsyncStorage.multiRemove(['@token/jwt', '@token/refresh']);
+
+  // The identity key cannot be re-issued without losing the message
+  // history, so it moves - and the device publishes a replacement key pair,
+  // treating the old one as compromised.
   const keysToMigrate = [
-    { asyncKey: '@token/jwt', secureKey: 'token_auth_jwt' },
-    { asyncKey: '@token/refresh', secureKey: 'token_refresh_jwt' },
-    { asyncKey: '@token/e2e_key', secureKey: 'token_e2e_key' },
+    { asyncKey: '@token/e2e_key', secureKey: 'token_identity_key' },
   ];
 
   for (const { asyncKey, secureKey } of keysToMigrate) {
@@ -211,89 +234,217 @@ export async function migrateSensitiveData(): Promise&lt;void&gt; {
   console.log('Sensitive data migration complete');
 }</code></pre>
 
-    <h2>Using SecureStore in Your Auth Context</h2>
-    <pre><code>// app/src/context/AuthContext.tsx (updated)
-import { secureStorage } from '../services/secureStorage';
+    <h2>Using SecureStore in the auth context</h2>
 
-const KEYS = {
-  AUTH: 'token_auth_jwt',
-  REFRESH: 'token_refresh_jwt',
-};
+    <p>
+      A4.2 already built <code>AuthProvider</code>, and this lesson deliberately
+      does not build a second one. What changes here is only <em>where the two
+      values live</em>:
+    </p>
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState&lt;User | null&gt;(null);
-  const [loading, setLoading] = useState(true);
+    <pre><code>// The access token: a module variable. Gone when the app closes, which
+// is fine - restoreSession() trades the refresh token for a new one.
+let accessToken: string | null = null;
+export const getAccessToken = () =&gt; accessToken;
+export const setAccessToken = (t: string | null) =&gt; { accessToken = t; };
 
-  // On app start: try to restore session from SecureStore
-  useEffect(() => {
-    async function restoreSession() {
-      const jwt = await secureStorage.get(KEYS.AUTH);
-      if (jwt) {
-        try {
-          const userData = await apiClient.get('/api/me', jwt);
-          setUser(userData);
-        } catch {
-          // Token expired — try refresh
-          const refreshToken = await secureStorage.get(KEYS.REFRESH);
-          if (refreshToken) {
-            const newTokens = await apiClient.post('/api/refresh', { refreshToken });
-            await secureStorage.set(KEYS.AUTH, newTokens.accessToken);
-            await secureStorage.set(KEYS.REFRESH, newTokens.refreshToken);
-            setUser(newTokens.user);
-          }
-        }
-      }
-      setLoading(false);
-    }
-    restoreSession();
-  }, []);
-
-  async function login(email: string, password: string) {
-    const response = await apiClient.post('/api/login', { email, password });
-    await secureStorage.set(KEYS.AUTH, response.accessToken);
-    await secureStorage.set(KEYS.REFRESH, response.refreshToken);
-    setUser(response.user);
-  }
-
-  async function logout() {
-    await secureStorage.remove(KEYS.AUTH);
-    await secureStorage.remove(KEYS.REFRESH);
-    setUser(null);
-  }
-
-  return (
-    &lt;AuthContext.Provider value={{ user, loading, login, logout }}&gt;
-      {children}
-    &lt;/AuthContext.Provider&gt;
-  );
+// The refresh token: SecureStore, readable by a background refresh.
+export async function saveRefreshToken(token: string) {
+  await SecureStore.setItemAsync('token_refresh', token, {
+    keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
+  });
 }</code></pre>
+
+    <p>
+      That is the whole integration. Everything else — the single in-flight
+      refresh, telling offline apart from logged out, revoking the family on
+      logout — is A3.2 and A4.2's job, and duplicating it here is how two
+      versions drift apart.
+    </p>
+
 
     <h2>Error Handling: When the Keychain is Unavailable</h2>
     <pre><code>// After a device restore or factory reset, the Keychain may reject reads.
 // Your app must handle this gracefully — force re-login.
 
-async function safeGetToken(): Promise&lt;string | null&gt; {
+// A read can fail for two completely different reasons and only one of
+// them means the data is gone:
+//
+//   "not available right now"  - device locked, Keystore busy. TRANSIENT.
+//   "not there any more"        - restored to a new device, keys dropped.
+//
+// Treating the first as the second is how you delete a private key because
+// the phone was locked for a moment. Never destroy on a read failure.
+async function safeGetRefreshToken(): Promise&lt;string | null&gt; {
   try {
-    return await SecureStore.getItemAsync('token_auth_jwt');
+    return await SecureStore.getItemAsync('token_refresh');
   } catch (err) {
-    // Keychain corrupted or inaccessible
-    console.error('Keychain unavailable:', err);
-    // Clear all secure data and force re-authentication
-    await clearAllSecureData();
-    return null;
+    console.error('Keychain read failed:', err);
+    return null;          // could not read. NOT the same as "does not exist".
   }
 }
 
-async function clearAllSecureData(): Promise&lt;void&gt; {
-  const keys = ['token_auth_jwt', 'token_refresh_jwt', 'token_e2e_key'];
-  for (const key of keys) {
+// Clearing is something the user asks for - logging out, or deleting their
+// account - not something a failed read decides on their behalf.
+async function clearSessionSecrets(): Promise&lt;void&gt; {
+  // Note what is NOT in this list: the identity key. Deleting it makes every
+  // message on this device permanently unreadable, so it is only removed by
+  // an explicit "delete my account and my history" flow.
+  for (const key of ['token_refresh', 'token_bio_secret']) {
     try {
       await SecureStore.deleteItemAsync(key);
     } catch {
-      // Already inaccessible — that's fine
+      // Already gone, or unreadable. Either way there is nothing to do.
     }
   }
 }</code></pre>
+
+    <hr>
+
+    <h2>Why this way (and what was rejected)</h2>
+
+    <h3>The access token is not stored at all</h3>
+
+    <p>
+      Putting it in SecureStore looks strictly safer and is strictly worse. It
+      lives fifteen minutes; persisting it creates a second copy to steal and
+      saves the user nothing, because if it is missing the refresh token
+      produces another one in a single request. A secret you do not write down
+      cannot be read off the disk.
+    </p>
+    <p>
+      The refresh token is the one worth persisting, because losing it means a
+      password prompt.
+    </p>
+
+    <h3><code>THIS_DEVICE_ONLY</code> for the identity key</h3>
+
+    <p>
+      iOS Keychain items sync to iCloud Keychain by default, and both platforms
+      include ordinary Keychain and Keystore entries in device backups. For a
+      refresh token that is convenient — restore your phone, stay logged in.
+    </p>
+    <p>
+      For the E2EE identity key it quietly undoes the product's central claim.
+      ADR-0002 says the server cannot read messages; a private key that syncs to
+      iCloud is a key <em>Apple</em> holds a copy of. Nobody attacked anything.
+      The default did it.
+    </p>
+    <p>
+      So the identity key is written with
+      <code>WHEN_UNLOCKED_THIS_DEVICE_ONLY</code>: it never leaves the phone it
+      was generated on, and a restored device gets no key at all. Which is the
+      right behaviour — and it is exactly why key backup has to be a real,
+      designed, user-controlled feature rather than something the platform does
+      by accident.
+    </p>
+
+    <h3>A wrapper, not <code>SecureStore</code> everywhere</h3>
+
+    <p>
+      One module owns the key names, the byte-limit check, and the read/write
+      policy. Scattering <code>SecureStore.setItemAsync</code> through the app
+      means the accessibility flag is set correctly in four places and forgotten
+      in the fifth, and the fifth is the one that ends up in iCloud.
+    </p>
+
+    <hr>
+
+    <h2>When this breaks</h2>
+
+    <h3>A failed read that deletes a private key</h3>
+
+    <p>
+      The original error handler caught any read failure and called
+      <code>clearAllSecureData()</code>, which deleted the E2EE key along with
+      the tokens. But a Keychain read fails for two very different reasons:
+    </p>
+
+    <ul>
+      <li><strong>Transient</strong> — the device is locked, or the Android Keystore is busy. The data is fine and will be readable in a moment.</li>
+      <li><strong>Permanent</strong> — the app was restored onto a new device, so <code>THIS_DEVICE_ONLY</code> items are simply not there.</li>
+    </ul>
+
+    <p>
+      Treating the first as the second <strong>destroys every message on the
+      device, permanently, because the phone was locked when a background task
+      ran.</strong> There is no recovery: the key is what made the ciphertext
+      readable. A read failure now returns <code>null</code> and deletes
+      nothing; clearing is something the user asks for.
+    </p>
+
+    <h3><code>.length</code> is not bytes</h3>
+
+    <p>
+      iOS caps a Keychain item at 2048 bytes, and
+      <code>value.length</code> counts UTF-16 code units. <code>नमस्ते</code> is
+      6 units and 18 bytes; an emoji is 2 units and 4 bytes. A guard written
+      against <code>.length</code> passes everything an English-speaking
+      developer tests with and fails on a real user's data — which for an app
+      built for the Indian market is not an edge case.
+    </p>
+
+    <h3>Migrating a secret does not un-leak it</h3>
+
+    <p>
+      The migration moves values out of AsyncStorage and deletes the plaintext.
+      That limits <em>future</em> exposure and does nothing about the past: the
+      value sat unencrypted in the app's sandbox for however long, and any
+      device backup taken in that window still contains it. Deleting a file does
+      not reach into a backup from March.
+    </p>
+    <p>
+      So a migration for something that was genuinely exposed is only half the
+      job. <strong>Assume the old value is compromised and rotate it</strong> —
+      force a re-login so every previously-stored refresh token is replaced, and
+      revoke the old ones server-side. Moving it is housekeeping; rotating it is
+      the fix.
+    </p>
+
+    <h3>The Keystore is unavailable while the device is locked</h3>
+
+    <p>
+      On Android, a background refresh on a locked phone can fail to read a
+      value stored <code>WHEN_UNLOCKED</code> — a failure that has nothing to do
+      with the network and everything to do with the pocket the phone is in.
+      This is why the refresh token uses <code>AFTER_FIRST_UNLOCK</code>, and
+      why "could not read the token" must not be treated as "the user is logged
+      out".
+    </p>
+
+    <hr>
+
+    <h2>What this costs you</h2>
+
+    <table>
+      <thead>
+        <tr><th>Decision</th><th>What you pay</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Identity key marked <code>THIS_DEVICE_ONLY</code></td>
+          <td>A user who restores to a new phone has no key and cannot read a single past message — including their own. That is not a bug to fix here; it is the requirement that makes key backup a v1 feature with a real design behind it (ADR-0002).</td>
+        </tr>
+        <tr>
+          <td>Access token in memory</td>
+          <td>Every cold start does a refresh round trip before the first screen can load anything, so the launch path depends on the network. Worth it, and it is why the app needs a real loading state rather than a flash of the login screen.</td>
+        </tr>
+        <tr>
+          <td>SecureStore's 2048-byte limit</td>
+          <td>Anything larger — a key bundle, a set of pre-keys, a cached credential blob — cannot go in directly. The pattern is to keep a random key in SecureStore and use it to encrypt the larger blob into ordinary storage, which is one more moving part to get right.</td>
+        </tr>
+        <tr>
+          <td>Async reads on both platforms</td>
+          <td>Nothing secret is available synchronously, so startup has an unavoidable await before it knows whether anyone is logged in.</td>
+        </tr>
+        <tr>
+          <td>Never clearing on a read error</td>
+          <td>A genuinely corrupted Keychain now leaves the app retrying something that will never work, instead of resetting itself. That is the right trade — a stuck app is recoverable, a deleted key is not — but it means a real "reset this device" action has to exist and be findable.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <hr>
 
     <h2>Playground: SecureStore Decision Helper</h2>
     <div id="playground-1"></div>
@@ -448,21 +599,24 @@ export class SecureTokenStore {
 
   // --- High-level credential methods ---
 
-  async saveCredentials(creds: StoredCredentials): Promise<void> {
-    await this.set('token_auth_jwt', creds.accessToken);
-    await this.set('token_refresh_jwt', creds.refreshToken);
+  // Only the refresh token is persisted. The access token lives ~15 minutes
+  // in a module variable; writing it down would add a copy to steal and save
+  // the user nothing, since the refresh token replaces it in one request.
+  async saveRefreshToken(token: string): Promise<void> {
+    await this.set('token_refresh', token, {
+      keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,   // background refresh
+    });
   }
 
-  async getCredentials(): Promise<StoredCredentials | null> {
-    const accessToken = await this.get('token_auth_jwt');
-    const refreshToken = await this.get('token_refresh_jwt');
-    if (!accessToken || !refreshToken) return null;
-    return { accessToken, refreshToken };
+  async getRefreshToken(): Promise<string | null> {
+    return this.get('token_refresh');
   }
 
-  async clearCredentials(): Promise<void> {
-    await this.remove('token_auth_jwt');
-    await this.remove('token_refresh_jwt');
+  async clearSession(): Promise<void> {
+    await this.remove('token_refresh');
+    // The identity key is deliberately NOT cleared here. Removing it makes
+    // every message on this device unreadable forever, so it belongs only in
+    // an explicit "delete my account" flow.
   }
 
   // --- Migration ---
@@ -476,10 +630,17 @@ export class SecureTokenStore {
       return;
     }
 
+    // Anything that sat in AsyncStorage was stored in plain text, and any
+    // device backup taken since still contains it. Moving it limits future
+    // exposure; it does not un-leak the past. So session credentials are
+    // DROPPED and re-issued by a fresh login, not migrated.
+    await AsyncStorage.multiRemove(['@token/jwt', '@token/refresh']);
+
+    // The identity key cannot be re-issued - losing it loses the message
+    // history - so it is moved, and treated as compromised: the device
+    // publishes a new key pair and the old one is marked superseded.
     const migrations = [
-      { from: '@token/jwt', to: 'token_auth_jwt' },
-      { from: '@token/refresh', to: 'token_refresh_jwt' },
-      { from: '@token/e2e_key', to: 'token_e2e_key' },
+      { from: '@token/e2e_key', to: 'token_identity_key' },
     ];
 
     for (const { from, to } of migrations) {
