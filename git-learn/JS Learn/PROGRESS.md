@@ -14,7 +14,7 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1497 words |
+| Avg teaching prose per track lesson | 1505 words |
 | Lessons with a playground | 54 / 96 |
 | Lessons with an exercise | 82 / 96 |
 | **Deepened** (all 3 spine sections) | 1 / 96 |
@@ -42,8 +42,8 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Position | Count | Share |
 |---|---|---|
-| index 0 | 126 | 9.5% |
-| index 1 | 834 | 62.8% |
+| index 0 | 125 | 9.4% |
+| index 1 | 835 | 62.9% |
 | index 2 | 336 | 25.3% |
 | index 3 | 31 | 2.3% |
 
@@ -81,7 +81,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b4-auth-server | 3 | 874 | 0 | 3 | 81 | 0/3 | 0/3 |
 | b5-websocket-server | 3 | 1427 | 3 | 3 | 77 | 0/3 | 0/3 |
 | b6-webrtc-signalling | 2 | 1381 | 2 | 2 | 52 | 0/2 | 0/2 |
-| b7-token-engine | 3 | 1485 | 4 | 3 | 77 | 1/3 | 0/3 |
+| b7-token-engine | 3 | 1762 | 4 | 3 | 77 | 1/3 | 0/3 |
 | b8-push-notifications | 1 | 1206 | 1 | 1 | 25 | 0/1 | 0/1 |
 | b9-docker-deployment | 3 | 1389 | 3 | 3 | 77 | 0/3 | 0/3 |
 | x1-git-dev-environment | 3 | 698 | 1 | 3 | 76 | 0/3 | 0/3 |
@@ -236,7 +236,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b5-websocket-server/0003-presence-typing.html | 1424 | 9 | 1 | 1 | 26 | — | — |
 | b6-webrtc-signalling/0001-signalling-server.html | 1616 | 8 | 1 | 1 | 26 | — | — |
 | b6-webrtc-signalling/0002-coturn-setup.html | 1145 | 9 | 1 | 1 | 26 | — | — |
-| b7-token-engine/0001-token-generation-redemption.html | 2190 | 9 | 2 | 1 | 25 | yes | n/a |
+| b7-token-engine/0001-token-generation-redemption.html | 3021 | 12 | 2 | 1 | 25 | yes | n/a |
 | b7-token-engine/0002-access-rules-engine.html | 1126 | 7 | 1 | 1 | 26 | — | — |
 | b7-token-engine/0003-revocation-pause.html | 1139 | 8 | 1 | 1 | 26 | — | — |
 | b8-push-notifications/0001-fcm-apns-expo.html | 1206 | 11 | 1 | 1 | 25 | — | — |

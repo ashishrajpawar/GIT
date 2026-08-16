@@ -890,13 +890,41 @@ The other correction of substance: `createUniqueCode()` does SELECT-then-INSERT,
 which is a TOCTOU race. The guarantee is the `UNIQUE` index; the correct shape
 is insert-and-catch `23505`, which is also one round trip instead of two.
 
-#### An open decision, deliberately not taken
+#### The open decision, put to the student and taken — ADR-0007
 
-Whether `tokens.code` should store a deterministic peppered hash instead of the
-code. Written into the lesson as a fork with its real costs — the code can never
-be displayed again, and bcrypt/argon2 are impossible because random salts make
-lookup impossible — and marked *ADR first*. A schema change smuggled in as a
-lesson edit is precisely what the ADR rule exists to stop.
+Whether `tokens.code` should hold the code at all. Raised as a fork rather than
+decided in a lesson edit; the student chose **hash for lookup + encrypted copy
+for display**.
+
+`tokens` now stores `code_hash` (SHA-256 of the normalised code plus a
+server-side pepper, indexed) and `code_enc` (AES-256-GCM). The bare code exists
+only in memory on its way to the creation response, and in the reveal endpoint's
+output.
+
+Deliberately **not** bcrypt or argon2 — they salt randomly, which makes finding
+a row by its code impossible without scanning the table. The pepper does the
+salt's job, and slow hashing buys nothing against a code drawn from
+31<sup>12</sup>.
+
+**Hash-only lost on product grounds, not security ones.** It is the simpler and
+slightly stronger option, and it makes re-showing a code or its QR impossible
+forever — a limitation the user never asked for. It stays correct for anything
+nobody needs to see twice; refresh tokens should use it.
+
+The lesson's code was rewritten to match rather than left describing one design
+and demonstrating another. That is the specific drift this project keeps
+finding, so it was not left for later.
+
+**The cost is operational and it is in the ADR:** the pepper and key are
+critical state. Lose them and every token in the system is dead. They belong in
+the disaster-recovery plan, backed up somewhere the database backups are not.
+Rotating the pepper rewrites every row — possible only because C keeps the
+plaintext recoverable; under hash-only it could not be done at all.
+
+**Follow-on, recorded so it is not forgotten:** B2 must be written against these
+columns (it is already scheduled for rewrite), `b7/0002` and `b7/0003` look
+tokens up by code and need `code_hash`, and B9 must carry the two secrets as
+required environment variables.
 
 #### Tooling: `--unverifiable "<reason>"`
 

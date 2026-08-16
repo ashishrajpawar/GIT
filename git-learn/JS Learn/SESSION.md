@@ -91,12 +91,28 @@ The three sections carry real material, not padding:
   lock, plaintext codes making a database dump a set of working capabilities,
   and 12 characters being the human ceiling.
 
-**One open decision surfaced and deliberately not taken:** whether to store a
-deterministic peppered hash of the code instead of the code. It is written up
-as a fork with its costs (lookup by hash means bcrypt/argon2 are impossible;
-the code can never be shown again) and marked *decide this in an ADR first* —
-smuggling a schema change into a lesson edit is exactly what ADRs exist to
-prevent.
+**The open decision was put to the student and taken: ADR-0007.** `tokens`
+stores `code_hash` (SHA-256 of the normalised code plus a server-side pepper,
+indexed, for lookup) and `code_enc` (AES-256-GCM, decrypted only when the owner
+asks to see one token). The bare code is never stored.
+
+Hash-only was the other serious option and lost on **product** grounds, not
+security ones — it makes re-showing a code or its QR impossible forever. It
+stays right for anything nobody needs to see twice, which is why refresh tokens
+should use it.
+
+The lesson's code paths were rewritten to match, because prose teaching one
+thing while the samples do another is the drift this project exists to stop:
+`codeStore.ts` helpers, insert-and-catch-`23505` instead of check-then-insert,
+every lookup on `code_hash`, and a `GET /tokens/:id/code` reveal endpoint —
+one token, its owner, logged, never a list. Four quiz fixtures updated with it.
+709 → 3,021 words.
+
+**Cost written into the ADR and the deployment follow-on:** the pepper and key
+become critical operational state. Lose them and every token is dead. They go
+in the disaster-recovery plan, backed up somewhere the database backups are
+not. Rotating the pepper rewrites every row — possible only because the
+plaintext stays recoverable.
 
 Also fixed a malformed fill-blank (two blanks, one answer) — warnings 52 → 51.
 
@@ -108,12 +124,17 @@ had two options: fail forever, or lie. It now takes a mandatory reason, records
 2 playgrounds and 5 executable `predict-output` answers all pass. The audit
 prints `n/a` for that lesson rather than counting it as verified.
 
-**Remaining: 15 of the 16 deepenable spine lessons.** At roughly this depth
-each, that is several sessions. Order to work in — thinnest and most
-load-bearing first: `b3/0003` REST design (713), `b4/0003` rate limiting (794),
-`a3/0002` API client (845), `b3/0004` validation (858), `a4/0002` auth context
-(865), `b4/0002` JWT rotation (923), `a10/0001` secure storage (982),
-`b7/0002` (1,126), `b7/0003` (1,139), then the rest.
+**Student decided the pace: full depth on all 15 remaining.** Order — thinnest
+and most load-bearing first: `b3/0003` REST design (713), `b4/0003` rate
+limiting (794), `a3/0002` API client (845), `b3/0004` validation (858),
+`a4/0002` auth context (865), `b4/0002` JWT rotation (923), `a10/0001` secure
+storage (982), `b7/0002` (1,126), `b7/0003` (1,139), then `b9/0002`, `b6/0001`,
+`b9/0001`, `b10/0001`, `a5/0001`, `a5/0004`.
+
+**ADR-0007 has follow-on work in three of them.** `b7/0002` and `b7/0003` look
+tokens up by code and must use `code_hash`; `b9/0002` (Coolify) must add
+`TOKEN_CODE_PEPPER` and `TOKEN_CODE_KEY` as required environment variables and
+put them in the backup runbook. Do not deepen those without applying it.
 
 ### Unit 10 — Phase 1.3, "explain it in your own words" — DONE
 

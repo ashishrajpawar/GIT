@@ -83,24 +83,72 @@ export function generateTokenCode(): string {
     </p>
   </div>
 
+  <h2>Storing it: hash to find, encrypt to show</h2>
+  <p>
+    The bare code never reaches the database. Two small helpers derive what does
+    — the reasoning is in <em>Why this way</em> below, and in ADR-0007.
+  </p>
+  <pre><code>// api/src/engine/codeStore.ts
+import crypto from 'crypto';
+
+const PEPPER = process.env.TOKEN_CODE_PEPPER!;   // 32+ random bytes, from the environment
+const KEY = Buffer.from(process.env.TOKEN_CODE_KEY!, 'base64');  // 32 bytes
+
+export function normaliseCode(raw: string): string {
+  return String(raw ?? '').trim().toUpperCase();
+}
+
+// Deterministic on purpose: the same code must always give the same hash,
+// or it could not be found by an indexed lookup.
+export function hashCode(code: string): Buffer {
+  return crypto.createHash('sha256').update(normaliseCode(code) + PEPPER).digest();
+}
+
+// Authenticated encryption, so a tampered column fails loudly instead of
+// decrypting to nonsense. iv || authTag || ciphertext, all in one bytea.
+export function encryptCode(code: string): Buffer {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', KEY, iv);
+  const enc = Buffer.concat([cipher.update(normaliseCode(code), 'utf8'), cipher.final()]);
+  return Buffer.concat([iv, cipher.getAuthTag(), enc]);
+}
+
+export function decryptCode(stored: Buffer): string {
+  const iv = stored.subarray(0, 12);
+  const tag = stored.subarray(12, 28);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', KEY, iv);
+  decipher.setAuthTag(tag);
+  return decipher.update(stored.subarray(28)).toString('utf8') + decipher.final('utf8');
+}</code></pre>
+
   <h2>Collision Retry</h2>
   <p>
-    Even with a large keyspace, collisions are theoretically possible. The
-    generation function retries up to 5 times if a code already exists in the
-    database.
+    Even with a large keyspace, collisions are theoretically possible. Rather
+    than asking whether a code is taken and then inserting it — two round trips,
+    and a race between them — let the database's <code>UNIQUE</code> constraint
+    answer, and retry when it says no.
   </p>
   <pre><code>const MAX_RETRIES = 5;
 
-export async function createUniqueCode(): Promise&lt;string&gt; {
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+export async function insertTokenWithFreshCode(client, userId: number, opts): Promise&lt;{ code: string; row: any }&gt; {
+  for (let attempt = 0; attempt &lt; MAX_RETRIES; attempt++) {
     const code = generateTokenCode();
-    const { rows } = await pool.query(
-      'SELECT 1 FROM tokens WHERE code = $1',
-      [code]
-    );
-    if (rows.length === 0) return code;
+    try {
+      const { rows } = await client.query(
+        `INSERT INTO tokens (user_id, code_hash, code_enc, label, expires_at, max_uses, rules)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, label, expires_at, max_uses, uses, created_at`,
+        [userId, hashCode(code), encryptCode(code),
+         opts.label ?? null, opts.expires_at ?? null, opts.max_uses ?? null, opts.rules ?? {}]
+      );
+      // The plaintext exists only here, in memory, on its way to the response.
+      return { code, row: rows[0] };
+    } catch (err: any) {
+      if (err.code !== '23505') throw err;    // 23505 = unique_violation
+      // Astronomically unlucky. Draw again.
+    }
   }
-  throw new Error('Failed to generate unique token code after retries');
+  throw new Error('Could not generate an unused code after ' + MAX_RETRIES + ' attempts');
 }</code></pre>
 
   <h2>POST /tokens — Creating a Token</h2>
@@ -111,7 +159,8 @@ export async function createUniqueCode(): Promise&lt;string&gt; {
   <pre><code>// api/src/routes/tokens.ts
 import { Router } from 'express';
 import { authenticate } from '../middleware/auth';
-import { createUniqueCode } from '../engine/generate';
+import { insertTokenWithFreshCode } from '../engine/generate';
+import { hashCode } from '../engine/codeStore';
 import { pool } from '../db';
 
 const router = Router();
@@ -120,16 +169,13 @@ router.post('/tokens', authenticate, async (req, res) => {
   const userId = req.user.id;
   const { label, expires_at, max_uses, rules } = req.body;
 
-  const code = await createUniqueCode();
+  const { code, row } = await insertTokenWithFreshCode(pool, userId, {
+    label, expires_at, max_uses, rules
+  });
 
-  const { rows } = await pool.query(
-    `INSERT INTO tokens (user_id, code, label, status, expires_at, max_uses, rules)
-     VALUES ($1, $2, $3, 'active', $4, $5, $6)
-     RETURNING id, code, label, status, expires_at, max_uses, created_at`,
-    [userId, code, label || null, expires_at || null, max_uses || null, rules || '{}']
-  );
-
-  res.status(201).json({ token: rows[0] });
+  // The code travels back in this response and is never stored in readable
+  // form. The database holds only the hash and the encrypted copy.
+  res.status(201).json({ token: { ...row, code } });
 });
 
 export default router;</code></pre>
@@ -148,10 +194,12 @@ export default router;</code></pre>
     return res.status(400).json({ error: 'holder_name is required' });
   }
 
-  // Fetch token with row lock to prevent race conditions
+  // Look up by hash, never by the code itself.
+  // NOTE: FOR UPDATE through pool.query does nothing — see "When this
+  // breaks" below. The exercise solution shows the correct transaction.
   const { rows: tokenRows } = await pool.query(
-    'SELECT * FROM tokens WHERE code = $1 FOR UPDATE',
-    [code]
+    'SELECT * FROM tokens WHERE code_hash = $1 FOR UPDATE',
+    [hashCode(code)]
   );
 
   if (tokenRows.length === 0) {
@@ -271,7 +319,7 @@ export function verifyHolderToken(token: string): HolderPayload & { role: string
 
   <h3>The database's unique index, not the retry loop</h3>
   <p>
-    <code>createUniqueCode()</code> checks for a collision before inserting.
+    A generator that checks for a collision before inserting looks careful.
     That check is a courtesy, not a guarantee: between the <code>SELECT</code>
     and the <code>INSERT</code>, another request can insert the same code. The
     window is tiny and the odds are 1.3 × 10<sup>-12</sup>, but "tiny window,
@@ -306,28 +354,108 @@ throw new Error('Could not generate an unused code after ' + MAX_RETRIES + ' att
     profile to correlate, and no account to delete later under DPDP.
   </p>
 
-  <div class="callout">
-    <div class="callout-title">An open decision, not a settled one</div>
+  <h3>The code is never stored as the code</h3>
+
+  <p>
+    A token code is not like a username. It is the entire authorisation —
+    no password behind it, no account, no second factor. Whoever holds
+    <code>MERC-8GH2-KP4X</code> can reach the person who issued it.
+  </p>
+  <p>
+    So storing it as text makes a copy of the database a set of <strong>live
+    keys</strong>. Not hashed passwords somebody would have to crack — working
+    capabilities, usable immediately. And the ways a copy escapes are ordinary
+    rather than exotic: a backup file on a laptop, a snapshot in object storage
+    with the wrong permissions, a <code>pg_dump</code> pasted into a support
+    ticket, a staging environment restored from production and left open.
+  </p>
+  <p>
+    It also sits badly beside the decision that message bodies are encrypted so
+    the server cannot read them. Encrypting the letters while keeping the front
+    door keys in the same drawer is not a security posture.
+  </p>
+
+  <p><strong>Two derived columns, and never the bare code</strong> (ADR-0007):</p>
+
+  <pre><code>CREATE TABLE tokens (
+  id          bigserial PRIMARY KEY,
+  code_hash   bytea UNIQUE NOT NULL,   -- SHA-256(normalised code || pepper)
+  code_enc    bytea NOT NULL,          -- AES-256-GCM(normalised code)
+  ...
+);</code></pre>
+
+  <ul>
+    <li>
+      <strong>Lookup</strong> normalises what was typed, hashes it with the
+      pepper, and matches <code>code_hash</code>. One indexed equality probe —
+      exactly the same cost as before.
+    </li>
+    <li>
+      <strong>Display</strong> decrypts <code>code_enc</code>, and only when the
+      owner asks to see that one token. Never for a whole list by default.
+    </li>
+    <li>
+      The pepper and the encryption key live in the container's environment,
+      supplied by Coolify. Never in a migration, a seed file, or the repo.
+    </li>
+  </ul>
+
+  <div class="callout warning">
+    <div class="callout-title">Why SHA-256 and not bcrypt or argon2</div>
     <p>
-      <code>tokens.code</code> currently stores the code in plain text. That
-      makes lookup a single indexed equality match, and it means a database
-      dump is a pile of working capabilities.
+      Those are the right tools for passwords and the wrong ones here, because
+      they salt every hash randomly. A random salt means two hashes of the same
+      code do not match — so you could not find a row by its code without
+      reading every row in the table and testing each one.
     </p>
     <p>
-      The alternative is storing a <strong>deterministic</strong> hash — SHA-256
-      of the code plus a server-side pepper — and looking up by hash. A dump
-      then yields nothing usable without the pepper, which lives outside the
-      database. It costs you the ability to ever show the code again, so the app
-      must display it once at issue and mean it. Note it cannot be bcrypt or
-      argon2: those salt each hash randomly, so you could not look the code up
-      without scanning every row.
-    </p>
-    <p>
-      This is a real fork and it is not decided. If you take it, write the ADR
-      first — it changes the schema, the issue response, and the product's
-      behaviour when someone loses a code.
+      The pepper does the job the salt would: an attacker holding only the
+      database cannot test guesses without it. And the slow-hashing that bcrypt
+      exists to provide buys nothing against a code drawn from 31<sup>12</sup>
+      possibilities — that is not a human-chosen password, and it is not
+      brute-forceable in the first place.
     </p>
   </div>
+
+  <p>
+    The option not taken was <strong>hashing alone</strong>, with no encrypted
+    copy. It is the simpler and slightly stronger choice, and it was rejected on
+    product grounds rather than security ones: a one-way hash cannot be
+    reversed, so the code could never be shown again — no re-displaying a QR for
+    a second person, no reading it out over the phone, and a lost code
+    recoverable only by revoking and issuing a new one. Hash-only remains
+    correct for anything nobody ever needs to see twice, which is why refresh
+    tokens will use it.
+  </p>
+  <p>
+    The payoff is the one endpoint hash-only could not have. Note that it
+    returns a single token, asked for by id, by its owner — never a list with
+    every code decrypted into it:
+  </p>
+
+  <pre><code>// "Show me that code again" — one token, its owner, on request
+router.get('/tokens/:id/code', authenticate, async (req, res) =&gt; {
+  const { rows } = await pool.query(
+    'SELECT code_enc FROM tokens WHERE id = $1 AND user_id = $2',
+    [req.params.id, req.user.id]
+  );
+  if (rows.length === 0) return res.status(404).json({ error: 'Not found' });
+
+  // Turning stored data back into a live capability is worth recording.
+  await logCodeReveal(req.user.id, req.params.id);
+
+  res.json({ code: decryptCode(rows[0].code_enc) });
+});</code></pre>
+
+  <p>
+    What it costs, stated plainly: <strong>the pepper and the key become
+    critical operational state.</strong> Lose them and every stored code is
+    unreadable and unmatchable — every token in the system is dead. They belong
+    in the disaster-recovery plan, backed up somewhere the database backups are
+    not. And rotating the pepper rewrites every row, which is possible only
+    because the plaintext stays recoverable; under hash-only it would be
+    impossible.
+  </p>
 
   <hr>
 
@@ -339,7 +467,7 @@ throw new Error('Could not generate an unused code after ' + MAX_RETRIES + ' att
     testing because it only shows under concurrency:
   </p>
   <pre><code>// WRONG - the lock is taken and released immediately
-const { rows } = await pool.query('SELECT * FROM tokens WHERE code = $1 FOR UPDATE', [code]);</code></pre>
+const { rows } = await pool.query('SELECT * FROM tokens WHERE code_hash = $1 FOR UPDATE', [hashCode(code)]);</code></pre>
   <p>
     A row lock lives for the length of a transaction. <code>pool.query</code>
     runs a single statement in its own implicit transaction, which commits the
@@ -371,7 +499,7 @@ const { rows } = await pool.query('SELECT * FROM tokens WHERE code = $1 FOR UPDA
   </p>
   <pre><code>UPDATE tokens
    SET uses = uses + 1
- WHERE code = $1
+ WHERE code_hash = $1
    AND revoked_at IS NULL
    AND (expires_at IS NULL OR expires_at &gt; now())
    AND (max_uses  IS NULL OR uses &lt; max_uses)
@@ -540,8 +668,8 @@ router.post('/tokens/:code/redeem', async (req, res) => {
 
     // 2. Fetch token with row lock
     const { rows: tokenRows } = await client.query(
-      'SELECT * FROM tokens WHERE code = $1 FOR UPDATE',
-      [code]
+      'SELECT * FROM tokens WHERE code_hash = $1 FOR UPDATE',
+      [hashCode(code)]
     );
 
     if (tokenRows.length === 0) {
@@ -616,7 +744,7 @@ export default router;`
       },
       {
         type: "spot-the-bug",
-        code: "async function createUniqueCode() {\n  const code = generateTokenCode();\n  const { rows } = await pool.query(\n    'SELECT 1 FROM tokens WHERE code = $1', [code]\n  );\n  if (rows.length === 0) return code;\n  throw new Error('Code collision');\n}",
+        code: "async function createUniqueCode() {\n  const code = generateTokenCode();\n  const { rows } = await pool.query(\n    'SELECT 1 FROM tokens WHERE code_hash = $1', [hashCode(code)]\n  );\n  if (rows.length === 0) return code;\n  throw new Error('Code collision');\n}",
         bugLine: 6,
         options: [
           "Line 2: generateTokenCode() is not async",
@@ -628,7 +756,7 @@ export default router;`
       },
       {
         type: "fill-blank",
-        code: "const { rows } = await pool.query(\n  'SELECT * FROM tokens WHERE code = $1 ___',\n  [code]\n);",
+        code: "const { rows } = await client.query(\n  'SELECT * FROM tokens WHERE code_hash = $1 ___',\n  [hashCode(code)]\n);",
         answer: "FOR UPDATE",
         explanation: "FOR UPDATE acquires a row-level lock, preventing race conditions when two redemption requests arrive simultaneously for the same token."
       },
@@ -721,7 +849,7 @@ export default router;`
       },
       {
         type: "spot-the-bug",
-        code: "router.post('/tokens/:code/redeem', async (req, res) => {\n  const { code } = req.params;\n  const { rows } = await pool.query(\n    'SELECT * FROM tokens WHERE code = $1',\n    [code]\n  );\n  if (rows.length === 0) return res.status(404).json({ error: 'Not found' });\n  const token = rows[0];\n  // ... check status, expiry, max_uses ...\n  await createConversation(token.id);\n});",
+        code: "router.post('/tokens/:code/redeem', async (req, res) => {\n  const { code } = req.params;\n  const { rows } = await pool.query(\n    'SELECT * FROM tokens WHERE code_hash = $1',\n    [hashCode(code)]\n  );\n  if (rows.length === 0) return res.status(404).json({ error: 'Not found' });\n  const token = rows[0];\n  // ... check status, expiry, max_uses ...\n  await createConversation(token.id);\n});",
         options: ["Line 3: Missing FOR UPDATE — race condition with concurrent redemptions", "Line 4: Should use $2 instead of $1", "Line 7: Should return 403 instead of 404 for missing tokens"],
         correct: 0,
         explanation: "Without FOR UPDATE, two simultaneous redemption requests could both pass the max_uses check before either creates a conversation. The row lock prevents this race condition."
@@ -761,17 +889,17 @@ export default router;`
         explanation: "The loop runs for i=0, i=1, i=2, then breaks at i===2 after incrementing. Three iterations complete, simulating a collision retry where the third attempt succeeds."
       },
       {
-        question: "Why does createUniqueCode() throw an error after 5 retries instead of continuing indefinitely?",
+        question: "Why does the insert-and-retry loop give up after 5 attempts instead of retrying forever?",
         options: ["JavaScript has a limit on loop iterations", "If 5 collisions occur consecutively, the database likely has a systemic issue worth investigating", "The pool.query function can only be called 5 times", "Infinite loops crash the Node.js event loop immediately"],
         correct: 1,
         explanation: "With ~1.1 trillion possible codes, 5 consecutive collisions is astronomically unlikely under normal conditions. If it happens, something is wrong (DB full, code space exhausted, bug) and should surface as an error."
       },
       {
         type: "spot-the-bug",
-        code: "router.post('/tokens', authenticate, async (req, res) => {\n  const { label, expires_at, max_uses, rules } = req.body;\n  const code = await createUniqueCode();\n  const { rows } = await pool.query(\n    `INSERT INTO tokens (user_id, code, label, status)\n     VALUES ($1, $2, $3, 'active') RETURNING *`,\n    [code, label]\n  );\n  res.status(201).json({ token: rows[0] });\n});",
-        options: ["Line 7: Parameters are in wrong order — user_id should be $1 but code is passed first", "Line 3: createUniqueCode() does not need await", "Line 5: Should use RETURNING id instead of RETURNING *"],
-        correct: 0,
-        explanation: "The SQL expects $1=user_id, $2=code, $3=label, but the parameter array passes [code, label] — missing userId entirely and code is in the user_id position. It should be [req.user.id, code, label]."
+        code: "router.post('/tokens', authenticate, async (req, res) => {\n  const { label } = req.body;\n  const code = generateTokenCode();\n  const { rows } = await pool.query(\n    `INSERT INTO tokens (user_id, code_hash, code_enc, label)\n     VALUES ($1, $2, $3, $4) RETURNING *`,\n    [hashCode(code), encryptCode(code), label]\n  );\n  res.status(201).json({ token: rows[0] });\n});",
+        options: ["Line 3: generateTokenCode() should be awaited", "Line 7: The parameters are shifted — user_id is missing, so the hash lands in the user_id column", "Line 5: Should use RETURNING id instead of RETURNING *"],
+        correct: 1,
+        explanation: "The SQL expects $1=user_id, $2=code_hash, $3=code_enc, $4=label, but only three values are passed. Postgres will reject it — or worse, if the types happen to line up, write the hash into user_id. It should be [req.user.id, hashCode(code), encryptCode(code), label]."
       },
       {
         type: "fill-blank",
