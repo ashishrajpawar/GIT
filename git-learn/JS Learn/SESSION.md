@@ -466,6 +466,50 @@ take up to 60 seconds, and the difference between those two words is the
 product. If reads ever hurt, make the truth faster — never let a stale answer
 stand.
 
+#### `b7/0003` revocation and pause — done, 1,139 → 2,569 words
+
+**A named ADR-0003 violation at the centre of it.** The socket registry was a
+`Map` in one process. Revoke arrives at replica A, the holder's socket is on
+replica B, `getSocketsByTokenId` finds nothing, the loop does nothing, and the
+endpoint answers **200 OK**. The owner is told the token is revoked; the
+conversation stays live. Nothing errors, nothing logs, and it works perfectly
+on a laptop with one process. ADR-0003 says it outright — stateless API, *no
+node-local socket registry*, Redis required — and this is the case it was
+written for. Now: local map of this replica's own sockets, decision broadcast
+over Redis pub/sub.
+
+**The correction that matters most is conceptual.** It is tempting to read the
+lesson as "revocation works because we close the sockets". It does not — a
+holder can reconnect a second later with a JWT valid for seven more days.
+**What enforces revocation is the check on connect and on every action (B7.2);
+the socket close is a courtesy that makes it immediate and visible.** Get that
+backwards and the security property depends on a broadcast being delivered.
+It is also why the whole thing survives a replica being mid-restart when the
+message goes out.
+
+Three more:
+
+- **Not idempotent.** Revoke twice returned `400 Cannot transition from
+  'revoked' to 'revoked'`. That happens when a user on a bad connection taps
+  Revoke, sees nothing, and taps again — the app shows an error for the most
+  safety-critical action in the product, and they conclude it did not work.
+  Now `WHERE revoked_at IS NULL` and a 204 either way.
+- **`PATCH /tokens/:id` with a `status` field**, contradicting B3.3's
+  `POST /:id/revoke|pause|resume`. These are actions with consequences, not a
+  field being edited.
+- **`status` enum instead of `revoked_at`/`paused_at`**, contradicting B7.1 and
+  B7.2. Timestamps answer *when*, which the audit needs, and the transition
+  rules become `WHERE` clauses the database enforces rather than a lookup table
+  two concurrent requests can both pass.
+- **`ws.send()` then `ws.close()` on the next line** can drop the frame, so the
+  holder sees an unexplained disconnect and reconnects thinking it was a blip.
+
+**A verifier-vs-browser disagreement, handled properly.** Two `predict-output`
+questions asserted `[false, true, true]` and `Set(0) {}` — correct in a browser
+console, wrong under the verifier, which stringifies with `JSON.stringify`.
+Rather than paper over it, both questions were rewritten to print unambiguous
+values: how a host renders a `Set` is trivia about the host, not the concept.
+
 #### Trap that bit twice
 
 **Two escaping failures while writing `b3/0003`, both caught by the verifier**, both

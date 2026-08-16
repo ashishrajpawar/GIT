@@ -47,75 +47,80 @@ const VALID_TRANSITIONS: Record&lt;TokenStatus, TokenStatus[]&gt; = {
   revoked: []  // Terminal state — no way back
 };</code></pre>
 
-  <h2>PATCH /tokens/:id — Status Update Endpoint</h2>
+  <h2>POST /tokens/:id/revoke — and why it is not PATCH</h2>
   <p>
-    The endpoint validates the transition, updates the status, records an audit
-    event, and then propagates to active connections.
+    B3.3 settled the shape: <code>POST /tokens/:id/revoke</code>,
+    <code>/pause</code> and <code>/resume</code> rather than a
+    <code>status</code> field on <code>PATCH</code>. These are actions with
+    consequences — sockets close, calls end — not a field being edited, and
+    naming them separately means each can be authorised and rate limited on its
+    own terms.
+  </p>
+  <p>
+    State is timestamps, not an enum: <code>revoked_at</code> and
+    <code>paused_at</code>, matching B7.1 and B7.2. A timestamp answers "when",
+    which an audit needs, and it cannot drift out of step with a derived status
+    the way a stored one can.
   </p>
   <pre><code>// api/src/routes/tokens.ts
-router.patch('/tokens/:id', authenticate, async (req, res) => {
-  const { id } = req.params;
-  const { status } = req.body;
-  const userId = req.user.id;
-
-  if (!['active', 'paused', 'revoked'].includes(status)) {
-    return res.status(400).json({ error: 'Invalid status' });
-  }
-
+router.post('/tokens/:id/revoke', authenticate, async (req, res, next) =&gt; {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
-    // Fetch current token (owned by this user)
-    const { rows: tokenRows } = await client.query(
-      'SELECT * FROM tokens WHERE id = $1 AND user_id = $2 FOR UPDATE',
-      [id, userId]
+    // Scoped by owner, so "not yours" and "does not exist" are one 404.
+    // Only sets revoked_at if it is not already set - so calling this twice
+    // is not an error, it is the same outcome. A user hammering the revoke
+    // button on a bad connection must not get a failure for an action that
+    // already succeeded.
+    const { rows } = await client.query(
+      `UPDATE tokens SET revoked_at = NOW()
+        WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+        RETURNING id, paused_at`,
+      [req.params.id, req.user.id]
     );
 
-    if (tokenRows.length === 0) {
+    if (rows.length === 0) {
+      // Either it is not theirs, it does not exist, or it was already
+      // revoked. Confirm the end state rather than reporting a conflict.
+      const { rows: check } = await client.query(
+        'SELECT revoked_at FROM tokens WHERE id = $1 AND user_id = $2',
+        [req.params.id, req.user.id]
+      );
       await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'Token not found' });
+      if (check.length === 0) return res.status(404).json({ error: 'Token not found' });
+      return res.status(204).end();      // already revoked: still success
     }
 
-    const token = tokenRows[0];
-    const currentStatus = token.status as TokenStatus;
-
-    // Validate transition
-    if (!VALID_TRANSITIONS[currentStatus].includes(status)) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({
-        error: `Cannot transition from '${currentStatus}' to '${status}'`
-      });
-    }
-
-    // Update status
     await client.query(
-      'UPDATE tokens SET status = $1, updated_at = NOW() WHERE id = $2',
-      [status, id]
-    );
-
-    // Record audit event
-    await client.query(
-      `INSERT INTO revocation_events (token_id, previous_status, new_status, created_at)
-       VALUES ($1, $2, $3, NOW())`,
-      [id, currentStatus, status]
+      `INSERT INTO revocation_events (token_id, action, created_at)
+       VALUES ($1, 'revoked', NOW())`,
+      [req.params.id]
     );
 
     await client.query('COMMIT');
 
-    // Propagate to active connections (after commit — don't hold the transaction)
-    if (status === 'revoked' || status === 'paused') {
-      await propagateStatusChange(parseInt(id), status);
-    }
+    // After the commit, never inside it. Holding a transaction open across a
+    // network call to Redis is how one slow dependency becomes a lock nobody
+    // else can get past.
+    await propagateStatusChange(Number(req.params.id), 'revoked');
 
-    res.json({ token: { id, status, previous_status: currentStatus } });
+    res.status(204).end();
   } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
+    await client.query('ROLLBACK').catch(() =&gt; {});
+    next(err);
   } finally {
     client.release();
   }
 });</code></pre>
+
+  <p>
+    <code>/pause</code> is the same shape against <code>paused_at</code>, and
+    <code>/resume</code> clears it — but only when <code>revoked_at</code> is
+    null, which is what makes revocation terminal. The transition table becomes
+    a <code>WHERE</code> clause rather than a lookup in application code, and a
+    <code>WHERE</code> clause cannot be raced.
+  </p>
 
   <h2>Propagation to Active WebSocket Connections</h2>
   <p>
@@ -130,65 +135,98 @@ export async function propagateStatusChange(
   tokenId: number,
   newStatus: 'paused' | 'revoked'
 ): Promise&lt;void&gt; {
-  // 1. Find all active WebSocket connections for this token
-  const sockets = getSocketsByTokenId(tokenId);
+  // Publish once. Every replica - including this one - receives it and
+  // closes whichever sockets it happens to be holding.
+  await broadcastStatusChange(tokenId, newStatus);
 
-  const message = JSON.stringify({
-    type: 'token_status_changed',
-    status: newStatus,
-    reason: newStatus === 'revoked'
-      ? 'This token has been permanently revoked. Connection closed.'
-      : 'This token has been paused. Connection closed temporarily.'
-  });
+  // Calls travel the same way, for the same reason: the two peers may be
+  // connected to two different replicas.
+  await redis.publish('call:end', JSON.stringify({ tokenId, reason: newStatus }));
+}
 
-  // 2. Notify each connected holder, then close
-  for (const ws of sockets) {
-    ws.send(message);
-    ws.close(1000, `Token ${newStatus}`);
+// IMPORTANT: this is the FAST path, not the correct one.
+//
+// Closing a socket does not stop the holder reconnecting a second later
+// with a JWT that is still perfectly valid. What actually enforces
+// revocation is the check on the way IN - and that check is the reason
+// this works even if a replica was restarting when the message went out.
+export async function authoriseSocketConnect(tokenId: number) {
+  const { rows } = await pool.query(
+    'SELECT revoked_at, paused_at FROM tokens WHERE id = $1',
+    [tokenId]
+  );
+  const t = rows[0];
+  if (!t || t.revoked_at !== null || t.paused_at !== null) {
+    throw new Error('token not usable');
   }
-
-  // 3. End any active calls through signalling
-  await endCallByTokenId(tokenId, newStatus);
-
-  // 4. Clean up the registry
-  removeTokenFromRegistry(tokenId);
 }</code></pre>
 
-  <h2>The Socket Registry</h2>
+  <h2>The Socket Registry — local map, global broadcast</h2>
+
+  <div class="callout warning">
+    <div class="callout-title">A local Map is not a registry</div>
+    <p>
+      Each replica only ever holds the sockets connected to <em>it</em>. If the
+      owner's revoke lands on replica A and the holder's socket is on replica B,
+      a local lookup finds nothing and returns successfully — <strong>the
+      connection stays open and the revoke silently does nothing.</strong>
+    </p>
+    <p>
+      ADR-0003 names this directly: the API is stateless, there is no
+      node-local socket registry, and Redis is required rather than optional.
+      This is the exact case it was written for.
+    </p>
+  </div>
+
   <p>
-    To propagate in real-time, we need a registry mapping token IDs to their
-    active WebSocket connections.
+    Each replica keeps a local map of <em>its own</em> sockets — it has to,
+    they are objects in its memory — and revocation is broadcast over Redis so
+    every replica checks its own map.
   </p>
+
   <pre><code>// api/src/ws/registry.ts
 import { WebSocket } from 'ws';
+import { redis, redisSub } from '../redis';
 
-// Maps tokenId -> Set of active WebSocket connections
-const tokenSockets = new Map&lt;number, Set&lt;WebSocket&gt;&gt;();
+// This replica's own connections. Never treated as the whole picture.
+const localSockets = new Map&lt;number, Set&lt;WebSocket&gt;&gt;();
 
 export function registerSocket(tokenId: number, ws: WebSocket): void {
-  if (!tokenSockets.has(tokenId)) {
-    tokenSockets.set(tokenId, new Set());
-  }
-  tokenSockets.get(tokenId)!.add(ws);
+  if (!localSockets.has(tokenId)) localSockets.set(tokenId, new Set());
+  localSockets.get(tokenId)!.add(ws);
 
-  // Clean up on disconnect
-  ws.on('close', () => {
-    const sockets = tokenSockets.get(tokenId);
-    if (sockets) {
-      sockets.delete(ws);
-      if (sockets.size === 0) {
-        tokenSockets.delete(tokenId);
-      }
-    }
+  ws.on('close', () =&gt; {
+    const sockets = localSockets.get(tokenId);
+    if (!sockets) return;
+    sockets.delete(ws);
+    if (sockets.size === 0) localSockets.delete(tokenId);
   });
 }
 
-export function getSocketsByTokenId(tokenId: number): Set&lt;WebSocket&gt; {
-  return tokenSockets.get(tokenId) || new Set();
+// Called by whichever replica handled the revoke.
+export async function broadcastStatusChange(tokenId: number, status: string) {
+  await redis.publish('token:status', JSON.stringify({ tokenId, status }));
 }
 
-export function removeTokenFromRegistry(tokenId: number): void {
-  tokenSockets.delete(tokenId);
+// Every replica subscribes at startup, including the one that published -
+// so the publisher needs no special case.
+redisSub.subscribe('token:status');
+redisSub.on('message', (_channel, payload) =&gt; {
+  const { tokenId, status } = JSON.parse(payload);
+  closeLocalSockets(tokenId, status);
+});
+
+function closeLocalSockets(tokenId: number, status: string) {
+  const sockets = localSockets.get(tokenId);
+  if (!sockets) return;                 // not on this replica - fine
+
+  const message = JSON.stringify({ type: 'token_status_changed', status });
+  for (const ws of sockets) {
+    // Close AFTER the write flushes. ws.send() is asynchronous; closing on
+    // the next line can drop the message the holder needs to see.
+    ws.send(message, () =&gt; ws.close(1000, 'token ' + status));
+  }
+  localSockets.delete(tokenId);
 }</code></pre>
 
   <h2>Ending Active Calls</h2>
@@ -244,6 +282,161 @@ export async function endCallByTokenId(
 // | Token visible in UI | Yes (with paused badge)  | Yes (with revoked badge)   |
 // | Can reuse code?     | No (code stays reserved) | No (code stays reserved)   |
 // | User intent         | "Not now, maybe later"   | "Never again"              |</code></pre>
+
+  <hr>
+
+  <h2>Why this way (and what was rejected)</h2>
+
+  <h3>Closing sockets is the fast path. The connect check is the real one.</h3>
+
+  <p>
+    It is tempting to read this lesson as "revocation works because we close
+    the sockets". It does not. A holder whose socket is closed can reconnect a
+    second later with a holder JWT that is still perfectly valid and does not
+    expire for seven days — B7.1 issued it and nothing has taken it back.
+  </p>
+  <p>
+    <strong>What enforces revocation is the check performed when a connection
+    is established, and on every action after it (B7.2).</strong> The socket
+    close is a courtesy that makes the effect immediate and visible; the
+    database check is what makes it true. Get that the wrong way round and you
+    build a system whose security property depends on a broadcast being
+    delivered.
+  </p>
+  <p>
+    Which is also why it survives failure. If a replica is mid-restart when the
+    Redis message goes out, it never closes that socket — and the next thing
+    the holder does is refused anyway.
+  </p>
+
+  <h3>Redis fan-out, because a local map is one replica's opinion</h3>
+
+  <p>
+    The registry has to be local — the sockets are objects in one process's
+    memory and cannot be anywhere else. The <em>decision</em> to close them
+    cannot be. Publishing to Redis and letting every replica check its own map
+    is the shape ADR-0003 requires, and the reason "build to scale out, deploy
+    on one box" costs almost nothing here: with one replica the publish is a
+    local round trip, and the day there are three, nothing changes.
+  </p>
+
+  <h3>Idempotent, because the button gets pressed twice</h3>
+
+  <p>
+    The original returned <code>400 Cannot transition from 'revoked' to
+    'revoked'</code>. Consider when that happens: a user on a bad connection
+    taps Revoke, sees nothing, and taps again. The first request succeeded, the
+    response was lost, and the app now shows an error for the most
+    safety-critical action in the product. They will reasonably conclude it did
+    not work.
+  </p>
+  <p>
+    <code>WHERE revoked_at IS NULL</code> plus a 204 for the already-revoked
+    case means the answer to "revoke this" is always "it is revoked".
+  </p>
+
+  <h3>Timestamps, not a status enum</h3>
+
+  <p>
+    <code>revoked_at</code> and <code>paused_at</code> match B7.1 and B7.2, and
+    they answer <em>when</em> — which an audit trail needs and a
+    <code>status</code> column cannot. The transition rules become
+    <code>WHERE</code> clauses (<code>resume</code> only applies
+    <code>WHERE revoked_at IS NULL</code>), so they are enforced by the database
+    rather than by a lookup table in application code that two concurrent
+    requests can both pass.
+  </p>
+
+  <hr>
+
+  <h2>When this breaks</h2>
+
+  <h3>One replica hears the revoke. The others do not.</h3>
+
+  <p>
+    The original registry was a <code>Map</code> in one process. Revoke arrives
+    at replica A; the holder's socket is on replica B; <code>getSocketsByTokenId</code>
+    finds nothing, returns an empty set, the loop does nothing, and the endpoint
+    responds <strong>200 OK</strong>. The owner is told their token is revoked
+    and the conversation is still live.
+  </p>
+  <p>
+    Nothing errors. Nothing logs. It works perfectly on a laptop with one
+    process and fails the first time a second replica exists — which is exactly
+    the class of bug ADR-0003 exists to prevent, and why "no node-local socket
+    registry" is written down rather than left to judgement.
+  </p>
+
+  <h3>The message that never left</h3>
+
+  <pre><code>ws.send(message);
+ws.close(1000, 'Token revoked');    // may close before the send flushes</code></pre>
+
+  <p>
+    <code>ws.send</code> is asynchronous. Closing on the next line can discard
+    the frame, so the holder's screen shows a disconnection with no explanation
+    and the app reconnects thinking it was a network blip. Close in the send
+    callback.
+  </p>
+
+  <h3>Propagation is not transactional, and must not be</h3>
+
+  <p>
+    The publish happens after <code>COMMIT</code>, which is correct — holding a
+    transaction open across a call to Redis turns one slow dependency into a
+    lock everyone else queues behind. The cost is a real window: if the process
+    dies between the commit and the publish, the token is revoked in the
+    database and the sockets stay open until something else closes them.
+  </p>
+  <p>
+    Which is survivable only because of the connect-time and per-action checks.
+    They are not belt-and-braces; they are the belt.
+  </p>
+
+  <h3>Pause drops connections, and the client must not treat that as an error</h3>
+
+  <p>
+    A paused token closes sockets exactly like a revoked one. The difference is
+    what happens next: the holder's client sees a normal close with a status of
+    <code>paused</code>, and must show "this conversation is paused" rather than
+    retrying forever. A reconnect loop against a paused token is an accidental
+    denial-of-service on your own API — and the rate limiter will eventually
+    treat that client as an attacker.
+  </p>
+
+  <hr>
+
+  <h2>What this costs you</h2>
+
+  <table>
+    <thead>
+      <tr><th>Decision</th><th>What you pay</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Redis on the revoke path</td>
+        <td>Another dependency in the most safety-critical action in the product. If Redis is down the database write still succeeds and enforcement still holds — the connection simply closes late, on the holder's next action rather than instantly. Degraded, not broken, which is the only acceptable shape here.</td>
+      </tr>
+      <tr>
+        <td>Checking token state on every socket connect</td>
+        <td>A query on every reconnect, and mobile clients reconnect constantly — every tunnel, every wifi handover. It is one indexed primary-key lookup, and it is the check the whole guarantee rests on.</td>
+      </tr>
+      <tr>
+        <td>Revocation being terminal</td>
+        <td>No undo. A user who revokes the wrong token issues a new one and re-shares it — which is cheap for a delivery driver and painful for a token printed on a business card. The alternative, an undo window, means "revoked" would not quite mean revoked.</td>
+      </tr>
+      <tr>
+        <td>Keeping revoked tokens and their conversations</td>
+        <td>Storage that never shrinks, and a privacy question of its own: the audit trail that proves someone kept trying after being cut off is also a record of them. That tension belongs to the retention policy in C9, not here.</td>
+      </tr>
+      <tr>
+        <td>Codes stay reserved forever</td>
+        <td>A revoked code can never be reissued, so the keyspace only shrinks. At 7.9 × 10<sup>17</sup> that will never matter — but it is the reason the collision check exists at all.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <hr>
 
   <h2>The Audit Trail</h2>
   <p>
@@ -523,8 +716,8 @@ async function propagateStatusChange(tokenId, newStatus) {
       },
       {
         type: "predict-output",
-        code: "const statuses = ['active', 'paused', 'revoked'];\nconst results = statuses.map(s => s === 'paused' || s === 'revoked');\nconsole.log(results);",
-        answer: "[false, true, true]",
+        code: "const tokens = [\n  { revoked_at: null,         paused_at: null },\n  { revoked_at: null,         paused_at: '2026-08-16' },\n  { revoked_at: '2026-08-16', paused_at: null }\n];\nconst blocked = tokens.map(function (t) {\n  return t.revoked_at !== null || t.paused_at !== null;\n});\nconsole.log(blocked.join(','));",
+        answer: "false,true,true",
         explanation: "Both 'paused' and 'revoked' trigger propagation to active connections. Only 'active' does not need propagation because transitioning TO active means the token is being resumed — connections weren't active to disconnect."
       },
       {
@@ -566,9 +759,9 @@ async function propagateStatusChange(tokenId, newStatus) {
       },
       {
         type: "predict-output",
-        code: "const registry = new Map();\nregistry.set(5, new Set());\nconsole.log(registry.get(5).size);\nconsole.log(registry.get(99) || new Set());",
-        answer: "0\nSet(0) {}",
-        explanation: "Token 5 has an empty Set (size 0). Token 99 doesn't exist in the map (returns undefined), so the || fallback provides a new empty Set. This is how getSocketsByTokenId safely returns an iterable even for tokens with no connections."
+        code: "const localSockets = new Map();\nlocalSockets.set(5, new Set());\nconsole.log(localSockets.get(5).size);\n// Token 99's holder is connected to a DIFFERENT replica:\nconsole.log((localSockets.get(99) || new Set()).size);",
+        answer: "0\n0",
+        explanation: "Both print 0, and that is the trap. The fallback makes a missing token look exactly like a token with no connections — so a replica that simply is not holding that socket loops over nothing and reports success. It is a safe iterable and a dangerous conclusion: 'no sockets here' never means 'no sockets anywhere', which is why the close has to be broadcast over Redis and why enforcement cannot depend on it."
       },
       {
         type: "fill-blank",
