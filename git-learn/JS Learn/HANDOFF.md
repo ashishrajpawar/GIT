@@ -773,6 +773,65 @@ it: not `index.html`, not `search-index.json`.
 Recover with `git show fbf79c0~1:"git-learn/JS Learn/modules/03-firebase-backend/README.html"`
 or check the whole tree out of that commit.
 
+### Session of 2026-08-16 — Phase 1.3, and a test suite that hid its own failure
+
+One "explain it in your own words" prompt in each of Module 01's 13 lessons,
+between the exercise and the quiz. New component `assets/explain.js`, backed by
+`scripts/test-explain.mjs`.
+
+#### The one design decision
+
+The item as written in `COURSE-REVIEW.md` is "add a one-sentence prompt". A
+prompt in a callout is free to build and free to ignore, so this one **saves
+the answer** and restores it on the next visit.
+
+That is not a flourish. Every other component in this course tests
+recognition — a quiz offers four options, a self-check runs code the student
+already wrote. Writing the idea out in a sentence is the only thing here that
+tests production, the sentence you cannot finish is what names the section to
+re-read, and the saved text is the only record anywhere of what was understood
+rather than clicked.
+
+Storage deliberately copies `progress.js`: one key holding one object, keyed by
+lesson file *and* container, so the same id in two lessons cannot collide and a
+future "you have written 7 of 13" needs no migration.
+
+#### The test suite hid its own worst failure
+
+Standard practice here is to prove a new suite has teeth by breaking the thing
+it guards. Breaking `keyFor` did make it fail — but an assertion read `.text`
+off an entry that was now `undefined`, so the run **crashed at test 11** and
+every test after it, including the cross-lesson separation check, never
+reported. The check protecting the worst failure mode was the one silenced by
+the failure.
+
+Lookups now go through `entryOf`/`textOf` helpers returning `null`. Re-proved
+after the fix: dropping the lesson from the key fails 6 checks cleanly, and
+removing the `trim()` fails 3.
+
+This is the same defect CLAUDE.md already names for lesson self-checks — "a
+mistake that trips *every* check means the self-check has poor diagnostics" —
+appearing in a test suite instead. Worth remembering that the rule applies to
+the tooling, not just the lessons.
+
+#### Prompts
+
+They ask **why**, not **what**, and each names the specific thing its lesson
+exists for: `maxUses: 0` truthiness in `0004`, `textContent` versus
+`innerHTML` in `0007`, where 248 comes from in the capstone. A prompt that
+could be answered from the lesson title is decoration.
+
+Inserted by a script written to a file rather than piped through a shell — the
+prompts carry apostrophes and inline `<code>`, which is precisely what gets
+mangled otherwise. It refuses to run twice, and aborts rather than guessing if
+a lesson does not have exactly one quiz heading and one `progress.js` tag.
+
+All 13 lessons re-verified afterwards; the audit is unchanged.
+
+**Module 02 was left out on purpose.** Its prompts belong with the 1.5
+retrofit, written against the lesson as it will be rather than the pre-pivot
+version — otherwise they get written twice.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees

@@ -136,6 +136,7 @@ assets/
   playground.js                     ← createPlayground() inline JS editor
   dom-sandbox.js                    ← in-memory document for DOM playgrounds
   solution.js                       ← createSolution() exercise-first component
+  explain.js                        ← createExplain() "in your own words" prompt
   progress.js                       ← lesson/module progress tracking (localStorage)
   copy-code.js                      ← auto-attaches Copy buttons to <pre> blocks
   search.js                         ← client-side search on index.html
@@ -159,6 +160,7 @@ All lessons in `modules/` share `assets/styles.css` and `assets/quiz.js`.
 <script src="../../assets/dom-sandbox.js"></script>  <!-- before playground.js -->
 <script src="../../assets/playground.js"></script>
 <script src="../../assets/solution.js"></script>
+<script src="../../assets/explain.js"></script>
 <script src="../../assets/progress.js"></script>
 <script src="../../assets/copy-code.js"></script>
 ```
@@ -281,6 +283,42 @@ Exercise-first component: shows the exercise, optionally hints, then solution.
   });
 </script>
 ```
+
+### `createExplain(containerId, config)` — `explain.js`
+
+One prompt per lesson, sitting between the exercise and the quiz. The student
+writes the idea out in a sentence; the answer is saved to `localStorage` and
+restored on the next visit.
+
+```html
+<div id="explain-0006"></div>
+<script>
+  createExplain("explain-0006", {
+    prompt: "Explain how the token list inside <code>createIssuer()</code> is still there long after it has finished, while no code outside can reach it."
+  });
+</script>
+```
+
+- `config.prompt` may contain inline HTML (it is set with `innerHTML`, like
+  `createSolution`'s exercise text). Author content only — never student input.
+- Storage is one key, `jslearn-explain`, holding
+  `{ "<lesson file>::<containerId>": { text, savedAt } }` — the same
+  one-key-one-object shape `progress.js` uses. The lesson file is part of the
+  key, so the same container id in two lessons cannot collide.
+- Saving an empty box **deletes** the entry rather than storing blanks.
+- Every read and write is wrapped: a browser with storage disabled shows
+  "could not save" instead of taking the lesson down with it.
+- `createExplain.count()` returns how many prompts have been answered. Nothing
+  reads it yet; it exists so a "7 of 13 written" line needs no format change.
+
+**Why it saves rather than just asking.** Every other component in the course
+tests recognition — a quiz offers four answers, a self-check runs code the
+student already wrote. The sentence you cannot finish is the one thing that
+names the section to re-read, and it is the only record of what was actually
+understood as opposed to what was clicked.
+
+Verify it with `node scripts/test-explain.mjs` (18 assertions, run against
+`dom-sandbox.js` so it exercises the same DOM the browser gives it).
 
 ### `progress.js` — auto-loaded on every page
 
@@ -482,6 +520,7 @@ Same structure as Track A except point 4 becomes:
 <script src="../../assets/dom-sandbox.js"></script>  <!-- if lesson touches the DOM -->
 <script src="../../assets/playground.js"></script>   <!-- if lesson has playgrounds -->
 <script src="../../assets/solution.js"></script>     <!-- if lesson has exercises -->
+<script src="../../assets/explain.js"></script>      <!-- every lesson: the explain prompt -->
 <script src="../../assets/progress.js"></script>
 <script src="../../assets/copy-code.js"></script>
 ```
@@ -501,6 +540,13 @@ this shape when retrofitting further lessons:
 
 3. **One `createSolution()` exercise before the quiz**, under the heading
    "Now build it yourself", with 3 hints.
+
+3b. **One `createExplain()` prompt**, between the exercise and the quiz. It
+   must be answerable only if the lesson landed — name the specific thing the
+   lesson exists for, and ask *why*, not *what*. "Explain why
+   `if (token.maxUses)` is wrong for `maxUses: 0`" is a prompt; "Explain
+   conditionals" is a heading. One per lesson, `explain-<lesson number>` as
+   the container id.
 
 4. **A self-check in the exercise playground.** Starter code is a blank
    space, then a line reading `// --- Self-check: leave everything below this
@@ -532,6 +578,8 @@ same document the browser loads. Two supporting suites back that up:
 node scripts/test-dom-sandbox.mjs      # the sandbox behaves like a DOM (55 assertions)
 node scripts/test-playground-dom.mjs   # playground.js wiring: preview, Reset,
                                        # fresh sandbox per Run, host page safety
+node scripts/test-explain.mjs          # explain.js: saving, restoring, key
+                                       # collisions, storage being unavailable
 ```
 
 Run both after touching `dom-sandbox.js` or `playground.js`. `verify-lesson.mjs`

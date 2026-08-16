@@ -26,6 +26,47 @@ one or two lessons at a time, never batched ahead.
 | `01/0011-modern-javascript-es6` | done |
 | `01/0012-error-handling` | done — **Module 01 and Phase 1.1 complete** |
 
+### Unit 10 — Phase 1.3, "explain it in your own words" — DONE
+
+One prompt per lesson, all 13 of Module 01. New component
+`assets/explain.js` + `scripts/test-explain.mjs` (18 assertions).
+
+**It saves the answer rather than just asking.** A prompt in a box is easy to
+skip; a box that still has last week's sentence in it is worth opening. It is
+also the only record anywhere in this course of what the student *understood*,
+as opposed to what they clicked — every other component tests recognition.
+
+Storage matches `progress.js`: one key, `jslearn-explain`, holding
+`{ "<lesson file>::<containerId>": { text, savedAt } }`. The lesson file is
+part of the key, which is the bug worth guarding — the same container id in
+two lessons must not show lesson 5's answer on lesson 6's page.
+
+**The test suite crashed instead of failing, the first time it was proved.**
+Breaking `keyFor` on purpose made an assertion read `.text` of `undefined`, so
+the run died at test 11 and the *cross-lesson* check — the one protecting the
+worst failure — never reported at all. Lookups now go through `entryOf` /
+`textOf` helpers that return `null`. Re-proved after the fix: dropping the
+lesson from the key fails 6 checks, removing the `trim()` fails 3, and both
+report cleanly rather than exploding. That is the same "poor diagnostics"
+problem CLAUDE.md names for self-checks, in the test suite itself.
+
+Prompts ask **why**, not **what**, and name the specific thing each lesson
+exists for — `maxUses: 0` truthiness in 0004, `textContent` vs `innerHTML` in
+0007, where 248 comes from in the capstone. A prompt that could be answered
+from the lesson title is decoration.
+
+Inserted by a script written to a file, not piped through a shell — the
+prompts carry apostrophes and inline `<code>`, which is exactly what CLAUDE.md
+warns gets mangled. The script refuses to run twice and aborts rather than
+guessing if a lesson does not have exactly one quiz heading and one
+`progress.js` tag.
+
+All 13 re-verified after the edit; audit unchanged (3 pre-existing schema
+errors, 52 warnings).
+
+**Module 02 deliberately not done.** Its prompts belong with the 1.5 retrofit,
+written against the lesson as it will be, not the pre-pivot version.
+
 ### Unit 9 — Firebase removal: Phase 0.4 and Module 02 — DONE
 
 Student asked for both after the phase table showed 0.4 was still open despite
@@ -429,14 +470,23 @@ What remains in COURSE-REVIEW.md §6 Phase 1:
 |---|---|---|
 | 1.1 | Retrofit `01/0005`–`01/0012` | **done** |
 | 1.2 | Capstone at the end of Module 01 | **done** — Token repo `221e6b0` |
-| 1.3 | One "explain it in your own words" prompt per lesson | not started |
+| 1.3 | One "explain it in your own words" prompt per lesson | **done** for Module 01; Module 02's come with 1.5 |
 | 1.4 | Spaced review from the previous two lessons | **done** — built into each retrofit |
 | 1.5 | Same retrofit for Module 02, just-in-time | not started |
 
-**Recommended next: 1.3.** It is the only item left that touches lessons the
-student is about to read, it is small and uniform (one prompt per lesson, no
-tooling), and it is the piece that turns passive reading into recall. Do it
-across `01/0001`–`0013` in one pass, since the shape is identical everywhere.
+**Phase 1 is now done except 1.5**, which is deliberately just-in-time.
+
+**Recommended next: 1.5, when the student actually reaches Module 02** — and
+it is a bigger job than 1.1 was per lesson, because Module 02 needs the
+practice retrofit *and* the Token reframe (the WhatsApp clone, Priya, read
+ticks) in one pass. The Firebase half is already done. Before writing any of
+it, decide how a React Native exercise gets verified: `verify-lesson.mjs`
+cannot run RN, so either the self-checks target plain functions the screens
+call, or Module 02 exercises are recorded `unverifiable` with a reason. That
+decision comes first, not after the lessons are written.
+
+Phase 2 (deepen the ~20 spine lessons) is the other candidate, and it does not
+depend on where the student is.
 
 **Do not start Module 02 (1.5) yet.** The student is on lesson 5 or 6 of 12;
 Module 02 is just-in-time work and writing it now is exactly the batching-ahead
