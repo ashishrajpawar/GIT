@@ -102,12 +102,19 @@ A lesson that shows a wrong alphabet deliberately opts out by containing the
 string `audit-allow-alphabet`.
 
 ### Token repo layout (one git repo, four folders)
+
+**It is a separate git repo, beside this one, at `GIT/token/`** — not inside
+`git-learn/`. Its own commits, its own history. `ARCHITECTURE.md` and the ADRs
+live there.
+
 ```
 token/
   app/          ← React Native + Expo (mobile client)
   web/          ← Vite + React (redemption web page)
   api/          ← Node.js + Express/Fastify (backend)
   shared/       ← TypeScript types, API client, zod validation schemas
+  practice/     ← lesson exercises; 01-token-issuer is the Module 01 capstone
+  docs/adr/     ← the decisions, numbered and append-only
 ```
 No monorepo tooling — plain folders with tsconfig path aliases.
 `web/` is a plain web app (Vite + React), NOT React Native Web.
@@ -421,11 +428,39 @@ config change.
 
 ### Backend — `api/`
 - Node.js + TypeScript, Express or Fastify (decided during B3)
-- PostgreSQL — primary datastore, pooled and partition-aware
+- PostgreSQL — primary datastore, pooled and partition-aware, behind pgbouncer
 - **Redis — required** (ADR-0003)
 - Raw SQL via the `pg` driver first, Drizzle later.
   **Never Prisma** — it hides the query layer, and learning SQL is a goal here
 - Parameterised queries always (`$1`), never string concatenation
+
+### The token code is never stored in the clear (ADR-0007)
+
+`tokens` holds two derived columns and not the code:
+
+- `code_hash` — SHA-256 of the normalised code plus a server-side pepper,
+  `UNIQUE`, and the only way a code is looked up
+- `code_enc` — AES-256-GCM, decrypted only when the owner asks to see that one
+  token, and logged when it happens
+
+Deliberately **not** bcrypt or argon2: they salt randomly, so a row could not
+be found by its code without scanning the table. `TOKEN_CODE_PEPPER` and
+`TOKEN_CODE_KEY` are required environment variables, validated at startup.
+**Lose them and every token ever issued is permanently unusable** — they belong
+in the disaster-recovery plan, stored somewhere the database backups are not.
+
+Three consequences that reach beyond the schema, and are the reason this is
+summarised here rather than left in the ADR:
+
+- **Codes never go in a URL path.** A path reaches the proxy's access log,
+  browser history, `Referer` and crash reports. Owner endpoints take `:id`; the
+  redemption endpoint takes the code in a POST body.
+- **Codes never go in a log.** The redeem body is the sensitive part precisely
+  because the code was moved there. Log an allow-list of fields, and configure
+  the error tracker's scrubbing — it attaches request bodies by default.
+- **The code is returned exactly once**, in the response to `POST /tokens`.
+  Everything else shows the label and the state. Showing it again is a separate,
+  logged request.
 
 ### Communication
 - Chat: WebSocket on own server, routed across nodes through Redis pub/sub
