@@ -23,12 +23,18 @@ Five steps, in order:
 | File | Owns | Written by |
 |---|---|---|
 | `PROGRESS.md` | Anything a script can compute — counts, coverage, verification state | **Generated only.** Never hand-edit |
-| `SESSION.md` | In progress / Next action / Blocked | Hand, before each unit of work |
+| `SESSION.md` | In progress / Next action / Blocked, **and per-item phase status** | Hand, before each unit of work |
 | `CLAUDE.md` (this file) | Architecture invariants, conventions, product rules | Hand |
 | `HANDOFF.md` | Narrative — why decisions were made, what failed, session log | Hand, appended each session |
 | `ARCHITECTURE.md` + `docs/adr/` | Technical design and the decisions behind it | Hand |
-| `COURSE-REVIEW.md` | The 2026-08-15 audit and the phase plan | Hand |
+| `COURSE-REVIEW.md` | The 2026-08-15 audit and the phase **plan** — what the work is, never how far it has got | Hand |
 | `TOKEN-TRACK.md` | Lesson map and sequencing | Hand |
+
+**Where "how far along are we?" is answered:** the phase-level headline is at
+the top of `COURSE-REVIEW.md` §6, per-item status is in `SESSION.md`, and every
+countable thing is in `PROGRESS.md`. Three files, three different questions —
+and deliberately no status column in `COURSE-REVIEW.md`'s tables, because a
+fact with three homes has three chances to be wrong.
 
 **The rule that prevents drift: this file and `HANDOFF.md` never restate a
 number the audit can compute.** They point at `PROGRESS.md` instead. Prose

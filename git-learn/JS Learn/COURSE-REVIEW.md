@@ -175,6 +175,27 @@ sequence where you will actually use it.
 
 ---
 
+> ### ⚠ These tables are the PLAN, not the status
+>
+> **As of 2026-08-16: Phase 0 is done, Phase 1 is done except 1.5, Phase 2 is
+> done. Phases 3 and 4 are not started and are deliberately just-in-time.**
+>
+> That headline is the only status kept in this file, and only because a plan
+> that reads as an untouched to-do list is actively misleading. **Per-item
+> status is in `SESSION.md`; anything countable is in `PROGRESS.md`, which is
+> generated.** Do not add a status column to the tables below — three homes for
+> one fact is how they drift apart, which is the failure this whole document was
+> written about.
+>
+> Two notes the plan itself cannot carry:
+>
+> - **Phase 2 covered 16 lessons, not 20.** `b2/0001`, `b2/0003`, `b5/0001` and
+>   `b5/0002` are marked REWRITE in `TOKEN-TRACK.md`'s revised sequence, so
+>   deepening them is work that gets discarded.
+> - **The Phase 3 module list is superseded.** `TOKEN-TRACK.md` § "Revised
+>   sequence (2026-08-15)" reorders it — chiefly C5 (E2EE) moving before B2 and
+>   C6 alongside the B-track. Where the two disagree, `TOKEN-TRACK.md` wins.
+
 ### Phase 0 — Repair the map (before you study anything else)
 
 | # | Work | Why |
