@@ -510,6 +510,45 @@ console, wrong under the verifier, which stringifies with `JSON.stringify`.
 Rather than paper over it, both questions were rewritten to print unambiguous
 values: how a host renders a `Set` is trivia about the host, not the concept.
 
+#### `b9/0002` Coolify — done, 1,097 → 2,663 words
+
+**ADR-0007's follow-on is now discharged.** `TOKEN_CODE_PEPPER` and
+`TOKEN_CODE_KEY` are required environment variables, validated at startup with
+`exit(1)` so a missing secret is a container that never becomes healthy rather
+than one that fails on the first request that needs it.
+
+**The lesson deployed a database and never mentioned backing it up.** On
+managed hosting that omission is survivable because someone else made the
+decision; on a VPS it is total — one disk, one machine, no snapshots unless
+you asked. Added a backup section, and the three parts that are easy to skip:
+restore drills (an untested backup is a belief), the fact that `pg_dump`
+captures `code_hash` and `code_enc` and *nothing that makes them meaningful*,
+and the awkward requirement that the secrets be recoverable **together with**
+the dump and stored **apart from** it.
+
+Three more:
+
+- **`prestart` migrations run in every container.** Two replicas start
+  together and both apply the same migration. One `pg_advisory_lock` and the
+  second finds nothing to do — dead code on one box, the difference between a
+  deploy and an outage on two. ADR-0003 in a paragraph.
+- **No pgbouncer**, though CLAUDE.md requires it. Postgres allocates a process
+  per connection and defaults to ~100; the failure mode is new connections
+  refused while existing ones work, so the API looks healthy and half the
+  requests fail. Retrofitting it means re-testing everything that assumed a
+  session.
+- **Health checks that test every dependency are a trap.** If `/health` fails
+  on a Redis blip, the orchestrator kills containers *because a dependency is
+  unwell*. Liveness ("is this wedged?") should test almost nothing; readiness
+  may check Postgres; Redis belongs in neither, because sockets degrade
+  without it and HTTP does not.
+
+Also made the cost table honest: **TURN relay bandwidth is missing and is the
+most likely surprise on the bill** — with `iceTransportPolicy: 'relay'` every
+call's media crosses your server rather than going peer to peer. And the
+single-box ceiling from CLAUDE.md is now written into "what this costs you"
+rather than living only in the orientation doc.
+
 #### Trap that bit twice
 
 **Two escaping failures while writing `b3/0003`, both caught by the verifier**, both

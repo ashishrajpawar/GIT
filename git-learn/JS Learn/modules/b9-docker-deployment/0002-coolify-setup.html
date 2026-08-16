@@ -137,18 +137,61 @@ curl -fsSL https://cdn.coollabs.io/coolify/install.sh | bash
 
     <h3>Environment Variables</h3>
     <p>In the application settings, add:</p>
-    <pre><code>DATABASE_URL=postgres://token:GENERATED_PASSWORD@postgres-container:5432/token_prod
+    <pre><code>DATABASE_URL=postgres://token:GENERATED_PASSWORD@pgbouncer:6432/token_prod
 REDIS_URL=redis://redis-container:6379
 JWT_SECRET=generate-a-64-char-random-string
 JWT_REFRESH_SECRET=different-64-char-random-string
 NODE_ENV=production
 CORS_ORIGIN=https://tokn.app
-EXPO_ACCESS_TOKEN=your-expo-token-for-push-notifications</code></pre>
+EXPO_ACCESS_TOKEN=your-expo-token-for-push-notifications
+
+# ADR-0007. Without these the API cannot look up or display a single token
+# code, so it must refuse to start rather than come up half working.
+TOKEN_CODE_PEPPER=64-hex-chars   # hashed into every code_hash
+TOKEN_CODE_KEY=base64-32-bytes   # AES-256-GCM key for code_enc</code></pre>
 
     <p><strong>Generating secrets:</strong></p>
-    <pre><code># Run locally to generate a cryptographically secure random string
+    <pre><code># 64 hex characters, for the JWT secrets and the pepper
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-# Output: a1b2c3d4e5f6...64 hex characters</code></pre>
+
+# A 32-byte AES key, base64 - a different encoding for a different job
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"</code></pre>
+
+    <p>
+      Refuse to start without them. A container that boots with a missing
+      secret and fails on the first request that needs it turns a
+      configuration mistake into an incident:
+    </p>
+
+    <pre><code>// api/src/config.ts - runs before anything listens on a port
+const REQUIRED = [
+  'DATABASE_URL', 'REDIS_URL', 'JWT_SECRET', 'JWT_REFRESH_SECRET',
+  'TOKEN_CODE_PEPPER', 'TOKEN_CODE_KEY',
+];
+
+const missing = REQUIRED.filter((k) =&gt; !process.env[k]);
+if (missing.length &gt; 0) {
+  console.error('Refusing to start. Missing: ' + missing.join(', '));
+  process.exit(1);          // health check never passes, old container stays
+}</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">These two secrets are not like the others</div>
+      <p>
+        Lose <code>JWT_SECRET</code> and everyone is logged out — annoying, and
+        they log back in. Lose <code>TOKEN_CODE_PEPPER</code> or
+        <code>TOKEN_CODE_KEY</code> and <strong>every token ever issued is
+        permanently unusable</strong>: no code can be matched to its hash, and
+        no stored code can be decrypted to show the owner. There is no recovery
+        and no support process. The database is intact and worthless.
+      </p>
+      <p>
+        So they belong in the disaster-recovery plan alongside the database —
+        and stored <em>somewhere the database backups are not</em>, because a
+        backup that contains both the data and the keys to it is a single thing
+        to lose and a single thing to steal.
+      </p>
+    </div>
 
     <h3>Domain &amp; TLS</h3>
     <ol>
@@ -241,6 +284,72 @@ CMD ["sh", "-c", "node dist/migrate.js && node dist/server.js"]</code></pre>
     won't pass, and Coolify will keep the old container running. This is the safe behavior &mdash;
     a failed migration never reaches users.</p>
 
+    <div class="callout warning">
+      <div class="callout-title">Two replicas, two migrators</div>
+      <p>
+        <code>prestart</code> runs in <em>every</em> container. With one replica
+        that is fine and invisible. With two, both start together and both begin
+        applying the same migration — and "add a column" run twice is an error
+        at best and a half-applied schema at worst.
+      </p>
+      <p>
+        Postgres has the tool for this built in. One advisory lock, held for the
+        duration, and the second migrator waits and then finds nothing to do:
+      </p>
+      <pre><code>// api/src/migrate.ts
+await client.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK_ID]);
+try {
+  await applyPendingMigrations(client);   // the second replica finds none
+} finally {
+  await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK_ID]);
+}</code></pre>
+      <p>
+        Deploy on one box today and this is dead code. Add a replica in a year
+        and it is the difference between a deploy and an outage — which is
+        ADR-0003 in one paragraph: build for N, run one.
+      </p>
+    </div>
+
+    <h2>Backups — the step this lesson used to skip</h2>
+
+    <p>
+      Everything above deploys a database onto a single VPS with a single disk.
+      Without the next few lines, the whole system is one hardware failure, one
+      mistaken <code>DROP</code>, or one bad migration away from gone.
+    </p>
+
+    <pre><code># A nightly dump, kept off the machine that made it
+0 3 * * * docker exec postgres-container pg_dump -U token token_prod   | gzip &gt; /backups/token-$(date +\%F).sql.gz
+
+# Then push it somewhere else entirely. A backup on the same disk as the
+# database is not a backup - it is a second copy of the thing that failed.
+rclone copy /backups remote:token-backups</code></pre>
+
+    <p>Three things that are easy to skip and are the whole point:</p>
+
+    <ul>
+      <li>
+        <strong>Restore, do not just back up.</strong> An untested backup is a
+        belief. Restore into a scratch container and run the API against it
+        — quarterly, and written down as a runbook, because the day you need it
+        is not the day to work out the command.
+      </li>
+      <li>
+        <strong>The secrets are not in the dump.</strong> <code>pg_dump</code>
+        captures <code>code_hash</code> and <code>code_enc</code> and nothing
+        that makes them meaningful. Restoring the database without
+        <code>TOKEN_CODE_PEPPER</code> and <code>TOKEN_CODE_KEY</code> gives you
+        a table of unusable rows.
+      </li>
+      <li>
+        <strong>And they must not be stored with it.</strong> Which is the
+        awkward part: the two must be recoverable together and kept apart. A
+        password manager entry, or a sealed envelope, is a legitimate answer at
+        this scale — what is not legitimate is "they are in the Coolify UI",
+        because that is on the machine you are backing up.
+      </li>
+    </ul>
+
     <h2>Cost Breakdown</h2>
     <table>
         <tr><th>Item</th><th>Provider</th><th>Monthly cost</th></tr>
@@ -254,6 +363,150 @@ CMD ["sh", "-c", "node dist/migrate.js && node dist/server.js"]</code></pre>
 
     <p>Compare this to Heroku ($25/month per dyno + $15 for Postgres) or AWS (variable, easily
     $50+/month). You get more control for less money.</p>
+
+    <hr>
+
+    <h2>Why this way (and what was rejected)</h2>
+
+    <h3>One box, an architecture built for more</h3>
+
+    <p>
+      Coolify on a VPS was chosen over a managed platform (Render, Railway,
+      Fly) and over AWS. The managed platforms are genuinely easier and cost
+      four to ten times more at this size; AWS is cheaper at large scale and
+      much more to learn. Neither was rejected for the money alone — the
+      deciding factor is that <strong>Token self-hosts things a platform will
+      not run for you</strong>: coturn for TURN relay, and a Postgres you
+      control the extensions and the partitioning of.
+    </p>
+    <p>
+      ADR-0003 is the reason this does not paint you into a corner. Nothing
+      above assumes a single process: no in-memory sessions, no node-local
+      socket registry, Redis for anything shared. Adding a second replica is a
+      number in the Coolify UI, not a rewrite.
+    </p>
+
+    <h3>pgbouncer between the API and Postgres</h3>
+
+    <p>
+      Connecting the API straight to Postgres works and stops working quietly.
+      Postgres allocates a process per connection and defaults to about 100;
+      a pool of 20 per replica plus migrations plus a psql session gets there
+      faster than expected, and the failure is new connections being refused
+      while the ones already open are fine — so the API looks healthy and
+      half the requests fail.
+    </p>
+    <p>
+      pgbouncer in transaction mode multiplexes hundreds of client connections
+      onto a handful of real ones. It goes in now because moving to it later
+      means re-testing every query that assumed a session — prepared
+      statements, <code>SET</code>, advisory locks held across statements.
+    </p>
+
+    <h3>Health checks that distinguish "restart me" from "do not send traffic"</h3>
+
+    <p>
+      The obvious health check tests every dependency. It is a trap: if
+      <code>/health</code> fails when Redis blips, the orchestrator kills
+      containers <em>because a dependency is unwell</em>, and now the API is
+      down too. A dependency outage becomes an application outage, with extra
+      restarts on top.
+    </p>
+    <p>
+      <strong>Liveness</strong> asks "is this process wedged?" and should test
+      almost nothing — if it fails, the answer is a restart.
+      <strong>Readiness</strong> asks "should this instance receive traffic
+      right now?" and may check Postgres, because an API with no database
+      genuinely cannot serve. Redis belongs in neither: sockets degrade without
+      it, HTTP does not, and killing the API over it makes things worse.
+    </p>
+
+    <hr>
+
+    <h2>When this breaks</h2>
+
+    <h3>The disk fails and there was never a backup</h3>
+
+    <p>
+      This lesson previously deployed a database and never mentioned backing it
+      up. On managed hosting that omission is survivable because someone else
+      made the decision for you. On a VPS it is total: one disk, one machine,
+      no snapshots unless you asked. The section above exists because "we will
+      set up backups later" is how it actually goes wrong.
+    </p>
+
+    <h3>The backup restores and the tokens are all dead</h3>
+
+    <p>
+      Specific to ADR-0007 and easy to miss until it matters:
+      <code>pg_dump</code> gives you <code>code_hash</code> and
+      <code>code_enc</code>, both of which are meaningless without two values
+      that live only in the environment. Restore the database onto a new VPS
+      without them and every token is unusable — the data is intact and inert.
+      The restore runbook has to list the secrets as an input, not an
+      afterthought.
+    </p>
+
+    <h3>Two replicas migrate at once</h3>
+
+    <p>
+      <code>prestart</code> runs per container. Two start together, both apply
+      the same migration, and you get a duplicate-column error at best or a
+      half-applied schema at worst — on the deploy where you also added the
+      second replica, so the cause is not obvious.
+    </p>
+
+    <h3>Vite bakes the API URL in at build time</h3>
+
+    <p>
+      Already in the lesson and worth repeating here because it breaks deploys
+      in a confusing way: changing <code>VITE_API_URL</code> in Coolify and
+      restarting does nothing. The value is compiled into the bundle. It needs
+      a rebuild, which means the web app has environment-specific
+      <em>builds</em>, not environment-specific config.
+    </p>
+
+    <h3>Secrets are visible to anyone with the box</h3>
+
+    <p>
+      Coolify's environment variables are readable in its UI and via
+      <code>docker inspect</code>. That is acceptable — they have to reach the
+      process somehow — as long as it is understood: <strong>anyone with root
+      on that VPS has every secret</strong>, so VPS access is the security
+      boundary, and rotating a leaked secret means a rotation plan. For
+      <code>TOKEN_CODE_PEPPER</code>, rotation is a migration that rewrites
+      every row (ADR-0007), not a value you can quietly change.
+    </p>
+
+    <hr>
+
+    <h2>What this costs you</h2>
+
+    <table>
+        <tr><th>Decision</th><th>What you pay</th></tr>
+        <tr>
+          <td>Self-hosting on one VPS</td>
+          <td>You are the on-call engineer, the backup operator and the person who notices the disk is full. Roughly ₹600/month buys the hardware and none of the operational work — which is real, recurring, and does not appear in the cost table.</td>
+        </tr>
+        <tr>
+          <td>The single-box ceiling</td>
+          <td>A few thousand concurrent WebSocket connections and low tens of thousands of users, bounded by memory and file descriptors first, then Postgres connections. Passing it means adding replicas, which the architecture already allows — but the ceiling is real and worth knowing before it arrives.</td>
+        </tr>
+        <tr>
+          <td>Backups you run yourself</td>
+          <td>Storage somewhere else (a few ₹100/month), a restore drill nobody enjoys, and the discipline to do it before you need it.</td>
+        </tr>
+        <tr>
+          <td>Secrets held outside the database</td>
+          <td>Two things to keep safe instead of one, kept apart from each other, and both required to recover. Better than a single backup that hands over the data and the keys together — but it is now possible to lose half of what you need.</td>
+        </tr>
+        <tr>
+          <td>The cost table's honest gaps</td>
+          <td>TURN relay bandwidth is missing and is the most likely surprise on the bill: with <code>iceTransportPolicy: 'relay'</code> every call's audio and video crosses your server rather than going peer to peer. Backup storage and the Expo build minutes are missing too.</td>
+        </tr>
+    </table>
+
+    <hr>
 
     <h2>Playground: Deployment Flow Simulation</h2>
     <div id="playground-1"></div>
@@ -419,7 +672,21 @@ runMigrations()
 // NODE_ENV              — "production"
 // CORS_ORIGIN           — "https://tokn.app" (the web client's origin)
 // EXPO_ACCESS_TOKEN     — Expo push notification credentials
-// PORT                  — 3000 (the port the API listens on)`
+// PORT                  — 3000 (the port the API listens on)
+//
+// TOKEN_CODE_PEPPER     — 64-char hex, hashed into every code_hash (ADR-0007)
+// TOKEN_CODE_KEY        — base64 32 bytes, AES-256-GCM key for code_enc
+//
+// The last two are not like the others. Lose JWT_SECRET and everyone logs
+// in again. Lose these and every token ever issued is permanently
+// unusable: no code matches its hash, no stored code decrypts. They go in
+// the disaster-recovery plan, and NOT in the same place as the database
+// backups — a backup holding both the data and the keys to it is one thing
+// to lose and one thing to steal.
+//
+// Validate all of them at startup and exit(1) if any is missing. A
+// container that boots without a secret and fails on the first request
+// that needs it turns a config mistake into an incident.`
         });
 
         createQuiz("lesson-quiz", [

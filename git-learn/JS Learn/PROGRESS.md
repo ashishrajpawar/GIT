@@ -14,10 +14,10 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1639 words |
+| Avg teaching prose per track lesson | 1655 words |
 | Lessons with a playground | 54 / 96 |
 | Lessons with an exercise | 82 / 96 |
-| **Deepened** (all 3 spine sections) | 10 / 96 |
+| **Deepened** (all 3 spine sections) | 11 / 96 |
 | **Verified** (code executed) | 13 / 96 |
 | Errors | 3 |
 | Warnings | 51 |
@@ -83,7 +83,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b6-webrtc-signalling | 2 | 1381 | 2 | 2 | 52 | 0/2 | 0/2 |
 | b7-token-engine | 3 | 2737 | 4 | 3 | 77 | 3/3 | 0/3 |
 | b8-push-notifications | 1 | 1206 | 1 | 1 | 25 | 0/1 | 0/1 |
-| b9-docker-deployment | 3 | 1389 | 3 | 3 | 77 | 0/3 | 0/3 |
+| b9-docker-deployment | 3 | 1911 | 3 | 3 | 77 | 1/3 | 0/3 |
 | x1-git-dev-environment | 3 | 698 | 1 | 3 | 76 | 0/3 | 0/3 |
 | x2-debugging | 2 | 778 | 1 | 2 | 50 | 0/2 | 0/2 |
 
@@ -241,7 +241,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b7-token-engine/0003-revocation-pause.html | 2569 | 9 | 1 | 1 | 26 | yes | n/a |
 | b8-push-notifications/0001-fcm-apns-expo.html | 1206 | 11 | 1 | 1 | 25 | — | — |
 | b9-docker-deployment/0001-docker-fundamentals.html | 1243 | 10 | 1 | 1 | 26 | — | — |
-| b9-docker-deployment/0002-coolify-setup.html | 1097 | 9 | 1 | 1 | 26 | — | — |
+| b9-docker-deployment/0002-coolify-setup.html | 2663 | 12 | 1 | 1 | 26 | yes | n/a |
 | b9-docker-deployment/0003-logs-backups-monitoring.html | 1827 | 17 | 1 | 1 | 25 | — | — |
 | x1-git-dev-environment/0001-git-fundamentals.html | 790 | 9 | 1 | 1 | 26 | — | — |
 | x1-git-dev-environment/0002-github-workflow.html | 719 | 7 | 0 | 1 | 25 | — | — |
