@@ -29,7 +29,7 @@
 
     <div class="callout">
       <div class="callout-title">Why this matters for your WhatsApp clone</div>
-      <p>When a user opens a chat screen your app needs to immediately fetch messages from Firebase. When they leave the screen, you need to stop listening for new messages so you're not wasting battery and data. When the chat list is open, you need a live listener that updates the list the instant a new message arrives. All of this — loading data when a screen opens, subscribing to live updates, cleaning up when leaving — is what <code>useEffect</code> handles.</p>
+      <p>When a user opens a chat screen your app needs to immediately fetch messages from your API. When they leave the screen, you need to stop listening for new messages so you're not wasting battery and data. When the chat list is open, you need a live subscription that updates the list the instant a new message arrives. All of this — loading data when a screen opens, subscribing to live updates, cleaning up when leaving — is what <code>useEffect</code> handles.</p>
     </div>
 
     <hr>
@@ -37,14 +37,14 @@
     <!-- Section 1 -->
     <h2>1. What is a side effect?</h2>
 
-    <p>A React Native component's job is to take some data and return UI. That's it. But real apps need to do things <em>beyond</em> just rendering — fetch data from a server, set up a timer, subscribe to Firebase updates, update the navigation title. These are called <strong>side effects</strong> because they reach outside the component into the outside world.</p>
+    <p>A React Native component's job is to take some data and return UI. That's it. But real apps need to do things <em>beyond</em> just rendering — fetch data from a server, set up a timer, subscribe to live updates over a WebSocket, update the navigation title. These are called <strong>side effects</strong> because they reach outside the component into the outside world.</p>
 
-    <p>You cannot do these things directly inside the component function body — that code runs on every render, which would mean fetching data on every keystroke, creating new Firebase subscriptions repeatedly, and leaking memory. <code>useEffect</code> gives you a controlled place to run side effects.</p>
+    <p>You cannot do these things directly inside the component function body — that code runs on every render, which would mean fetching data on every keystroke, opening a new subscription repeatedly, and leaking memory. <code>useEffect</code> gives you a controlled place to run side effects.</p>
 
     <pre><code>// WRONG — fetching data directly in the component body
 export default function ChatScreen() {
   // This runs on EVERY render — including every keystroke in the input!
-  const messages = fetchMessagesFromFirebase();  // runs constantly
+  const messages = fetchMessagesFromApi();  // runs constantly
 
   return &lt;View&gt;...&lt;/View&gt;;
 }
@@ -55,7 +55,7 @@ export default function ChatScreen() {
 
   useEffect(() => {
     // This only runs once when the screen opens
-    fetchMessagesFromFirebase().then(msgs => setMessages(msgs));
+    fetchMessagesFromApi().then(msgs => setMessages(msgs));
   }, []);  // empty array = run once on mount
 
   return &lt;View&gt;...&lt;/View&gt;;
@@ -98,12 +98,12 @@ useEffect(() => {
     <!-- Section 3 -->
     <h2>3. Loading data when a screen opens</h2>
 
-    <p>The most common use of <code>useEffect</code> — fetch data from Firebase (or any API) when the screen first appears.</p>
+    <p>The most common use of <code>useEffect</code> — fetch data from your API when the screen first appears.</p>
 
     <pre><code>import { useState, useEffect } from 'react';
 import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
 
-// Simulated Firebase fetch
+// Simulated API call
 function fetchMessages(chatId) {
   return new Promise(resolve => {
     setTimeout(() => {
@@ -187,7 +187,7 @@ const styles = StyleSheet.create({
     <!-- Section 4 -->
     <h2>4. Cleanup — stopping effects when a screen closes</h2>
 
-    <p>Some effects set things up that need to be torn down — timers, Firebase listeners, event subscriptions. If you don't clean up, those effects keep running after the screen is gone, wasting resources and causing bugs (updating state on unmounted components).</p>
+    <p>Some effects set things up that need to be torn down — timers, socket subscriptions, event listeners. If you don't clean up, those effects keep running after the screen is gone, wasting resources and causing bugs (updating state on unmounted components).</p>
 
     <p>Return a function from your effect — React Native calls it when the component unmounts or before re-running the effect.</p>
 
@@ -204,33 +204,24 @@ const styles = StyleSheet.create({
   };
 }, []);  // set up once, clean up once</code></pre>
 
-    <h3>Firebase real-time listener with cleanup</h3>
+    <h3>A live subscription with cleanup</h3>
 
-    <p>This is the exact pattern you'll use in Module 3 when connecting to Firestore:</p>
+    <p>This is the exact pattern you'll use in A6, when the screen is fed by your own WebSocket server:</p>
 
     <pre><code>useEffect(() => {
-  // onSnapshot returns an unsubscribe function
-  const unsubscribe = firebase
-    .firestore()
-    .collection('chats')
-    .doc(chatId)
-    .collection('messages')
-    .orderBy('timestamp')
-    .onSnapshot(snapshot => {
-      const msgs = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-      }));
-      setMessages(msgs);
-    });
+  // subscribe returns the function that undoes it
+  const unsubscribe = socket.subscribe(`chat:${chatId}`, (message) => {
+    setMessages(prev => [...prev, message]);
+  });
 
   // Clean up — stop listening when the screen closes
   return () => unsubscribe();
 }, [chatId]);</code></pre>
 
     <div class="callout success">
-      <div class="callout-title">This is how WhatsApp's live updates work</div>
-      <p>When you open a chat, a Firestore listener is set up — any new message written to that chat document instantly triggers your callback and updates the screen. When you close the chat, the cleanup function calls <code>unsubscribe()</code> and the listener stops. Your battery and data thank you.</p>
+      <div class="callout-title">This is how live updates work</div>
+      <p>When you open a chat, the screen subscribes to that conversation — any new message the server pushes triggers your callback and updates the list. When you close the chat, the cleanup function calls <code>unsubscribe()</code> and the messages stop arriving. Your battery and data thank you.</p>
+      <p>The shape matters more than the library: <strong>a subscribe call returns the function that undoes it.</strong> Timers, event listeners and sockets all work this way, which is why one cleanup pattern covers all three.</p>
     </div>
 
     <hr>
@@ -286,13 +277,11 @@ useEffect(() => {
 }, []);
 
 
-// ── Pattern 2: Live Firebase listener with cleanup ────────────────────────
+// ── Pattern 2: Live socket subscription with cleanup ──────────────────────
 useEffect(() => {
-  const unsub = db.collection('messages')
-    .where('chatId', '==', chatId)
-    .onSnapshot(snap => {
-      setMessages(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
+  const unsub = socket.subscribe('chat:' + chatId, (message) => {
+    setMessages(prev => [...prev, message]);
+  });
   return () => unsub();
 }, [chatId]);
 
@@ -338,7 +327,7 @@ import {
   ActivityIndicator, Pressable, StyleSheet
 } from 'react-native';
 
-// ── Simulated Firebase fetch ───────────────────────────────────────────────
+// ── Simulated API call ─────────────────────────────────────────────────────
 function fetchChats() {
   return new Promise(resolve => {
     setTimeout(() => {
@@ -536,7 +525,7 @@ const styles = StyleSheet.create({
 
     <div class="ask-teacher">
       <strong>Anything unclear? Ask your teacher.</strong>
-      The two things that trip people up most: forgetting the inner async function pattern (you can't make the effect itself async), and missing a dependency from the array. If either felt unclear, ask before moving on — every Firebase screen in Module 3 uses exactly these patterns.
+      The two things that trip people up most: forgetting the inner async function pattern (you can't make the effect itself async), and missing a dependency from the array. If either felt unclear, ask before moving on — every screen that talks to the API in A3 and A6 uses exactly these patterns.
     </div>
 
     <hr>
@@ -554,7 +543,7 @@ const styles = StyleSheet.create({
     createQuiz("rn-lesson-0006-quiz", [
       // ── Question 1 (original) ──────────────────────────────────────────────
       {
-        question: "You want to fetch messages from Firebase exactly once when the chat screen opens. Which useEffect form is correct?",
+        question: "You want to fetch messages from the API exactly once when the chat screen opens. Which useEffect form is correct?",
         options: [
           "useEffect(() => { fetchMessages(); }); — no dependency array",
           "useEffect(() => { fetchMessages(); }, [messages]); — depend on messages",
@@ -566,15 +555,15 @@ const styles = StyleSheet.create({
       },
       // ── Question 2 (original) ──────────────────────────────────────────────
       {
-        question: "Your Firebase listener (onSnapshot) keeps running even after the user navigates away from the screen. What are you missing?",
+        question: "Your socket subscription keeps delivering messages even after the user navigates away from the screen. What are you missing?",
         options: [
           "You need to call useEffect twice — once to start, once to stop",
+          "Subscriptions stop automatically when the component unmounts",
           "You need to return a cleanup function from useEffect that calls the unsubscribe function",
-          "Firebase listeners stop automatically when the component unmounts",
-          "You need to set the listener to null in a useState call"
+          "You need to set the subscription to null in a useState call"
         ],
-        correct: 1,
-        explanation: "Return a cleanup function from useEffect: `return () => unsubscribe()`. React Native calls this function when the component unmounts (user leaves the screen) or before re-running the effect. Without it, the listener keeps firing, updates state on an unmounted component, and wastes battery and data."
+        correct: 2,
+        explanation: "Return a cleanup function from useEffect: `return () => unsubscribe()`. React Native calls this function when the component unmounts (user leaves the screen) or before re-running the effect. Without it, messages keep arriving, state updates on an unmounted component, and the app wastes battery and data on a conversation nobody is looking at."
       },
       // ── Question 3 (original) ──────────────────────────────────────────────
       {

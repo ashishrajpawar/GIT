@@ -14,7 +14,7 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 45 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1477 words |
+| Avg teaching prose per track lesson | 1481 words |
 | Lessons with a playground | 54 / 96 |
 | Lessons with an exercise | 82 / 96 |
 | **Deepened** (all 3 spine sections) | 0 / 96 |
@@ -43,8 +43,8 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Position | Count | Share |
 |---|---|---|
 | index 0 | 126 | 9.5% |
-| index 1 | 835 | 62.9% |
-| index 2 | 335 | 25.2% |
+| index 1 | 834 | 62.8% |
+| index 2 | 336 | 25.3% |
 | index 3 | 31 | 2.3% |
 
 ## Question types
@@ -63,7 +63,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Module | Lessons | Avg prose | Playgrounds | Exercises | Questions | Deepened | Verified |
 |---|---|---|---|---|---|---|---|
 | 01-javascript-fundamentals | 13 | 2556 | 85 | 15 | 380 | 0/13 | 13/13 |
-| 02-react-native | 14 | 2301 | 0 | 0 | 355 | 0/14 | 0/14 |
+| 02-react-native | 14 | 2311 | 0 | 0 | 355 | 0/14 | 0/14 |
 | a10-device-security | 2 | 1277 | 2 | 2 | 50 | 0/2 | 0/2 |
 | a11-polish-publish | 5 | 1229 | 0 | 5 | 125 | 0/5 | 0/5 |
 | a2-typescript | 3 | 716 | 2 | 3 | 76 | 0/3 | 0/3 |
@@ -71,7 +71,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a4-auth-client | 3 | 879 | 0 | 3 | 80 | 0/3 | 0/3 |
 | a5-core-token-features | 5 | 1690 | 5 | 5 | 148 | 0/5 | 0/5 |
 | a6-chat-realtime | 3 | 1387 | 3 | 3 | 78 | 0/3 | 0/3 |
-| a7-voice-video | 5 | 934 | 5 | 5 | 138 | 0/5 | 0/5 |
+| a7-voice-video | 5 | 980 | 5 | 5 | 138 | 0/5 | 0/5 |
 | a8-redemption-web | 4 | 1216 | 4 | 4 | 115 | 0/4 | 0/4 |
 | a9-deep-linking | 2 | 1159 | 2 | 2 | 53 | 0/2 | 0/2 |
 | b1-sql-fundamentals | 4 | 905 | 0 | 4 | 103 | 0/4 | 0/4 |
@@ -165,20 +165,20 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | 01-javascript-fundamentals/0011-modern-javascript-es6.html | 2399 | 9 | 6 | 1 | 30 | — | yes |
 | 01-javascript-fundamentals/0012-error-handling.html | 2876 | 10 | 8 | 1 | 30 | — | yes |
 | 01-javascript-fundamentals/0013-capstone-token-issuer.html | 3073 | 19 | 13 | 3 | 30 | — | yes |
-| 02-react-native/0001-expo-setup-and-eas-build.html | 1687 | 13 | 0 | 0 | 25 | — | — |
-| 02-react-native/0002-core-components.html | 2211 | 9 | 0 | 0 | 30 | — | — |
+| 02-react-native/0001-expo-setup-and-eas-build.html | 1713 | 13 | 0 | 0 | 25 | — | — |
+| 02-react-native/0002-core-components.html | 2212 | 9 | 0 | 0 | 30 | — | — |
 | 02-react-native/0003-styling-and-flexbox.html | 2035 | 10 | 0 | 0 | 25 | — | — |
 | 02-react-native/0004-textinput-and-keyboard.html | 1911 | 11 | 0 | 0 | 25 | — | — |
-| 02-react-native/0005-usestate.html | 2135 | 14 | 0 | 0 | 25 | — | — |
-| 02-react-native/0006-useeffect.html | 2327 | 9 | 0 | 0 | 25 | — | — |
-| 02-react-native/0007-flatlist.html | 2192 | 12 | 0 | 0 | 25 | — | — |
-| 02-react-native/0008-navigation.html | 2594 | 8 | 0 | 0 | 25 | — | — |
-| 02-react-native/0009-passing-data.html | 2625 | 9 | 0 | 0 | 25 | — | — |
-| 02-react-native/0010-forms-login-register.html | 2437 | 7 | 0 | 0 | 25 | — | — |
-| 02-react-native/0011-images-imagepicker.html | 1936 | 8 | 0 | 0 | 25 | — | — |
-| 02-react-native/0012-loading-and-error-states.html | 2375 | 10 | 0 | 0 | 25 | — | — |
-| 02-react-native/0013-chat-list-screen.html | 2555 | 6 | 0 | 0 | 25 | — | — |
-| 02-react-native/0014-message-thread-screen.html | 3193 | 8 | 0 | 0 | 25 | — | — |
+| 02-react-native/0005-usestate.html | 2137 | 14 | 0 | 0 | 25 | — | — |
+| 02-react-native/0006-useeffect.html | 2356 | 9 | 0 | 0 | 25 | — | — |
+| 02-react-native/0007-flatlist.html | 2196 | 12 | 0 | 0 | 25 | — | — |
+| 02-react-native/0008-navigation.html | 2602 | 8 | 0 | 0 | 25 | — | — |
+| 02-react-native/0009-passing-data.html | 2639 | 9 | 0 | 0 | 25 | — | — |
+| 02-react-native/0010-forms-login-register.html | 2450 | 7 | 0 | 0 | 25 | — | — |
+| 02-react-native/0011-images-imagepicker.html | 1953 | 8 | 0 | 0 | 25 | — | — |
+| 02-react-native/0012-loading-and-error-states.html | 2377 | 10 | 0 | 0 | 25 | — | — |
+| 02-react-native/0013-chat-list-screen.html | 2556 | 6 | 0 | 0 | 25 | — | — |
+| 02-react-native/0014-message-thread-screen.html | 3211 | 8 | 0 | 0 | 25 | — | — |
 | a10-device-security/0001-secure-storage.html | 982 | 7 | 1 | 1 | 25 | — | — |
 | a10-device-security/0002-biometric-app-lock.html | 1572 | 9 | 1 | 1 | 25 | — | — |
 | a11-polish-publish/0001-animations-gestures.html | 1501 | 12 | 0 | 1 | 25 | — | — |
@@ -207,7 +207,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a7-voice-video/0001-webrtc-refresher.html | 1141 | 9 | 1 | 1 | 29 | — | — |
 | a7-voice-video/0002-voice-call.html | 758 | 6 | 1 | 1 | 27 | — | — |
 | a7-voice-video/0003-video-call.html | 836 | 6 | 1 | 1 | 26 | — | — |
-| a7-voice-video/0004-incoming-calls.html | 987 | 9 | 1 | 1 | 29 | — | — |
+| a7-voice-video/0004-incoming-calls.html | 1217 | 9 | 1 | 1 | 29 | — | — |
 | a7-voice-video/0005-relay-only-privacy.html | 950 | 9 | 1 | 1 | 27 | — | — |
 | a8-redemption-web/0001-vite-react-setup.html | 832 | 12 | 1 | 1 | 29 | — | — |
 | a8-redemption-web/0002-token-redemption-flow.html | 1172 | 6 | 1 | 1 | 30 | — | — |

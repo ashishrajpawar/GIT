@@ -26,6 +26,72 @@ one or two lessons at a time, never batched ahead.
 | `01/0011-modern-javascript-es6` | done |
 | `01/0012-error-handling` | done — **Module 01 and Phase 1.1 complete** |
 
+### Unit 9 — Firebase removal: Phase 0.4 and Module 02 — DONE
+
+Student asked for both after the phase table showed 0.4 was still open despite
+being recorded as done.
+
+**0.4 — `a7/0004-incoming-calls`.** Two lines: a `@react-native-firebase/
+messaging` import and a library name in a playground. Replaced with
+`expo-notifications` + `expo-task-manager`, plus a callout drawing the
+distinction that caused the contradiction in the first place: **FCM is the
+transport, Firebase is the platform.** Only Apple and Google can wake a
+backgrounded app, so FCM/APNs is the one accepted third party — but
+`expo-notifications` already speaks to both, so the native SDK buys nothing
+and costs a Google config file in the repo. The remaining "Firebase" strings
+in that file are deliberate negative references and should stay.
+
+**Module 02 — 15 files, ~81 mentions.** Categories, because they are not all
+the same job:
+
+1. Prose data-source references ("from Firebase in Module 3") → the Token API
+2. Forward references to **Module 03, which is SUPERSEDED** — doubly wrong,
+   they point a student at a dead Firebase module
+3. Real Firebase code — `0006-useeffect` has `firebase.firestore()...
+   onSnapshot()` as its cleanup example, which is the pattern Token replaces
+   with a WebSocket subscription
+4. Quiz questions and options naming Firebase
+
+Scope is Firebase only. The WhatsApp-clone framing (Priya, read ticks) is the
+*other* half of 1.5 and is deliberately left alone here — mixing the two makes
+the diff unreviewable.
+
+Replacement vocabulary, so it stays consistent across 15 files:
+`Firebase`/`Firestore` (data) → the Token API · `Firebase Auth` → the auth API
+(B4/A4) · `onSnapshot` listener → WebSocket subscription (B5/A6) ·
+`Firebase Storage` → object storage through the API (C4) · `Module 3` → the
+module that actually does it.
+
+**Result: Module 02 is at zero mentions**, and every quiz block still parses —
+question counts per lesson are unchanged (25 each, 30 in `0002`), which is the
+cheap proof that no `<script>` was broken by an edit.
+
+Two judgement calls worth keeping:
+
+- **`0006-useeffect` needed a real rewrite, not a find-and-replace.** Its
+  cleanup section taught `firebase.firestore()…onSnapshot()`. It now teaches
+  `socket.subscribe()` returning its own unsubscribe, with the general point
+  made explicit — *a subscribe call returns the function that undoes it* —
+  which is what makes one cleanup pattern cover timers, listeners and sockets.
+  Its second quiz question was rewritten with it, and the correct answer moved
+  off index 1 while I was there.
+- **Negative references stay.** `a6`, `b5`, `b6` and now `a7/0004` all name
+  Firebase deliberately, to say what Token does *not* use and why — `b6/0001`
+  has a whole quiz question on it. Those are the constraint being taught, not
+  a violation of it. Do not "clean" them.
+
+The `a7/0004` fix also answers a question the course had never answered
+outright: **FCM is the transport, Firebase is the platform.** Push is the one
+third party Token accepts because only Apple and Google can wake a
+backgrounded app — but `expo-notifications` already speaks FCM and APNs, so
+the `@react-native-firebase` SDK adds a native dependency and a Google config
+file in the repo for nothing.
+
+**Still Firebase-shaped, and deliberately left:** `modules/03-firebase-backend/`
+exists and is SUPERSEDED, and Module 02 no longer links to it. Deleting it is a
+separate call — it is still the only written material on several topics Track B
+has not reached yet.
+
 ### Unit 8 — Phase 1.2, the Module 01 capstone — DONE
 
 `COURSE-REVIEW.md` §6 item 1.2: a pure-JavaScript token issuer — generate,

@@ -700,6 +700,59 @@ the template literal and kills the entire `<script>` block. Hints are ordinary
 quoted strings and are safe. This is the `</script>` trap's sibling and it is
 now in CLAUDE.md beside it.
 
+### Session of 2026-08-16 — Firebase out of Module 02, and Phase 0.4 finally done
+
+Prompted by building a phase table and checking each item against the files
+instead of the record. **Phase 0 was recorded as complete; item 0.4 was not
+done.** `a7/0004-incoming-calls` still imported `@react-native-firebase/
+messaging`. That is the same failure mode as "Modules 1 and 2 complete" — a
+claim nobody re-checked — and it is the argument for the audit and the
+verification log both being generated rather than asserted.
+
+#### 0.4 — and the distinction that caused it
+
+Replaced with `expo-notifications` + `expo-task-manager`, and a callout added
+that states the thing the course had never said plainly:
+
+> **FCM is the transport. Firebase is the platform.**
+
+Only Apple and Google can wake a backgrounded app, so FCM/APNs is the one
+third party Token accepts — but `expo-notifications` already speaks to both.
+Pulling in the `@react-native-firebase` native SDK to receive a push buys
+nothing and costs a native dependency, a `google-services.json` in the repo,
+and an analytics client nobody asked for. The server sends a data-only
+high-priority message; Google routes bytes and learns a device got something,
+never who is calling whom.
+
+#### Module 02 — 15 files, ~81 mentions, now zero
+
+Not one job but four: prose data-source references, forward references to
+**Module 03 (superseded)**, real Firebase code, and quiz questions naming it.
+
+The one that needed thought was `0006-useeffect`, whose cleanup section taught
+`firebase.firestore()…onSnapshot()` — the exact pattern Token replaces. It now
+teaches a WebSocket subscription and makes the general rule explicit: *a
+subscribe call returns the function that undoes it*, which is why one cleanup
+pattern covers timers, event listeners and sockets alike.
+
+`README.html` pointed "next" at `03-firebase-backend`, walking the student
+straight into the superseded module. It now points at X1, which is what the
+revised sequence in `TOKEN-TRACK.md` actually says comes next.
+
+**Negative references were kept deliberately.** `a6`, `b5`, `b6` and the new
+`a7/0004` callout all name Firebase to say what Token does not use and why —
+`b6/0001` has a quiz question whose whole point is that answer. Those are the
+constraint being taught. A future grep-and-replace should leave them alone.
+
+Proof nothing broke: per-lesson question counts are unchanged (25 each, 30 in
+`0002`), so no `<script>` block was damaged, and the audit reports the same 3
+pre-existing schema errors and 52 warnings as before — no new link errors,
+which is what confirms the new nav target resolves.
+
+**Not done, and a separate decision:** `modules/03-firebase-backend/` still
+exists. Nothing links to it now. Deleting it is its own call — it remains the
+only written material on several topics Track B has not reached.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees
