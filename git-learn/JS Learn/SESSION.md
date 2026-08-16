@@ -125,11 +125,57 @@ had two options: fail forever, or lie. It now takes a mandatory reason, records
 prints `n/a` for that lesson rather than counting it as verified.
 
 **Student decided the pace: full depth on all 15 remaining.** Order — thinnest
-and most load-bearing first: `b3/0003` REST design (713), `b4/0003` rate
+and most load-bearing first: ~~`b3/0003` REST design~~ **done**, `b4/0003` rate
 limiting (794), `a3/0002` API client (845), `b3/0004` validation (858),
 `a4/0002` auth context (865), `b4/0002` JWT rotation (923), `a10/0001` secure
 storage (982), `b7/0002` (1,126), `b7/0003` (1,139), then `b9/0002`, `b6/0001`,
 `b9/0001`, `b10/0001`, `a5/0001`, `a5/0004`.
+
+#### `b3/0003` REST design — done, 713 → 2,091 words
+
+The deepening turned up a design defect, not just thinness. Every owner-facing
+endpoint addressed tokens as `/api/tokens/:code`.
+
+**A URL is the least private part of a request.** The path is written down by
+the reverse proxy's access log, browser history, the `Referer` header sent to
+whatever the next page loads, crash reporters and APM traces (which capture
+URLs by default and bodies almost never), and any CDN in front. Bodies get none
+of that. So ADR-0007's care — never storing the code in the database — would
+have been undone one layer up by nginx writing it to disk in plain text.
+
+Owner endpoints now take `:id`. Redemption takes the code in a **POST body**;
+the holder has nothing else to identify themselves with, and the redemption
+*page* is still `tokn.app/t/CODE` because a person has to type it — it reads
+the code from the path and sends it onward in a body.
+
+Three more corrections of substance:
+
+- **`403` on someone else's token is an enumeration oracle.** The lesson had
+  `if (!token) 404; if (token.user_id !== me) 403;` — so any account could walk
+  ids and learn which are real. Fixed by scoping the query with
+  `AND user_id = $2` and returning 404 for both. A resource you may not see
+  does not exist.
+- **`DELETE` → `POST /revoke`.** Revocation keeps the row and records every
+  later attempt against it; a verb meaning "remove this" invites someone to
+  implement the removal it promises. It also sits consistently with
+  `/pause` and `/resume`.
+- **The exercise generated codes with `randomBytes(9).toString('base64url')
+  .toUpperCase()`** — which yields `0`, `O`, `1`, `I`, `L`, underscores and
+  stray hyphens. Every code it produced was one the system rejects. Now imports
+  B7's generator. The new alphabet guard could not catch this one: there is no
+  alphabet literal to check, which is worth knowing about the guard's reach.
+
+Also documented: `JSON.parse` on a client-supplied cursor turns `?cursor=hello`
+into a **500** rather than a 400, and `{"id":"abc"}` into a Postgres error;
+`COALESCE` in PATCH cannot distinguish "field absent" from "set to null", so
+clearing an expiry silently does nothing. The solution now uses
+`'label' in req.body`.
+
+**Two escaping failures while writing it, both caught by the verifier**, both
+the same family as the `</script>` trap: a scripted edit put real newlines
+inside a double-quoted JS string, and an unescaped backtick inside the
+`solution:` template literal ended it early. Neither is visible by reading —
+run `verify-lesson.mjs` after *every* scripted edit, not at the end.
 
 **ADR-0007 has follow-on work in three of them.** `b7/0002` and `b7/0003` look
 tokens up by code and must use `code_hash`; `b9/0002` (Coolify) must add

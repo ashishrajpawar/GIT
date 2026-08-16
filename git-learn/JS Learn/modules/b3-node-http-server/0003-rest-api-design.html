@@ -48,7 +48,7 @@
       <tr style="border-bottom:1px solid var(--gray-200);">
         <td style="padding:0.5rem;">Get one token</td>
         <td style="padding:0.5rem;"><code>GET</code></td>
-        <td style="padding:0.5rem;"><code>/api/tokens/:code</code></td>
+        <td style="padding:0.5rem;"><code>/api/tokens/:id</code></td>
         <td style="padding:0.5rem;">—</td>
       </tr>
       <tr style="border-bottom:1px solid var(--gray-200);">
@@ -60,13 +60,13 @@
       <tr style="border-bottom:1px solid var(--gray-200);">
         <td style="padding:0.5rem;">Update token</td>
         <td style="padding:0.5rem;"><code>PATCH</code></td>
-        <td style="padding:0.5rem;"><code>/api/tokens/:code</code></td>
+        <td style="padding:0.5rem;"><code>/api/tokens/:id</code></td>
         <td style="padding:0.5rem;">JSON (partial)</td>
       </tr>
       <tr>
         <td style="padding:0.5rem;">Revoke token</td>
-        <td style="padding:0.5rem;"><code>DELETE</code></td>
-        <td style="padding:0.5rem;"><code>/api/tokens/:code</code></td>
+        <td style="padding:0.5rem;"><code>POST</code></td>
+        <td style="padding:0.5rem;"><code>/api/tokens/:id/revoke</code></td>
         <td style="padding:0.5rem;">—</td>
       </tr>
     </table>
@@ -94,18 +94,31 @@
 
     <h3>Tokens (authenticated — requires JWT)</h3>
 
-    <pre><code>GET    /api/tokens              — list user's tokens (paginated)
-GET    /api/tokens/:code        — get token details + rules
-POST   /api/tokens              — create a new token
-PATCH  /api/tokens/:code        — update label, max_uses, rules
-DELETE /api/tokens/:code        — revoke a token
-POST   /api/tokens/:code/pause  — pause a token
-POST   /api/tokens/:code/resume — resume a paused token</code></pre>
+    <pre><code>GET    /api/tokens             — list user's tokens (paginated)
+GET    /api/tokens/:id         — get token details + rules
+GET    /api/tokens/:id/code    — reveal the code again (decrypts, logs)
+POST   /api/tokens             — create a new token
+PATCH  /api/tokens/:id         — update label, max_uses, rules
+POST   /api/tokens/:id/revoke  — revoke a token
+POST   /api/tokens/:id/pause   — pause a token
+POST   /api/tokens/:id/resume  — resume a paused token</code></pre>
+
+    <p>
+      Note what is <em>not</em> in those URLs: the token code. These are
+      addressed by database id. The reason is in <em>Why this way</em> below,
+      and it is the most Token-specific decision in this lesson.
+    </p>
 
     <h3>Redemption (public — no auth required)</h3>
 
-    <pre><code>POST   /api/redeem/:code        — redeem a token (holder side)
-GET    /api/redeem/:code/status — check if a code is valid (before redeeming)</code></pre>
+    <pre><code>POST   /api/redeem             — redeem a token; the code goes in the JSON body
+POST   /api/redeem/check       — is this code usable? code in the body</code></pre>
+
+    <p>
+      The holder does have to send the code — they have nothing else. It travels
+      in the request body rather than the path, which keeps it out of every log
+      line and every browser history entry between them and the server.
+    </p>
 
     <h3>Messages (authenticated)</h3>
 
@@ -218,6 +231,220 @@ router.get('/:code', async (req, res, next) =&gt; {
 
     <hr>
 
+    <h2>Why this way (and what was rejected)</h2>
+
+    <h3>Addressed by id, because a code in a URL is a capability in a log file</h3>
+
+    <p>
+      The obvious REST design is <code>/api/tokens/MERC-8GH2-KP4X</code>. The
+      resource is the token, the code identifies it, and it reads beautifully.
+      It was rejected, and this is the decision worth understanding because it
+      is not about REST at all.
+    </p>
+
+    <p><strong>A URL is the least private part of a request.</strong> The path is written down, repeatedly, by things you do not control:</p>
+
+    <ul>
+      <li>the reverse proxy's access log, in plain text, rotated to disk</li>
+      <li>the browser's history and address bar, on a shared or borrowed device</li>
+      <li>the <code>Referer</code> header sent to any third party the next page loads</li>
+      <li>crash reporters and APM traces, which capture the URL by default and the body almost never</li>
+      <li>a CDN or WAF in front of the API, keeping its own logs elsewhere</li>
+    </ul>
+
+    <p>
+      Bodies get none of that treatment. Nothing logs a POST body by default,
+      because bodies are assumed to hold the sensitive part.
+    </p>
+
+    <div class="callout warning">
+      <div class="callout-title">This is the same decision as ADR-0007, one layer up</div>
+      <p>
+        The database deliberately does not store the code — only a hash for
+        lookup and an encrypted copy for display. Putting the code in the URL
+        path would write it, in plain text, into the web server's access log on
+        the same machine. The care taken at the database would be undone by the
+        routing table.
+      </p>
+    </div>
+
+    <p>
+      So owner-facing endpoints take <code>:id</code>, which is meaningless
+      without the account it belongs to. The redemption endpoints take the code
+      in a POST body, because the holder genuinely has nothing else to identify
+      themselves with. The redemption <em>page</em> is still
+      <code>tokn.app/t/CODE</code> — a person has to be able to type it — but
+      the page reads the code from the path and sends it onward in a body.
+    </p>
+
+    <h3>POST /revoke, not DELETE</h3>
+
+    <p>
+      <code>DELETE /api/tokens/:id</code> is the conventional REST answer and it
+      is the wrong shape here. Revocation does not remove the token: the row
+      stays, <code>revoked_at</code> is set, and every redemption attempt after
+      it is recorded against that row. That history is the point — it is how an
+      owner sees that someone kept trying after being cut off.
+    </p>
+    <p>
+      A method whose name means "remove this" describing an operation that
+      deliberately keeps everything invites exactly one bug: someone
+      implementing it later writes the <code>DELETE</code> the verb promised.
+      <code>POST /revoke</code> also sits consistently beside
+      <code>/pause</code> and <code>/resume</code>, which are the same kind of
+      state change and could never have been methods.
+    </p>
+
+    <h3>Cursors, not page numbers</h3>
+
+    <p>
+      <code>?page=2</code> is computed as <code>OFFSET 20</code>, and offset
+      means "count twenty rows and throw them away". Two consequences: it gets
+      slower the deeper you go, because the database still walks the rows it
+      discards; and it is wrong under writes. Issue a token while the user is
+      reading page 1 and everything shifts down one — the first row of page 2 is
+      the row they already saw, and one row is skipped entirely.
+    </p>
+    <p>
+      A cursor says "everything after id 42", which stays true no matter what
+      was inserted. Same query plan at page 1 and page 100.
+    </p>
+
+    <h3>The envelope, and the part of it that is redundant</h3>
+
+    <p>
+      <code>{ data, success }</code> earns its place on the error path: every
+      failure has the same shape, so the client has one place that reads
+      <code>error</code> rather than a guess per endpoint.
+    </p>
+    <p>
+      Be honest that <code>success</code> itself carries no information the
+      status line does not. It is kept for one reason — the client's fetch
+      wrapper checks a single field rather than a range of status codes — and
+      that is a defensible choice, not a free one. If it ever disagrees with the
+      status code, the status code is right.
+    </p>
+
+    <hr>
+
+    <h2>When this breaks</h2>
+
+    <h3>403 tells a stranger the token exists</h3>
+
+    <p>
+      This is in the code above and it is the sharpest bug in the lesson:
+    </p>
+
+    <pre><code>if (!token) throw ApiError.notFound('Token not found');
+if (token.user_id !== req.user.id) throw ApiError.forbidden();   // leaks</code></pre>
+
+    <p>
+      Two different answers for "does not exist" and "exists but is not yours"
+      is an oracle. Any authenticated account can walk ids and learn exactly
+      which ones are real tokens on the platform. It is the enumeration problem
+      from error handling, wearing a status code instead of a message.
+    </p>
+    <p>
+      <strong>A resource you are not allowed to see does not exist.</strong>
+      Scope the query by owner and return 404 for both cases:
+    </p>
+
+    <pre><code>const { rows } = await pool.query(
+  'SELECT * FROM tokens WHERE id = $1 AND user_id = $2',
+  [req.params.id, req.user.id]
+);
+if (!rows[0]) throw ApiError.notFound('Token not found');</code></pre>
+
+    <p>
+      403 is still the right answer when the client already knows the resource
+      exists — a shared conversation, a team object. It is wrong whenever
+      knowing a thing exists is itself the information.
+    </p>
+
+    <h3>A malformed cursor is a 500</h3>
+
+    <pre><code>const cursor = req.query.cursor
+  ? JSON.parse(Buffer.from(req.query.cursor, 'base64url').toString())
+  : null;</code></pre>
+
+    <p>
+      That line takes a string from a stranger and runs <code>JSON.parse</code>
+      on it. <code>?cursor=hello</code> throws, the error reaches the handler,
+      and the response is 500 — the status code that means "we have a bug".
+      Bad input from a client is a 400, and the difference matters when you are
+      looking at a graph of 500s trying to work out whether production is on
+      fire.
+    </p>
+    <p>
+      There is a second half: even valid JSON is not a valid cursor.
+      <code>{"id":"abc"}</code> parses, reaches <code>id &lt; $2</code>, and
+      Postgres rejects the comparison — another 500. The cursor is untrusted
+      input and needs the same validation as a request body.
+    </p>
+
+    <h3>PATCH cannot express "clear this field"</h3>
+
+    <p>
+      <code>COALESCE($1, label)</code> means "if the client sent null, keep the
+      old value". So a client that wants to <em>remove</em> a token's expiry by
+      sending <code>{"expires_at": null}</code> gets nothing — silently.
+      Omitting a field and setting it to null are indistinguishable once the
+      body is parsed into an object.
+    </p>
+    <p>
+      Either document that null means "no change" and provide a separate way to
+      clear (<code>POST /tokens/:id/expiry/clear</code>), or check
+      <code>'expires_at' in req.body</code> to tell absent from null. What does
+      not work is leaving it ambiguous and finding out from a bug report.
+    </p>
+
+    <h3>The generated code in the exercise is not a Token code</h3>
+
+    <p>
+      The solution below originally built codes with
+      <code>randomBytes(9).toString('base64url').toUpperCase()</code>. Base64url
+      is <code>A-Z a-z 0-9 - _</code>; upper-casing it yields <code>0</code>,
+      <code>O</code>, <code>1</code>, <code>I</code>, <code>L</code>,
+      underscores and hyphens in the middle of groups. Every code it produced
+      was one the rest of the system rejects. Generation belongs in one place —
+      B7's engine — and every other lesson should import it rather than write a
+      fourth version.
+    </p>
+
+    <hr>
+
+    <h2>What this costs you</h2>
+
+    <table>
+      <thead>
+        <tr><th>Decision</th><th>What you pay</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Ids in URLs, not codes</td>
+          <td>The client has to hold ids, and a URL is no longer something a human can construct or read. Support conversations get harder: "which token?" is answered with a label, never a URL.</td>
+        </tr>
+        <tr>
+          <td>Cursor pagination</td>
+          <td>No "page 5 of 20", no total count, and no jumping. Getting a count means a second query that gets slower as the table grows — which is why most APIs that show totals stop showing them eventually.</td>
+        </tr>
+        <tr>
+          <td>The response envelope</td>
+          <td>Every response carries a wrapper the client must unwrap, and every endpoint must remember to use it. One forgotten <code>res.json(rows)</code> and a client parsing <code>body.data</code> gets <code>undefined</code>.</td>
+        </tr>
+        <tr>
+          <td>404 instead of 403</td>
+          <td>Your own debugging gets harder — "not found" no longer distinguishes a typo in an id from a permissions bug. Log the real reason server-side; the response stays vague.</td>
+        </tr>
+        <tr>
+          <td><code>/api</code> with no version</td>
+          <td>Cheap now, and the day a breaking change is needed you run two route trees at once. The alternative — versioning from day one — costs a path segment and a duplicated router for a break that may never come.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <hr>
+
     <h2>Exercise</h2>
 
     <div id="exercise-1"></div>
@@ -240,25 +467,23 @@ router.get('/:code', async (req, res, next) =&gt; {
 
   <script>
     createSolution("exercise-1", {
-      exercise: "Implement the full tokens CRUD router with real database queries: (1) GET /api/tokens — list user's tokens with cursor pagination, (2) GET /api/tokens/:code — get one token (verify ownership), (3) POST /api/tokens — create a token with a generated code, (4) PATCH /api/tokens/:code — update label or maxUses, (5) DELETE /api/tokens/:code — revoke (set status to 'revoked'). Use the ApiError class for all error responses.",
+      exercise: "Implement the full tokens router with real database queries: (1) GET /api/tokens — list the user's tokens with cursor pagination, (2) GET /api/tokens/:id — get one token, (3) POST /api/tokens — create a token, (4) PATCH /api/tokens/:id — update label or maxUses, (5) POST /api/tokens/:id/revoke — revoke it. Use the ApiError class for all error responses.<br><br>Three rules that are easy to get wrong:<br>&bull; Address tokens by id, never by code — a code in a URL ends up in the access log.<br>&bull; Scope every query by user_id and return 404 for someone else's token; a 403 confirms it exists.<br>&bull; Import generateTokenCode from the engine rather than writing a fourth generator.",
       hints: [
-        "For code generation, use crypto.randomBytes to generate a secure random code in the format XXXX-XXXX-XXXX.",
-        "All routes except redeem need req.user (from auth middleware). For now, hardcode req.user = { id: 1 } as a temporary middleware.",
+        "Do not write a generator here at all — import generateTokenCode and hashCode from B7's engine. A code built from base64url contains 0, O, 1, I and L, which the rest of the system rejects.",
+        "Put `AND user_id = $2` in the WHERE clause rather than fetching the row and comparing afterwards. Then the not-yours case and the does-not-exist case return the same 404 without you having to remember to make them match.",
         "Use RETURNING * on INSERT and UPDATE to get the created/updated row back without a second query."
       ],
       solution: `// api/src/routes/tokens.ts
 import { Router } from 'express';
-import { randomBytes } from 'crypto';
+import { generateTokenCode } from '../engine/generate.js';
+import { hashCode, encryptCode } from '../engine/codeStore.js';
 import { pool } from '../db/pool.js';
 import { ApiError } from '../utils/api-error.js';
 
 const router = Router();
 
-function generateCode(): string {
-  const bytes = randomBytes(9);
-  const code = bytes.toString('base64url').slice(0, 12).toUpperCase();
-  return \`\${code.slice(0, 4)}-\${code.slice(4, 8)}-\${code.slice(8, 12)}\`;
-}
+// Generation lives in one place. base64url would give 0, O, 1, I, L,
+// underscores and hyphens - none of which are Token codes.
 
 // GET /api/tokens — list with cursor pagination
 router.get('/', async (req, res, next) => {
@@ -290,12 +515,16 @@ router.get('/', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/tokens/:code
-router.get('/:code', async (req, res, next) => {
+// GET /api/tokens/:id
+// Scoped by owner in the WHERE clause, so "not yours" and "does not
+// exist" are the same 404 and neither confirms anything.
+router.get('/:id', async (req, res, next) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM tokens WHERE code = $1', [req.params.code]);
+    const { rows } = await pool.query(
+      'SELECT id, label, status, max_uses, uses, expires_at, created_at FROM tokens WHERE id = $1 AND user_id = $2',
+      [req.params.id, req.user.id]
+    );
     if (!rows[0]) throw ApiError.notFound('Token not found');
-    if (rows[0].user_id !== req.user.id) throw ApiError.forbidden();
     res.json({ data: rows[0], success: true });
   } catch (err) { next(err); }
 });
@@ -303,45 +532,58 @@ router.get('/:code', async (req, res, next) => {
 // POST /api/tokens
 router.post('/', async (req, res, next) => {
   try {
-    const { label, maxUses = 0 } = req.body;
+    const { label, maxUses = null } = req.body;
     if (!label) throw ApiError.badRequest('label is required');
-    const code = generateCode();
+    const code = generateTokenCode();
     const { rows } = await pool.query(
-      'INSERT INTO tokens (code, user_id, label, max_uses) VALUES ($1, $2, $3, $4) RETURNING *',
-      [code, req.user.id, label, maxUses]
+      \`INSERT INTO tokens (user_id, code_hash, code_enc, label, max_uses)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, label, status, max_uses, uses, created_at\`,
+      [req.user.id, hashCode(code), encryptCode(code), label, maxUses]
     );
-    res.status(201).json({ data: rows[0], success: true });
+    // The only time the plaintext code is ever sent anywhere.
+    res.status(201).json({ data: { ...rows[0], code }, success: true });
   } catch (err) { next(err); }
 });
 
-// PATCH /api/tokens/:code
-router.patch('/:code', async (req, res, next) => {
+// PATCH /api/tokens/:id
+// 'label' in req.body distinguishes "not sent" from "sent as null", which
+// COALESCE alone cannot do - see "PATCH cannot express clear this field".
+router.patch('/:id', async (req, res, next) => {
   try {
-    const { label, maxUses } = req.body;
-    const { rows: [token] } = await pool.query('SELECT * FROM tokens WHERE code = $1', [req.params.code]);
-    if (!token) throw ApiError.notFound('Token not found');
-    if (token.user_id !== req.user.id) throw ApiError.forbidden();
+    const sets: string[] = [];
+    const params: any[] = [];
 
+    if ('label' in req.body) { params.push(req.body.label); sets.push(\`label = $\${params.length}\`); }
+    if ('maxUses' in req.body) { params.push(req.body.maxUses); sets.push(\`max_uses = $\${params.length}\`); }
+    if (sets.length === 0) throw ApiError.badRequest('Nothing to update');
+
+    params.push(req.params.id, req.user.id);
     const { rows } = await pool.query(
-      'UPDATE tokens SET label = COALESCE($1, label), max_uses = COALESCE($2, max_uses) WHERE code = $3 RETURNING *',
-      [label || null, maxUses ?? null, req.params.code]
+      \`UPDATE tokens SET \${sets.join(', ')}
+        WHERE id = $\${params.length - 1} AND user_id = $\${params.length}
+        RETURNING id, label, status, max_uses, uses, expires_at\`,
+      params
     );
+    if (!rows[0]) throw ApiError.notFound('Token not found');
     res.json({ data: rows[0], success: true });
   } catch (err) { next(err); }
 });
 
-// DELETE /api/tokens/:code (revoke)
-router.delete('/:code', async (req, res, next) => {
+// POST /api/tokens/:id/revoke
+// Not DELETE: the row stays, and every attempt made after this point is
+// recorded against it. That history is the reason revocation exists.
+router.post('/:id/revoke', async (req, res, next) => {
   try {
-    const { rows: [token] } = await pool.query('SELECT * FROM tokens WHERE code = $1', [req.params.code]);
-    if (!token) throw ApiError.notFound('Token not found');
-    if (token.user_id !== req.user.id) throw ApiError.forbidden();
-    if (token.status === 'revoked') throw ApiError.badRequest('Token already revoked');
-
-    await pool.query(
-      "UPDATE tokens SET status = 'revoked', revoked_at = NOW() WHERE code = $1",
-      [req.params.code]
+    const { rows } = await pool.query(
+      \`UPDATE tokens SET revoked_at = NOW()
+        WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+        RETURNING id\`,
+      [req.params.id, req.user.id]
     );
+    // No row means: not yours, does not exist, or already revoked. The
+    // first two must be indistinguishable, so all three are one 404.
+    if (!rows[0]) throw ApiError.notFound('Token not found');
     res.status(204).end();
   } catch (err) { next(err); }
 });
@@ -360,7 +602,7 @@ export default router;`
       {
         type: "spot-the-bug",
         question: "What's the authorization flaw?",
-        code: "router.delete('/:code', async (req, res) => {\n  await pool.query(\n    \"UPDATE tokens SET status = 'revoked' WHERE code = $1\",\n    [req.params.code]\n  );\n  res.status(204).end();\n});",
+        code: "router.post('/:id/revoke', async (req, res) => {\n  await pool.query(\n    \"UPDATE tokens SET revoked_at = NOW() WHERE id = $1\",\n    [req.params.id]\n  );\n  res.status(204).end();\n});",
         options: [
           "DELETE should actually delete the row, not update it",
           "No ownership check — any authenticated user can revoke anyone's token",
@@ -392,9 +634,9 @@ export default router;`
         type: "which-breaks",
         question: "Which endpoint design violates REST conventions?",
         variants: [
-          "DELETE /api/tokens/MERC-8GH2",
-          "POST /api/tokens/MERC-8GH2/pause",
-          "GET /api/deleteToken?code=MERC-8GH2"
+          "POST /api/tokens/42/revoke",
+          "POST /api/tokens/42/pause",
+          "GET /api/deleteToken?id=42"
         ],
         correct: 2,
         explanation: "Using GET for a destructive action violates REST. GET must be safe (no side effects) — browsers prefetch GET links, crawlers follow them. If deleting was a GET, a search engine could accidentally revoke your tokens. Use DELETE or POST for actions that change state."
@@ -459,11 +701,11 @@ export default router;`
       {
         type: "spot-the-bug",
         question: "This PATCH handler has a bug. Which line causes incorrect behavior?",
-        code: "app.patch('/api/tokens/:code', async (req, res) => {\n  const { code } = req.params;\n  const updates = req.body;\n  // Line A: Replace entire token with request body\n  await db.query('UPDATE tokens SET label=$1, rules=$2, active=$3 WHERE code=$4',\n    [updates.label, updates.rules, updates.active, code]);\n  // Line B: Return updated token\n  const result = await db.query('SELECT * FROM tokens WHERE code=$1', [code]);\n  res.json({ success: true, data: result.rows[0] });\n});",
+        code: "app.patch('/api/tokens/:id', async (req, res) => {\n  const { id } = req.params;\n  const updates = req.body;\n  // Line A: Replace entire token with request body\n  await db.query('UPDATE tokens SET label=$1, rules=$2, active=$3 WHERE id=$4',\n    [updates.label, updates.rules, updates.active, code]);\n  // Line B: Return updated token\n  const result = await db.query('SELECT * FROM tokens WHERE id=$1', [code]);\n  res.json({ success: true, data: result.rows[0] });\n});",
         options: [
           "Line B — should not query again after update",
           "Line A — PATCH should partially update, but this replaces ALL fields (acts like PUT)",
-          "The route path — should use /api/token/:code (singular)",
+          "The route path — should use /api/token/:id (singular)",
           "The response — should return 204 No Content"
         ],
         correct: 1,
@@ -512,7 +754,7 @@ export default router;`
       {
         type: "fill-blank",
         question: "Complete the status code for a successful DELETE that returns no body.",
-        code: "app.delete('/api/tokens/:code', async (req, res) => {\n  await db.query('DELETE FROM tokens WHERE code = $1 AND owner_id = $2',\n    [req.params.code, req.user.id]);\n  res.status(___).end();\n});",
+        code: "app.post('/api/tokens/:id/revoke', async (req, res) => {\n  await db.query('UPDATE tokens SET revoked_at = NOW() WHERE id = $1 AND owner_id = $2',\n    [req.params.id, req.user.id]);\n  res.status(___).end();\n});",
         answer: "204",
         explanation: "204 No Content means the action succeeded but there's nothing to return. It's the standard response for DELETE — the resource is gone, so there's no body to send. Using 200 with an empty body works but 204 is more semantically correct and tells the client not to expect a response body."
       },
@@ -527,12 +769,12 @@ export default router;`
         type: "which-breaks",
         question: "Which of these sub-resource URL patterns is incorrect?",
         variants: [
-          "GET /api/tokens/MERC-8GH2/rules",
-          "POST /api/tokens/MERC-8GH2/rules",
-          "GET /api/rules?token=MERC-8GH2"
+          "GET /api/tokens/42/rules",
+          "POST /api/tokens/42/rules",
+          "GET /api/rules?token=42"
         ],
         correct: 2,
-        explanation: "Option C treats rules as a top-level resource filtered by query param. While it works, it breaks the ownership hierarchy — rules belong to a token, so they should be nested under it. /tokens/:code/rules makes the relationship explicit and lets you enforce authorization at the token level."
+        explanation: "Option C treats rules as a top-level resource filtered by query param. While it works, it breaks the ownership hierarchy — rules belong to a token, so they should be nested under it. /tokens/:id/rules makes the relationship explicit and lets you enforce authorization at the token level."
       },
       {
         type: "which-breaks",
@@ -549,8 +791,8 @@ export default router;`
         type: "which-breaks",
         question: "Which HTTP method is NOT idempotent?",
         variants: [
-          "PUT /api/tokens/MERC-8GH2 — update with full body",
-          "DELETE /api/tokens/MERC-8GH2 — delete the token",
+          "PUT /api/tokens/42 — update with full body",
+          "POST /api/tokens/42/revoke — revoke the token",
           "POST /api/tokens — create a new token"
         ],
         correct: 2,
@@ -588,7 +830,7 @@ export default router;`
         steps: [
           "Validate the request body contains an array of token codes",
           "Verify each code belongs to the authenticated user",
-          "Execute UPDATE tokens SET active = false WHERE code = ANY($1) AND owner_id = $2",
+          "Execute UPDATE tokens SET active = false WHERE id = ANY($1) AND owner_id = $2",
           "Return the count of actually revoked tokens and any codes that were not found",
           "Log the bulk action for audit purposes"
         ],
@@ -615,7 +857,7 @@ export default router;`
           "To authenticate requests"
         ],
         correct: 1,
-        explanation: "HATEOAS (Hypermedia as the Engine of Application State) includes links like { \"revoke\": \"/api/tokens/MERC-8GH2/revoke\", \"rules\": \"/api/tokens/MERC-8GH2/rules\" } in responses. The client doesn't need to construct URLs — it follows links. This decouples clients from URL structure and lets the API evolve without breaking clients."
+        explanation: "HATEOAS (Hypermedia as the Engine of Application State) includes links like { \"revoke\": \"/api/tokens/42/revoke\", \"rules\": \"/api/tokens/42/rules\" } in responses. The client doesn't need to construct URLs — it follows links. This decouples clients from URL structure and lets the API evolve without breaking clients."
       },
       {
         question: "How should filtering and sorting be expressed in a REST API?",
