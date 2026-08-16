@@ -14,10 +14,10 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1607 words |
+| Avg teaching prose per track lesson | 1624 words |
 | Lessons with a playground | 54 / 96 |
 | Lessons with an exercise | 82 / 96 |
-| **Deepened** (all 3 spine sections) | 8 / 96 |
+| **Deepened** (all 3 spine sections) | 9 / 96 |
 | **Verified** (code executed) | 13 / 96 |
 | Errors | 3 |
 | Warnings | 51 |
@@ -64,7 +64,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 |---|---|---|---|---|---|---|---|
 | 01-javascript-fundamentals | 13 | 2556 | 85 | 15 | 380 | 0/13 | 13/13 |
 | 02-react-native | 14 | 2311 | 0 | 0 | 355 | 0/14 | 0/14 |
-| a10-device-security | 2 | 1867 | 2 | 2 | 50 | 1/2 | 0/2 |
+| a10-device-security | 2 | 1908 | 2 | 2 | 50 | 1/2 | 0/2 |
 | a11-polish-publish | 5 | 1229 | 0 | 5 | 125 | 0/5 | 0/5 |
 | a2-typescript | 3 | 727 | 2 | 3 | 76 | 0/3 | 0/3 |
 | a3-api-consumption | 4 | 1103 | 1 | 4 | 111 | 1/4 | 0/4 |
@@ -81,7 +81,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b4-auth-server | 3 | 1969 | 0 | 3 | 81 | 2/3 | 0/3 |
 | b5-websocket-server | 3 | 1427 | 3 | 3 | 77 | 0/3 | 0/3 |
 | b6-webrtc-signalling | 2 | 1381 | 2 | 2 | 52 | 0/2 | 0/2 |
-| b7-token-engine | 3 | 1762 | 4 | 3 | 77 | 1/3 | 0/3 |
+| b7-token-engine | 3 | 2260 | 4 | 3 | 77 | 2/3 | 0/3 |
 | b8-push-notifications | 1 | 1206 | 1 | 1 | 25 | 0/1 | 0/1 |
 | b9-docker-deployment | 3 | 1389 | 3 | 3 | 77 | 0/3 | 0/3 |
 | x1-git-dev-environment | 3 | 698 | 1 | 3 | 76 | 0/3 | 0/3 |
@@ -179,7 +179,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | 02-react-native/0012-loading-and-error-states.html | 2377 | 10 | 0 | 0 | 25 | — | — |
 | 02-react-native/0013-chat-list-screen.html | 2556 | 6 | 0 | 0 | 25 | — | — |
 | 02-react-native/0014-message-thread-screen.html | 3211 | 8 | 0 | 0 | 25 | — | — |
-| a10-device-security/0001-secure-storage.html | 2162 | 7 | 1 | 1 | 25 | yes | n/a |
+| a10-device-security/0001-secure-storage.html | 2244 | 7 | 1 | 1 | 25 | yes | n/a |
 | a10-device-security/0002-biometric-app-lock.html | 1572 | 9 | 1 | 1 | 25 | — | — |
 | a11-polish-publish/0001-animations-gestures.html | 1501 | 12 | 0 | 1 | 25 | — | — |
 | a11-polish-publish/0002-theming-dark-mode.html | 1171 | 9 | 0 | 1 | 25 | — | — |
@@ -237,7 +237,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b6-webrtc-signalling/0001-signalling-server.html | 1616 | 8 | 1 | 1 | 26 | — | — |
 | b6-webrtc-signalling/0002-coturn-setup.html | 1145 | 9 | 1 | 1 | 26 | — | — |
 | b7-token-engine/0001-token-generation-redemption.html | 3021 | 12 | 2 | 1 | 25 | yes | n/a |
-| b7-token-engine/0002-access-rules-engine.html | 1126 | 7 | 1 | 1 | 26 | — | — |
+| b7-token-engine/0002-access-rules-engine.html | 2621 | 7 | 1 | 1 | 26 | yes | n/a |
 | b7-token-engine/0003-revocation-pause.html | 1139 | 8 | 1 | 1 | 26 | — | — |
 | b8-push-notifications/0001-fcm-apns-expo.html | 1206 | 11 | 1 | 1 | 25 | — | — |
 | b9-docker-deployment/0001-docker-fundamentals.html | 1243 | 10 | 1 | 1 | 26 | — | — |

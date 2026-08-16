@@ -418,6 +418,54 @@ Three more:
 Also replaced a duplicated `AuthProvider` with a pointer to A4.2 — two
 versions of the same component in two lessons is how they drift.
 
+#### `b7/0002` access rules engine — done, 1,126 → 2,621 words
+
+**A lesson titled "deny-by-default" that allowed by default in four ways.**
+
+The biggest: `evaluateRules` selected one column — `rules` — and never asked
+whether the token was still alive. Redemption checks `revoked_at`, so it looked
+covered. It is not. **Redemption happens once; messages happen forever.** A
+holder who redeemed in March has a conversation, a JWT and a live socket;
+revoking in June sets a column nothing on the message path reads. The owner
+presses the button the entire product is built around, watches the token vanish
+from their list, and the messages keep arriving. State is now checked first, on
+every action, before any rule.
+
+The other three:
+
+- **The `evaluateRulesSafe` wrapper was never called.** It caught exceptions;
+  the integration code called `evaluateRules` directly. *A safe version that
+  can be bypassed is not a safe version* — the try/catch now lives inside the
+  one function everyone calls.
+- **Unknown rule types were skipped.** Deploys are not atomic, so a new client
+  writing `{"geo_fence": …}` hits old replicas that ignore the restriction the
+  owner just set, silently, on a subset of requests.
+- **Unreadable `rules` read as "no rules"** — corruption treated as consent.
+
+Three correctness bugs:
+
+- **Overnight windows allowed nothing.** `currentTime < start || >= end` is
+  right for 09:00–18:00 and false at every minute of the day for 22:00–06:00,
+  which is an ordinary do-not-disturb window.
+- **The daily counter reset at 05:30 IST** — `setUTCHours(0,0,0,0)` while the
+  time window used the owner's timezone. Ten messages at 9pm, ten more at half
+  past five: "10 per day" quietly means up to 20 in one Indian day.
+- **Count-then-allow race**, the same shape as `max_uses` in B7.1 — with the
+  comment "correctness matters more than speed here" sitting directly above
+  the racy version. Believing you chose correctness is not the same as having
+  it.
+
+Recorded rather than solved: `calls` is queried and created by no migration
+(one of the audit's three orphan tables). Left to the B2 rewrite instead of
+inventing a shape B2 would then have to be consistent with.
+
+**Also written down so nobody optimises it away:** rules are deliberately not
+cached, because `ARCHITECTURE.md` lists immediate revocation as one of four
+properties everything else follows from. A 60-second cache makes revocation
+take up to 60 seconds, and the difference between those two words is the
+product. If reads ever hurt, make the truth faster — never let a stale answer
+stand.
+
 #### Trap that bit twice
 
 **Two escaping failures while writing `b3/0003`, both caught by the verifier**, both

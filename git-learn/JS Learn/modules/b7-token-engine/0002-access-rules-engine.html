@@ -88,44 +88,80 @@ interface RuleResult {
   reason?: string;
 }
 
+// Every rule type this engine understands. Anything in the rules column
+// that is NOT in here is a rule we cannot evaluate - which under
+// deny-by-default means the action is refused, not ignored.
+const KNOWN_RULES = ['channel_restrict', 'time_window', 'contact_limit'] as const;
+
 export async function evaluateRules(
   tokenId: number,
   action: Action
 ): Promise&lt;RuleResult&gt; {
-  // Fetch rules from token
-  const { rows } = await pool.query(
-    'SELECT rules FROM tokens WHERE id = $1',
-    [tokenId]
-  );
+  try {
+    // The token's STATE comes back with its rules. Evaluating rules without
+    // checking whether the token is still alive is how a revoked token keeps
+    // working on a conversation that already exists.
+    const { rows } = await pool.query(
+      `SELECT rules, revoked_at, paused_at, expires_at, max_uses, uses
+         FROM tokens WHERE id = $1`,
+      [tokenId]
+    );
 
-  if (rows.length === 0) {
-    return { allowed: false, reason: 'Token not found' };
-  }
+    if (rows.length === 0) {
+      return { allowed: false, reason: 'Token not found' };
+    }
 
-  const rules = rows[0].rules;
+    const token = rows[0];
 
-  // No rules means open access (user chose not to restrict)
-  if (!rules || Object.keys(rules).length === 0) {
+    // 1. Is this token usable at all? Checked first, and independently of
+    //    any rule the owner did or did not set.
+    if (token.revoked_at !== null) return { allowed: false, reason: 'revoked' };
+    if (token.paused_at !== null) return { allowed: false, reason: 'paused' };
+    if (token.expires_at !== null &amp;&amp; new Date(token.expires_at) &lt;= new Date()) {
+      return { allowed: false, reason: 'expired' };
+    }
+
+    const rules = token.rules;
+
+    // 2. An empty rules object means the owner chose not to restrict, and
+    //    that is a real answer. A rules column that is not an object at all
+    //    means something is wrong, and "something is wrong" is not consent.
+    if (rules === null || rules === undefined) return { allowed: true };
+    if (typeof rules !== 'object' || Array.isArray(rules)) {
+      return { allowed: false, reason: 'unreadable rules' };
+    }
+
+    // 3. Refuse what we do not understand. An older server meeting a rule
+    //    type added by a newer client must not silently ignore it.
+    const unknown = Object.keys(rules).filter(k =&gt; !KNOWN_RULES.includes(k as any));
+    if (unknown.length &gt; 0) {
+      return { allowed: false, reason: 'unsupported rule: ' + unknown[0] };
+    }
+
+    // 4. Every rule present must pass.
+    if (rules.channel_restrict) {
+      const result = evaluateChannelRestrict(rules.channel_restrict, action);
+      if (!result.allowed) return result;
+    }
+
+    if (rules.time_window) {
+      const result = evaluateTimeWindow(rules.time_window);
+      if (!result.allowed) return result;
+    }
+
+    if (rules.contact_limit) {
+      const result = await evaluateContactLimit(rules.contact_limit, tokenId, action);
+      if (!result.allowed) return result;
+    }
+
     return { allowed: true };
+  } catch (err) {
+    // Deny-by-default has to include the case where the engine itself
+    // failed. A thrown exception that propagates is an unhandled path, and
+    // an unhandled path in an authorisation check is an open door.
+    logger.error({ err, tokenId, action }, 'rule evaluation failed');
+    return { allowed: false, reason: 'could not evaluate rules' };
   }
-
-  // Evaluate each rule type — ALL must pass
-  if (rules.channel_restrict) {
-    const result = evaluateChannelRestrict(rules.channel_restrict, action);
-    if (!result.allowed) return result;
-  }
-
-  if (rules.time_window) {
-    const result = evaluateTimeWindow(rules.time_window);
-    if (!result.allowed) return result;
-  }
-
-  if (rules.contact_limit) {
-    const result = await evaluateContactLimit(rules.contact_limit, tokenId, action);
-    if (!result.allowed) return result;
-  }
-
-  return { allowed: true };
 }</code></pre>
 
   <h2>Channel Restriction Evaluation</h2>
@@ -198,8 +234,15 @@ export async function evaluateRules(
   const minutePart = parts.find(p => p.type === 'minute')?.value || '00';
   const currentTime = `${hourPart}:${minutePart}`;
 
-  // Compare as strings (works because HH:MM format sorts correctly)
-  if (currentTime < rule.start_time || currentTime >= rule.end_time) {
+  // Compare as strings - HH:MM sorts correctly. But a window is not always
+  // start < end: "22:00 to 06:00" is a perfectly ordinary do-not-disturb
+  // inverse, and the naive comparison rejects every minute of it.
+  const inWindow = rule.start_time <= rule.end_time
+    ? (currentTime >= rule.start_time && currentTime < rule.end_time)
+    // Overnight window: allowed if after the start OR before the end.
+    : (currentTime >= rule.start_time || currentTime < rule.end_time);
+
+  if (!inWindow) {
     return {
       allowed: false,
       reason: `Contact allowed only between ${rule.start_time} and ${rule.end_time} (${rule.timezone})`
@@ -215,14 +258,30 @@ export async function evaluateRules(
     but correctness matters more than speed here. Caching would risk allowing
     messages past the limit.
   </p>
-  <pre><code>async function evaluateContactLimit(
+  <pre><code>// Midnight in a named timezone, as an instant. Intl knows the offset for
+// that date, which is what makes this survive a DST change - somewhere that
+// has one. India does not, which is exactly why this is easy to get wrong
+// here and then break in the first market that does.
+function startOfDayIn(timeZone: string): Date {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(new Date());
+  const get = (t: string) =&gt; parts.find(p =&gt; p.type === t)!.value;
+  // 'en-CA' formats as YYYY-MM-DD, which is why it is used here.
+  return new Date(new Date(`${get('year')}-${get('month')}-${get('day')}T00:00:00`)
+    .toLocaleString('en-US', { timeZone }));
+}
+
+async function evaluateContactLimit(
   rule: { max_messages_per_day: number; max_calls_per_day: number },
   tokenId: number,
   action: Action
 ): Promise&lt;RuleResult&gt; {
-  // Get start of today in UTC (we count by calendar day)
-  const todayStart = new Date();
-  todayStart.setUTCHours(0, 0, 0, 0);
+  // "Per day" means the OWNER's day. Counting from UTC midnight resets the
+  // allowance at 05:30 in Asia/Kolkata - so a holder who used up their ten
+  // messages at 9pm gets ten more at half past five the next morning, and
+  // the owner's "10 a day" quietly became more.
+  const todayStart = startOfDayIn(rule.timezone ?? 'Asia/Kolkata');
 
   if (action === 'message') {
     const { rows } = await pool.query(
@@ -299,22 +358,192 @@ ws.on('message', async (data) => {
   <h2>Deny-by-Default Principle</h2>
   <p>
     If anything goes wrong during rule evaluation — a database error, an
-    unexpected rule format, a missing timezone — the action is DENIED. This is
-    the security-first approach: bugs should restrict access, never grant it.
+    unexpected rule format, a missing timezone — the action is DENIED. Bugs
+    should restrict access, never grant it.
   </p>
-  <pre><code>export async function evaluateRulesSafe(
-  tokenId: number,
-  action: Action
-): Promise&lt;RuleResult&gt; {
-  try {
-    return await evaluateRules(tokenId, action);
-  } catch (err) {
-    console.error('Rule evaluation failed, denying by default:', err);
-    return { allowed: false, reason: 'Rule evaluation error — access denied' };
-  }
-}</code></pre>
+  <p>
+    That is easy to state and it is <em>four</em> separate things to build. The
+    version of this engine that existed before this lesson was deepened had a
+    <code>evaluateRulesSafe</code> wrapper that caught exceptions — and the
+    integration code called <code>evaluateRules</code> directly, so the wrapper
+    never ran. <strong>A safe version that can be bypassed is not a safe
+    version.</strong> The <code>try</code>/<code>catch</code> now lives inside
+    the one function everyone calls, and there is no unsafe one to reach for.
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>The gap</th><th>What it granted</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Exception escapes the evaluator</td>
+        <td>An unhandled path in an authorisation check. A bad timezone string makes <code>Intl</code> throw a <code>RangeError</code>, and the caller has no answer at all.</td>
+      </tr>
+      <tr>
+        <td>Unknown rule type ignored</td>
+        <td>A rule the owner set and this server does not understand is skipped rather than obeyed. An older replica mid-deploy silently ignores a restriction.</td>
+      </tr>
+      <tr>
+        <td>Unreadable <code>rules</code> treated as "no rules"</td>
+        <td>Corruption reads as consent. "No restrictions" and "we could not tell" must not be the same answer.</td>
+      </tr>
+      <tr>
+        <td>Token state never checked</td>
+        <td>The big one — see below.</td>
+      </tr>
+    </tbody>
+  </table>
 
   <div id="playground-1"></div>
+
+  <hr>
+
+  <h2>Why this way (and what was rejected)</h2>
+
+  <h3>State first, rules second</h3>
+
+  <p>
+    The original evaluator selected one column — <code>rules</code> — and never
+    asked whether the token was still alive. Redemption checks
+    <code>revoked_at</code>, so this looked covered. It is not, and the gap is
+    the one that matters most:
+  </p>
+  <p>
+    <strong>Redemption happens once. Messages happen forever.</strong> A holder
+    who redeemed a token in March has a conversation, a holder JWT, and a live
+    socket. Revoking the token in June sets <code>revoked_at</code> and changes
+    nothing about that conversation, because nothing on the message path ever
+    reads it. The owner presses the button that the entire product is built
+    around, sees the token disappear from their list, and the messages keep
+    arriving.
+  </p>
+  <p>
+    So the state check is not a rule among rules — it comes first, it is not
+    optional, and it runs on every action rather than once at the door.
+  </p>
+
+  <h3>Evaluated on every message, and deliberately not cached</h3>
+
+  <p>
+    A query per message is real cost, and caching rules for even sixty seconds
+    would remove most of it. It is rejected because <code>ARCHITECTURE.md</code>
+    lists "revocation is immediate and enforced server-side" as one of four
+    properties everything else follows from. A sixty-second cache makes
+    revocation take up to sixty seconds — which is not immediate, and the
+    difference between those two words is the product.
+  </p>
+  <p>
+    If the read cost ever matters, the answer is a faster read of the truth — a
+    covering index, or the token row in Redis invalidated <em>on write</em> —
+    never a timer that lets a stale answer stand.
+  </p>
+
+  <h3>ALL rules must pass</h3>
+
+  <p>
+    Rules are combined with AND, not OR. Each one the owner adds can only
+    narrow access, never widen it, which means a user adding a rule can never
+    accidentally grant something. It also means the engine can stop at the
+    first failure — and that the order of evaluation is a free optimisation:
+    the cheap in-memory checks run before the ones that hit the database.
+  </p>
+
+  <hr>
+
+  <h2>When this breaks</h2>
+
+  <h3>The overnight window that allowed nothing</h3>
+
+  <pre><code>if (currentTime &lt; rule.start_time || currentTime &gt;= rule.end_time) deny();</code></pre>
+
+  <p>
+    Correct for 09:00–18:00 and wrong for every window that crosses midnight.
+    "22:00 to 06:00" — an ordinary night-shift or do-not-disturb-inverted
+    window — makes that condition true at every minute of the day, so the token
+    is dead and the owner cannot see why. Windows need the wrap-around case
+    handled explicitly.
+  </p>
+
+  <h3>A day that starts at 05:30</h3>
+
+  <p>
+    The daily counter used <code>setUTCHours(0,0,0,0)</code> while the time
+    window used the owner's timezone. In <code>Asia/Kolkata</code> that is
+    05:30 local — so a holder who spent all ten of their messages at 9pm gets
+    ten more at half past five the next morning, and "10 per day" quietly means
+    up to 20 in one Indian day. Any per-day rule has to use the same day the
+    user means.
+  </p>
+
+  <h3>Counting, then allowing</h3>
+
+  <p>
+    <code>SELECT COUNT(*)</code>, compare, then insert. Two messages arriving
+    together both count nine of ten, both pass, and eleven get through. It is
+    the same shape as the <code>max_uses</code> race in B7.1 and the fix is the
+    same shape too: make the database do the counting and the deciding in one
+    statement, or take a row lock for the duration.
+  </p>
+  <p>
+    The comment in this lesson said "correctness matters more than speed here"
+    directly above the racy version, which is worth noticing — <em>believing</em>
+    you have chosen correctness is not the same as having it.
+  </p>
+
+  <h3>A rule type the server has never heard of</h3>
+
+  <p>
+    Deploys are not atomic. For a few minutes, a new client writing
+    <code>{"geo_fence": …}</code> talks to old replicas that do not know what a
+    geo-fence is. Skipping the unknown key means the restriction the owner just
+    set is not enforced, silently, on a subset of requests — which is worse than
+    an error, because nobody sees it.
+  </p>
+
+  <h3>The <code>calls</code> table does not exist</h3>
+
+  <p>
+    <code>evaluateContactLimit</code> queries <code>calls</code>, which no
+    migration in this course creates — one of three tables the audit flags as
+    queried-but-never-created. It is left as a known gap rather than invented
+    here: it belongs to the B2 schema rewrite, and guessing at a shape now
+    would give B2 something wrong to be consistent with.
+  </p>
+
+  <hr>
+
+  <h2>What this costs you</h2>
+
+  <table>
+    <thead>
+      <tr><th>Decision</th><th>What you pay</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Evaluating on every action</td>
+        <td>Two to three queries per message — conversation to token, token row, and a count for limits. At Token's scale that is nothing; it is also the first thing to show up in a slow trace, and the fix must be a faster read rather than a cached one.</td>
+      </tr>
+      <tr>
+        <td>No caching of rules</td>
+        <td>You give up the easiest performance win in the system to keep revocation instant. Stated plainly so nobody adds a five-minute cache in a hurry and quietly breaks the product's central promise.</td>
+      </tr>
+      <tr>
+        <td>Denying on unknown rule types</td>
+        <td>Deploy order now matters: the server must understand a rule type before any client can write it. Ship the server first, always — which is a release-process constraint, not a code one.</td>
+      </tr>
+      <tr>
+        <td>Rules as JSONB</td>
+        <td>Flexible to add to, and the database cannot check any of it. Everything that would be a <code>CHECK</code> constraint on a real column becomes a Zod schema and a code review, and a malformed payload is only caught when someone tries to use the token.</td>
+      </tr>
+      <tr>
+        <td>Timezone-aware everything</td>
+        <td>Every rule now needs a timezone, and the owner's timezone can change when they travel. The rule stores the timezone rather than reading the device's, so a user in London still has their tokens behave on Kolkata hours — which is right, and is the sort of thing that has to be explained in the UI.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <hr>
 
   <h2>Exercise</h2>
   <div id="exercise-1"></div>
@@ -601,7 +830,7 @@ console.log('Result:', JSON.stringify(result));`);
           "It logs a warning and asks the user to update their rules"
         ],
         correct: 2,
-        explanation: "The evaluateRulesSafe wrapper catches all exceptions and returns { allowed: false }. If a new rule type causes an error during evaluation, deny-by-default ensures the action is blocked rather than accidentally allowed."
+        explanation: "evaluateRules catches its own exceptions and returns { allowed: false }. Note where the try/catch lives: inside the one function everyone calls. A separate 'safe' wrapper is only safe if nobody ever calls the unsafe one, and this lesson shipped exactly that mistake — a wrapper the integration code went around."
       },
       {
         type: "predict-output",
@@ -611,9 +840,9 @@ console.log('Result:', JSON.stringify(result));`);
       },
       {
         type: "fill-blank",
-        code: "export async function evaluateRulesSafe(tokenId, action) {\n  try {\n    return await evaluateRules(tokenId, action);\n  } catch (err) {\n    return { allowed: ___, reason: 'Rule evaluation error' };\n  }\n}",
+        code: "export async function evaluateRules(tokenId, action) {\n  try {\n    // ...check the token's state, then every rule...\n  } catch (err) {\n    return { allowed: ___, reason: 'could not evaluate rules' };\n  }\n}",
         answer: "false",
-        explanation: "Deny-by-default: when an error occurs during rule evaluation, the action is denied (allowed: false). This ensures bugs in the rules engine restrict access rather than accidentally granting it."
+        explanation: "Deny-by-default: an error during evaluation denies the action. An exception that escapes instead is an unhandled path in an authorisation check, and an unhandled path there is an open door — the caller gets no answer and has to invent one."
       },
       {
         type: "which-breaks",
