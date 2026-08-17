@@ -36,7 +36,8 @@ the pattern.
 | `0002-core-components` | done — `toRowModel`, 4 playgrounds, 7 wrong-cases |
 | `0003-styling-and-flexbox` | done — `layoutRow`, 3 playgrounds, 6 wrong-cases |
 | `0004-textinput-and-keyboard` | done — `normaliseCode`, 3 playgrounds, 7 wrong-cases |
-| `0005`–`0014` | not started |
+| `0005-usestate` | done — `applyTokenAction`, 3 playgrounds, 6 wrong-cases |
+| `0006`–`0014` | not started |
 
 ### `0004` forced the token-fixture opt-out that M2 left open
 
