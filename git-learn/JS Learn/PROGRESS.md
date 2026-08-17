@@ -21,7 +21,7 @@ with this one, this one is right — everything below is measured, not asserted.
 | **Verified** (code executed) | 20 / 96 |
 | Ran clean but had nothing to run | 7 / 96 |
 | Errors | 3 |
-| Warnings | 27 |
+| Warnings | 9 |
 
 Student-completed lessons are **not** tracked here — that comes from the student
 or from `progress.js` localStorage, and is never inferred from the files.
@@ -97,7 +97,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Tables queried but never created | participants, deletion_queue, calls |
 | Broken relative links | ok |
 | search-index.json | 96 entries, 0 dead, 0 unindexed |
-| Example tokens valid under alphabet | 24 invalid |
+| Example tokens valid under alphabet | 6 invalid |
 
 ## Errors (3)
 
@@ -105,35 +105,17 @@ or from `progress.js` localStorage, and is never inferred from the files.
 - schema: table "deletion_queue" is queried in 1 lesson(s) but never created
 - schema: table "calls" is queried in 2 lesson(s) but never created
 
-## Warnings (27)
+## Warnings (9)
 
 - modules/02-react-native/0007-flatlist.html q0: position-dependent option at index 2, not last
 - modules/a5-core-token-features/0004-access-rules-ui.html q5: position-dependent option at index 2, not last
 - link (legacy): modules/07-store-compliance-and-safety/0005-data-export-and-terms.html -> ./privacy-policy.html
-- token: "UTIL-4KQ9-ZT7M" uses characters excluded from the alphabet (3 file(s))
-- token: "DELI-2XN5-QW8R" uses characters excluded from the alphabet (2 file(s))
-- token: "BOLT-3KP9" uses characters excluded from the alphabet (3 file(s))
-- token: "WAVE-1MN4" uses characters excluded from the alphabet (3 file(s))
-- token: "MERC-8GH2-KP4O" uses characters excluded from the alphabet (4 file(s))
-- token: "FOOD-3KP9" uses characters excluded from the alphabet (2 file(s))
-- token: "XPRT-4KL9" uses characters excluded from the alphabet (2 file(s))
-- token: "PRYA-4KL9" uses characters excluded from the alphabet (2 file(s))
-- token: "SHOP-4FD9" uses characters excluded from the alphabet (2 file(s))
-- token: "CAFE-2KL7" uses characters excluded from the alphabet (2 file(s))
-- token: "MERC-11AB" uses characters excluded from the alphabet (2 file(s))
-- token: "DELI-9XK2" uses characters excluded from the alphabet (2 file(s))
-- token: "SHOP-2AX4" uses characters excluded from the alphabet (2 file(s))
-- token: "BANK-7QR1" uses characters excluded from the alphabet (2 file(s))
-- token: "SHOP-4KN9" uses characters excluded from the alphabet (4 file(s))
-- token: "SHOP-4KN9-RT2M" uses characters excluded from the alphabet (3 file(s))
-- token: "XPRD-4KL9-MN2T" uses characters excluded from the alphabet (2 file(s))
-- token: "XPRD-4KL9" uses characters excluded from the alphabet (2 file(s))
-- token: "DOCK-1AB2" uses characters excluded from the alphabet (2 file(s))
+- token: "MERC-8GH2-KP4O" uses characters excluded from the alphabet (3 file(s))
 - token: "MERC-8GH2-LP4X" uses characters excluded from the alphabet (4 file(s))
-- token: "0001-0004" uses characters excluded from the alphabet (3 file(s))
-- token: "0005-0012" uses characters excluded from the alphabet (2 file(s))
-- token: "BANK-4FJ1" uses characters excluded from the alphabet (3 file(s))
-- token: "SHOP-9KL3" uses characters excluded from the alphabet (3 file(s))
+- token: "WAVE-1MN4" uses characters excluded from the alphabet (1 file(s))
+- token: "XPRT-4KL9" uses characters excluded from the alphabet (1 file(s))
+- token: "BANK-4FJ1" uses characters excluded from the alphabet (1 file(s))
+- token: "SHOP-9KL3" uses characters excluded from the alphabet (1 file(s))
 
 ## Per-lesson detail
 

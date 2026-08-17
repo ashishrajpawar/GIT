@@ -9,6 +9,54 @@ how far it got.
 
 ---
 
+## Unit 15 — M2, the example codes that cannot exist — DONE
+
+Of the 24 codes the audit reported: **2 were not codes at all** (`0001-0004`,
+`0005-0012` — lesson ranges), **4 were deliberate or historical**, and **18
+were genuinely accidental in lessons**. All 18 are fixed across 15 files.
+
+Replacements keep each label's meaning rather than mangling a character:
+`SHOP`→`KART` (and `Flipkart` is already the issuedTo in those lessons),
+`UTIL`→`CGAS` (the label is literally "City Gas"), `DELI`→`FARM`,
+`FOOD`→`CHEF`, `BOLT`→`BEAM`, `DOCK`→`DECK`. Where only the suffix was bad,
+only the suffix moved: `WAVE-1MN4`→`WAVE-7MN4`, `XPRT-4KL9`→`XPRT-4KN9`.
+
+**The plan's rule 3 was wrong and is withdrawn** — see `TOKEN-TRACK.md`. It
+said an 8-character code is always an accident and should become 12. It is not:
+84 standalone `MERC-8GH2` across 26 files, plus a dozen other 8-character codes
+with perfectly valid alphabets. It is an established shorthand. **Alphabet
+fixed, shape left alone**; converting the shape is a separate unit with its own
+argument, not a cleanup that rides along with this one.
+
+### Two audit bugs found by doing the work
+
+1. **The check scanned `PROGRESS.md` — its own generated output** — which
+   prints every offending code inside its warnings. So a code fixed everywhere
+   a student could see it stayed reported forever, and the list could never
+   reach zero. Exactly how 24 blank-count warnings hid three broken questions
+   in Unit 12: a list that cannot go down stops being read.
+2. `[A-Z0-9]{4}-[A-Z0-9]{4}` matched **lesson ranges** like `0001-0004`. Every
+   real example code carries a letter label in its first group, so all-digit
+   first groups are now skipped.
+
+Warnings 27 → 7; token warnings 24 → 4, and stable across consecutive runs
+(which is the actual proof the loop is gone).
+
+**The 4 remaining are all deliberate and should stay:** `MERC-8GH2-KP4O` is
+`0012`'s negative fixture — its own self-check label reads *"a code using an
+excluded letter is rejected too"*, so it documents itself; `MERC-8GH2-LP4X` is
+the historical wrong canonical code that `CLAUDE.md` and `HANDOFF.md` narrate
+as a cautionary tale; `BANK-4FJ1` and `SHOP-9KL3` are named in `SESSION.md` and
+`TOKEN-TRACK.md` as codes already fixed. None is in teaching material.
+
+**Not done, and deliberately left as a decision:** a per-file opt-out marker
+for token codes, like the existing `audit-allow-alphabet`, would take those 4
+to zero. It would also hide a genuinely accidental bad code in any file that
+carried it, and that trade-off is worth stating rather than making quietly.
+
+All 15 edited lessons re-verified — the replacements land inside quiz answers,
+playgrounds and self-check expectations, so a half-applied rename would fail.
+
 ## Unit 14 — M1 across the rest of the track — DONE
 
 **Every track lesson now has a log entry — 96 of 96.** The split is in
@@ -724,7 +772,7 @@ its reasoning are here.
    entry and no quiz-key defect remains.
 2. **M2 — the invalid example codes.** Independent of both, and safe to slot in
    whenever. Per-code reading, never a bulk rewrite — some are deliberate
-   negative fixtures.
+   negative fixtures. **DONE — Unit 15.**
 3. **1.5 — the Module 02 retrofit.** Last, and still just-in-time: it is a big
    job and the student is 7+ lessons short of needing it. Planning it now is
    fine; writing 14 lessons they will not open for weeks is the batching mistake

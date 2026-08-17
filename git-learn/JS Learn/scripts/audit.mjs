@@ -351,11 +351,20 @@ if (exists(indexPath)) {
 // -------------------------------------------------- token alphabet
 
 const badTokens = new Map();
-for (const file of [...lessonFiles, ...walk(ROOT).filter((p) => p.endsWith(".md") && !rel(p).startsWith("node_modules"))]) {
+/* PROGRESS.md is this script's own output, and it prints the offending codes
+   inside the warnings below. Scanning it means every code stays reported after
+   it has been fixed everywhere a student can see it — the warning list can
+   never reach zero, so it stops being read. That is the same way 24 blank-count
+   warnings hid three broken questions until 2026-08-17. */
+const tokenScan = [...lessonFiles, ...walk(ROOT).filter((p) => p.endsWith(".md") && !rel(p).startsWith("node_modules") && rel(p) !== "PROGRESS.md")];
+for (const file of tokenScan) {
   const text = read(file);
   for (const m of text.matchAll(/\b([A-Z0-9]{4}-[A-Z0-9]{4}(?:-[A-Z0-9]{4})?)\b/g)) {
     const bad = [...m[1].replace(/-/g, "")].filter((c) => !TOKEN_ALPHABET.includes(c));
     if (!bad.length) continue;
+    /* "0001-0004" is a lesson range, not a token. Every real example code in
+       this course carries a letter label in the first group. */
+    if (/^\d{4}-/.test(m[1])) continue;
     if (/^(TEST|NOPE|OLD1|NEW1|ABCD|IJKL|AAAA|EFGH|ZZZZ|DTLS|HMAC|XXXX)/.test(m[1])) continue; // fixtures
     if (!badTokens.has(m[1])) badTokens.set(m[1], new Set());
     badTokens.get(m[1]).add(rel(file));

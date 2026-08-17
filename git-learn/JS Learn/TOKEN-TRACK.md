@@ -475,13 +475,27 @@ Method, per code: read it in context and decide which of three it is.
 2. **Deliberate negative fixture** — invalidity is the point. Leave it, and add
    a one-line comment saying so if there is not already one, so the next sweep
    does not re-litigate it.
-3. **Wrong shape as well as wrong alphabet** — 8 characters instead of 12, as
-   `BANK-4FJ1` and `SHOP-9KL3` were. These are always accidental; a fixture
-   teaching a shape should teach the real one.
+3. **Wrong shape** — 8 characters instead of 12. **This rule was wrong and is
+   withdrawn.** It was written assuming the 8-character form was an occasional
+   slip, as it was in `0010`. It is not: 84 standalone `MERC-8GH2` across 26
+   files, plus a dozen other 8-character codes whose alphabets are perfectly
+   valid (`BANK-4FJ7`, `CAFE-2BN7`, `DENT-9KRW`, `PARK-4FX9`, `RENT-2WX7`).
+   It is an established shorthand, not an accident. **Fix the alphabet only.**
+   Converting the shape is a separate decision touching ~26 files and mostly
+   already-valid codes, and it is not a cleanup — if it is ever wanted, it is
+   its own unit with its own argument.
 
 The alphabet itself is already guarded as an audit **error**, so this cleanup
 cannot regress into the dangerous case — a wrong alphabet in a lesson that
 generates codes.
+
+**Two audit bugs found by doing this, both now fixed.** The check scanned
+`PROGRESS.md`, which is its own generated output and prints every offending
+code inside its warnings — so a code fixed everywhere a student can see it
+stayed reported forever and the list could never reach zero. And
+`[A-Z0-9]{4}-[A-Z0-9]{4}` matched lesson ranges like `0001-0004`. Every real
+example code carries a letter label in its first group, so all-digit first
+groups are skipped.
 
 ## Phase 4 — The operating track
 
