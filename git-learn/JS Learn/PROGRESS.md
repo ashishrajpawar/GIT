@@ -28,12 +28,12 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 ## Answer-position distribution — **authored order, not what the student sees**
 
-1338 keyed questions (multiple-choice, spot-the-bug, which-breaks).
+1339 keyed questions (multiple-choice, spot-the-bug, which-breaks).
 
 > **This clustering is expected and already handled. Do not "fix" it again.**
 > `quiz.js` shuffles options at render time (`optionDisplayOrder`), so the
 > displayed distribution is roughly even — measured at 26.9 / 28.5 / 26.9 / 17.6
-> across all 1338 questions, versus the authored figures below. Index 3 sits
+> across all 1339 questions, versus the authored figures below. Index 3 sits
 > lower only because many questions have three options.
 >
 > The numbers here read `correct` straight from the lesson data, which is
@@ -44,16 +44,16 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Position | Count | Share |
 |---|---|---|
 | index 0 | 126 | 9.4% |
-| index 1 | 840 | 62.8% |
+| index 1 | 840 | 62.7% |
 | index 2 | 340 | 25.4% |
-| index 3 | 32 | 2.4% |
+| index 3 | 33 | 2.5% |
 
 ## Question types
 
 | Type | Count |
 |---|---|
-| multiple-choice | 666 |
-| predict-output | 508 |
+| multiple-choice | 667 |
+| predict-output | 507 |
 | fill-blank | 454 |
 | spot-the-bug | 371 |
 | which-breaks | 301 |

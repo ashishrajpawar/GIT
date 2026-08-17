@@ -9,6 +9,47 @@ how far it got.
 
 ---
 
+## In progress — Unit 14: M1 across the rest of the track
+
+Surveyed every track lesson with no log entry (skipping logged ones — running
+an `unverifiable` lesson without its reason **fails and deletes the record**).
+53 lessons fail; almost all only on `no self-check found in pg-exercise`, which
+is the un-retrofitted state, not a defect.
+
+**35 quiz-key failures, and the first five were the verifier's fault, not the
+lessons'.** This is worth stating plainly because the tool exists to be trusted:
+
+- `b3/0001` q0, q21 and several elsewhere wrote multi-line output as a
+  comma-separated list — `"A, D, C, B"` for four lines. Correct, and how a
+  student would type it. The normaliser collapsed whitespace but not commas.
+  Commas now separate exactly like newlines.
+- `b3/0001` q5 asks about `process.nextTick` versus promises versus
+  `setImmediate`. The sandbox drains a microtask queue and a timer queue and
+  has no notion of Node's phases, so it reported `3,4,2,1` where real Node
+  gives `4,3,…`. **The lesson was right.** Questions using `nextTick` or
+  `setImmediate` are now skipped, like the existing server/React/SQL skips.
+- `a6/0003` q6 is a debounce: three rapid calls, only the last should print.
+  The verifier printed all three, because `setTimeout` was shimmed onto the
+  drainable queue and **`clearTimeout` was not** — student code reached Node's
+  real `clearTimeout` holding an id this queue invented, so nothing was ever
+  cancelled. The browser has real timers and debounces correctly, so this was
+  the verifier and the browser disagreeing about a correct lesson.
+
+Only one of the five was a lesson defect: `b3/0001` q15, whose answer described
+a process-level crash in prose no sandbox reproduces literally. It asks about
+behaviour rather than stdout, so it is multiple-choice now.
+
+**Still open: 30 premise-in-comment questions across 15 lessons**, all printing
+`""` because their code is a scenario written in comments. They are real
+student-facing defects — the answers are prose like *"Opens in browser (old
+cached AASA doesn't include /invite/\*)"*, which no one can type exactly — and
+each needs converting to multiple-choice with distractors written by hand.
+That is the next chunk, done module by module.
+
+Regression check after the verifier changes: all 13 Module 01 lessons
+re-verified with their `--wrong` files, and the three widget suites pass
+(72 / 15 / 18).
+
 ## Unit 13 — M1 over Module 02 — DONE
 
 M1 as specified in `TOKEN-TRACK.md` § Maintenance, starting with Module 02

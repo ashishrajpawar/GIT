@@ -171,8 +171,21 @@ async function runLikePlayground(code, opts = {}) {
   };
   fake.warn = fake.info = fake.error = fake.log;
 
+  /* setTimeout is shimmed onto a drainable queue; clearTimeout must be too.
+     Without it, student code reached Node's real clearTimeout holding an id
+     this queue invented, so nothing was ever cancelled and every debounce
+     lesson verified as firing all its calls. The browser has real timers and
+     debounces correctly — the verifier and the browser disagreeing about a
+     lesson is the failure this tooling exists to prevent. Ids are a running
+     counter, not the queue length, so cancelling one does not invalidate the
+     rest. */
   const queue = [];
-  const setTimeoutShim = (fn, ms) => { queue.push([fn, ms || 0]); return queue.length; };
+  let timerSeq = 0;
+  const setTimeoutShim = (fn, ms) => { queue.push([fn, ms || 0, ++timerSeq]); return timerSeq; };
+  const clearTimeoutShim = (id) => {
+    const i = queue.findIndex((t) => t[2] === id);
+    if (i >= 0) queue.splice(i, 1);
+  };
 
   const sandbox = opts.dom ? createDomSandbox(opts.html || "") : null;
 
@@ -189,8 +202,8 @@ async function runLikePlayground(code, opts = {}) {
 
   let threw = null;
   try {
-    const names = ["console", "__tick", "setTimeout"];
-    const values = [fake, makeTicker(), setTimeoutShim];
+    const names = ["console", "__tick", "setTimeout", "clearTimeout"];
+    const values = [fake, makeTicker(), setTimeoutShim, clearTimeoutShim];
     if (sandbox) {
       names.push("document", "window", "localStorage", "Event");
       values.push(sandbox.document, sandbox.window, sandbox.localStorage, sandbox.Event);
@@ -264,10 +277,21 @@ for (const [qid, qs] of Object.entries(quizzes)) {
     // Still skip anything needing a server, React Native, or a database.
     if (/require\(|fetch\(|React|useState|StyleSheet|expo|SELECT |INSERT /.test(q.code)) continue;
     if (!needsDom && /window\./.test(q.code)) continue;
+    /* Node's phase ordering is not modelled here. runLikePlayground drains a
+       microtask queue and a timer queue; it has no notion of nextTick running
+       ahead of promises, or of the check phase. It reported b3/0001 q5 as
+       "3,4,2,1" when real Node gives "4,3,…" — the lesson was right and the
+       verifier was wrong, which is the one failure this tool must not produce. */
+    if (/process\.nextTick|setImmediate/.test(q.code)) continue;
 
     const { logs, threw } = await runLikePlayground(q.code, needsDom ? { dom: true, html: q.html } : {});
     if (threw) continue; // e.g. deliberately-throwing snippets
-    const norm = (s) => String(s).replace(/['"]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+    /* "A, D, C, B" and "A\nD\nC\nB" are the same prediction. Several lessons
+       write a multi-line output as a comma-separated list, which is how a
+       student would type it into the box, so commas separate exactly like
+       newlines here. */
+    const norm = (s) =>
+      String(s).replace(/['"]/g, "").replace(/\s*,\s*/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
     checked++;
     if (norm(logs.join("\n")) !== norm(q.answer))
       fail(`${qid} q${i}: stated ${JSON.stringify(q.answer)} but prints ${JSON.stringify(logs.join("\n"))}`);
