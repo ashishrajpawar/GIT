@@ -14,9 +14,9 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1747 words |
-| Lessons with a playground | 60 / 96 |
-| Lessons with an exercise | 88 / 96 |
+| Avg teaching prose per track lesson | 1750 words |
+| Lessons with a playground | 61 / 96 |
+| Lessons with an exercise | 89 / 96 |
 | **Deepened** (all 3 spine sections) | 16 / 96 |
 | **Verified** (code executed) | 25 / 96 |
 | Ran clean but had nothing to run | 2 / 96 |
@@ -64,7 +64,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Module | Lessons | Avg prose | Playgrounds | Exercises | Questions | Deepened | Verified |
 |---|---|---|---|---|---|---|---|
 | 01-javascript-fundamentals | 13 | 2556 | 85 | 15 | 380 | 0/13 | 13/13 |
-| 02-react-native | 14 | 2480 | 19 | 6 | 355 | 0/14 | 12/14 |
+| 02-react-native | 14 | 2498 | 22 | 7 | 355 | 0/14 | 12/14 |
 | a10-device-security | 2 | 1908 | 2 | 2 | 50 | 1/2 | 0/2 |
 | a11-polish-publish | 5 | 1229 | 0 | 5 | 125 | 0/5 | 0/5 |
 | a2-typescript | 3 | 727 | 2 | 3 | 76 | 0/3 | 0/3 |
@@ -135,7 +135,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | 02-react-native/0005-usestate.html | 2484 | 14 | 4 | 1 | 25 | — | yes |
 | 02-react-native/0006-useeffect.html | 2607 | 9 | 3 | 1 | 25 | — | yes |
 | 02-react-native/0007-flatlist.html | 2322 | 12 | 2 | 1 | 25 | — | yes |
-| 02-react-native/0008-navigation.html | 2602 | 8 | 0 | 0 | 25 | — | yes |
+| 02-react-native/0008-navigation.html | 2854 | 8 | 3 | 1 | 25 | — | yes |
 | 02-react-native/0009-passing-data.html | 2639 | 9 | 0 | 0 | 25 | — | none |
 | 02-react-native/0010-forms-login-register.html | 2450 | 7 | 0 | 0 | 25 | — | yes |
 | 02-react-native/0011-images-imagepicker.html | 1953 | 8 | 0 | 0 | 25 | — | yes |
