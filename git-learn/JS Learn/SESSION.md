@@ -9,7 +9,11 @@ how far it got.
 
 ---
 
-## In progress — Unit 14: M1 across the rest of the track
+## Unit 14 — M1 across the rest of the track — DONE
+
+**Every track lesson now has a log entry — 96 of 96.** The split is in
+`PROGRESS.md`; the point is that nothing is unmeasured any more. Before this
+unit, most of the course had never been executed once.
 
 Surveyed every track lesson with no log entry (skipping logged ones — running
 an `unverifiable` lesson without its reason **fails and deletes the record**).
@@ -39,16 +43,37 @@ Only one of the five was a lesson defect: `b3/0001` q15, whose answer described
 a process-level crash in prose no sandbox reproduces literally. It asks about
 behaviour rather than stdout, so it is multiple-choice now.
 
-**Still open: 30 premise-in-comment questions across 15 lessons**, all printing
-`""` because their code is a scenario written in comments. They are real
-student-facing defects — the answers are prose like *"Opens in browser (old
-cached AASA doesn't include /invite/\*)"*, which no one can type exactly — and
-each needs converting to multiple-choice with distractors written by hand.
-That is the next chunk, done module by module.
+**All 30 premise-in-comment questions are fixed.** Their code was a scenario
+written in comments, so they printed nothing, and their keys were prose like
+*"Opens in browser (old cached AASA doesn't include /invite/\*)"* — which no
+student could ever type into the box. 29 became multiple-choice with distractors
+written by hand; keys were placed off index 1 throughout, and the authored
+skew moved 62.8% → 61.4% as a side effect.
+
+One was made executable instead: `a6/0003` q16's `formatLastSeen` is real,
+runnable code whose input was described in a trailing comment. It now builds
+the timestamp — `new Date(Date.now() - 90 * 60000)` — and prints. Prefer this
+whenever the code genuinely runs; a converted question tests recall, an
+executed one tests prediction.
+
+**Zero quiz-key defects remain anywhere in the track.**
+
+The 53 lessons that still fail do so for exactly one reason each —
+`no self-check found in pg-exercise`, one per lesson, no exceptions. That is
+the un-retrofitted state, and it is 1.5 and Phase 3's job. They are recorded
+`unverifiable` with a reason naming what each solution actually needs, one
+reason per module: SQL needs Postgres, WebRTC needs two devices and a TURN
+server, x1 is git and shell setup rather than runnable code. A vague reason
+would be worse than none, because it is stored and read later.
 
 Regression check after the verifier changes: all 13 Module 01 lessons
 re-verified with their `--wrong` files, and the three widget suites pass
 (72 / 15 / 18).
+
+**What M1 leaves for later.** `unverifiable` is an honest record, not a
+finished state. When 1.5 gives Module 02 self-checks against plain functions,
+and Phase 3 does the same elsewhere, those entries should become real
+`verified` ones. The count to watch is `verified`, not the number of entries.
 
 ## Unit 13 — M1 over Module 02 — DONE
 
@@ -695,8 +720,8 @@ its reasoning are here.
    one that *finds* work rather than assuming it. Every time the verifier has
    been pointed somewhere new it has found real defects, most recently
    `a8/0001` q23 in `7c86660`. Start with Module 02, whose result is a required
-   input to 1.5. **Module 02 done — Unit 13.** Remaining: the A- and B-track
-   modules, none of which have ever been executed except the Phase 2 spine.
+   input to 1.5. **DONE — Units 13 and 14.** All 96 track lessons carry a log
+   entry and no quiz-key defect remains.
 2. **M2 — the invalid example codes.** Independent of both, and safe to slot in
    whenever. Per-code reading, never a bulk rewrite — some are deliberate
    negative fixtures.

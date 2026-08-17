@@ -28,12 +28,12 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 ## Answer-position distribution — **authored order, not what the student sees**
 
-1339 keyed questions (multiple-choice, spot-the-bug, which-breaks).
+1368 keyed questions (multiple-choice, spot-the-bug, which-breaks).
 
 > **This clustering is expected and already handled. Do not "fix" it again.**
 > `quiz.js` shuffles options at render time (`optionDisplayOrder`), so the
 > displayed distribution is roughly even — measured at 26.9 / 28.5 / 26.9 / 17.6
-> across all 1339 questions, versus the authored figures below. Index 3 sits
+> across all 1368 questions, versus the authored figures below. Index 3 sits
 > lower only because many questions have three options.
 >
 > The numbers here read `correct` straight from the lesson data, which is
@@ -43,17 +43,17 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Position | Count | Share |
 |---|---|---|
-| index 0 | 126 | 9.4% |
-| index 1 | 840 | 62.7% |
-| index 2 | 340 | 25.4% |
-| index 3 | 33 | 2.5% |
+| index 0 | 135 | 9.9% |
+| index 1 | 840 | 61.4% |
+| index 2 | 353 | 25.8% |
+| index 3 | 40 | 2.9% |
 
 ## Question types
 
 | Type | Count |
 |---|---|
-| multiple-choice | 667 |
-| predict-output | 507 |
+| multiple-choice | 696 |
+| predict-output | 478 |
 | fill-blank | 454 |
 | spot-the-bug | 371 |
 | which-breaks | 301 |
@@ -167,71 +167,71 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | 02-react-native/0013-chat-list-screen.html | 2556 | 6 | 0 | 0 | 25 | — | yes |
 | 02-react-native/0014-message-thread-screen.html | 3211 | 8 | 0 | 0 | 25 | — | yes |
 | a10-device-security/0001-secure-storage.html | 2244 | 7 | 1 | 1 | 25 | yes | n/a |
-| a10-device-security/0002-biometric-app-lock.html | 1572 | 9 | 1 | 1 | 25 | — | — |
-| a11-polish-publish/0001-animations-gestures.html | 1501 | 12 | 0 | 1 | 25 | — | — |
-| a11-polish-publish/0002-theming-dark-mode.html | 1171 | 9 | 0 | 1 | 25 | — | — |
-| a11-polish-publish/0003-forms-validation.html | 1340 | 9 | 0 | 1 | 25 | — | — |
-| a11-polish-publish/0004-environment-config.html | 904 | 13 | 0 | 1 | 25 | — | — |
-| a11-polish-publish/0005-store-submission.html | 1227 | 9 | 0 | 1 | 25 | — | — |
-| a2-typescript/0001-types-and-interfaces.html | 733 | 9 | 1 | 1 | 26 | — | — |
-| a2-typescript/0002-generics-utility-types.html | 702 | 11 | 1 | 1 | 25 | — | — |
-| a2-typescript/0003-typescript-react-native.html | 747 | 9 | 0 | 1 | 25 | — | — |
-| a3-api-consumption/0001-fetch-http-fundamentals.html | 616 | 8 | 1 | 1 | 29 | — | — |
+| a10-device-security/0002-biometric-app-lock.html | 1572 | 9 | 1 | 1 | 25 | — | n/a |
+| a11-polish-publish/0001-animations-gestures.html | 1501 | 12 | 0 | 1 | 25 | — | n/a |
+| a11-polish-publish/0002-theming-dark-mode.html | 1171 | 9 | 0 | 1 | 25 | — | n/a |
+| a11-polish-publish/0003-forms-validation.html | 1340 | 9 | 0 | 1 | 25 | — | n/a |
+| a11-polish-publish/0004-environment-config.html | 904 | 13 | 0 | 1 | 25 | — | n/a |
+| a11-polish-publish/0005-store-submission.html | 1227 | 9 | 0 | 1 | 25 | — | n/a |
+| a2-typescript/0001-types-and-interfaces.html | 733 | 9 | 1 | 1 | 26 | — | n/a |
+| a2-typescript/0002-generics-utility-types.html | 702 | 11 | 1 | 1 | 25 | — | n/a |
+| a2-typescript/0003-typescript-react-native.html | 747 | 9 | 0 | 1 | 25 | — | n/a |
+| a3-api-consumption/0001-fetch-http-fundamentals.html | 616 | 8 | 1 | 1 | 29 | — | n/a |
 | a3-api-consumption/0002-api-client-layer.html | 2164 | 8 | 0 | 1 | 26 | yes | n/a |
-| a3-api-consumption/0003-loading-empty-error-states.html | 844 | 8 | 0 | 1 | 27 | — | — |
-| a3-api-consumption/0004-pagination-infinite-scroll.html | 789 | 6 | 0 | 1 | 29 | — | — |
-| a4-auth-client/0001-jwt-storage.html | 894 | 6 | 0 | 1 | 25 | — | — |
+| a3-api-consumption/0003-loading-empty-error-states.html | 844 | 8 | 0 | 1 | 27 | — | n/a |
+| a3-api-consumption/0004-pagination-infinite-scroll.html | 789 | 6 | 0 | 1 | 29 | — | n/a |
+| a4-auth-client/0001-jwt-storage.html | 894 | 6 | 0 | 1 | 25 | — | n/a |
 | a4-auth-client/0002-auth-context-protected-routes.html | 2143 | 7 | 0 | 1 | 26 | yes | n/a |
-| a4-auth-client/0003-handling-401s-logout.html | 877 | 6 | 0 | 1 | 29 | — | — |
+| a4-auth-client/0003-handling-401s-logout.html | 877 | 6 | 0 | 1 | 29 | — | n/a |
 | a5-core-token-features/0001-token-generation-display.html | 3241 | 14 | 1 | 1 | 30 | yes | n/a |
-| a5-core-token-features/0002-qr-generation-scanning.html | 1740 | 16 | 1 | 1 | 30 | — | — |
-| a5-core-token-features/0003-token-list-management.html | 1760 | 16 | 1 | 1 | 30 | — | — |
+| a5-core-token-features/0002-qr-generation-scanning.html | 1740 | 16 | 1 | 1 | 30 | — | n/a |
+| a5-core-token-features/0003-token-list-management.html | 1760 | 16 | 1 | 1 | 30 | — | n/a |
 | a5-core-token-features/0004-access-rules-ui.html | 3011 | 12 | 1 | 1 | 29 | yes | n/a |
-| a5-core-token-features/0005-share-path-warnings.html | 1479 | 5 | 1 | 1 | 29 | — | — |
-| a6-chat-realtime/0001-websocket-client.html | 1260 | 10 | 1 | 1 | 26 | — | — |
-| a6-chat-realtime/0002-message-thread-ui.html | 1620 | 10 | 1 | 1 | 26 | — | — |
-| a6-chat-realtime/0003-typing-presence.html | 1280 | 10 | 1 | 1 | 26 | — | — |
-| a7-voice-video/0001-webrtc-refresher.html | 1141 | 9 | 1 | 1 | 29 | — | — |
-| a7-voice-video/0002-voice-call.html | 758 | 6 | 1 | 1 | 27 | — | — |
-| a7-voice-video/0003-video-call.html | 836 | 6 | 1 | 1 | 26 | — | — |
-| a7-voice-video/0004-incoming-calls.html | 1217 | 9 | 1 | 1 | 29 | — | — |
-| a7-voice-video/0005-relay-only-privacy.html | 950 | 9 | 1 | 1 | 27 | — | — |
-| a8-redemption-web/0001-vite-react-setup.html | 832 | 12 | 1 | 1 | 29 | — | — |
-| a8-redemption-web/0002-token-redemption-flow.html | 1172 | 6 | 1 | 1 | 30 | — | — |
-| a8-redemption-web/0003-browser-webrtc-ws.html | 1322 | 8 | 1 | 1 | 29 | — | — |
-| a8-redemption-web/0004-no-app-experience.html | 1538 | 9 | 1 | 1 | 27 | — | — |
-| a9-deep-linking/0001-universal-links-app-links.html | 1112 | 7 | 1 | 1 | 28 | — | — |
-| a9-deep-linking/0002-in-app-deep-link-handling.html | 1206 | 9 | 1 | 1 | 25 | — | — |
-| b1-sql-fundamentals/0001-tables-insert-select.html | 946 | 9 | 0 | 1 | 26 | — | — |
-| b1-sql-fundamentals/0002-joins-relationships.html | 828 | 10 | 0 | 1 | 25 | — | — |
-| b1-sql-fundamentals/0003-indexes-transactions-constraints.html | 935 | 11 | 0 | 1 | 26 | — | — |
-| b1-sql-fundamentals/0004-postgres-specifics.html | 910 | 8 | 0 | 1 | 26 | — | — |
+| a5-core-token-features/0005-share-path-warnings.html | 1479 | 5 | 1 | 1 | 29 | — | n/a |
+| a6-chat-realtime/0001-websocket-client.html | 1260 | 10 | 1 | 1 | 26 | — | n/a |
+| a6-chat-realtime/0002-message-thread-ui.html | 1620 | 10 | 1 | 1 | 26 | — | n/a |
+| a6-chat-realtime/0003-typing-presence.html | 1280 | 10 | 1 | 1 | 26 | — | n/a |
+| a7-voice-video/0001-webrtc-refresher.html | 1141 | 9 | 1 | 1 | 29 | — | n/a |
+| a7-voice-video/0002-voice-call.html | 758 | 6 | 1 | 1 | 27 | — | n/a |
+| a7-voice-video/0003-video-call.html | 836 | 6 | 1 | 1 | 26 | — | n/a |
+| a7-voice-video/0004-incoming-calls.html | 1217 | 9 | 1 | 1 | 29 | — | n/a |
+| a7-voice-video/0005-relay-only-privacy.html | 950 | 9 | 1 | 1 | 27 | — | n/a |
+| a8-redemption-web/0001-vite-react-setup.html | 832 | 12 | 1 | 1 | 29 | — | n/a |
+| a8-redemption-web/0002-token-redemption-flow.html | 1172 | 6 | 1 | 1 | 30 | — | n/a |
+| a8-redemption-web/0003-browser-webrtc-ws.html | 1322 | 8 | 1 | 1 | 29 | — | n/a |
+| a8-redemption-web/0004-no-app-experience.html | 1538 | 9 | 1 | 1 | 27 | — | n/a |
+| a9-deep-linking/0001-universal-links-app-links.html | 1112 | 7 | 1 | 1 | 28 | — | n/a |
+| a9-deep-linking/0002-in-app-deep-link-handling.html | 1206 | 9 | 1 | 1 | 25 | — | n/a |
+| b1-sql-fundamentals/0001-tables-insert-select.html | 946 | 9 | 0 | 1 | 26 | — | n/a |
+| b1-sql-fundamentals/0002-joins-relationships.html | 828 | 10 | 0 | 1 | 25 | — | n/a |
+| b1-sql-fundamentals/0003-indexes-transactions-constraints.html | 935 | 11 | 0 | 1 | 26 | — | n/a |
+| b1-sql-fundamentals/0004-postgres-specifics.html | 910 | 8 | 0 | 1 | 26 | — | n/a |
 | b10-security-compliance/0001-security-hardening.html | 2987 | 20 | 1 | 1 | 25 | yes | n/a |
-| b10-security-compliance/0002-dpdp-act.html | 1953 | 11 | 1 | 1 | 25 | — | — |
-| b2-schema-design/0001-token-schema.html | 1090 | 8 | 0 | 1 | 26 | — | — |
-| b2-schema-design/0002-messaging-schema.html | 1075 | 8 | 0 | 1 | 26 | — | — |
-| b2-schema-design/0003-migrations.html | 932 | 11 | 0 | 1 | 29 | — | — |
-| b3-node-http-server/0001-nodejs-fundamentals.html | 806 | 10 | 1 | 1 | 29 | — | — |
-| b3-node-http-server/0002-express-fastify-setup.html | 912 | 13 | 0 | 1 | 30 | — | — |
+| b10-security-compliance/0002-dpdp-act.html | 1953 | 11 | 1 | 1 | 25 | — | n/a |
+| b2-schema-design/0001-token-schema.html | 1090 | 8 | 0 | 1 | 26 | — | n/a |
+| b2-schema-design/0002-messaging-schema.html | 1075 | 8 | 0 | 1 | 26 | — | n/a |
+| b2-schema-design/0003-migrations.html | 932 | 11 | 0 | 1 | 29 | — | n/a |
+| b3-node-http-server/0001-nodejs-fundamentals.html | 806 | 10 | 1 | 1 | 29 | — | n/a |
+| b3-node-http-server/0002-express-fastify-setup.html | 912 | 13 | 0 | 1 | 30 | — | n/a |
 | b3-node-http-server/0003-rest-api-design.html | 2091 | 10 | 0 | 1 | 28 | yes | n/a |
 | b3-node-http-server/0004-input-validation-error-handling.html | 2190 | 9 | 0 | 1 | 30 | yes | n/a |
-| b4-auth-server/0001-password-hashing-registration.html | 905 | 8 | 0 | 1 | 25 | — | — |
+| b4-auth-server/0001-password-hashing-registration.html | 905 | 8 | 0 | 1 | 25 | — | n/a |
 | b4-auth-server/0002-jwt-refresh-rotation.html | 2688 | 9 | 0 | 1 | 26 | yes | n/a |
 | b4-auth-server/0003-rate-limiting.html | 2314 | 7 | 0 | 1 | 30 | yes | n/a |
-| b5-websocket-server/0001-ws-connection-lifecycle.html | 1548 | 11 | 1 | 1 | 25 | — | — |
-| b5-websocket-server/0002-message-routing.html | 1309 | 10 | 1 | 1 | 26 | — | — |
-| b5-websocket-server/0003-presence-typing.html | 1424 | 9 | 1 | 1 | 26 | — | — |
+| b5-websocket-server/0001-ws-connection-lifecycle.html | 1548 | 11 | 1 | 1 | 25 | — | n/a |
+| b5-websocket-server/0002-message-routing.html | 1309 | 10 | 1 | 1 | 26 | — | n/a |
+| b5-websocket-server/0003-presence-typing.html | 1424 | 9 | 1 | 1 | 26 | — | n/a |
 | b6-webrtc-signalling/0001-signalling-server.html | 2873 | 9 | 1 | 1 | 26 | yes | n/a |
-| b6-webrtc-signalling/0002-coturn-setup.html | 1145 | 9 | 1 | 1 | 26 | — | — |
+| b6-webrtc-signalling/0002-coturn-setup.html | 1145 | 9 | 1 | 1 | 26 | — | n/a |
 | b7-token-engine/0001-token-generation-redemption.html | 3021 | 12 | 2 | 1 | 25 | yes | n/a |
 | b7-token-engine/0002-access-rules-engine.html | 2621 | 7 | 1 | 1 | 26 | yes | n/a |
 | b7-token-engine/0003-revocation-pause.html | 2569 | 9 | 1 | 1 | 26 | yes | n/a |
-| b8-push-notifications/0001-fcm-apns-expo.html | 1206 | 11 | 1 | 1 | 25 | — | — |
+| b8-push-notifications/0001-fcm-apns-expo.html | 1206 | 11 | 1 | 1 | 25 | — | n/a |
 | b9-docker-deployment/0001-docker-fundamentals.html | 2403 | 13 | 1 | 1 | 26 | yes | n/a |
 | b9-docker-deployment/0002-coolify-setup.html | 2663 | 12 | 1 | 1 | 26 | yes | n/a |
-| b9-docker-deployment/0003-logs-backups-monitoring.html | 1827 | 17 | 1 | 1 | 25 | — | — |
-| x1-git-dev-environment/0001-git-fundamentals.html | 790 | 9 | 1 | 1 | 26 | — | — |
-| x1-git-dev-environment/0002-github-workflow.html | 719 | 7 | 0 | 1 | 25 | — | — |
-| x1-git-dev-environment/0003-dev-environment.html | 586 | 13 | 0 | 1 | 25 | — | — |
-| x2-debugging/0001-react-native-debugging.html | 831 | 9 | 1 | 1 | 25 | — | — |
-| x2-debugging/0002-nodejs-debugging.html | 724 | 8 | 0 | 1 | 25 | — | — |
+| b9-docker-deployment/0003-logs-backups-monitoring.html | 1827 | 17 | 1 | 1 | 25 | — | n/a |
+| x1-git-dev-environment/0001-git-fundamentals.html | 790 | 9 | 1 | 1 | 26 | — | n/a |
+| x1-git-dev-environment/0002-github-workflow.html | 719 | 7 | 0 | 1 | 25 | — | n/a |
+| x1-git-dev-environment/0003-dev-environment.html | 586 | 13 | 0 | 1 | 25 | — | n/a |
+| x2-debugging/0001-react-native-debugging.html | 831 | 9 | 1 | 1 | 25 | — | n/a |
+| x2-debugging/0002-nodejs-debugging.html | 724 | 8 | 0 | 1 | 25 | — | n/a |

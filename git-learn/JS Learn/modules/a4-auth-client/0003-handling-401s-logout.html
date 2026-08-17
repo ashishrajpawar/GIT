@@ -338,10 +338,14 @@ function doFetch(method: string, path: string, body?: unknown) {
         explanation: "401 triggers the flow. Deduplication prevents parallel refresh calls. The refresh endpoint returns new tokens. Store them. Then the original request retries with the fresh access token — the user never sees a login screen."
       },
       {
-        type: "predict-output",
-        question: "Three API calls return 401 at the same time. How many refresh requests are sent to the server?",
-        code: "// Call A → 401 → refresh()\n// Call B → 401 → refresh()\n// Call C → 401 → refresh()\n// refreshPromise is shared...",
-        answer: "1",
+        question: "Three API calls return 401 at the same moment and each calls refresh(), which shares a single refreshPromise. How many refresh requests reach the server?",
+        options: [
+          "1",
+          "2",
+          "3",
+          "0 — all three force a logout instead"
+        ],
+        correct: 0,
         explanation: "The refreshPromise singleton means the first 401 creates one refresh request. Calls B and C await the same promise. When it resolves, all three retry with the new token. Without deduplication, you'd waste 3 refresh tokens (rotation means only the last one is valid)."
       },
       {
@@ -390,10 +394,14 @@ function doFetch(method: string, path: string, body?: unknown) {
         explanation: "With token rotation, each refresh call consumes the current refresh token and issues a new one. If three 401s each independently call /auth/refresh, the first succeeds but invalidates the token for calls 2 and 3 — they'd fail and force logout. The singleton ensures only one refresh happens; all waiters share the result."
       },
       {
-        type: "predict-output",
-        question: "What is refreshPromise after a successful refresh completes?",
-        code: "let refreshPromise = null;\n\nasync function refresh() {\n  if (refreshPromise) return refreshPromise;\n  refreshPromise = doRefresh();\n  const result = await refreshPromise;\n  refreshPromise = null;  // .finally() equivalent\n  return result;\n}\n\n// After refresh() resolves, what is refreshPromise?",
-        answer: "null",
+        question: "Given:\n\nlet refreshPromise = null;\n\nasync function refresh() {\n  if (refreshPromise) return refreshPromise;\n  refreshPromise = doRefresh();\n  const result = await refreshPromise;\n  refreshPromise = null;\n  return result;\n}\n\nAfter refresh() resolves, what is refreshPromise?",
+        options: [
+          "The resolved promise, so later 401s reuse it",
+          "undefined",
+          "null",
+          "A new pending promise"
+        ],
+        correct: 2,
         explanation: "After the refresh completes (success or failure), refreshPromise is reset to null. This allows future 401s to trigger a fresh refresh. If we never reset it, subsequent token expirations would await a stale, already-resolved promise and never actually refresh."
       },
       {
@@ -495,10 +503,14 @@ function doFetch(method: string, path: string, body?: unknown) {
         explanation: "With token rotation, each refresh call issues BOTH a new access token AND a new refresh token. The old refresh token is invalidated immediately. If you only store the new access token, the next refresh attempt will send the old (dead) refresh token and get a 401 — triggering force-logout when the user is still legitimately logged in."
       },
       {
-        type: "predict-output",
-        question: "A user is logged out on Device B. Device A makes an API call 2 minutes later. What happens?",
-        code: "// Device B: POST /auth/logout → server revokes refresh token\n// Device A (2 min later): GET /api/tokens → 401 (access token expired)\n// Device A: POST /auth/refresh → ???",
-        answer: "401 from refresh endpoint, force-logout on Device A",
+        question: "Device B posts /auth/logout and the server revokes the refresh token. Two minutes later Device A's access token expires, so its GET /api/tokens returns 401 and it posts /auth/refresh. What happens on Device A?",
+        options: [
+          "It keeps working — logging out on B only affects B",
+          "Its next call succeeds and the one after that fails",
+          "/auth/refresh returns 401, and the interceptor's forceLogout() sends it to the Login screen",
+          "It silently registers a new session and carries on"
+        ],
+        correct: 2,
         explanation: "When Device B logs out, the server revokes the refresh token (or the entire session). Device A's access token still works until it expires (short-lived). Once it expires and Device A tries to refresh, the server rejects the revoked refresh token with 401. The interceptor calls forceLogout() — the user sees the Login screen on Device A too."
       },
       {
