@@ -24,8 +24,9 @@ Shape per `TOKEN-TRACK.md` § "1.5 in detail":
 - One or two lessons per commit. Never all 14.
 - Exercises put their logic in a **plain function the component calls**, and the
   self-check tests that function. `verify-lesson.mjs` cannot run React Native.
-- `0001`, `0003`, `0004`, `0011` are render-or-build-pipeline lessons and take
-  `--unverifiable` with a reason.
+- Lessons with no runnable logic take `--unverifiable` with a reason. The
+  original list was `0001`, `0003`, `0004`, `0011`; **three of those turned out
+  to be wrong** — see the note below. Only `0001` still looks untestable.
 
 Order: `0002` first, not `0001` — `0001` is the Expo/EAS build pipeline and has
 the least runnable logic in the module, so it is the worst place to establish
@@ -37,7 +38,20 @@ the pattern.
 | `0003-styling-and-flexbox` | done — `layoutRow`, 3 playgrounds, 6 wrong-cases |
 | `0004-textinput-and-keyboard` | done — `normaliseCode`, 3 playgrounds, 7 wrong-cases |
 | `0005-usestate` | done — `applyTokenAction`, 3 playgrounds, 6 wrong-cases |
-| `0006`–`0014` | not started |
+| `0006-useeffect` | done — `subscribeToToken`, 2 playgrounds, 6 wrong-cases |
+| `0007`–`0014` | not started |
+
+**`0006` caught me asserting something false.** The exercise required an
+unsubscribe safe to call twice, and justified it by claiming a second call
+would remove *somebody else's* handler. It does not: `off()` matches on
+function identity, so the second call finds nothing and is a harmless no-op.
+The wrong-case built to prove it passed every check, which is how the claim
+surfaced. **The lesson text was corrected rather than the fake socket rigged to
+make the claim true** — the temptation to do the latter is exactly how a course
+teaches something that is not so. The guard survives on honest grounds (some
+libraries throw on an unknown handler), and the replacement wrong-case is a
+real bug: holding the handler in module-level state, so a second subscriber
+overwrites the first and closing one thread deafens another.
 
 ### `0004` forced the token-fixture opt-out that M2 left open
 
