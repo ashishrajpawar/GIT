@@ -33,8 +33,36 @@ the pattern.
 
 | Lesson | Status |
 |---|---|
-| `0002-core-components` | done — 4 playgrounds, exercise, explain, 7 wrong-cases |
-| `0003`–`0014` | not started |
+| `0002-core-components` | done — `toRowModel`, 4 playgrounds, 7 wrong-cases |
+| `0003-styling-and-flexbox` | done — `layoutRow`, 3 playgrounds, 6 wrong-cases |
+| `0004-textinput-and-keyboard` | done — `normaliseCode`, 3 playgrounds, 7 wrong-cases |
+| `0005`–`0014` | not started |
+
+### `0004` forced the token-fixture opt-out that M2 left open
+
+`0004` teaches the redemption code field, so its subject **is** invalid codes:
+`KART-4KN9-RTLM`, `-RT20`, `-RT2O`, `-RT2I`, `-RT21`, `-RTL0`, each present to
+be rejected. That is six audit warnings for six correct fixtures, and six
+deliberate warnings are how a list stops being read — the exact failure this
+session spent three units undoing.
+
+So the marker exists now: a file containing **`audit-allow-token-fixtures`**
+is skipped by the example-code check. Same bargain as the existing
+`audit-allow-alphabet`, taken for the same reason. **Deliberately narrow:** the
+*alphabet* check is an error rather than a warning and still applies to opted-out
+files — proved by corrupting `0004`'s alphabet literal and watching it error,
+then restoring. A wrong example code is one bad code; a wrong alphabet is an
+unlimited supply, and that one is never opt-outable.
+
+Use it only where invalidity is the lesson. Two files have it: this one, and
+nothing else yet.
+
+**The "render-only, take `--unverifiable`" prediction was wrong for `0003`.**
+It was on that list because flexbox is layout and layout needs a device. But
+the *arithmetic* is the logic, and `layoutRow(total, children)` is as testable
+as anything in Module 01. Check each remaining lesson for the same thing before
+reaching for `--unverifiable`: `0001` (a build pipeline) is the only one that
+looks genuinely untestable now.
 
 ### `0002` — what the pattern looks like in React Native
 

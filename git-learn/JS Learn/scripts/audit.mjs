@@ -381,6 +381,14 @@ const tokenScan = [
 ];
 for (const file of tokenScan) {
   const text = read(file);
+  /* A lesson whose subject IS invalid codes needs a supply of them. 02/0004
+     teaches the redemption field, so every excluded character appears there on
+     purpose, as the thing being rejected. Marking the file opts it out — the
+     same bargain as `audit-allow-alphabet` above, and taken for the same
+     reason: six deliberate warnings train people to ignore the list, which is
+     how the real ones hid. The alphabet check, which is an error and the
+     dangerous one, still applies to these files. */
+  if (text.includes("audit-allow-token-fixtures")) continue;
   for (const m of text.matchAll(/\b([A-Z0-9]{4}-[A-Z0-9]{4}(?:-[A-Z0-9]{4})?)\b/g)) {
     const bad = [...m[1].replace(/-/g, "")].filter((c) => !TOKEN_ALPHABET.includes(c));
     if (!bad.length) continue;
