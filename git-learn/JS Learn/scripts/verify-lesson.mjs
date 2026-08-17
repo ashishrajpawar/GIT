@@ -349,13 +349,24 @@ const LOG_PATH = path.join(ROOT, "scripts", "verification-log.json");
 const log = fs.existsSync(LOG_PATH) ? JSON.parse(fs.readFileSync(LOG_PATH, "utf8")) : {};
 const lessonId = path.relative(ROOT, lessonPath).split(path.sep).join("/");
 
+/* A lesson with no playgrounds, no solution and no executable question passes
+   every section by having nothing in them. Recording that as `verified` — the
+   same word the capstone earns with 13 playgrounds and 29 self-checks — is how
+   a count starts overstating what was measured, which is the failure this log
+   was written to end. It gets its own status instead. */
+const ranSomething =
+  checked > 0 ||
+  Object.keys(playgrounds).length > 0 ||
+  (!unverifiableReason && Object.keys(solutions).length > 0);
+
 if (failures) delete log[lessonId];
 else log[lessonId] = {
-  status: unverifiableReason ? "unverifiable" : "verified",
+  status: unverifiableReason ? "unverifiable" : ranSomething ? "verified" : "nothing-to-verify",
   reason: unverifiableReason || undefined,
   at: new Date().toISOString().slice(0, 10),
   solutions: Object.keys(solutions).length,
   playgrounds: Object.keys(playgrounds).length,
+  executableQuestions: checked,
   wrongCases: wrongFile ? path.basename(wrongFile) : null,
 };
 
@@ -366,6 +377,8 @@ const verdict = failures
   ? `FAIL — ${failures} problem(s)`
   : unverifiableReason
     ? `OK — everything runnable checked; solution recorded UNVERIFIABLE (${unverifiableReason})`
-    : "OK — lesson verified";
+    : ranSomething
+      ? "OK — lesson verified"
+      : "OK — but NOTHING TO VERIFY: no playground, no solution, no executable question";
 console.log(`\n${verdict}\n`);
 process.exit(failures ? 1 : 0);

@@ -442,6 +442,7 @@ with this one, this one is right — everything below is measured, not asserted.
 | Lessons with an exercise | ${track.filter((l) => l.exercises > 0).length} / ${track.length} |
 | **Deepened** (all 3 spine sections) | ${track.filter((l) => l.deepened).length} / ${track.length} |
 | **Verified** (code executed) | ${track.filter((l) => l.verified === "verified").length} / ${track.length} |
+| Ran clean but had nothing to run | ${track.filter((l) => l.verified === "nothing-to-verify").length} / ${track.length} |
 | Errors | ${errors.length} |
 | Warnings | ${warnings.length} |
 
@@ -502,7 +503,7 @@ ${warnings.length ? `## Warnings (${warnings.length})\n\n${warnings.slice(0, 40)
 
 | Lesson | Prose | Pre | Play | Exer | Q | Deepened | Verified |
 |---|---|---|---|---|---|---|---|
-${track.map((l) => `| ${l.id.replace("modules/", "")} | ${l.words} | ${l.pre} | ${l.playgrounds} | ${l.exercises} | ${l.questions} | ${l.deepened ? "yes" : "—"} | ${l.verified === "verified" ? "yes" : l.verified === "unverifiable" ? "n/a" : "—"} |`).join("\n")}
+${track.map((l) => `| ${l.id.replace("modules/", "")} | ${l.words} | ${l.pre} | ${l.playgrounds} | ${l.exercises} | ${l.questions} | ${l.deepened ? "yes" : "—"} | ${l.verified === "verified" ? "yes" : l.verified === "unverifiable" ? "n/a" : l.verified === "nothing-to-verify" ? "none" : "—"} |`).join("\n")}
 `;
 
 fs.writeFileSync(path.join(ROOT, "PROGRESS.md"), md);

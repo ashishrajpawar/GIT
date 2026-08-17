@@ -9,6 +9,60 @@ how far it got.
 
 ---
 
+## Unit 13 — M1 over Module 02 — DONE
+
+M1 as specified in `TOKEN-TRACK.md` § Maintenance, starting with Module 02
+because its result is a required input to 1.5.
+
+**The expected failure never happened.** The plan assumed most lessons would
+fail on `no self-check found in pg-exercise`. They do not: Module 02 has no
+`createSolution` at all, so section 4 has nothing to check and passes silently.
+That is the whole point of 1.5 and it is not this unit's job.
+
+**Four real defects, all premise-in-comment** — the pattern CLAUDE.md names,
+where the code is a description in comments so the question prints nothing:
+
+| Lesson | Was keyed | Fix |
+|---|---|---|
+| `0003` q10 | `"300"` | multiple-choice — flexbox arithmetic has no runtime |
+| `0003` q15 | `"100"` | multiple-choice |
+| `0003` q21 | `"80"` | multiple-choice |
+| `0008` q6 | `"MERC-8GH2 → Priya"` | made genuinely executable |
+
+`0003`'s three are layout arithmetic. No sandbox can run them — `dom-sandbox`
+has no layout by design — so they are multiple-choice, which is what they
+always were underneath. `0008` q6 is different: it was real code with the call
+described in a trailing comment, so it now performs the call and prints. Its
+token code went from `MERC-8GH2` to the canonical `MERC-8GH2-KP4X` — the
+alphabet was fine but 8 characters is not the format, and the string was being
+rewritten anyway.
+
+Question counts per lesson are unchanged (25 each), which is the cheap proof
+no `<script>` was broken by an edit. All three new keys sit off index 1.
+
+**Priya stays.** The WhatsApp-clone reframe is 1.5's other half and mixing it
+in here makes the diff unreviewable — the same call Unit 9 made.
+
+### The metric this unit nearly broke
+
+Recording the 14 lessons as "verified" put `Verified` at 27/96 — and seven of
+those had **no playground, no solution and no executable question**. They
+passed every section by having nothing in them, and were about to be counted
+identically to `01/0013`, which earns it with 13 playgrounds and 29
+self-checks. That is exactly the overstatement this log exists to prevent, and
+it would have been introduced by the tool that exists to prevent it.
+
+`verify-lesson.mjs` now distinguishes them: `nothing-to-verify` when no
+playground ran, no solution executed and no question was checked. The audit
+prints `none` rather than `—` (never run) and carries a separate count. Real
+figures are in `PROGRESS.md`; the split for Module 02 is 7 verified, 7 with
+nothing to run.
+
+Log entries also gained `executableQuestions`, so "verified" can be read
+alongside how much was actually executed. Module 01's 13 were re-run with their
+`--wrong` case files so the log is consistent and no `wrongCases` reference was
+lost.
+
 ## Unit 12 — fill-blank questions that cannot be answered — DONE
 
 Not a phase item. Found by reading the audit's 24 "N blanks but one answer"
@@ -600,7 +654,8 @@ its reasoning are here.
    one that *finds* work rather than assuming it. Every time the verifier has
    been pointed somewhere new it has found real defects, most recently
    `a8/0001` q23 in `7c86660`. Start with Module 02, whose result is a required
-   input to 1.5.
+   input to 1.5. **Module 02 done — Unit 13.** Remaining: the A- and B-track
+   modules, none of which have ever been executed except the Phase 2 spine.
 2. **M2 — the invalid example codes.** Independent of both, and safe to slot in
    whenever. Per-code reading, never a bulk rewrite — some are deliberate
    negative fixtures.
