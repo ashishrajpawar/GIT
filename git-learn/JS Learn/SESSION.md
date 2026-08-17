@@ -46,7 +46,8 @@ the pattern.
 | `0011-images-imagepicker` | done — `prepareAttachment`, 1 playground, 7 wrong-cases |
 | `0012-loading-and-error-states` | done — `viewState`, 2 playgrounds, 6 wrong-cases |
 | `0013` (token list screen) | done — `orderTokens`, 1 playground, 7 wrong-cases |
-| `0014`, `0001` | not started |
+| `0014` (message thread screen) | done — `buildThreadItems`, 1 playground, 7 wrong-cases |
+| `0001-expo-setup-and-eas-build` | not started — the last one, and the only likely `--unverifiable` |
 
 **A self-check that crashed instead of failing, again.** `0012`'s unguarded
 `items.length` throws, which aborted every check below it — the same defect
