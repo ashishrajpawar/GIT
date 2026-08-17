@@ -124,6 +124,60 @@ function extractQuizzes(html, file) {
   return out;
 }
 
+/**
+ * fill-blank renders ONE text box and grades by exact string compare, so a
+ * question with several blanks only works when the same word fills every one.
+ * Most do — `import { readFile } … await readFile(…)` is fine.
+ *
+ * This used to warn on the blank count alone. That fired 24 times, 21 of them
+ * correct, and a warning that is 87% noise is a warning nobody reads: three
+ * genuinely unanswerable questions sat behind it until 2026-08-17. The count
+ * carried no signal, so it is gone. What replaces it are three checks that are
+ * exact about the ways one answer provably cannot fill every blank.
+ *
+ * Still not caught, and no static check can: blanks far apart that happen to
+ * want different words. `new ___()` … `controller.___()` needed
+ * `AbortController` then `abort`, and only reading it tells you.
+ */
+function validateBlanks(q, at) {
+  const code = String(q.code);
+  const answer = String(q.answer || "");
+
+  // 1. An answer spliced across blanks — `max(128` for `.___(___, …)`. Whatever
+  //    the student types, it cannot be this, because this is not a thing.
+  const pairs = { ")": "(", "]": "[", "}": "{" };
+  const stack = [];
+  let balanced = true;
+  for (const ch of answer) {
+    if ("([{".includes(ch)) stack.push(ch);
+    else if (ch in pairs && stack.pop() !== pairs[ch]) balanced = false;
+  }
+  if (!balanced || stack.length)
+    err(`${at}: answer ${JSON.stringify(answer)} has unbalanced brackets — spliced across blanks?`);
+
+  // Three underscores, not two: `__dirname` and `__DEV__` are ordinary code and
+  // were being counted as blanks. That is the same mistake in the checker that
+  // `___dirname` was in the lesson — the first version of this check reported
+  // a8/0001 as broken on the strength of it.
+  const blanks = [...code.matchAll(/_{3,}/g)];
+  if (blanks.length < 2) return;
+
+  // 2. Blanks separated by punctuation only — `item.___.___()`, `.___(___,`.
+  //    One string cannot be both halves of a member chain or both a call and
+  //    its own argument.
+  for (let k = 1; k < blanks.length; k++) {
+    const gap = code.slice(blanks[k - 1].index + blanks[k - 1][0].length, blanks[k].index);
+    if (gap && /^[.,()[\]{}]+$/.test(gap))
+      err(`${at}: blanks separated only by "${gap}" — they need different answers`);
+  }
+
+  // 3. One blank a property name, another not — `new ___()` vs `obj.___()`.
+  //    The answer would have to play two incompatible roles.
+  const member = blanks.map((b) => code[b.index - 1] === ".");
+  if (member.some(Boolean) && !member.every(Boolean))
+    err(`${at}: some blanks are property positions and some are not — one answer cannot fill both`);
+}
+
 function validateQuestion(q, file, i) {
   const t = q.type || "multiple-choice";
   const at = `${file} q${i}`;
@@ -162,9 +216,8 @@ function validateQuestion(q, file, i) {
       err(`${at}: correctOrder is not a permutation of 0..${q.steps.length - 1}`);
   } else if (t === "fill-blank") {
     if (!q.answer || !String(q.answer).trim()) err(`${at}: missing answer`);
-    if (!q.code || !/_{2,}/.test(q.code)) err(`${at}: code has no ___ blank`);
-    else if ((q.code.match(/_{2,}/g) || []).length > 1)
-      warn(`${at}: ${(q.code.match(/_{2,}/g) || []).length} blanks but one answer`);
+    if (!q.code || !/_{3,}/.test(q.code)) err(`${at}: code has no ___ blank`);
+    else validateBlanks(q, at);
   } else if (t === "predict-output") {
     if (q.answer === undefined || q.answer === null) err(`${at}: missing answer`);
     if (!q.code) err(`${at}: missing code`);

@@ -9,7 +9,72 @@ how far it got.
 
 ---
 
-## In progress — PHASE 1
+## Unit 12 — fill-blank questions that cannot be answered — DONE
+
+Not a phase item. Found by reading the audit's 24 "N blanks but one answer"
+warnings, which had gone unread because the check is mostly noise.
+
+`renderFillBlank` gives **one** text box and grades by exact string compare
+(whitespace/semicolons stripped). So a multi-blank question only works when
+every blank takes the *same* word. 21 of the 24 do. Three do not, and a student
+who understands the material is marked wrong on all three:
+
+| Lesson | Code | Keyed answer | Second blank actually wants |
+|---|---|---|---|
+| `a3/0003` | `new ___()` … `controller.___()` | `AbortController` | `abort` |
+| `a5/0003` | `item.___.___()` | `id.toString` | `id` then `toString` |
+| `b4/0001` | `.___(___, 'Password too long')` | `max(128` | `max` then `128` |
+
+Same family as the `which-breaks` inversion fixed on 2026-08-15 — the renderer
+says one thing and the key rewards another.
+
+Two content bugs found in the same sweep, fixed alongside:
+`a5/0004`'s SQL reads `COALESCE(${1}, payload)` (template-literal artifact,
+should be `$1`), and `a8/0001` renders as `___dirname` because the `__` of
+`__dirname` is matched as a blank.
+
+Each was re-keyed to a **single** blank on the part the question actually asks
+about: `new ___()` with `controller.abort()` shown, `item.___` answered
+`id.toString()`, `.max(___, …)` answered `128`. Re-keying rather than adding a
+second input box, because one box is the component's contract and 21 questions
+depend on it.
+
+**The bare count warning is gone**, replaced by three checks that are exact
+about the ways one answer provably cannot fill every blank:
+
+1. the answer has unbalanced brackets — `max(128` is a splice, not something a
+   student could ever type
+2. two blanks separated only by punctuation — `item.___.___()`, `.___(___,`
+3. some blanks are property positions (`.___`) and some are not — the answer
+   would have to play two roles
+
+Not caught, and no static check can: blanks far apart that simply want
+different words. `new ___()` … `controller.___()` is that case, and only
+reading it tells you. The comment above `validateBlanks` says so.
+
+**The first version of the check reported a false positive, and it was the
+same bug as the lesson it was checking.** The blank regex was `_{2,}`, so
+`__dirname` and `__DEV__` counted as blanks — exactly the `___dirname` mangle
+in `a8/0001`. It is `_{3,}` now. Proved on a throwaway fixture carrying all
+three defect shapes plus two legitimate multi-blank questions: three errors,
+no false positives, fixture deleted.
+
+Warnings 51 → 27. Errors unchanged at the 3 pre-existing schema ones.
+
+**One more defect found by re-verifying the files I had edited**, which is the
+argument for re-verifying at all: `a8/0001` q23 was a `predict-output` whose
+code was three comment lines, so it verified as printing `""` against a key of
+`"dist"`. The premise-in-comment pattern CLAUDE.md names. It is recall, not
+prediction, so it is now multiple-choice with the answer at index 2.
+
+The other four edited lessons still fail verification for one pre-existing
+reason each — `no self-check found in pg-exercise`. That is the Phase 1.5 / 3
+retrofit, not this unit. Blocks parse, playgrounds run, and every executable
+`predict-output` passes in all of them. `a5/0004`'s `unverifiable` log entry
+was re-run and survives; the log is still 29 entries and Verified is still
+13/96.
+
+## Phase 1
 
 Phase 0 is done (see `HANDOFF.md` for the 10 steps and their commits).
 Phase 1 item 1.1 (see `TOKEN-TRACK.md`'s work plan): retrofit practice into `01/0005`–`01/0012`,

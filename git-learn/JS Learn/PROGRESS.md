@@ -4,7 +4,7 @@
      Regenerate with: node scripts/audit.mjs
      Hand-written session state lives in SESSION.md, never here. -->
 
-Generated 2026-08-16 from the files on disk. Where any other document disagrees
+Generated 2026-08-17 from the files on disk. Where any other document disagrees
 with this one, this one is right — everything below is measured, not asserted.
 
 ## Summary
@@ -20,19 +20,19 @@ with this one, this one is right — everything below is measured, not asserted.
 | **Deepened** (all 3 spine sections) | 16 / 96 |
 | **Verified** (code executed) | 13 / 96 |
 | Errors | 3 |
-| Warnings | 51 |
+| Warnings | 27 |
 
 Student-completed lessons are **not** tracked here — that comes from the student
 or from `progress.js` localStorage, and is never inferred from the files.
 
 ## Answer-position distribution — **authored order, not what the student sees**
 
-1334 keyed questions (multiple-choice, spot-the-bug, which-breaks).
+1335 keyed questions (multiple-choice, spot-the-bug, which-breaks).
 
 > **This clustering is expected and already handled. Do not "fix" it again.**
 > `quiz.js` shuffles options at render time (`optionDisplayOrder`), so the
 > displayed distribution is roughly even — measured at 26.9 / 28.5 / 26.9 / 17.6
-> across all 1334 questions, versus the authored figures below. Index 3 sits
+> across all 1335 questions, versus the authored figures below. Index 3 sits
 > lower only because many questions have three options.
 >
 > The numbers here read `correct` straight from the lesson data, which is
@@ -43,16 +43,16 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Position | Count | Share |
 |---|---|---|
 | index 0 | 125 | 9.4% |
-| index 1 | 840 | 63.0% |
-| index 2 | 338 | 25.3% |
+| index 1 | 840 | 62.9% |
+| index 2 | 339 | 25.4% |
 | index 3 | 31 | 2.3% |
 
 ## Question types
 
 | Type | Count |
 |---|---|
-| multiple-choice | 662 |
-| predict-output | 512 |
+| multiple-choice | 663 |
+| predict-output | 511 |
 | fill-blank | 454 |
 | spot-the-bug | 371 |
 | which-breaks | 301 |
@@ -104,34 +104,10 @@ or from `progress.js` localStorage, and is never inferred from the files.
 - schema: table "deletion_queue" is queried in 1 lesson(s) but never created
 - schema: table "calls" is queried in 2 lesson(s) but never created
 
-## Warnings (51)
+## Warnings (27)
 
-- modules/02-react-native/0002-core-components.html q7: 3 blanks but one answer
-- modules/02-react-native/0002-core-components.html q27: 3 blanks but one answer
-- modules/02-react-native/0005-usestate.html q8: 2 blanks but one answer
 - modules/02-react-native/0007-flatlist.html q0: position-dependent option at index 2, not last
-- modules/a11-polish-publish/0003-forms-validation.html q23: 2 blanks but one answer
-- modules/a11-polish-publish/0004-environment-config.html q3: 2 blanks but one answer
-- modules/a3-api-consumption/0003-loading-empty-error-states.html q3: 2 blanks but one answer
-- modules/a4-auth-client/0002-auth-context-protected-routes.html q2: 2 blanks but one answer
-- modules/a5-core-token-features/0003-token-list-management.html q8: 2 blanks but one answer
-- modules/a5-core-token-features/0004-access-rules-ui.html q3: 2 blanks but one answer
 - modules/a5-core-token-features/0004-access-rules-ui.html q5: position-dependent option at index 2, not last
-- modules/a5-core-token-features/0005-share-path-warnings.html q3: 2 blanks but one answer
-- modules/a6-chat-realtime/0001-websocket-client.html q21: 3 blanks but one answer
-- modules/a6-chat-realtime/0002-message-thread-ui.html q3: 3 blanks but one answer
-- modules/a6-chat-realtime/0002-message-thread-ui.html q16: 2 blanks but one answer
-- modules/a6-chat-realtime/0003-typing-presence.html q3: 3 blanks but one answer
-- modules/a7-voice-video/0002-voice-call.html q8: 3 blanks but one answer
-- modules/a8-redemption-web/0001-vite-react-setup.html q8: 2 blanks but one answer
-- modules/a8-redemption-web/0004-no-app-experience.html q18: 2 blanks but one answer
-- modules/b10-security-compliance/0001-security-hardening.html q14: 2 blanks but one answer
-- modules/b3-node-http-server/0001-nodejs-fundamentals.html q2: 2 blanks but one answer
-- modules/b3-node-http-server/0001-nodejs-fundamentals.html q8: 2 blanks but one answer
-- modules/b3-node-http-server/0002-express-fastify-setup.html q3: 2 blanks but one answer
-- modules/b4-auth-server/0001-password-hashing-registration.html q7: 2 blanks but one answer
-- modules/b4-auth-server/0003-rate-limiting.html q2: 2 blanks but one answer
-- modules/b6-webrtc-signalling/0002-coturn-setup.html q18: 3 blanks but one answer
 - link (legacy): modules/07-store-compliance-and-safety/0005-data-export-and-terms.html -> ./privacy-policy.html
 - token: "UTIL-4KQ9-ZT7M" uses characters excluded from the alphabet (3 file(s))
 - token: "DELI-2XN5-QW8R" uses characters excluded from the alphabet (2 file(s))
@@ -146,7 +122,17 @@ or from `progress.js` localStorage, and is never inferred from the files.
 - token: "MERC-11AB" uses characters excluded from the alphabet (2 file(s))
 - token: "DELI-9XK2" uses characters excluded from the alphabet (2 file(s))
 - token: "SHOP-2AX4" uses characters excluded from the alphabet (2 file(s))
-- …and 11 more
+- token: "BANK-7QR1" uses characters excluded from the alphabet (2 file(s))
+- token: "SHOP-4KN9" uses characters excluded from the alphabet (4 file(s))
+- token: "SHOP-4KN9-RT2M" uses characters excluded from the alphabet (3 file(s))
+- token: "XPRD-4KL9-MN2T" uses characters excluded from the alphabet (2 file(s))
+- token: "XPRD-4KL9" uses characters excluded from the alphabet (2 file(s))
+- token: "DOCK-1AB2" uses characters excluded from the alphabet (2 file(s))
+- token: "MERC-8GH2-LP4X" uses characters excluded from the alphabet (4 file(s))
+- token: "0001-0004" uses characters excluded from the alphabet (3 file(s))
+- token: "0005-0012" uses characters excluded from the alphabet (2 file(s))
+- token: "BANK-4FJ1" uses characters excluded from the alphabet (2 file(s))
+- token: "SHOP-9KL3" uses characters excluded from the alphabet (2 file(s))
 
 ## Per-lesson detail
 
