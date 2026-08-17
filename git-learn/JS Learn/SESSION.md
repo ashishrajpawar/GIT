@@ -42,7 +42,15 @@ the pattern.
 | `0007-flatlist` | done — `mergePage`, 1 playground, 7 wrong-cases |
 | `0008-navigation` | done — `applyNavAction`, 2 playgrounds, 6 wrong-cases |
 | `0009-passing-data` | done — `toRouteParams`, 2 playgrounds, 7 wrong-cases |
-| `0010`–`0014` | not started |
+| `0010-forms-login-register` | done — `validateRegistration`, 2 playgrounds, 7 wrong-cases |
+| `0011`–`0014` | not started |
+
+**`0010` was the biggest product correction of the phase.** The lesson was
+built on an email/password form, which contradicts the thing Token exists for —
+`b10/0002` already says collecting an email or phone violates data
+minimisation. Registration is now a username and a password, and the callout
+says why: an app that asks for an email to create the account has undermined
+itself on its first screen.
 
 **Three self-checks have now passed a wrong answer by coincidence** — `0003`'s
 ordering check used three children that all came out 100dp wide, and `0008`'s
