@@ -108,6 +108,14 @@ like an alphabet must now equal the canonical one, or the audit **errors**.
 A lesson that shows a wrong alphabet deliberately opts out by containing the
 string `audit-allow-alphabet`.
 
+**A lesson whose *subject* is invalid codes opts out of the example-code check
+with `audit-allow-token-fixtures`.** Only `02/0004` has it — it teaches the
+redemption field, so it carries six deliberately impossible codes to reject, and
+six standing warnings would train everyone to ignore the list. The bargain is
+deliberately narrow: **the alphabet check is an error and still applies to
+opted-out files.** A wrong example code is one bad code; a wrong alphabet is an
+unlimited supply, and that one is never opt-outable.
+
 ### Token repo layout (one git repo, four folders)
 
 **It is a separate git repo, beside this one, at `GIT/token/`** — not inside
@@ -135,7 +143,9 @@ index.html                          ← course home page
 modules/
   01-javascript-fundamentals/       ← 12 lessons + `0013` capstone (see PROGRESS.md
                                        for what carries practice and what is verified)
-  02-react-native/                  ← 14 lessons, written (no practice yet)
+  02-react-native/                  ← 14 lessons, retrofitted 2026-08-17: practice
+                                       pattern throughout, Token framing throughout,
+                                       all verified by execution
   x1-git-dev-environment/           ← 3 lessons, complete
   a2-typescript/                    ← 3 lessons, complete
   x2-debugging/                     ← 2 lessons, complete
@@ -643,15 +653,40 @@ Write the wrong-answer cases in `scripts/cases/<lesson>.mjs` — `alternatives`
 (other correct styles, all must pass) and `mistakes` (each must fail, and
 `expect` names the check it should trip). A mistake that trips *every* check
 means the self-check has poor diagnostics, not that the student is very wrong.
+**Each mistake is `{ expect, impl }` — `impl`, not `code`.** Using `code` yields
+a row of identical `ReferenceError`s that look like a verifier bug and are not.
+
+**The wrong-cases are the only thing that tests the test, so write them.** A
+green self-check proves nothing about what it would catch. Five self-checks in
+Phase 1.5 passed a wrong answer purely by coincidence — three flex children that
+all came out 100dp wide, a navigate target at stack index 0 where "pop back to
+it" and "clear the stack" agree, a label identical before and after trimming, a
+password long enough to survive being trimmed. Every one was exposed by a
+wrong-case that should have failed and did not. **Choose fixture values that
+differ from what a wrong answer would produce**, and say why in a comment so the
+next person does not "simplify" them back.
+
+**Where a mistake can throw rather than return, wrap that check on its own.** An
+uncaught throw aborts every check below it, so the suite hides what it never
+reached — the defect `test-explain.mjs` had in Unit 10, and which recurred twice
+in Phase 1.5.
 
 A passing run records itself in `scripts/verification-log.json`, which is where
 the audit's "Verified" column comes from; a failing run deletes the entry. The
 file is **generated** — never hand-edit it, and never claim a lesson is verified
 without running the verifier over it.
 
-**Lessons whose solution cannot run here** — an Express route needing Postgres,
-a React Native screen needing a device, a Dockerfile needing a VPS — take
-`--unverifiable "<reason>"`. The reason is mandatory and stored, and the log
+**Look for the plain function before reaching for `--unverifiable`.** Phase 1.5
+predicted four Module 02 lessons had no runnable logic and was wrong about all
+four: flexbox is arithmetic, the keyboard lesson is string normalisation, the
+image picker is a payload filter, and the Expo setup lesson has `eas.json`
+profile inheritance in it. `--unverifiable` was never used once. The reflex to
+reach for it is wrong more often than it is right — and the function you find by
+resisting it is usually the part of the lesson worth testing.
+
+**Lessons whose solution genuinely cannot run here** — an Express route needing
+Postgres, a React Native screen needing a device, a Dockerfile needing a VPS —
+take `--unverifiable "<reason>"`. The reason is mandatory and stored, and the log
 entry becomes `unverifiable` (the audit prints `n/a`) rather than `verified`.
 Everything else still runs and still fails: blocks must parse, playgrounds must
 run, executable `predict-output` answers must match. A lesson full of SQL
@@ -747,11 +782,11 @@ RootStack (headerShown: false)
 
 ## Student profile
 
-- **Actual progress: 4 lessons of 95** (as of 2026-08-15). Finished
-  `01/0001-what-is-javascript` through `01/0004-conditionals` with their
-  quizzes; next is `01/0005-loops`. A true beginner — pitch accordingly.
-  (This file previously claimed Modules 1 and 2 were complete. They are not.
-  "Complete" in the module tables below means *written*, never *studied*.)
+- **Actual progress: partway through Module 01** — their own answer on
+  2026-08-17, somewhere in `0006`–`0012`. A true beginner: pitch accordingly.
+  **Ask; never infer this from the files.** That inference is what produced the
+  "Modules 1 and 2 complete" claim which mispitched the course for months.
+  "Complete" in the module tables above means *written*, never *studied*.
 - Background: HTML and CSS. Not an experienced programmer.
 - Wants **deep understanding, not vibe coding**. Explain why, not just what.
 - Motivated by the end goal — tie concepts to Token concretely.

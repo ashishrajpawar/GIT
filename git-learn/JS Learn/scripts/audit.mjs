@@ -388,7 +388,11 @@ for (const file of tokenScan) {
      reason: six deliberate warnings train people to ignore the list, which is
      how the real ones hid. The alphabet check, which is an error and the
      dangerous one, still applies to these files. */
-  if (text.includes("audit-allow-token-fixtures")) continue;
+  /* Honoured in lesson files only. `CLAUDE.md` documents this marker, and a
+     plain substring test let that prose opt the whole file out — including the
+     canonical-code story it exists to protect. A marker must be claimable only
+     by the content it guards. */
+  if (file.endsWith(".html") && text.includes("audit-allow-token-fixtures")) continue;
   for (const m of text.matchAll(/\b([A-Z0-9]{4}-[A-Z0-9]{4}(?:-[A-Z0-9]{4})?)\b/g)) {
     const bad = [...m[1].replace(/-/g, "")].filter((c) => !TOKEN_ALPHABET.includes(c));
     if (!bad.length) continue;

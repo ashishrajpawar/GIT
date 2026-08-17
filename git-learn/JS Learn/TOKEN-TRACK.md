@@ -343,8 +343,9 @@ removed — it is in git history.
 Do not add a status column below — a fact with three homes has three chances
 to be wrong, and that is the failure the audit was written about.
 
-**As of 2026-08-17: Phase 0 done. Phase 1 done except 1.5. Phase 2 done.
-Phases 3 and 4 not started, deliberately. M1 and M2 queued — see Maintenance.**
+**As of 2026-08-17: Phases 0, 1 and 2 are done, and so are M1 and M2. Phases 3
+and 4 are not started, deliberately.** Phase 1 finished with 1.5, the Module 02
+retrofit — all 14 lessons, verified by execution.
 
 ## Phase 0 — Repair the map
 
@@ -392,16 +393,30 @@ the app should be built anyway, so the constraint buys a lesson rather than
 costing one. It also means the self-checks obey the existing "behaviour, not
 resemblance" rule without special-casing JSX.
 
-**Four lessons cannot do this and take `--unverifiable` with a reason**, since
-their subject *is* the rendering: `0003-styling-and-flexbox`,
-`0004-textinput-and-keyboard`, `0011-images-imagepicker`, and
-`0001-expo-setup-and-eas-build` (a build pipeline, not code). Everything else
-still runs and still fails — blocks must parse, playgrounds must run,
-executable `predict-output` answers must match.
+The decision held. **All 14 lessons carry a plain-function exercise and all 14
+verify by execution** — `SESSION.md` lists which function belongs to which
+lesson.
 
-**Do not start 1.5 before M1 has been run over Module 02** (below). Running the
-verifier there first says exactly which lessons are already broken, and that
-list is an input to the retrofit rather than a surprise during it.
+> **The prediction below was wrong, and is kept because the way it was wrong is
+> the useful part.**
+>
+> This section originally said four lessons could not have a runnable exercise
+> and would take `--unverifiable`, their subject being the rendering:
+> `0003-styling-and-flexbox`, `0004-textinput-and-keyboard`,
+> `0011-images-imagepicker` and `0001-expo-setup-and-eas-build`.
+>
+> All four were wrong. Flexbox *is* arithmetic (`layoutRow`); the keyboard
+> lesson is string normalisation (`normaliseCode`); the image picker is a
+> payload filter (`prepareAttachment`); and the Expo setup lesson has
+> `eas.json` profile inheritance in it (`resolveProfile`). **`--unverifiable`
+> was never used once in the whole phase.**
+>
+> Carry that into Phase 3: look for the plain function before deciding a lesson
+> has none. On this evidence the reflex is wrong more often than it is right.
+
+**M1 was run over Module 02 before 1.5 started**, which is why the retrofit met
+no surprises: the four premise-in-comment questions it found were fixed first,
+as their own unit.
 
 ## Phase 2 — Deepen the spine
 

@@ -441,6 +441,148 @@ new modules — also just-in-time. The student is on lesson 5 or 6 of Module 01,
 so nothing above is anywhere near them yet; it is groundwork that stops being
 cheap to lay once lessons are being studied.
 
+### Session of 2026-08-17 — the checks that reported finished work, and Module 02
+
+One theme runs through everything below, and it is worth stating before the
+detail: **a check that reports work already done stops being read, and then it
+stops catching anything.** Four separate instances of that turned up in one
+session, each hiding real defects behind noise it had generated itself.
+
+#### Three quiz questions nobody could answer
+
+`renderFillBlank` gives one text box and grades by exact string compare, so a
+multi-blank question only works when the same word fills every blank. The audit
+warned on blank *count* alone: 24 warnings, 21 of them perfectly correct.
+
+87% noise is why nobody had read the list, and three genuinely unanswerable
+questions had been sitting behind it — `a3/0003` wanted `AbortController` then
+`abort`, `a5/0003` wanted `id` then `toString`, and `b4/0001` was keyed
+`"max(128"`, a splice no student could ever type. Same family as the
+`which-breaks` inversion: the renderer says one thing, the key rewards another.
+
+The count carried no signal, so it is gone. Three exact checks replaced it —
+unbalanced answer, blanks separated only by punctuation, mixed
+property/non-property positions. **The first version of that check made the
+same mistake as the lesson it was checking**: `_{2,}` matched the leading
+underscores of `__dirname` and `__DEV__`, which is precisely the `___dirname`
+mangle it was written to find.
+
+#### M1 — the verifier was blaming correct lessons
+
+Running `verify-lesson.mjs` over the whole track for the first time produced 35
+quiz-key failures. **Five were the tool's fault, not the lessons'**, which
+matters more than the thirty that were real:
+
+- Several lessons key multi-line output as `"A, D, C, B"` — correct, and how a
+  student types it. The normaliser collapsed whitespace but not commas.
+- `b3/0001` q5 asks about `process.nextTick` versus promises versus
+  `setImmediate`. The sandbox drains a microtask queue and a timer queue and has
+  no notion of Node's phases, so it reported `3,4,2,1` where real Node gives
+  `4,3,…`. **The lesson was right.**
+- `a6/0003` q6 is a debounce. `setTimeout` was shimmed onto a drainable queue
+  and **`clearTimeout` was not**, so student code reached Node's real one
+  holding an id this queue invented and nothing was ever cancelled. The browser
+  has real timers and debounces correctly — the verifier and the browser
+  disagreeing about a correct lesson is the exact failure this tooling exists to
+  prevent.
+
+The other thirty were premise-in-comment questions: code written as a comment
+block, so nothing printed, with prose keys like *"Opens in browser (old cached
+AASA doesn't include /invite/*)"* that no one could type. 29 became
+multiple-choice; one was made executable instead, which is the better fix
+whenever the code genuinely runs.
+
+**A metric nearly started lying during this unit.** Recording Module 02 as
+"verified" would have counted seven lessons with no playground, no solution and
+no executable question identically to `01/0013` and its 29 self-checks — they
+passed every section by having nothing in them. There is now a separate
+`nothing-to-verify` status. The tool that exists to stop overstatement had come
+within one commit of introducing one.
+
+#### M2 — and the audit warning about its own output
+
+Of 24 flagged example codes, 2 were not codes (lesson ranges like `0001-0004`),
+4 were deliberate or historical, and 18 were genuinely accidental. Replacements
+keep each label's meaning rather than mangling a character: `SHOP`→`KART`
+(Flipkart is already the `issuedTo` there), `UTIL`→`CGAS` (the label is
+literally "City Gas").
+
+**The plan's rule 3 was wrong and is withdrawn.** It said an 8-character code is
+always an accident that should become 12. It is not — 84 standalone `MERC-8GH2`
+across 26 files, plus a dozen other 8-character codes with valid alphabets. That
+is an established shorthand, not a slip. Alphabet fixed, shape left alone.
+
+Then two more instances of the session's theme. The check scanned `PROGRESS.md`
+— **its own generated output** — which prints every offending code inside its
+warnings, so a code fixed everywhere a student could see it stayed reported
+forever. And it warned about `SESSION.md`, flagging `WAVE-1MN4` purely because
+the entry recording its removal named it. **Writing an honest session note made
+the audit noisier**, which is precisely backwards. Log and plan files are no
+longer scanned; `CLAUDE.md` still is, deliberately, because it carries the
+canonical example a lesson copies.
+
+With the noise gone, two remaining warnings became readable, and one was the tip
+of something wider: `quiz.js` shuffles options, so **"Both A and B" is broken
+wherever it sits**. The old check only warned when such an option was not last,
+so six of the seven in the course passed silently while being exactly as broken
+as the flagged one.
+
+#### Phase 1.5 — Module 02, at the student's explicit direction
+
+Started ahead of the student, who is partway through Module 01 and was told so
+before agreeing. Thirteen lessons retrofitted plus `0001`; all 14 verified;
+zero WhatsApp-clone framing left.
+
+**`--unverifiable` was never needed once.** The plan predicted four
+render-or-pipeline lessons would have no runnable logic, and all four
+predictions were wrong. Flexbox is arithmetic (`layoutRow`); the keyboard lesson
+is string normalisation (`normaliseCode`); the image picker is a payload filter
+(`prepareAttachment`); even the Expo setup lesson has `eas.json` profile
+inheritance in it (`resolveProfile`). On this evidence the reflex to reach for
+`--unverifiable` is wrong more often than right — look for the plain function
+first.
+
+**Two product corrections came out of the reframe, not the practice pass.**
+`0010` was built on an email/password registration form, which contradicts the
+thing Token exists for — `b10/0002` already says collecting either violates data
+minimisation. `0011` was a profile-avatar picker for a product that has no faces
+in it; reframing it to a thread attachment surfaced a hazard the lesson never
+mentioned, that EXIF carries GPS, so photographing your own gate for a courier
+hands them your address through the app installed to prevent that. Both lessons
+were internally consistent and taught the wrong product. Only a reframe finds
+that class of error.
+
+The exercises accumulated an argument nobody planned: `0005` establishes that
+React watches object identity, `0007` reuses it with a visible cost, `0013`
+shows `sort()` reordering state in place. Three lessons, one underlying truth,
+arrived at independently because it kept being the real answer.
+
+#### What the wrong-cases were actually for
+
+**Five times this phase, a green self-check proved nothing.** `0003` used three
+children that all came out 100dp wide; `0008` navigated to a screen at index 0,
+where "pop back to it" and "clear the stack" agree; `0009` used a label
+identical before and after trimming; `0010` used a password long enough to
+survive it. `0013` had a real `NaN` bug in one of my own "correct" alternatives.
+
+Every one was found by a wrong-case that should have failed and did not — never
+by the self-check passing. **Choose fixture values that differ from what a wrong
+answer would produce**, and write the wrong-cases, because they are the only
+thing that tests the test.
+
+Two self-checks also crashed rather than failed (`0012`'s unguarded
+`items.length`, `0001`'s unguarded recursion), aborting every check below them.
+That is the `test-explain.mjs` defect from Unit 10 again: where a mistake can
+throw rather than return, wrap that check on its own.
+
+#### One process note
+
+CLAUDE.md warns against building lesson content through a shell. That warning
+applies to bulk *edits* too. A blanket `quality: 0.8,` replacement in `0011`
+injected real newlines into four quiz code strings, breaking the whole block,
+and successive fixes kept being mangled by escape handling until the bytes were
+edited directly.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees
