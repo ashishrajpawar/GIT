@@ -43,7 +43,15 @@ the pattern.
 | `0008-navigation` | done — `applyNavAction`, 2 playgrounds, 6 wrong-cases |
 | `0009-passing-data` | done — `toRouteParams`, 2 playgrounds, 7 wrong-cases |
 | `0010-forms-login-register` | done — `validateRegistration`, 2 playgrounds, 7 wrong-cases |
-| `0011`–`0014` | not started |
+| `0011-images-imagepicker` | done — `prepareAttachment`, 1 playground, 7 wrong-cases |
+| `0012`–`0014` | not started |
+
+**`0011` was the second product correction.** The whole lesson was a profile
+avatar picker, and Token has no profile photos — there are no faces in this
+product. The real use is an image *in a thread*, which brings a hazard the
+original never mentioned: EXIF carries GPS, so photographing your own gate for
+a courier hands them your address through the app you installed to prevent
+exactly that.
 
 **`0010` was the biggest product correction of the phase.** The lesson was
 built on an email/password form, which contradicts the thing Token exists for —
