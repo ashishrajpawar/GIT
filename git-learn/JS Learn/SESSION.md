@@ -44,7 +44,19 @@ the pattern.
 | `0009-passing-data` | done — `toRouteParams`, 2 playgrounds, 7 wrong-cases |
 | `0010-forms-login-register` | done — `validateRegistration`, 2 playgrounds, 7 wrong-cases |
 | `0011-images-imagepicker` | done — `prepareAttachment`, 1 playground, 7 wrong-cases |
-| `0012`–`0014` | not started |
+| `0012-loading-and-error-states` | done — `viewState`, 2 playgrounds, 6 wrong-cases |
+| `0013`–`0014` | not started |
+
+**A self-check that crashed instead of failing, again.** `0012`'s unguarded
+`items.length` throws, which aborted every check below it — the same defect
+`test-explain.mjs` had in Unit 10. The two robustness checks now run inside
+their own try/catch and report as failures, so the rest of the suite still
+reports. Worth watching for wherever a mistake can throw rather than return.
+
+**Filenames still say `chat`.** `0013-chat-list-screen.html` and
+`0014-message-thread-screen.html` keep their names for now; renaming them
+touches `search-index.json`, the README and prev/next nav in three lessons, so
+it is its own small unit rather than a rider on the retrofit.
 
 **`0011` was the second product correction.** The whole lesson was a profile
 avatar picker, and Token has no profile photos — there are no faces in this
