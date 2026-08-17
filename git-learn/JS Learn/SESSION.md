@@ -9,6 +9,64 @@ how far it got.
 
 ---
 
+## In progress — Unit 16: Phase 1.5, the Module 02 retrofit
+
+Started 2026-08-17 at the student's explicit direction. **Noted for the record
+that this is ahead of them** — they are partway through Module 01, so Module 02
+is 7+ lessons away, and the just-in-time rule exists because batching ahead is
+what produced 95 unverified lessons. They were told and said proceed; that is
+their call to make.
+
+Shape per `TOKEN-TRACK.md` § "1.5 in detail":
+
+- Both jobs in one pass per lesson — practice pattern **and** the
+  WhatsApp→Token reframe. Separately makes the diff unreviewable.
+- One or two lessons per commit. Never all 14.
+- Exercises put their logic in a **plain function the component calls**, and the
+  self-check tests that function. `verify-lesson.mjs` cannot run React Native.
+- `0001`, `0003`, `0004`, `0011` are render-or-build-pipeline lessons and take
+  `--unverifiable` with a reason.
+
+Order: `0002` first, not `0001` — `0001` is the Expo/EAS build pipeline and has
+the least runnable logic in the module, so it is the worst place to establish
+the pattern.
+
+| Lesson | Status |
+|---|---|
+| `0002-core-components` | done — 4 playgrounds, exercise, explain, 7 wrong-cases |
+| `0003`–`0014` | not started |
+
+### `0002` — what the pattern looks like in React Native
+
+The reframe found a better example than the one it replaced. A chat app puts a
+face on every row; **Token cannot, and the absence is the product.** The holder
+of `KART-4KN9-RT2M` is whoever redeemed it — no name, no number, no face — so
+the row shows what the *token* is for. `Image` became a category icon rather
+than an avatar, and the lesson says why.
+
+The exercise is `toRowModel(token, now)`, a plain function returning
+`{ label, code, lastUsed, badge }`. This is the settled 1.5 approach working as
+intended: no JSX, no React Native, fully executable here, and the split is
+honest rather than contrived — deciding *what* to show genuinely is not the
+same job as describing *how* it looks.
+
+**The lesson now turns on one character.** `{token.unread && …}` is correct on
+every row that has unread messages and renders a bare `0` on the rows that do
+not, which React Native throws on: *"Text strings must be rendered within a
+&lt;Text&gt; component"*. It is the state least likely to be in anyone's test
+data, because you were testing badges. So `badge` must be **null**, never `0`
+and never `false`, and one self-check tests exactly that. Two of the seven
+wrong-cases are the two ways of getting it wrong.
+
+**Caught myself introducing an invalid token code** — `AUTO-9KM3-BF6P`, with an
+excluded `O`, written an hour after finishing M2. The audit caught it
+immediately. CLAUDE.md's warning to run the alphabet check "including on codes
+you write yourself" is not theoretical.
+
+Also worth knowing for the next twelve: `--wrong` mistakes take **`impl`**, not
+`code`. Getting it wrong yields seven identical `ReferenceError`s that look like
+a verifier bug and are not.
+
 ## Unit 15 — M2, the example codes that cannot exist — DONE
 
 Of the 24 codes the audit reported: **2 were not codes at all** (`0001-0004`,

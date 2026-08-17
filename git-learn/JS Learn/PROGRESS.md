@@ -14,12 +14,12 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1722 words |
-| Lessons with a playground | 54 / 96 |
-| Lessons with an exercise | 82 / 96 |
+| Avg teaching prose per track lesson | 1729 words |
+| Lessons with a playground | 55 / 96 |
+| Lessons with an exercise | 83 / 96 |
 | **Deepened** (all 3 spine sections) | 16 / 96 |
-| **Verified** (code executed) | 20 / 96 |
-| Ran clean but had nothing to run | 7 / 96 |
+| **Verified** (code executed) | 21 / 96 |
+| Ran clean but had nothing to run | 6 / 96 |
 | Errors | 3 |
 | Warnings | 3 |
 
@@ -64,7 +64,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Module | Lessons | Avg prose | Playgrounds | Exercises | Questions | Deepened | Verified |
 |---|---|---|---|---|---|---|---|
 | 01-javascript-fundamentals | 13 | 2556 | 85 | 15 | 380 | 0/13 | 13/13 |
-| 02-react-native | 14 | 2311 | 0 | 0 | 355 | 0/14 | 7/14 |
+| 02-react-native | 14 | 2359 | 4 | 1 | 355 | 0/14 | 8/14 |
 | a10-device-security | 2 | 1908 | 2 | 2 | 50 | 1/2 | 0/2 |
 | a11-polish-publish | 5 | 1229 | 0 | 5 | 125 | 0/5 | 0/5 |
 | a2-typescript | 3 | 727 | 2 | 3 | 76 | 0/3 | 0/3 |
@@ -129,7 +129,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | 01-javascript-fundamentals/0012-error-handling.html | 2876 | 10 | 8 | 1 | 30 | — | yes |
 | 01-javascript-fundamentals/0013-capstone-token-issuer.html | 3073 | 19 | 13 | 3 | 30 | — | yes |
 | 02-react-native/0001-expo-setup-and-eas-build.html | 1713 | 13 | 0 | 0 | 25 | — | none |
-| 02-react-native/0002-core-components.html | 2212 | 9 | 0 | 0 | 30 | — | none |
+| 02-react-native/0002-core-components.html | 2883 | 10 | 4 | 1 | 30 | — | yes |
 | 02-react-native/0003-styling-and-flexbox.html | 2035 | 10 | 0 | 0 | 25 | — | none |
 | 02-react-native/0004-textinput-and-keyboard.html | 1911 | 11 | 0 | 0 | 25 | — | none |
 | 02-react-native/0005-usestate.html | 2137 | 14 | 0 | 0 | 25 | — | none |
