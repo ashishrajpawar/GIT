@@ -39,7 +39,8 @@ the pattern.
 | `0004-textinput-and-keyboard` | done — `normaliseCode`, 3 playgrounds, 7 wrong-cases |
 | `0005-usestate` | done — `applyTokenAction`, 3 playgrounds, 6 wrong-cases |
 | `0006-useeffect` | done — `subscribeToToken`, 2 playgrounds, 6 wrong-cases |
-| `0007`–`0014` | not started |
+| `0007-flatlist` | done — `mergePage`, 1 playground, 7 wrong-cases |
+| `0008`–`0014` | not started |
 
 **`0006` caught me asserting something false.** The exercise required an
 unsubscribe safe to call twice, and justified it by claiming a second call
