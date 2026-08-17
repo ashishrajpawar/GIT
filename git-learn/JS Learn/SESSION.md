@@ -9,7 +9,7 @@ how far it got.
 
 ---
 
-## In progress — Unit 16: Phase 1.5, the Module 02 retrofit
+## Unit 16 — Phase 1.5, the Module 02 retrofit — DONE
 
 Started 2026-08-17 at the student's explicit direction. **Noted for the record
 that this is ahead of them** — they are partway through Module 01, so Module 02
@@ -47,7 +47,35 @@ the pattern.
 | `0012-loading-and-error-states` | done — `viewState`, 2 playgrounds, 6 wrong-cases |
 | `0013` (token list screen) | done — `orderTokens`, 1 playground, 7 wrong-cases |
 | `0014` (message thread screen) | done — `buildThreadItems`, 1 playground, 7 wrong-cases |
-| `0001-expo-setup-and-eas-build` | not started — the last one, and the only likely `--unverifiable` |
+| `0001-expo-setup-and-eas-build` | done — `resolveProfile`, 1 playground, 6 wrong-cases |
+
+**All 14 verified by execution. Zero WhatsApp-clone framing left in the module,
+and `--unverifiable` was never needed once.**
+
+The plan predicted four render-or-pipeline lessons would have no runnable
+logic. All four were wrong. Flexbox is arithmetic (`layoutRow`), the keyboard
+lesson is string normalisation (`normaliseCode`), the image picker is a payload
+filter (`prepareAttachment`), and even the Expo setup lesson has `eas.json`
+profile inheritance in it. **Look for the plain function before reaching for
+`--unverifiable`** — on this evidence the reflex to reach for it is wrong more
+often than it is right.
+
+Two product corrections came out of the reframe rather than the practice:
+`0010` was built on an email/password form, which contradicts the thing Token
+exists for, and `0011` was a profile-avatar picker for a product that has no
+faces in it. Both are the kind of error only a reframe finds — the lessons were
+internally consistent and taught the wrong product.
+
+**Recurring finding, five times over: a green self-check proves nothing about
+what it would catch.** `0003`, `0008`, `0009` and `0010` each had a fixture
+whose value was identical before and after the bug, and `0013` had a real NaN
+bug in one of my own "correct" alternatives. Every one was found by a
+wrong-case that should have failed and did not. Choose fixture values that
+differ from what a wrong answer produces.
+
+**Two self-checks crashed instead of failing** (`0012`, `0001`), aborting every
+check below them — the `test-explain.mjs` defect from Unit 10 again. Where a
+mistake can throw rather than return, wrap that check on its own.
 
 **A self-check that crashed instead of failing, again.** `0012`'s unguarded
 `items.length` throws, which aborted every check below it — the same defect
