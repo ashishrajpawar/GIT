@@ -113,7 +113,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 - token: "DELI-2XN5-QW8R" uses characters excluded from the alphabet (2 file(s))
 - token: "BOLT-3KP9" uses characters excluded from the alphabet (3 file(s))
 - token: "WAVE-1MN4" uses characters excluded from the alphabet (3 file(s))
-- token: "MERC-8GH2-KP4O" uses characters excluded from the alphabet (3 file(s))
+- token: "MERC-8GH2-KP4O" uses characters excluded from the alphabet (4 file(s))
 - token: "FOOD-3KP9" uses characters excluded from the alphabet (2 file(s))
 - token: "XPRT-4KL9" uses characters excluded from the alphabet (2 file(s))
 - token: "PRYA-4KL9" uses characters excluded from the alphabet (2 file(s))
@@ -131,8 +131,8 @@ or from `progress.js` localStorage, and is never inferred from the files.
 - token: "MERC-8GH2-LP4X" uses characters excluded from the alphabet (4 file(s))
 - token: "0001-0004" uses characters excluded from the alphabet (3 file(s))
 - token: "0005-0012" uses characters excluded from the alphabet (2 file(s))
-- token: "BANK-4FJ1" uses characters excluded from the alphabet (2 file(s))
-- token: "SHOP-9KL3" uses characters excluded from the alphabet (2 file(s))
+- token: "BANK-4FJ1" uses characters excluded from the alphabet (3 file(s))
+- token: "SHOP-9KL3" uses characters excluded from the alphabet (3 file(s))
 
 ## Per-lesson detail
 

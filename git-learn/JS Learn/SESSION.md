@@ -589,20 +589,33 @@ What remains in Phase 1 (`TOKEN-TRACK.md` § work plan):
 
 **Phase 1 is done except 1.5, and Phase 2 is complete.**
 
-**Recommended next: 1.5, when the student actually reaches Module 02.** It is
-a bigger job than 1.1 was per lesson, because Module 02 needs the practice
-retrofit *and* the Token reframe (the WhatsApp clone, Priya, read ticks) in one
-pass. The Firebase half is already done.
+### Agreed 2026-08-17: M1, then M2, then 1.5
 
-**Decide this before writing any of it:** `verify-lesson.mjs` cannot run React
-Native, so either the self-checks target plain functions the screens call, or
-Module 02's exercises are recorded `unverifiable` with a reason. That decision
-comes first, not after the lessons are written.
+The student is partway through Module 01 (their own answer — not inferred) and
+asked for all three planned rather than pausing. The work is specified in
+`TOKEN-TRACK.md` § Maintenance and § "1.5 in detail"; only the ordering and
+its reasoning are here.
 
-The other candidate is **Phase 3** — the ten new modules (C0–C9) — which is
-also explicitly just-in-time and should not be started ahead of the student.
-If neither is due, the honest answer is that the course does not need more
-written material right now; it needs the student to reach lesson 7.
+1. **M1 — verify what has never been executed.** First, because it is the only
+   one that *finds* work rather than assuming it. Every time the verifier has
+   been pointed somewhere new it has found real defects, most recently
+   `a8/0001` q23 in `7c86660`. Start with Module 02, whose result is a required
+   input to 1.5.
+2. **M2 — the invalid example codes.** Independent of both, and safe to slot in
+   whenever. Per-code reading, never a bulk rewrite — some are deliberate
+   negative fixtures.
+3. **1.5 — the Module 02 retrofit.** Last, and still just-in-time: it is a big
+   job and the student is 7+ lessons short of needing it. Planning it now is
+   fine; writing 14 lessons they will not open for weeks is the batching mistake
+   that produced 95 unverified lessons in the first place.
+
+**The 1.5 blocker is now decided** and written into `TOKEN-TRACK.md`: exercises
+put their logic in a plain function the component calls, and the self-check
+tests that function. Four render-only lessons take `--unverifiable`. This
+removes the "decide before writing any of it" gate that stood here.
+
+**Phase 3** — the ten new modules (C0–C9) — is explicitly just-in-time and
+stays unstarted. It is far further from the student than 1.5 is.
 
 **When the student reaches the capstone**, they need Node 19+ on the machine
 (`node -v`) — `crypto.getRandomValues` as a global is the only environment

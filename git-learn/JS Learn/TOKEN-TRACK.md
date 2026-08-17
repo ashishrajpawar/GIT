@@ -343,8 +343,8 @@ removed — it is in git history.
 Do not add a status column below — a fact with three homes has three chances
 to be wrong, and that is the failure the audit was written about.
 
-**As of 2026-08-16: Phase 0 done. Phase 1 done except 1.5. Phase 2 done.
-Phases 3 and 4 not started, deliberately.**
+**As of 2026-08-17: Phase 0 done. Phase 1 done except 1.5. Phase 2 done.
+Phases 3 and 4 not started, deliberately. M1 and M2 queued — see Maintenance.**
 
 ## Phase 0 — Repair the map
 
@@ -366,6 +366,43 @@ Phases 3 and 4 not started, deliberately.**
 | 1.4 | Open each lesson with ~5 questions from the previous two lessons |
 | 1.5 | The same retrofit for Module 02, just-in-time |
 
+### 1.5 in detail — and the decision that comes before it
+
+Module 02 is the only module needing **two** jobs in one pass: the practice
+pattern (playgrounds, a broken-on-purpose one, exercise, explain prompt,
+self-check) *and* the WhatsApp-clone reframe — Priya, read ticks, chat threads
+— into Token. The Firebase half is already done. Doing the two jobs in
+separate passes makes the diff unreviewable; doing all 14 lessons in one pass
+breaks the commit-per-unit rule. **One or two lessons per commit, both jobs
+together.**
+
+**The decision, settled here so it is not re-litigated per lesson:
+`verify-lesson.mjs` cannot run React Native, so every Module 02 exercise puts
+its logic in a plain function that the component calls, and the self-check
+tests that function.** `groupMessagesByDay(messages)`, `validateLabel(s)`,
+`buildSectionData(tokens)` — the screen imports it and renders the result.
+
+Rejected: recording all 14 as `unverifiable`. That is one line of work and
+zero checks, and it would make the largest un-retrofitted module the least
+verified part of the course — the exact shape of the problem the audit exists
+to catch.
+
+The choice is not only about tooling. Separating logic from rendering is how
+the app should be built anyway, so the constraint buys a lesson rather than
+costing one. It also means the self-checks obey the existing "behaviour, not
+resemblance" rule without special-casing JSX.
+
+**Four lessons cannot do this and take `--unverifiable` with a reason**, since
+their subject *is* the rendering: `0003-styling-and-flexbox`,
+`0004-textinput-and-keyboard`, `0011-images-imagepicker`, and
+`0001-expo-setup-and-eas-build` (a build pipeline, not code). Everything else
+still runs and still fails — blocks must parse, playgrounds must run,
+executable `predict-output` answers must match.
+
+**Do not start 1.5 before M1 has been run over Module 02** (below). Running the
+verifier there first says exactly which lessons are already broken, and that
+list is an input to the retrofit rather than a surprise during it.
+
 ## Phase 2 — Deepen the spine
 
 Each spine lesson gains three sections — **Why this way (and what was
@@ -384,6 +421,67 @@ rewrites (see the table above), so deepening them is work that gets discarded.
 The ten C-modules, each written **just-in-time** at the point in the sequence
 above where the student reaches it. Never batched ahead — writing 36 lessons
 now would repeat exactly the mistake that produced 95 unverified ones.
+
+## Maintenance — M1 and M2
+
+Not phase work: neither writes a lesson, and neither is gated on where the
+student has reached. Added 2026-08-17, after `7c86660` fixed three fill-blank
+questions nobody could answer and found a fourth defect purely by re-running
+the verifier over the files it had touched. That is the argument for M1.
+
+### M1 — Verify the lessons that have never been executed
+
+The verifier covers a small fraction of the course; `PROGRESS.md` has the
+count. Everywhere it has been pointed it has found real defects — an initial
+4.3% wrong-key rate, about a dozen premise-in-comment questions across Phase 2,
+and `a8/0001` q23 verifying as `""` against a key of `"dist"`. There is no
+reason to think the unrun lessons are cleaner than the run ones; they are
+simply unmeasured.
+
+Work, per lesson: run `verify-lesson.mjs`, fix what it reports, re-run. Track B
+and React Native lessons need `--unverifiable "<reason>"` decided individually
+— the reason is stored, so a wrong one is worse than none.
+
+Three things make this cheaper than it looks:
+
+- **Most lessons will fail on `no self-check found in pg-exercise` alone.**
+  That is the un-retrofitted state, not a defect, and it is Phase 1.5/3 work.
+  Record those as `unverifiable` for the solution and keep the other three
+  sections, which still run.
+- **Order by risk, not by module number.** The Phase 2 spine is already
+  verified. Start with lessons carrying executable `predict-output` questions,
+  since those are where wrong keys hide.
+- **Batch the runs, commit the fixes per lesson.** Running the verifier is
+  read-only until something is edited.
+
+Expected output: a real Verified count in `PROGRESS.md`, and a list of wrong
+keys to fix. Do **not** hand-edit `scripts/verification-log.json`.
+
+### M2 — The example token codes that cannot exist
+
+The audit reports example codes using the five excluded characters
+(`0 O 1 I L`); `PROGRESS.md` has the current list. **This is not a bulk
+rewrite, and a script must not do it.** Some are accidental. Others —
+`TEST-1234`, `NOPE-0000`, `IJKL-3333`, `MERC-8GH2-KP4O` — are deliberate
+negative fixtures whose whole teaching point is being invalid, and
+`0012-error-handling` has one with a paragraph underneath explaining why.
+Rewriting those deletes the lesson.
+
+Method, per code: read it in context and decide which of three it is.
+
+1. **Accidental** — a code used as an ordinary example. Rewrite to a valid one,
+   keeping the 12-character `XXXX-XXXX-XXXX` shape and the label's meaning
+   (`SHOP-`, `DELI-` are doing work; keep them).
+2. **Deliberate negative fixture** — invalidity is the point. Leave it, and add
+   a one-line comment saying so if there is not already one, so the next sweep
+   does not re-litigate it.
+3. **Wrong shape as well as wrong alphabet** — 8 characters instead of 12, as
+   `BANK-4FJ1` and `SHOP-9KL3` were. These are always accidental; a fixture
+   teaching a shape should teach the real one.
+
+The alphabet itself is already guarded as an audit **error**, so this cleanup
+cannot regress into the dangerous case — a wrong alphabet in a lesson that
+generates codes.
 
 ## Phase 4 — The operating track
 
