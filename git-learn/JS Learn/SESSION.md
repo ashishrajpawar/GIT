@@ -41,14 +41,18 @@ the pattern.
 | `0006-useeffect` | done — `subscribeToToken`, 2 playgrounds, 6 wrong-cases |
 | `0007-flatlist` | done — `mergePage`, 1 playground, 7 wrong-cases |
 | `0008-navigation` | done — `applyNavAction`, 2 playgrounds, 6 wrong-cases |
-| `0009`–`0014` | not started |
+| `0009-passing-data` | done — `toRouteParams`, 2 playgrounds, 7 wrong-cases |
+| `0010`–`0014` | not started |
 
-**Two self-checks have now passed a wrong answer by coincidence** — `0003`'s
+**Three self-checks have now passed a wrong answer by coincidence** — `0003`'s
 ordering check used three children that all came out 100dp wide, and `0008`'s
 navigate check popped back to a screen at index 0, where "pop back to it" and
-"clear the stack" give the same array. Both were found by a wrong-case that
-should have failed and did not. **Choose fixture values that differ**; the
-wrong-cases are what expose it, which is the argument for writing them at all.
+"clear the stack" give the same array. `0009`'s mutation check used a label
+identical before and after trimming, so a function that normalised it back onto
+the caller's token left no trace. All three were found by a wrong-case that
+should have failed and did not. **Choose fixture values that differ from what a
+wrong answer would produce**; the wrong-cases are what expose it, which is the
+argument for writing them at all.
 
 **`0006` caught me asserting something false.** The exercise required an
 unsubscribe safe to call twice, and justified it by claiming a second call
