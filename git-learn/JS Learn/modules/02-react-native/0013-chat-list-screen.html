@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RN Lesson 13: Build the Chat List Screen — JS Learn</title>
+  <title>RN Lesson 13: Build the Token List Screen — JS Learn</title>
   <link rel="stylesheet" href="../../assets/styles.css" />
 </head>
 <body>
@@ -15,12 +15,12 @@
       <span class="sep">›</span>
       <a href="./README.html">Module 2: React Native</a>
       <span class="sep">›</span>
-      <span class="current">Lesson 13: Build the Chat List Screen</span>
+      <span class="current">Lesson 13: Build the Token List Screen</span>
     </nav>
 
     <!-- Header -->
     <span class="badge">React Native · Lesson 13</span>
-    <h1 style="margin-top:0.5rem;">Build the Chat List Screen</h1>
+    <h1 style="margin-top:0.5rem;">Build the Token List Screen</h1>
     <div class="lesson-meta">
       <span>Capstone · Combines lessons 2–12</span>
       <span>~50 min</span>
@@ -28,8 +28,8 @@
     </div>
 
     <div class="callout">
-      <div class="callout-title">Why this matters for your WhatsApp clone</div>
-      <p>The chat list is the first screen users see after logging in. It's the heart of WhatsApp — a scrollable list of every conversation, sorted by most recent, with unread counts, contact names, message previews, and a search bar. This capstone lesson combines everything you've learned in Module 2: FlatList, navigation, useState, useEffect, loading skeletons, error handling, pull-to-refresh, and search filtering. The result is a production-quality screen you'll wire directly to the Token API in A3.</p>
+      <div class="callout-title">Why this matters for Token</div>
+      <p>The token list is the first screen users see after logging in, and it is the whole product in one view: every token they have issued, what it is for, whether it still works, and whether anyone has used it. This capstone combines everything in Module 2 — FlatList, navigation, useState, useEffect, loading skeletons, error handling, pull-to-refresh and search. The result is the screen you will wire directly to the Token API in A3.</p>
     </div>
 
     <hr>
@@ -44,14 +44,14 @@
         <tr><th>Feature</th><th>Lesson it came from</th></tr>
       </thead>
       <tbody>
-        <tr><td>Show a list of chat rows</td><td>Lesson 7 — FlatList</td></tr>
+        <tr><td>Show a list of token rows</td><td>Lesson 7 — FlatList</td></tr>
         <tr><td>Skeleton while loading, error screen, empty state</td><td>Lesson 12 — Loading &amp; Error States</td></tr>
         <tr><td>Search bar that filters the list as you type</td><td>Lesson 5 — useState (derived values)</td></tr>
         <tr><td>Pull-to-refresh</td><td>Lesson 12 — Loading &amp; Error States</td></tr>
-        <tr><td>Tap a row → open message thread with chatId + chatName</td><td>Lesson 9 — Passing Data Between Screens</td></tr>
-        <tr><td>Unread count badge, green timestamp</td><td>Lesson 7 — FlatList</td></tr>
-        <tr><td>Custom green header (no React Navigation header)</td><td>Lesson 8 — Navigation</td></tr>
-        <tr><td>Keyboard dismisses when tapping a chat row</td><td>Lesson 4 — TextInput &amp; Keyboard</td></tr>
+        <tr><td>Tap a row → open the detail screen with tokenId + label (never the code)</td><td>Lesson 9 — Passing Data Between Screens</td></tr>
+        <tr><td>Unread count badge, highlighted timestamp</td><td>Lesson 7 — FlatList</td></tr>
+        <tr><td>Custom header (no React Navigation header)</td><td>Lesson 8 — Navigation</td></tr>
+        <tr><td>Keyboard dismisses when tapping a token row</td><td>Lesson 4 — TextInput &amp; Keyboard</td></tr>
       </tbody>
     </table>
 
@@ -60,19 +60,21 @@
     <!-- Section 2 -->
     <h2>2. Data shape</h2>
 
-    <p>This is the shape of a single chat object. In A3 this comes from an API call — for now we use local data with the same shape so the switch requires zero UI changes.</p>
+    <p>This is the shape of a single token object. In A3 this comes from an API call — for now we use local data with the same shape so the switch requires zero UI changes.</p>
 
-    <pre><code>// One chat object — matches the JSON the API will return in A3
+    <pre><code>// One token object — matches the JSON the API will return in A3
 {
-  id:          '1',              // primary key from the database
-  name:        'Priya Sharma',   // contact's display name
-  preview:     'See you then!',  // last message text
-  time:        '10:32',          // last message time, formatted string
-  unread:      2,                // unread message count (0 = no badge)
-  avatarColor: '#128C7E',        // fallback colour when no photo
-  isGroup:     false,            // group vs direct message
-  online:      true,             // show online indicator dot
-}</code></pre>
+  id:         '1',                    // primary key from the database
+  label:      'Flipkart delivery',    // what YOU called it, when you issued it
+  code:       'KART-4KN9-RT2M',       // shown on this screen, never passed as a route param
+  status:     'active',               // 'active' | 'paused' | 'revoked'
+  lastUsedAt: 1755400000000,          // ms since epoch, or null if never redeemed
+  unread:     2,                      // unread messages on this token (0 = no badge)
+  iconColor:  '#2F9E7E',              // category tint for the row icon
+}
+
+// Note what is NOT here: anything about the holder. No name, no avatar, no
+// "online" dot. The list is a list of YOUR tokens, not of people.</code></pre>
 
     <hr>
 
@@ -81,73 +83,101 @@
 
     <p>Plan state before writing JSX. This screen needs:</p>
 
-    <pre><code>const [allChats,   setAllChats]   = useState([]);    // full list from the API
+    <pre><code>const [allTokens,  setAllTokens]  = useState([]);    // full list from the API
 const [loading,    setLoading]    = useState(true);
 const [error,      setError]      = useState(null);
 const [refreshing, setRefreshing] = useState(false);
 const [query,      setQuery]      = useState('');    // search input text
 
-// Derived — never stored in state, computed inline
-const filteredChats = query.trim()
-  ? allChats.filter(c =&gt;
-      c.name.toLowerCase().includes(query.toLowerCase()) ||
-      c.preview.toLowerCase().includes(query.toLowerCase())
+// Derived — never stored in state, computed inline.
+// Label only: the code is capability material, and nobody finds a token by
+// typing a fragment of one into a search box.
+const filteredTokens = query.trim()
+  ? allTokens.filter(t =&gt;
+      t.label.toLowerCase().includes(query.toLowerCase())
     )
-  : allChats;</code></pre>
+  : allTokens;</code></pre>
 
-    <p><code>filteredChats</code> is derived from <code>allChats</code> and <code>query</code> — recomputed on every render, no extra <code>useEffect</code> needed. If <code>query</code> is empty, show everything.</p>
+    <p><code>filteredTokens</code> is derived from <code>allTokens</code> and <code>query</code> — recomputed on every render, no extra <code>useEffect</code> needed. If <code>query</code> is empty, show everything.</p>
 
     <hr>
 
     <!-- Section 4 -->
-    <h2>4. The chat row component</h2>
+    <h2>4. The token row component</h2>
 
     <p>Extract the row into its own component so the FlatList <code>renderItem</code> stays clean. Components defined outside the screen function avoid being re-created on every render.</p>
 
-    <pre><code>function ChatRow({ chat, onPress }) {
+    <pre><code>function TokenRow({ token, onPress }) {
   return (
     &lt;Pressable
       style={({ pressed }) =&gt; [styles.row, pressed &amp;&amp; styles.rowPressed]}
       onPress={onPress}
     &gt;
-      {/* Avatar with optional online dot */}
+      {/* Category icon — never a face */}
       &lt;View style={styles.avatarWrap}&gt;
-        &lt;View style={[styles.avatarCircle, { backgroundColor: chat.avatarColor }]}&gt;
-          &lt;Text style={styles.avatarLetter}&gt;{chat.name[0].toUpperCase()}&lt;/Text&gt;
+        &lt;View style={[styles.avatarCircle, { backgroundColor: token.iconColor }]}&gt;
+          &lt;Text style={styles.avatarLetter}&gt;{token.label[0].toUpperCase()}&lt;/Text&gt;
         &lt;/View&gt;
-        {chat.online &amp;&amp; &lt;View style={styles.onlineDot} /&gt;}
       &lt;/View&gt;
 
-      {/* Name + preview */}
+      {/* Label + code */}
       &lt;View style={styles.middle}&gt;
         &lt;View style={styles.topRow}&gt;
-          &lt;Text style={styles.chatName} numberOfLines={1}&gt;{chat.name}&lt;/Text&gt;
-          {chat.isGroup &amp;&amp; &lt;Text style={styles.groupTag}&gt;Group&lt;/Text&gt;}
+          &lt;Text style={styles.tokenLabel} numberOfLines={1}&gt;{token.label}&lt;/Text&gt;
+          {token.status !== 'active' &amp;&amp; (
+            &lt;Text style={styles.groupTag}&gt;
+              {token.status === 'paused' ? 'Paused' : 'Revoked'}
+            &lt;/Text&gt;
+          )}
         &lt;/View&gt;
-        &lt;Text style={styles.preview} numberOfLines={1}&gt;{chat.preview}&lt;/Text&gt;
+        &lt;Text style={styles.preview} numberOfLines={1}&gt;{token.code}&lt;/Text&gt;
       &lt;/View&gt;
 
       {/* Time + unread badge */}
       &lt;View style={styles.right}&gt;
-        &lt;Text style={[styles.time, chat.unread &gt; 0 &amp;&amp; styles.timeGreen]}&gt;
-          {chat.time}
+        &lt;Text style={[styles.time, token.unread &gt; 0 &amp;&amp; styles.timeGreen]}&gt;
+          {token.lastUsed}
         &lt;/Text&gt;
-        {chat.unread &gt; 0 &amp;&amp; (
+        {token.unread &gt; 0 &amp;&amp; (
           &lt;View style={styles.badge}&gt;
-            &lt;Text style={styles.badgeText}&gt;{chat.unread}&lt;/Text&gt;
+            &lt;Text style={styles.badgeText}&gt;{token.unread}&lt;/Text&gt;
           &lt;/View&gt;
         )}
       &lt;/View&gt;
     &lt;/Pressable&gt;
   );
-}</code></pre>
+}
+
+{/* The status word next to the label is not decoration. A coloured dot alone
+    cannot be read by everyone — see the colour note in Lesson 3. */}</code></pre>
+
+    <hr>
+
+    <!-- Section 4b -->
+    <h2>4b. Ordering the list</h2>
+
+    <p>Six rows in the order the API happened to return them is not a screen. The list has to have an order, and the order carries meaning: a revoked token is dead and belongs at the bottom, an active one you used an hour ago belongs at the top.</p>
+
+    <h3>Try it yourself — this one is broken on purpose</h3>
+
+    <p>This sorts the list before rendering it. Watch what it does to the array it was given:</p>
+
+    <div id="pg-sort-mutates"></div>
+
+    <p><code>Array.prototype.sort</code> sorts <strong>in place</strong> and returns the same array. Called on the array held in state, it reorders that array — so React compares the new value to the old one, finds the identical object, and concludes nothing changed. The data is now in a different order and the screen is not.</p>
+
+    <div class="callout warning">
+      <div class="callout-title">The two ways this shows up</div>
+      <p>Sometimes the list simply does not re-order until something else forces a render, and you blame the sort comparator. Sometimes it re-orders <em>later</em>, when an unrelated state change re-renders the screen, and the rows appear to shuffle themselves for no reason.</p>
+      <p style="margin-bottom:0;">Copy first: <code>[...tokens].sort(…)</code>. It is one character of punctuation and it is the difference between a pure function and a bug you will chase twice.</p>
+    </div>
 
     <hr>
 
     <!-- Section 5 -->
     <h2>5. The search bar</h2>
 
-    <p>The search bar lives inside the header — same dark green background. It appears when the user taps a search icon. Use a simple <code>showSearch</code> boolean to toggle it.</p>
+    <p>The search bar lives inside the header — same header background. It appears when the user taps a search icon. Use a simple <code>showSearch</code> boolean to toggle it.</p>
 
     <pre><code>const [showSearch, setShowSearch] = useState(false);
 
@@ -157,14 +187,14 @@ const filteredChats = query.trim()
     style={styles.searchInput}
     value={query}
     onChangeText={setQuery}
-    placeholder="Search chats..."
+    placeholder="Search your tokens..."
     placeholderTextColor="#b2dfdb"
     autoFocus                         // keyboard opens automatically
     returnKeyType="search"
     onSubmitEditing={() =&gt; Keyboard.dismiss()}
   /&gt;
 ) : (
-  &lt;Text style={styles.headerTitle}&gt;WhatsApp&lt;/Text&gt;
+  &lt;Text style={styles.headerTitle}&gt;My tokens&lt;/Text&gt;
 )}
 
 &lt;Pressable
@@ -182,23 +212,23 @@ const filteredChats = query.trim()
     <!-- Section 6 -->
     <h2>6. Total unread count in the tab bar badge</h2>
 
-    <p>WhatsApp shows the total unread count as a badge on the Chats tab icon. Pass it up to the navigator using <code>navigation.setOptions</code>.</p>
+    <p>Show the total unread count as a badge on the Tokens tab icon. Pass it up to the navigator using <code>navigation.setOptions</code>.</p>
 
-    <pre><code>// Inside ChatListScreen, after allChats is loaded:
+    <pre><code>// Inside TokenListScreen, after allTokens is loaded:
 useEffect(() =&gt; {
-  const totalUnread = allChats.reduce((sum, c) =&gt; sum + c.unread, 0);
+  const totalUnread = allTokens.reduce((sum, c) =&gt; sum + c.unread, 0);
   navigation.setOptions({
     tabBarBadge: totalUnread &gt; 0 ? totalUnread : undefined,
     //                                          ↑ undefined removes the badge
   });
-}, [allChats, navigation]);</code></pre>
+}, [allTokens, navigation]);</code></pre>
 
     <hr>
 
     <!-- Section 7: Full working example -->
-    <h2>7. Full working example — production chat list screen</h2>
+    <h2>7. Full working example — the production token list screen</h2>
 
-    <p>This is the complete, production-quality chat list screen for your WhatsApp clone. It combines every technique from Module 2. Replace your entire <code>App.js</code> with this.</p>
+    <p>This is the complete, production-quality token list screen. It combines every technique from Module 2. Replace your entire <code>App.js</code> with this.</p>
 
     <pre><code>import { useState, useEffect, useRef } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
@@ -214,13 +244,12 @@ const Tab   = createBottomTabNavigator();
 
 // ── Sample data — same shape as the API's JSON ────────────────────────────────
 const SAMPLE_CHATS = [
-  { id: '1', name: 'Priya Sharma',   preview: 'Perfect, see you then!',      time: '10:32',     unread: 2, avatarColor: '#075E54', isGroup: false, online: true  },
-  { id: '2', name: 'Rahul Mehta',    preview: 'I\'ll send the file now.',     time: '09:15',     unread: 0, avatarColor: '#128C7E', isGroup: false, online: false },
-  { id: '3', name: 'Family Group',   preview: 'Mom: Dinner at 7!',            time: 'Yesterday', unread: 5, avatarColor: '#25D366', isGroup: true,  online: false },
-  { id: '4', name: 'Work Team',      preview: 'Meeting moved to 3pm.',        time: 'Yesterday', unread: 0, avatarColor: '#667781', isGroup: true,  online: false },
-  { id: '5', name: 'Ananya Reddy',   preview: 'Thanks for your help!',        time: 'Monday',    unread: 1, avatarColor: '#e91e63', isGroup: false, online: true  },
-  { id: '6', name: 'Vikram Singh',   preview: 'Did you see the game?',        time: 'Sunday',    unread: 0, avatarColor: '#9c27b0', isGroup: false, online: false },
-  { id: '7', name: 'Dev Friends',    preview: 'Arjun: PR is ready to review', time: 'Sunday',    unread: 3, avatarColor: '#ff5722', isGroup: true,  online: false },
+  { id: '1', label: 'Flipkart delivery', code: 'KART-4KN9-RT2M', status: 'active',  lastUsed: '10:32',     unread: 2, iconColor: '#2F9E7E' },
+  { id: '2', label: 'Gym membership',    code: 'GYMX-7PQ8-VN3K', status: 'active',  lastUsed: '09:15',     unread: 0, iconColor: '#12263A' },
+  { id: '3', label: 'Flat viewing',      code: 'RENT-2WX7-HJ5D', status: 'paused',  lastUsed: 'Yesterday', unread: 5, iconColor: '#C98A16' },
+  { id: '4', label: 'Car service',       code: 'CARS-9KM3-BF6P', status: 'active',  lastUsed: 'Yesterday', unread: 0, iconColor: '#33566F' },
+  { id: '5', label: 'Dentist booking',   code: 'DENT-9KRW-3TF8', status: 'revoked', lastUsed: 'Monday',    unread: 0, iconColor: '#B3392F' },
+  { id: '6', label: 'Courier pickup',    code: 'MERC-8GH2-KP4X', status: 'active',  lastUsed: 'Monday',    unread: 1, iconColor: '#2F9E7E' },
 ];
 
 // ── Skeleton ──────────────────────────────────────────────────────────────────
@@ -241,7 +270,7 @@ function SkeletonBlock({ width, height, borderRadius, style }) {
   );
 }
 
-function ChatRowSkeleton() {
+function TokenRowSkeleton() {
   return (
     &lt;View style={styles.row}&gt;
       &lt;SkeletonBlock width={52} height={52} borderRadius={26} /&gt;
@@ -253,35 +282,39 @@ function ChatRowSkeleton() {
   );
 }
 
-// ── Chat row ──────────────────────────────────────────────────────────────────
-function ChatRow({ chat, onPress }) {
+// ── Token row ─────────────────────────────────────────────────────────────────
+function TokenRow({ token, onPress }) {
   return (
     &lt;Pressable
       style={({ pressed }) =&gt; [styles.row, pressed &amp;&amp; styles.rowPressed]}
       onPress={onPress}
     &gt;
       &lt;View style={styles.avatarWrap}&gt;
-        &lt;View style={[styles.avatarCircle, { backgroundColor: chat.avatarColor }]}&gt;
-          &lt;Text style={styles.avatarLetter}&gt;{chat.name[0].toUpperCase()}&lt;/Text&gt;
+        &lt;View style={[styles.avatarCircle, { backgroundColor: token.iconColor }]}&gt;
+          &lt;Text style={styles.avatarLetter}&gt;{token.label[0].toUpperCase()}&lt;/Text&gt;
         &lt;/View&gt;
-        {chat.online &amp;&amp; &lt;View style={styles.onlineDot} /&gt;}
+        {/* no presence dot: there is no person on the other side to be online */}
       &lt;/View&gt;
 
       &lt;View style={styles.middle}&gt;
         &lt;View style={styles.topRow}&gt;
-          &lt;Text style={styles.chatName} numberOfLines={1}&gt;{chat.name}&lt;/Text&gt;
-          {chat.isGroup &amp;&amp; &lt;Text style={styles.groupTag}&gt;Group&lt;/Text&gt;}
+          &lt;Text style={styles.tokenLabel} numberOfLines={1}&gt;{token.label}&lt;/Text&gt;
+          {token.status !== 'active' &amp;&amp; (
+            &lt;Text style={styles.groupTag}&gt;
+              {token.status === 'paused' ? 'Paused' : 'Revoked'}
+            &lt;/Text&gt;
+          )}
         &lt;/View&gt;
-        &lt;Text style={styles.preview} numberOfLines={1}&gt;{chat.preview}&lt;/Text&gt;
+        &lt;Text style={styles.preview} numberOfLines={1}&gt;{token.code}&lt;/Text&gt;
       &lt;/View&gt;
 
       &lt;View style={styles.right}&gt;
-        &lt;Text style={[styles.time, chat.unread &gt; 0 &amp;&amp; styles.timeGreen]}&gt;
-          {chat.time}
+        &lt;Text style={[styles.time, token.unread &gt; 0 &amp;&amp; styles.timeGreen]}&gt;
+          {token.lastUsed}
         &lt;/Text&gt;
-        {chat.unread &gt; 0 &amp;&amp; (
+        {token.unread &gt; 0 &amp;&amp; (
           &lt;View style={styles.badge}&gt;
-            &lt;Text style={styles.badgeText}&gt;{chat.unread}&lt;/Text&gt;
+            &lt;Text style={styles.badgeText}&gt;{token.unread}&lt;/Text&gt;
           &lt;/View&gt;
         )}
       &lt;/View&gt;
@@ -289,9 +322,9 @@ function ChatRow({ chat, onPress }) {
   );
 }
 
-// ── Chat List Screen ──────────────────────────────────────────────────────────
-function ChatListScreen({ navigation }) {
-  const [allChats,   setAllChats]   = useState([]);
+// ── Token List Screen ─────────────────────────────────────────────────────────
+function TokenListScreen({ navigation }) {
+  const [allTokens,   setAllTokens]   = useState([]);
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -299,20 +332,20 @@ function ChatListScreen({ navigation }) {
   const [showSearch, setShowSearch] = useState(false);
 
   // Derived — filtered list, never stored in state
-  const filteredChats = query.trim()
-    ? allChats.filter(c =&gt;
+  const filteredTokens = query.trim()
+    ? allTokens.filter(c =&gt;
         c.name.toLowerCase().includes(query.toLowerCase()) ||
         c.preview.toLowerCase().includes(query.toLowerCase())
       )
-    : allChats;
+    : allTokens;
 
   // Total unread for tab badge
   useEffect(() =&gt; {
-    const total = allChats.reduce((sum, c) =&gt; sum + c.unread, 0);
+    const total = allTokens.reduce((sum, c) =&gt; sum + c.unread, 0);
     navigation.setOptions({
       tabBarBadge: total &gt; 0 ? total : undefined,
     });
-  }, [allChats, navigation]);
+  }, [allTokens, navigation]);
 
   // Initial load
   async function loadChats() {
@@ -320,13 +353,13 @@ function ChatListScreen({ navigation }) {
     setError(null);
     try {
       // TODO A3: replace with a call to the Token API
-      // const q = query(collection(db, 'chats'), orderBy('lastMessageAt', 'desc'));
+      // const { data } = await api.get('/tokens');
       // const snap = await getDocs(q);
-      // setAllChats(snap.docs.map(d =&gt; ({ id: d.id, ...d.data() })));
+      // setAllTokens(snap.docs.map(d =&gt; ({ id: d.id, ...d.data() })));
       await new Promise(r =&gt; setTimeout(r, 1200));
-      setAllChats(SAMPLE_CHATS);
+      setAllTokens(SAMPLE_CHATS);
     } catch {
-      setError('Could not load chats. Check your connection.');
+      setError('Could not load your tokens. Check your connection.');
     } finally {
       setLoading(false);
     }
@@ -337,7 +370,7 @@ function ChatListScreen({ navigation }) {
     setRefreshing(true);
     try {
       await new Promise(r =&gt; setTimeout(r, 900));
-      setAllChats(SAMPLE_CHATS);
+      setAllTokens(SAMPLE_CHATS);
     } catch {
       // Non-fatal — list stays, show nothing (toast could go here)
     } finally {
@@ -352,9 +385,9 @@ function ChatListScreen({ navigation }) {
     return (
       &lt;View style={styles.screen}&gt;
         &lt;View style={styles.header}&gt;
-          &lt;Text style={styles.headerTitle}&gt;WhatsApp&lt;/Text&gt;
+          &lt;Text style={styles.headerTitle}&gt;My tokens&lt;/Text&gt;
         &lt;/View&gt;
-        {[1,2,3,4,5,6].map(i =&gt; &lt;ChatRowSkeleton key={i} /&gt;)}
+        {[1,2,3,4,5,6].map(i =&gt; &lt;TokenRowSkeleton key={i} /&gt;)}
       &lt;/View&gt;
     );
   }
@@ -364,7 +397,7 @@ function ChatListScreen({ navigation }) {
     return (
       &lt;View style={styles.screen}&gt;
         &lt;View style={styles.header}&gt;
-          &lt;Text style={styles.headerTitle}&gt;WhatsApp&lt;/Text&gt;
+          &lt;Text style={styles.headerTitle}&gt;My tokens&lt;/Text&gt;
         &lt;/View&gt;
         &lt;View style={styles.centre}&gt;
           &lt;Text style={styles.errorIcon}&gt;⚠️&lt;/Text&gt;
@@ -389,14 +422,14 @@ function ChatListScreen({ navigation }) {
             style={styles.searchInput}
             value={query}
             onChangeText={setQuery}
-            placeholder="Search chats..."
+            placeholder="Search your tokens..."
             placeholderTextColor="#b2dfdb"
             autoFocus
             returnKeyType="search"
             onSubmitEditing={() =&gt; Keyboard.dismiss()}
           /&gt;
         ) : (
-          &lt;Text style={styles.headerTitle}&gt;WhatsApp&lt;/Text&gt;
+          &lt;Text style={styles.headerTitle}&gt;My tokens&lt;/Text&gt;
         )}
         &lt;Pressable
           style={styles.searchIconBtn}
@@ -413,16 +446,16 @@ function ChatListScreen({ navigation }) {
       {showSearch &amp;&amp; query.trim() ? (
         &lt;View style={styles.resultBar}&gt;
           &lt;Text style={styles.resultText}&gt;
-            {filteredChats.length === 0
-              ? 'No chats match'
-              : `${filteredChats.length} result${filteredChats.length !== 1 ? 's' : ''}`}
+            {filteredTokens.length === 0
+              ? 'No tokens match'
+              : `${filteredTokens.length} result${filteredTokens.length !== 1 ? 's' : ''}`}
           &lt;/Text&gt;
         &lt;/View&gt;
       ) : null}
 
       {/* List */}
       &lt;FlatList
-        data={filteredChats}
+        data={filteredTokens}
         keyExtractor={item =&gt; item.id}
         refreshing={refreshing}
         onRefresh={onRefresh}
@@ -438,10 +471,10 @@ function ChatListScreen({ navigation }) {
                 &lt;Text style={styles.emptySub}&gt;Try a different name or message.&lt;/Text&gt;
               &lt;/&gt;
             ) : (
-              // Empty because there are genuinely no chats
+              // Empty because there are genuinely no tokens
               &lt;&gt;
                 &lt;Text style={styles.emptyIcon}&gt;💬&lt;/Text&gt;
-                &lt;Text style={styles.emptyTitle}&gt;No chats yet&lt;/Text&gt;
+                &lt;Text style={styles.emptyTitle}&gt;No tokens yet&lt;/Text&gt;
                 &lt;Text style={styles.emptySub}&gt;
                   Tap the pencil icon to start your first conversation.
                 &lt;/Text&gt;
@@ -450,13 +483,13 @@ function ChatListScreen({ navigation }) {
           &lt;/View&gt;
         }
         renderItem={({ item }) =&gt; (
-          &lt;ChatRow
-            chat={item}
+          &lt;TokenRow
+            token={item}
             onPress={() =&gt; {
               Keyboard.dismiss();
-              navigation.navigate('MessageThread', {
-                chatId:   item.id,
-                chatName: item.name,
+              navigation.navigate('TokenDetail', {
+                tokenId:    item.id,
+                tokenLabel: item.label,
                 isGroup:  item.isGroup,
               });
             }}
@@ -469,8 +502,8 @@ function ChatListScreen({ navigation }) {
 }
 
 // ── Placeholder screens ───────────────────────────────────────────────────────
-function MessageThreadScreen({ route, navigation }) {
-  const { chatId, chatName, isGroup = false } = route.params ?? {};
+function TokenDetailScreen({ route, navigation }) {
+  const { tokenId, tokenLabel } = route.params ?? {};
   useEffect(() =&gt; { navigation.setOptions({ headerShown: false }); }, []);
   return (
     &lt;View style={styles.screen}&gt;
@@ -479,12 +512,12 @@ function MessageThreadScreen({ route, navigation }) {
           &lt;Text style={styles.backArrow}&gt;←&lt;/Text&gt;
         &lt;/Pressable&gt;
         &lt;View&gt;
-          &lt;Text style={styles.headerTitle}&gt;{chatName}&lt;/Text&gt;
+          &lt;Text style={styles.headerTitle}&gt;{tokenLabel}&lt;/Text&gt;
           &lt;Text style={styles.headerSubSmall}&gt;{isGroup ? 'Group' : 'online'}&lt;/Text&gt;
         &lt;/View&gt;
       &lt;/View&gt;
       &lt;View style={styles.centre}&gt;
-        &lt;Text style={{ fontSize: 16, color: '#667781' }}&gt;Messages for chat {chatId}&lt;/Text&gt;
+        &lt;Text style={{ fontSize: 16, color: '#667781' }}&gt;Detail for token {tokenId}&lt;/Text&gt;
         &lt;Text style={{ fontSize: 13, color: '#aaa', marginTop: 6 }}&gt;Full thread coming in Lesson 14&lt;/Text&gt;
       &lt;/View&gt;
     &lt;/View&gt;
@@ -496,11 +529,11 @@ function StatusScreen()   { return &lt;View style={[styles.screen, styles.centre
 function SettingsScreen() { return &lt;View style={[styles.screen, styles.centre]}&gt;&lt;Text style={styles.tabLabel}&gt;⚙ Settings&lt;/Text&gt;&lt;/View&gt;; }
 
 // ── Navigators ────────────────────────────────────────────────────────────────
-function ChatsStack() {
+function TokensStack() {
   return (
     &lt;Stack.Navigator screenOptions={{ headerShown: false }}&gt;
-      &lt;Stack.Screen name="ChatList"      component={ChatListScreen} /&gt;
-      &lt;Stack.Screen name="MessageThread" component={MessageThreadScreen} /&gt;
+      &lt;Stack.Screen name="TokenList"   component={TokenListScreen} /&gt;
+      &lt;Stack.Screen name="TokenDetail" component={TokenDetailScreen} /&gt;
     &lt;/Stack.Navigator&gt;
   );
 }
@@ -517,8 +550,8 @@ export default function App() {
         }}
       &gt;
         &lt;Tab.Screen
-          name="Chats"
-          component={ChatsStack}
+          name="Tokens"
+          component={TokensStack}
           options={{ tabBarIcon: ({ color }) =&gt; &lt;Text style={{ color, fontSize: 22 }}&gt;💬&lt;/Text&gt; }}
         /&gt;
         &lt;Tab.Screen
@@ -567,7 +600,7 @@ const styles = StyleSheet.create({
   onlineDot:     { position: 'absolute', bottom: 1, right: 1, width: 13, height: 13, borderRadius: 7, backgroundColor: '#25D366', borderWidth: 2, borderColor: '#fff' },
   middle:        { flex: 1, marginLeft: 12, marginRight: 8 },
   topRow:        { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  chatName:      { flex: 1, fontSize: 16, fontWeight: '600', color: '#111' },
+  tokenLabel:    { flex: 1, fontSize: 16, fontWeight: '600', color: '#111' },
   groupTag:      { fontSize: 11, color: '#667781', backgroundColor: '#f0f2f5', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4 },
   preview:       { fontSize: 14, color: '#667781', marginTop: 2 },
   right:         { alignItems: 'flex-end' },
@@ -591,7 +624,7 @@ const styles = StyleSheet.create({
   tabLabel:      { fontSize: 28 },
 });</code></pre>
 
-    <p>Run this on your phone. You'll see 1.2 seconds of skeleton rows, then the full chat list with coloured avatars, online dots, unread badges, and a green tab badge showing the total unread count. Tap the 🔍 icon — the header switches to a search bar. Type "priya" — the list filters live. Tap ✕ — the search clears. Tap any row — it navigates to the thread screen with the correct name. Pull down to refresh.</p>
+    <p>Run this on your phone. You'll see 1.2 seconds of skeleton rows, then the full token list with coloured category icons and status words, unread badges, and a green tab badge showing the total unread count. Tap the 🔍 icon — the header switches to a search bar. Type "gym" — the list filters live. Tap ✕ — the search clears. Tap any row — it navigates to the thread screen with the correct name. Pull down to refresh.</p>
 
     <div class="callout success">
       <div class="callout-title">The three lines that change in Module 3</div>
@@ -599,6 +632,22 @@ const styles = StyleSheet.create({
     </div>
 
     <hr>
+
+
+    <hr>
+
+    <!-- Exercise -->
+    <h2>Now build it yourself</h2>
+
+    <p>The screen is React Native; the ordering is not. This is the last plain function of the module, and it is the one the whole list screen is arranged around.</p>
+
+    <div id="exercise-1"></div>
+
+    <h3>Check your work</h3>
+
+    <div id="pg-exercise"></div>
+
+    <div id="explain-0013"></div>
 
     <!-- Quiz -->
     <h2>Quick check — test yourself</h2>
@@ -618,7 +667,7 @@ const styles = StyleSheet.create({
 
     <div class="ask-teacher">
       <strong>Anything unclear? Ask your teacher.</strong>
-      Common issues: (1) Tab badge doesn't appear — make sure you're calling <code>navigation.setOptions</code> from inside the <code>ChatListScreen</code> component that is registered directly in the Tab.Navigator (not from inside the Stack). The <code>navigation</code> prop in ChatListScreen belongs to the Chats tab — it can set <code>tabBarBadge</code>. (2) Search doesn't filter — confirm <code>filteredChats</code> is the variable passed to FlatList's <code>data</code> prop, not <code>allChats</code>. (3) Keyboard hides the search input — add <code>keyboardShouldPersistTaps="handled"</code> to the FlatList so tapping a row while the keyboard is open works correctly.
+      Common issues: (1) Tab badge doesn't appear — make sure you're calling <code>navigation.setOptions</code> from inside the <code>TokenListScreen</code> component that is registered directly in the Tab.Navigator (not from inside the Stack). The <code>navigation</code> prop in TokenListScreen belongs to the Tokens tab — it can set <code>tabBarBadge</code>. (2) Search doesn't filter — confirm <code>filteredTokens</code> is the variable passed to FlatList's <code>data</code> prop, not <code>allTokens</code>. (3) Keyboard hides the search input — add <code>keyboardShouldPersistTaps="handled"</code> to the FlatList so tapping a row while the keyboard is open works correctly.
     </div>
 
     <hr>
@@ -632,23 +681,166 @@ const styles = StyleSheet.create({
   </div><!-- .page-wrap -->
 
   <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script>
+    createPlayground("pg-sort-mutates", `const fromState = [
+  { id: "t1", label: "Gym membership" },
+  { id: "t2", label: "Flipkart delivery" },
+  { id: "t3", label: "Car service" },
+];
+
+function order(tokens) {
+  return tokens.sort((a, b) => a.label.localeCompare(b.label));
+}
+
+const before = fromState.map(t => t.id).join(",");
+const sorted = order(fromState);
+const after = fromState.map(t => t.id).join(",");
+
+console.log("state array before:", before);
+console.log("sorted result     :", sorted.map(t => t.id).join(","));
+console.log("state array AFTER :", after);
+console.log("");
+console.log("same array object?", sorted === fromState);
+console.log("React compares the new value to the old one and finds the very");
+console.log("same object, so it concludes nothing changed.");`);
+
+    createSolution("exercise-1", {
+      exercise: "Write <code>orderTokens(tokens)</code> — the order the token list is rendered in.\n\nEach token is <code>{ id, label, status, lastUsedAt }</code>, where <code>status</code> is <code>'active'</code>, <code>'paused'</code> or <code>'revoked'</code> and <code>lastUsedAt</code> is milliseconds since the epoch, or <code>null</code> for a token nobody has redeemed yet.\n\nReturn a <strong>new array</strong>, ordered by:\n\n1. <strong>Status group</strong> — all <code>active</code> first, then all <code>paused</code>, then all <code>revoked</code>. A revoked token is dead; it should not sit above one that still works.\n\n2. Within a group, <strong>most recently used first</strong>.\n\n3. Within a group, a token that has <strong>never been used</strong> (<code>lastUsedAt</code> is null) sorts below every token that has. It is not \"infinitely old\" and it is not \"brand new\" — it simply has no activity.\n\n4. Ties broken by <strong>label, A–Z</strong>, so two tokens used in the same millisecond always come out in the same order. A list that reshuffles between renders looks broken.\n\n5. <strong>Never mutate the array you were given</strong>, and never mutate the tokens in it.",
+      hints: [
+        "Copy before you sort: [...tokens].sort(...). Array.prototype.sort works in place, which is the bug in the playground above.",
+        "Give each status a rank — { active: 0, paused: 1, revoked: 2 } — and compare ranks first. An unknown status should sort last rather than crash; treat it as rank 3.",
+        "For rule 3, turn null into -Infinity so it loses every comparison against a real timestamp, then compare descending: (b.lastUsedAt ?? -Infinity) - (a.lastUsedAt ?? -Infinity)."
+      ],
+      solution: `const STATUS_RANK = { active: 0, paused: 1, revoked: 2 };
+
+function orderTokens(tokens) {
+  // Copy first. sort() works in place, and this array is React state.
+  return [...tokens].sort((a, b) => {
+    const rankA = STATUS_RANK[a.status] ?? 3;
+    const rankB = STATUS_RANK[b.status] ?? 3;
+    if (rankA !== rankB) return rankA - rankB;
+
+    // Never used loses to any real timestamp, whichever way round they come.
+    const usedA = a.lastUsedAt ?? -Infinity;
+    const usedB = b.lastUsedAt ?? -Infinity;
+    if (usedA !== usedB) return usedB - usedA;   // most recent first
+
+    // Deterministic tiebreak: without this the list can reshuffle between
+    // renders, which reads as a bug even though the data never changed.
+    return a.label.localeCompare(b.label);
+  });
+}`
+    });
+
+    createPlayground("pg-exercise", `// --- Write orderTokens(tokens) here, then press Run ---
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : " -- " + detail));
+}
+function ids(list) { return list.map(t => t.id).join(","); }
+function t(id, status, lastUsedAt, label) {
+  return { id: id, status: status, lastUsedAt: lastUsedAt, label: label || ("Token " + id) };
+}
+
+const NOW = 1755400000000;
+const HOUR = 3600000;
+
+try {
+  const byStatus = [
+    t("revoked1", "revoked", NOW),
+    t("active1", "active", NOW),
+    t("paused1", "paused", NOW),
+  ];
+  check("active comes before paused, and paused before revoked",
+        ids(orderTokens(byStatus)) === "active1,paused1,revoked1",
+        "got " + ids(orderTokens(byStatus)));
+
+  const byRecency = [
+    t("old", "active", NOW - 5 * HOUR),
+    t("newest", "active", NOW),
+    t("middle", "active", NOW - HOUR),
+  ];
+  check("within a group, most recently used comes first",
+        ids(orderTokens(byRecency)) === "newest,middle,old",
+        "got " + ids(orderTokens(byRecency)));
+
+  const withNever = [
+    t("never", "active", null),
+    t("used", "active", NOW - 100 * HOUR),
+  ];
+  check("a never-used token sorts below one that has been used",
+        ids(orderTokens(withNever)) === "used,never",
+        "null is not 'infinitely recent' -- got " + ids(orderTokens(withNever)));
+
+  const bothNever = [
+    t("b", "active", null, "Beta"),
+    t("a", "active", null, "Alpha"),
+  ];
+  check("two never-used tokens fall back to label order",
+        ids(orderTokens(bothNever)) === "a,b",
+        "got " + ids(orderTokens(bothNever)));
+
+  const tie = [
+    t("z", "active", NOW, "Zebra crossing"),
+    t("a", "active", NOW, "Alpha delivery"),
+  ];
+  check("an exact tie is broken by label, A-Z",
+        ids(orderTokens(tie)) === "a,z",
+        "without a tiebreak the list can reshuffle between renders -- got " + ids(orderTokens(tie)));
+
+  check("status beats recency",
+        ids(orderTokens([t("freshRevoked", "revoked", NOW), t("staleActive", "active", NOW - 900 * HOUR)]))
+          === "staleActive,freshRevoked",
+        "a revoked token must not sit above one that still works -- got " +
+        ids(orderTokens([t("freshRevoked", "revoked", NOW), t("staleActive", "active", NOW - 900 * HOUR)])));
+
+  const original = [t("b", "active", NOW - HOUR), t("a", "active", NOW)];
+  const before = ids(original);
+  const result = orderTokens(original);
+  check("the array you were given is not reordered", ids(original) === before,
+        "sort() works in place; copy before sorting -- it is now " + ids(original));
+  check("a new array is returned", result !== original,
+        "got the same array object back");
+
+  check("an empty list returns an empty array",
+        Array.isArray(orderTokens([])) && orderTokens([]).length === 0,
+        "got " + JSON.stringify(orderTokens([])));
+  check("an unknown status sorts last rather than crashing",
+        ids(orderTokens([t("weird", "archived", NOW), t("ok", "revoked", NOW)])) === "ok,weird",
+        "got " + ids(orderTokens([t("weird", "archived", NOW), t("ok", "revoked", NOW)])));
+
+  const stable = orderTokens([t("a", "active", NOW, "Same"), t("b", "active", NOW, "Same")]);
+  const stableAgain = orderTokens([t("a", "active", NOW, "Same"), t("b", "active", NOW, "Same")]);
+  check("identical input always produces identical output",
+        ids(stable) === ids(stableAgain),
+        "got " + ids(stable) + " then " + ids(stableAgain));
+} catch (err) {
+  console.log("FAIL  " + err.name + ": " + err.message);
+  console.log("      Usually this means orderTokens is missing or misspelt,");
+  console.log("      or it does not return the ordered array.");
+}`);
+  </script>
   <script>
     createQuiz("rn-lesson-0013-quiz", [
       // ── Question 1 (existing) ──────────────────────────────────────────────
       {
-        question: "The chat list has a search bar. filteredChats is computed inline from allChats and query. Why is filteredChats NOT stored in useState?",
+        question: "The token list has a search bar. filteredTokens is computed inline from allTokens and query. Why is filteredTokens NOT stored in useState?",
         options: [
           "React Native doesn't allow arrays in useState",
-          "It is derived data — it can always be computed from allChats and query, so storing it separately would create two sources of truth that could get out of sync",
+          "It is derived data — it can always be computed from allTokens and query, so storing it separately would create two sources of truth that could get out of sync",
           "It would cause an infinite re-render loop if stored in state",
           "FlatList only accepts derived values, not state variables"
         ],
         correct: 1,
-        explanation: "filteredChats is fully determined by allChats and query — given those two values you can always recompute it. Storing it in state would mean three pieces of state where only two are needed, and you'd have to remember to update all three in sync. Derived values should be computed inline (or with useMemo for expensive computations). This is the pattern from Lesson 5: never store what you can compute."
+        explanation: "filteredTokens is fully determined by allTokens and query — given those two values you can always recompute it. Storing it in state would mean three pieces of state where only two are needed, and you'd have to remember to update all three in sync. Derived values should be computed inline (or with useMemo for expensive computations). This is the pattern from Lesson 5: never store what you can compute."
       },
       // ── Question 2 (existing) ──────────────────────────────────────────────
       {
-        question: "The search bar is open and the user taps a chat row. The keyboard is still visible. Which FlatList prop ensures the onPress fires correctly instead of just dismissing the keyboard?",
+        question: "The search bar is open and the user taps a token row. The keyboard is still visible. Which FlatList prop ensures the onPress fires correctly instead of just dismissing the keyboard?",
         options: [
           "keyboardDismissMode='on-drag'",
           "keyboardShouldPersistTaps='handled' — taps on interactive elements (Pressable) fire their handlers first, then dismiss the keyboard",
@@ -660,31 +852,31 @@ const styles = StyleSheet.create({
       },
       // ── Question 3 (existing) ──────────────────────────────────────────────
       {
-        question: "You want the Chats tab icon to show a badge with the total unread count. Where do you call navigation.setOptions({ tabBarBadge: total })?",
+        question: "You want the Tokens tab icon to show a badge with the total unread count. Where do you call navigation.setOptions({ tabBarBadge: total })?",
         options: [
           "In App.js, on the Tab.Screen definition — set it as a static options prop",
-          "In a useEffect inside ChatListScreen, with allChats as a dependency — runs every time the chat list updates",
-          "In the ChatsStack navigator's screenOptions",
-          "In the MessageThreadScreen, since that's where read state changes"
+          "In a useEffect inside TokenListScreen, with allTokens as a dependency — runs every time the token list updates",
+          "In the TokensStack navigator's screenOptions",
+          "In the TokenDetailScreen, since that's where read state changes"
         ],
         correct: 1,
-        explanation: "The navigation prop available inside ChatListScreen belongs to the Chats tab — it has authority to call setOptions on that tab, including tabBarBadge. Wrapping it in useEffect with [allChats] as a dependency means the badge updates every time the chat list data changes. Setting a static options prop on Tab.Screen wouldn't be dynamic. ChatsStack's screenOptions affects the stack header, not the tab."
+        explanation: "The navigation prop available inside TokenListScreen belongs to the Tokens tab — it has authority to call setOptions on that tab, including tabBarBadge. Wrapping it in useEffect with [allTokens] as a dependency means the badge updates every time the token list data changes. Setting a static options prop on Tab.Screen wouldn't be dynamic. TokensStack's screenOptions affects the stack header, not the tab."
       },
       // ── Question 4 (existing) ──────────────────────────────────────────────
       {
-        question: "The search bar shows '0 results' when the query matches nothing. But when there are no chats at all (the array is genuinely empty), you want a different empty state message. How does the code distinguish these two cases inside ListEmptyComponent?",
+        question: "The search bar shows '0 results' when the query matches nothing. But when there are no tokens at all (the array is genuinely empty), you want a different empty state message. How does the code distinguish these two cases inside ListEmptyComponent?",
         options: [
           "They can't be distinguished — ListEmptyComponent always shows the same message",
-          "Check query.trim() inside ListEmptyComponent — if it has a value, the list is empty because search found nothing; if it's empty string, there are genuinely no chats",
-          "Check allChats.length vs filteredChats.length — if they differ, it's a search empty",
+          "Check query.trim() inside ListEmptyComponent — if it has a value, the list is empty because search found nothing; if it's empty string, there are genuinely no tokens",
+          "Check allTokens.length vs filteredTokens.length — if they differ, it's a search empty",
           "Use two separate FlatList components, one for search results and one for the full list"
         ],
         correct: 1,
-        explanation: "Inside ListEmptyComponent, query.trim() tells you why the list is empty. If query is non-empty, the user searched and found nothing — show 'No results for X'. If query is empty, the data itself is empty — show the friendly onboarding message. This is why it's important to pass filteredChats to FlatList's data prop: when query is empty, filteredChats === allChats, so both cases are handled by the same FlatList."
+        explanation: "Inside ListEmptyComponent, query.trim() tells you why the list is empty. If query is non-empty, the user searched and found nothing — show 'No results for X'. If query is empty, the data itself is empty — show the friendly onboarding message. This is why it's important to pass filteredTokens to FlatList's data prop: when query is empty, filteredTokens === allTokens, so both cases are handled by the same FlatList."
       },
       // ── Question 5 (existing) ──────────────────────────────────────────────
       {
-        question: "The ChatRow component is defined outside the ChatListScreen function. Why is this better than defining it inside?",
+        question: "The TokenRow component is defined outside the TokenListScreen function. Why is this better than defining it inside?",
         options: [
           "Components defined outside can access the parent's state directly without props",
           "Defining a component inside another component re-creates it as a new function reference on every render, causing React to unmount and remount it — defining it outside avoids this",
@@ -692,19 +884,19 @@ const styles = StyleSheet.create({
           "There is no difference — it is purely a style preference"
         ],
         correct: 1,
-        explanation: "When you define a component inside another function, React sees a new function reference every render and treats it as a completely different component type — causing it to unmount the old instance and mount a new one, losing any local state and causing unnecessary DOM operations. Defining ChatRow outside ChatListScreen means React recognises it as the same component across renders and simply updates props."
+        explanation: "When you define a component inside another function, React sees a new function reference every render and treats it as a completely different component type — causing it to unmount the old instance and mount a new one, losing any local state and causing unnecessary DOM operations. Defining TokenRow outside TokenListScreen means React recognises it as the same component across renders and simply updates props."
       },
       // ── Question 6 (predict-output) ────────────────────────────────────────
       {
         type: "predict-output",
         code: "const conversations = [\n  { id: '1', unread: 3 },\n  { id: '2', unread: 0 },\n  { id: '3', unread: 5 },\n];\nconst total = conversations.reduce((sum, c) => sum + c.unread, 0);\nconsole.log(total);",
         answer: "8",
-        explanation: "reduce iterates over the array, accumulating the sum of all unread values: 0 + 3 = 3, 3 + 0 = 3, 3 + 5 = 8. This is how the chat list calculates the total unread count for the tab bar badge."
+        explanation: "reduce iterates over the array, accumulating the sum of all unread values: 0 + 3 = 3, 3 + 0 = 3, 3 + 5 = 8. This is how the token list calculates the total unread count for the tab bar badge."
       },
       // ── Question 7 (fill-blank) ────────────────────────────────────────────
       {
         type: "fill-blank",
-        code: "const filteredChats = query.trim()\n  ? allChats.___(c =>\n      c.name.toLowerCase().includes(query.toLowerCase())\n    )\n  : allChats;",
+        code: "const filteredTokens = query.trim()\n  ? allTokens.___(c =>\n      c.name.toLowerCase().includes(query.toLowerCase())\n    )\n  : allTokens;",
         answer: "filter",
         explanation: "Array.filter() returns a new array containing only items that pass the predicate. Here it keeps conversations whose name includes the search query. This is the core of the live-search feature — recomputed on every render when query changes."
       },
@@ -735,7 +927,7 @@ const styles = StyleSheet.create({
         steps: [
           "Set loading to true and error to null",
           "Await the async data fetch",
-          "Set allChats with the fetched data",
+          "Set allTokens with the fetched data",
           "Set loading to false in the finally block",
           "FlatList re-renders with the new data"
         ],
@@ -746,9 +938,9 @@ const styles = StyleSheet.create({
       {
         type: "which-breaks",
         variants: [
-          "<FlatList data={filteredChats} keyExtractor={item => item.id} renderItem={({ item }) => <ChatRow chat={item} />} />",
-          "<FlatList data={filteredChats} renderItem={({ item }) => <ChatRow chat={item} />} />",
-          "<FlatList data={filteredChats} keyExtractor={item => item.id} renderItem={({ item }) => <ChatRow chat={item} />} refreshing={refreshing} onRefresh={onRefresh} />"
+          "<FlatList data={filteredTokens} keyExtractor={item => item.id} renderItem={({ item }) => <TokenRow token={item} />} />",
+          "<FlatList data={filteredTokens} renderItem={({ item }) => <TokenRow token={item} />} />",
+          "<FlatList data={filteredTokens} keyExtractor={item => item.id} renderItem={({ item }) => <TokenRow token={item} />} refreshing={refreshing} onRefresh={onRefresh} />"
         ],
         correct: 1,
         explanation: "Variant B is missing keyExtractor. Without it, FlatList falls back to using the array index as the key. This causes incorrect behaviour when items are reordered, filtered, or removed — React confuses which row is which and you get visual glitches, stale data, or broken animations. Always provide keyExtractor with a stable unique ID."
@@ -763,23 +955,23 @@ const styles = StyleSheet.create({
       // ── Question 13 (predict-output) ───────────────────────────────────────
       {
         type: "predict-output",
-        code: "const chat = { name: 'Token: FARM-9XK2', unread: 0 };\nconst showBadge = chat.unread > 0;\nconsole.log(showBadge);",
+        code: "const token = { label: 'Farm box', unread: 0 };\nconst showBadge = token.unread > 0;\nconsole.log(showBadge);",
         answer: "false",
-        explanation: "When unread is 0, the expression 0 > 0 evaluates to false. In the chat list UI, this means no badge is rendered for this conversation — the && short-circuits and returns false, which React does not render."
+        explanation: "When unread is 0, the expression 0 > 0 evaluates to false. In the token list UI, this means no badge is rendered for this conversation — the && short-circuits and returns false, which React does not render."
       },
       // ── Question 14 (spot-the-bug) ─────────────────────────────────────────
       {
         type: "spot-the-bug",
-        code: "function TokenConversationList({ navigation }) {\n  const [allChats, setAllChats] = useState([]);\n  const [query, setQuery] = useState('');\n  const [filteredChats, setFilteredChats] = useState([]);\n\n  useEffect(() => {\n    const result = allChats.filter(c =>\n      c.name.toLowerCase().includes(query.toLowerCase())\n    );\n    setFilteredChats(result);\n  }, [query]);\n\n  return <FlatList data={filteredChats} /* ... */ />;\n}",
+        code: "function TokenConversationList({ navigation }) {\n  const [allTokens, setAllTokens] = useState([]);\n  const [query, setQuery] = useState('');\n  const [filteredTokens, setFilteredChats] = useState([]);\n\n  useEffect(() => {\n    const result = allTokens.filter(c =>\n      c.name.toLowerCase().includes(query.toLowerCase())\n    );\n    setFilteredChats(result);\n  }, [query]);\n\n  return <FlatList data={filteredTokens} /* ... */ />;\n}",
         bugLine: 4,
         options: [
           "Line 2 — useState should be initialized with null",
-          "Line 4 — filteredChats is stored in state when it should be derived inline",
+          "Line 4 — filteredTokens is stored in state when it should be derived inline",
           "Line 7 — filter should use find instead",
-          "Line 11 — dependency array is missing allChats"
+          "Line 11 — dependency array is missing allTokens"
         ],
         correct: 1,
-        explanation: "filteredChats is derived from allChats and query — it should be computed inline, not stored in state. Storing it introduces a second source of truth that can get out of sync (notice the useEffect is also missing allChats in its dependency array). The fix: remove the filteredChats state and the useEffect, compute it as a const from allChats and query on every render."
+        explanation: "filteredTokens is derived from allTokens and query — it should be computed inline, not stored in state. Storing it introduces a second source of truth that can get out of sync (notice the useEffect is also missing allTokens in its dependency array). The fix: remove the filteredTokens state and the useEffect, compute it as a const from allTokens and query on every render."
       },
       // ── Question 15 (order-steps) ──────────────────────────────────────────
       {
@@ -787,16 +979,16 @@ const styles = StyleSheet.create({
         steps: [
           "User taps a conversation row",
           "Keyboard.dismiss() is called",
-          "navigation.navigate('MessageThread', { chatId, chatName }) fires",
-          "React Navigation pushes MessageThreadScreen onto the stack",
-          "MessageThreadScreen reads chatId and chatName from route.params"
+          "navigation.navigate('TokenDetail', { tokenId, tokenLabel }) fires",
+          "React Navigation pushes TokenDetailScreen onto the stack",
+          "TokenDetailScreen reads tokenId and tokenLabel from route.params"
         ],
         correctOrder: [0, 1, 2, 3, 4],
         explanation: "The sequence when tapping a row: (1) onPress fires, (2) the keyboard is dismissed first so it does not overlay the next screen, (3) navigate is called with params, (4) React Navigation animates the new screen in, (5) the new screen reads its params from route.params to display the correct conversation."
       },
       // ── Question 16 (multiple-choice) ──────────────────────────────────────
       {
-        question: "In the Token conversation list, each row passes onPress={() => navigation.navigate('MessageThread', { chatId: item.id, chatName: item.name })}. Why wrap it in an arrow function instead of passing navigation.navigate directly?",
+        question: "In the Token conversation list, each row passes onPress={() => navigation.navigate('TokenDetail', { tokenId: item.id, tokenLabel: item.label })}. Why wrap it in an arrow function instead of passing navigation.navigate directly?",
         options: [
           "Arrow functions are faster than direct method references",
           "Without the arrow function, navigate would be called immediately during render instead of waiting for the press event",
@@ -804,12 +996,12 @@ const styles = StyleSheet.create({
           "The arrow function prevents the component from re-rendering"
         ],
         correct: 1,
-        explanation: "onPress expects a function reference to call later. If you wrote onPress={navigation.navigate('MessageThread', {...})}, navigate would execute immediately during rendering (it's a function call, not a reference). The arrow function wraps it so it only executes when the user actually presses."
+        explanation: "onPress expects a function reference to call later. If you wrote onPress={navigation.navigate('TokenDetail', {...})}, navigate would execute immediately during rendering (it's a function call, not a reference). The arrow function wraps it so it only executes when the user actually presses."
       },
       // ── Question 17 (fill-blank) ───────────────────────────────────────────
       {
         type: "fill-blank",
-        code: "useEffect(() => {\n  const total = allChats.reduce((sum, c) => sum + c.unread, 0);\n  navigation.setOptions({\n    tabBarBadge: total > 0 ? total : ___,\n  });\n}, [allChats, navigation]);",
+        code: "useEffect(() => {\n  const total = allTokens.reduce((sum, c) => sum + c.unread, 0);\n  navigation.setOptions({\n    tabBarBadge: total > 0 ? total : ___,\n  });\n}, [allTokens, navigation]);",
         answer: "undefined",
         explanation: "Setting tabBarBadge to undefined removes the badge entirely. If you used 0 or null, the badge might still render as a visible dot or show '0'. undefined tells React Navigation 'no badge at all' — which is what you want when all conversations are read."
       },
@@ -824,9 +1016,9 @@ const styles = StyleSheet.create({
       {
         type: "which-breaks",
         variants: [
-          "navigation.navigate('MessageThread', { chatId: '1', chatName: 'Token: MERC-8GH2' })",
-          "navigation.navigate('MessageThread', '1', 'Token: MERC-8GH2')",
-          "navigation.navigate('MessageThread', { chatId: '1', chatName: 'Token: MERC-8GH2', isGroup: false })"
+          "navigation.navigate('TokenDetail', { tokenId: '1', tokenLabel: 'Courier pickup' })",
+          "navigation.navigate('TokenDetail', '1', 'Token: MERC-8GH2')",
+          "navigation.navigate('TokenDetail', { tokenId: '1', tokenLabel: 'Courier pickup', code: 'MERC-8GH2-KP4X'   // never do thisp: false })"
         ],
         correct: 1,
         explanation: "Variant B passes the params as separate arguments instead of in an object. React Navigation's navigate() expects the second argument to be a params object: navigate(screenName, { key: value }). Passing loose strings means route.params will be undefined in the destination screen."
@@ -834,7 +1026,7 @@ const styles = StyleSheet.create({
       // ── Question 20 (spot-the-bug) ─────────────────────────────────────────
       {
         type: "spot-the-bug",
-        code: "function TokenConversationList({ navigation }) {\n  const [allChats, setAllChats] = useState([]);\n  const [loading, setLoading] = useState(true);\n\n  async function loadChats() {\n    setLoading(true);\n    const response = await fetch('/api/conversations');\n    const data = await response.json();\n    setAllChats(data);\n  }\n\n  useEffect(() => { loadChats(); }, []);\n\n  if (loading) return <SkeletonList />;\n  return <FlatList data={allChats} /* ... */ />;\n}",
+        code: "function TokenConversationList({ navigation }) {\n  const [allTokens, setAllTokens] = useState([]);\n  const [loading, setLoading] = useState(true);\n\n  async function loadChats() {\n    setLoading(true);\n    const response = await fetch('/api/conversations');\n    const data = await response.json();\n    setAllTokens(data);\n  }\n\n  useEffect(() => { loadChats(); }, []);\n\n  if (loading) return <SkeletonList />;\n  return <FlatList data={allTokens} /* ... */ />;\n}",
         bugLine: 5,
         options: [
           "Line 3 — loading should default to false",
@@ -855,9 +1047,9 @@ const styles = StyleSheet.create({
       // ── Question 22 (predict-output) ───────────────────────────────────────
       {
         type: "predict-output",
-        code: "const chat = { name: 'Token: FARM-9XK2', unread: 4 };\nconst badgeStyle = [styles.badge];\nconst result = chat.unread > 0 && <Text>{chat.unread}</Text>;\nconsole.log(typeof result);",
+        code: "const token = { label: 'Farm box', unread: 4 };\nconst badgeStyle = [styles.badge];\nconst result = token.unread > 0 && <Text>{token.unread}</Text>;\nconsole.log(typeof result);",
         answer: "object",
-        explanation: "When chat.unread > 0 is true, the && expression returns the right side: a JSX element. JSX elements are JavaScript objects (React.createElement returns an object). So typeof result is 'object'. If unread were 0, the && would short-circuit and return false (typeof 'boolean')."
+        explanation: "When token.unread > 0 is true, the && expression returns the right side: a JSX element. JSX elements are JavaScript objects (React.createElement returns an object). So typeof result is 'object'. If unread were 0, the && would short-circuit and return false (typeof 'boolean')."
       },
       // ── Question 23 (order-steps) ──────────────────────────────────────────
       {
@@ -866,7 +1058,7 @@ const styles = StyleSheet.create({
           "User pulls down on the FlatList",
           "onRefresh callback fires, sets refreshing to true",
           "The refresh spinner appears at the top of the list",
-          "Async fetch completes, setAllChats updates with fresh data",
+          "Async fetch completes, setAllTokens updates with fresh data",
           "setRefreshing(false) hides the spinner"
         ],
         correctOrder: [0, 1, 2, 3, 4],
@@ -888,14 +1080,20 @@ const styles = StyleSheet.create({
       {
         type: "which-breaks",
         variants: [
-          "useEffect(() => {\n  const total = allChats.reduce((sum, c) => sum + c.unread, 0);\n  navigation.setOptions({ tabBarBadge: total || undefined });\n}, [allChats, navigation]);",
-          "useEffect(() => {\n  const total = allChats.reduce((sum, c) => sum + c.unread, 0);\n  navigation.setOptions({ tabBarBadge: total || undefined });\n}, []);",
-          "useEffect(() => {\n  const total = allChats.reduce((sum, c) => sum + c.unread, 0);\n  navigation.setOptions({ tabBarBadge: total > 0 ? total : undefined });\n}, [allChats, navigation]);"
+          "useEffect(() => {\n  const total = allTokens.reduce((sum, c) => sum + c.unread, 0);\n  navigation.setOptions({ tabBarBadge: total || undefined });\n}, [allTokens, navigation]);",
+          "useEffect(() => {\n  const total = allTokens.reduce((sum, c) => sum + c.unread, 0);\n  navigation.setOptions({ tabBarBadge: total || undefined });\n}, []);",
+          "useEffect(() => {\n  const total = allTokens.reduce((sum, c) => sum + c.unread, 0);\n  navigation.setOptions({ tabBarBadge: total > 0 ? total : undefined });\n}, [allTokens, navigation]);"
         ],
         correct: 1,
-        explanation: "Variant B has an empty dependency array [], so the effect runs only once on mount — when allChats is still an empty array. It will never recalculate the badge when new conversations load or unread counts change. The badge will always remain undefined (no badge). The dependency array must include allChats so the effect re-runs whenever the data updates."
+        explanation: "Variant B has an empty dependency array [], so the effect runs only once on mount — when allTokens is still an empty array. It will never recalculate the badge when new conversations load or unread counts change. The badge will always remain undefined (no badge). The dependency array must include allTokens so the effect re-runs whenever the data updates."
       }
     ]);
+  </script>
+  <script src="../../assets/explain.js"></script>
+  <script>
+    createExplain("explain-0013", {
+      prompt: "<code>tokens.sort(...)</code> returns a correctly ordered array, and the screen still does not re-order. Explain what React compared, what it concluded, and why the rows may then appear to shuffle themselves later for no visible reason."
+    });
   </script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>

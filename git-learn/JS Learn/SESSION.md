@@ -45,7 +45,8 @@ the pattern.
 | `0010-forms-login-register` | done — `validateRegistration`, 2 playgrounds, 7 wrong-cases |
 | `0011-images-imagepicker` | done — `prepareAttachment`, 1 playground, 7 wrong-cases |
 | `0012-loading-and-error-states` | done — `viewState`, 2 playgrounds, 6 wrong-cases |
-| `0013`–`0014` | not started |
+| `0013` (token list screen) | done — `orderTokens`, 1 playground, 7 wrong-cases |
+| `0014`, `0001` | not started |
 
 **A self-check that crashed instead of failing, again.** `0012`'s unguarded
 `items.length` throws, which aborted every check below it — the same defect
