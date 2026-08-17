@@ -189,12 +189,17 @@ function validateQuestion(q, file, i) {
     if (typeof q.correct !== "number") return err(`${at}: correct is not a number`);
     if (q.correct < 0 || q.correct >= q.options.length)
       err(`${at}: correct=${q.correct} out of range (${q.options.length} options)`);
+    /* quiz.js shuffles options at render (optionDisplayOrder), so an option
+       naming other options — "Both A and B", "all of the above" — is broken
+       wherever it sits, not merely when it is not last. The old check warned
+       only on position, so six of the seven "Both A and B" options in the
+       course passed silently while being just as broken; and it matched a bare
+       "Neither", flagging "Neither — use a WebView instead", which references
+       nothing. Name the content, not the letters. */
     q.options.forEach((o, j) => {
-      if (
-        /^(all of the above|none of the above|both a and b|neither)/i.test(String(o).trim()) &&
-        j !== q.options.length - 1
-      )
-        warn(`${at}: position-dependent option at index ${j}, not last`);
+      const text = String(o).trim();
+      if (/\b(both|either|neither)\s+a\s+and\s+b\b/i.test(text) || /\b(all|none|both|neither) of the above\b/i.test(text))
+        err(`${at}: option ${j} names other options ("${text.slice(0, 40)}") — options are shuffled at render`);
     });
   } else if (t === "which-breaks") {
     if (!Array.isArray(q.variants)) return err(`${at}: no variants array`);
@@ -351,12 +356,29 @@ if (exists(indexPath)) {
 // -------------------------------------------------- token alphabet
 
 const badTokens = new Map();
-/* PROGRESS.md is this script's own output, and it prints the offending codes
-   inside the warnings below. Scanning it means every code stays reported after
-   it has been fixed everywhere a student can see it — the warning list can
-   never reach zero, so it stops being read. That is the same way 24 blank-count
-   warnings hid three broken questions until 2026-08-17. */
-const tokenScan = [...lessonFiles, ...walk(ROOT).filter((p) => p.endsWith(".md") && !rel(p).startsWith("node_modules") && rel(p) !== "PROGRESS.md")];
+/* This check protects *teaching* material — a code a student might copy. The
+   log and plan files are neither, and every code in them is either a historical
+   reference or a description of a fix that has already landed. Scanning them
+   punished the work twice over:
+
+     - PROGRESS.md is this script's own output and prints every offending code
+       inside its warnings, so a code fixed everywhere a student could see it
+       stayed reported forever and the list could never reach zero;
+     - SESSION.md warned about WAVE-1MN4 and XPRT-4KL9 purely because the entry
+       recording their removal names them. Writing an honest session note made
+       the audit noisier, which is precisely backwards.
+
+   A list that cannot reach zero stops being read — the same way 24 blank-count
+   warnings hid three broken questions until 2026-08-17. CLAUDE.md is still
+   scanned, deliberately: it carries the canonical example a lesson copies, and
+   a wrong code there is how MERC-8GH2-LP4X reached 36 files. */
+const NARRATIVE = /^(PROGRESS|SESSION|HANDOFF|TOKEN-TRACK)\.md$|^docs\//;
+const tokenScan = [
+  ...lessonFiles,
+  ...walk(ROOT).filter(
+    (p) => p.endsWith(".md") && !rel(p).startsWith("node_modules") && !NARRATIVE.test(rel(p))
+  ),
+];
 for (const file of tokenScan) {
   const text = read(file);
   for (const m of text.matchAll(/\b([A-Z0-9]{4}-[A-Z0-9]{4}(?:-[A-Z0-9]{4})?)\b/g)) {

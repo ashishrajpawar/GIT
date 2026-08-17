@@ -21,7 +21,7 @@ with this one, this one is right — everything below is measured, not asserted.
 | **Verified** (code executed) | 20 / 96 |
 | Ran clean but had nothing to run | 7 / 96 |
 | Errors | 3 |
-| Warnings | 9 |
+| Warnings | 3 |
 
 Student-completed lessons are **not** tracked here — that comes from the student
 or from `progress.js` localStorage, and is never inferred from the files.
@@ -45,8 +45,8 @@ or from `progress.js` localStorage, and is never inferred from the files.
 |---|---|---|
 | index 0 | 135 | 9.9% |
 | index 1 | 840 | 61.4% |
-| index 2 | 353 | 25.8% |
-| index 3 | 40 | 2.9% |
+| index 2 | 352 | 25.7% |
+| index 3 | 41 | 3.0% |
 
 ## Question types
 
@@ -97,7 +97,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Tables queried but never created | participants, deletion_queue, calls |
 | Broken relative links | ok |
 | search-index.json | 96 entries, 0 dead, 0 unindexed |
-| Example tokens valid under alphabet | 6 invalid |
+| Example tokens valid under alphabet | 2 invalid |
 
 ## Errors (3)
 
@@ -105,17 +105,11 @@ or from `progress.js` localStorage, and is never inferred from the files.
 - schema: table "deletion_queue" is queried in 1 lesson(s) but never created
 - schema: table "calls" is queried in 2 lesson(s) but never created
 
-## Warnings (9)
+## Warnings (3)
 
-- modules/02-react-native/0007-flatlist.html q0: position-dependent option at index 2, not last
-- modules/a5-core-token-features/0004-access-rules-ui.html q5: position-dependent option at index 2, not last
 - link (legacy): modules/07-store-compliance-and-safety/0005-data-export-and-terms.html -> ./privacy-policy.html
-- token: "MERC-8GH2-KP4O" uses characters excluded from the alphabet (3 file(s))
-- token: "MERC-8GH2-LP4X" uses characters excluded from the alphabet (4 file(s))
-- token: "WAVE-1MN4" uses characters excluded from the alphabet (1 file(s))
-- token: "XPRT-4KL9" uses characters excluded from the alphabet (1 file(s))
-- token: "BANK-4FJ1" uses characters excluded from the alphabet (1 file(s))
-- token: "SHOP-9KL3" uses characters excluded from the alphabet (1 file(s))
+- token: "MERC-8GH2-KP4O" uses characters excluded from the alphabet (1 file(s))
+- token: "MERC-8GH2-LP4X" uses characters excluded from the alphabet (1 file(s))
 
 ## Per-lesson detail
 

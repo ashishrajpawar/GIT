@@ -57,6 +57,34 @@ carried it, and that trade-off is worth stating rather than making quietly.
 All 15 edited lessons re-verified — the replacements land inside quiz answers,
 playgrounds and self-check expectations, so a half-applied rename would fail.
 
+### Found while clearing the board: seven options that name other options
+
+With the token noise gone, two "position-dependent option" warnings were
+finally readable — and one was a false positive while the other was the visible
+tip of a wider defect.
+
+`quiz.js` shuffles options at render (`optionDisplayOrder`). **An option reading
+"Both A and B" is therefore broken wherever it sits** — by the time a student
+reads it, A and B are whichever options landed first. The old check warned only
+when such an option was *not last*, so **six of the seven in the course passed
+silently while being exactly as broken as the one that was flagged.** Same
+family as the `which-breaks` inversion: the renderer does one thing and the
+content assumes another.
+
+All seven now name their content — "Both — the missing transition validation
+and the missing ownership check" — which is also a better distractor, because it
+cannot be picked by elimination. `a5/0004` q5 additionally moved to last, and
+its key from index 2 to 3.
+
+The check is now an **error**, fires regardless of position, and no longer
+matches a bare "Neither": `02/0007` q0's "Neither — use a WebView with an HTML
+table" references nothing and was a false positive. Proved by reintroducing
+"Both A and B" into `x1/0003` and watching the audit error, then restoring.
+
+**Audit state: 3 errors, 3 warnings.** The errors are the three pre-existing
+orphan tables, which belong to the B2 rewrite. Warnings were 51 when this
+session started.
+
 ## Unit 14 — M1 across the rest of the track — DONE
 
 **Every track lesson now has a log entry — 96 of 96.** The split is in
