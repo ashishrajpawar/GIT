@@ -92,6 +92,25 @@ for (let i = 0; i < 500; i++) {
 }
 check('"All of the above" is pinned last', alwaysLast);
 
+/* The sharp edge, asserted rather than discovered again. isPositionPinned
+   matches an explicit list of openings, so an all-of-the-above written as
+   "All three" is NOT recognised and gets shuffled into the middle, where the
+   correct answer reads as nonsense. 01/0006 q27 was exactly that and survived
+   only because its explanation named a position, which stopped the question
+   shuffling at all — safe by accident, and it would have broken the moment
+   anyone tidied that explanation up.
+   The convention is therefore: do not write an option that refers to the others
+   at all — "All of the above" is caught by the audit, "All three" is caught by
+   nobody. Restructure the question instead. This test exists to keep that gap
+   visible, so fix the lesson, not this assertion. */
+const notRecognised = ["alpha", "bravo", "All three are correct"];
+let everMoved = false;
+for (let i = 0; i < 500; i++) {
+  if (optionDisplayOrder({ explanation: "plain" }, notRecognised)[2] !== 2) { everMoved = true; break; }
+}
+check('"All three…" is NOT pinned — write "All of the above" instead', everMoved,
+  "if this now passes as pinned, isPositionPinned grew and the docs should follow");
+
 const bothPinned = ["alpha", "bravo", "Both A and B"];
 let bothLast = true;
 for (let i = 0; i < 500; i++) {

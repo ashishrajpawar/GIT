@@ -583,6 +583,22 @@ summarised here rather than left in the ADR:
      are pinned last. And per the note above, `quiz.js` shuffling is exactly why
      "Both A and B" is broken wherever it sits.
 
+   **Never write an option that refers to the other options at all** — not
+   "All of the above" (the audit errors on it), and not "All three", which the
+   audit *cannot* see. Restructure so every option stands alone. `01/0006` q27
+   had "All three — a function is just a value" as its **correct** answer and
+   was safe only by accident: its explanation named a position, which stopped
+   the whole question shuffling. Tidying that explanation would have dropped an
+   all-of-the-above into the middle of the list. It is now four self-contained
+   statements.
+
+   The check stays narrow deliberately — widening it to catch "All three" gave
+   two false positives out of three hits ("All three get equal space" is about
+   flex children; "both of them" about two sessions). `test-quiz-shuffle.mjs`
+   asserts that "All three…" is *not* pinned, so the gap stays visible instead
+   of being forgotten. **This is the trap for anyone rewriting the remaining
+   position-naming explanations: read the options before you unpin a question.**
+
    `order-steps` steps are shuffled at render, so `correctOrder` may be authored
    in any order.
 

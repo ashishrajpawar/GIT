@@ -197,6 +197,18 @@ function validateQuestion(q, file, i) {
        course passed silently while being just as broken; and it matched a bare
        "Neither", flagging "Neither — use a WebView instead", which references
        nothing. Name the content, not the letters. */
+    /* This stays narrow on purpose, and the attempt to widen it is recorded so
+       nobody repeats it. "All three — a function is just a value" was the
+       CORRECT answer in 01/0006 q27 and slipped through, because the check sees
+       "of the above" and "A and B" only. Widening to "of these" / "of them" /
+       "all three" immediately produced two false positives out of three hits:
+       "All three get equal space" is about three flex children, and "both of
+       them" is about two sessions. Neither refers to an option.
+
+       "of the above" is the only phrase that cannot mean something else. The
+       rest is handled where regexes cannot reach: the instance is fixed, the
+       convention is in CLAUDE.md, and test-quiz-shuffle.mjs asserts that
+       "All three…" is NOT pinned so the sharp edge stays visible. */
     q.options.forEach((o, j) => {
       const text = String(o).trim();
       if (/\b(both|either|neither)\s+a\s+and\s+b\b/i.test(text) || /\b(all|none|both|neither) of the above\b/i.test(text))
