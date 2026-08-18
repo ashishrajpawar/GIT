@@ -14,12 +14,25 @@ how far it got.
 
 **Nothing.** Working tree clean as of 2026-08-18.
 
-**Next unit: Phase 1.5's pattern for Track A/B.** The blocker is now removed —
-see below. `a3/0004` is done and is the worked example; ~24 more look like it.
-One lesson per commit: find the plain function, excuse the un-runnable exercise
-with a per-exercise reason, add `createSolution` + self-check, write the
-`--wrong` cases, verify. **Not a batch job** — `a3/0004` alone needed seven
-wrong-cases to be worth anything.
+**Phase 1.5's pattern for Track A/B — A3 and A4 are done.** Six lessons:
+`a3/0001` `buildUrl`, `a3/0003` `retryPlan`, `a3/0004` `applyPage`,
+`a4/0001` `decideStartup`, `a4/0002` `screensFor`, `a4/0003` `planFor`.
+Verified 27 → 33. A3 and A4 are now fully verified except `a3/0002`, which is
+TypeScript and cannot be.
+
+**Reframing a lesson around its function keeps finding contradictions between
+lessons** — three so far, all where one page states a rule and a neighbour's
+code breaks it:
+
+- `a3/0002` throws `ApiError(429, retryable: true)`; `a3/0003`'s retry helper
+  tested `status < 500` and so **never retried a rate limit**, the one response
+  that says come back and when.
+- `a4/0001`'s splash screen sent a **network error to Login**, destroying a
+  valid session over a tunnel — while `a4/0003` says in prose not to.
+- `a4/0002`'s own quiz warns against leaving Login in the stack; nothing tested
+  it until `screensFor`.
+
+Next: `a5` (5 lessons) is the largest remaining logic-rich module.
 
 The answer-position work is **finished**: `render-as-authored` is **0**, so
 every question in the course now shuffles its options. Three defects surfaced

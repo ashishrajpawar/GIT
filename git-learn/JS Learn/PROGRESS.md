@@ -14,11 +14,11 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1776 words |
-| Lessons with a playground | 71 / 96 |
+| Avg teaching prose per track lesson | 1777 words |
+| Lessons with a playground | 73 / 96 |
 | Lessons with an exercise | 96 / 96 |
 | **Deepened** (all 3 spine sections) | 16 / 96 |
-| **Verified** (code executed) | 31 / 96 |
+| **Verified** (code executed) | 33 / 96 |
 | Ran clean but had nothing to run | 0 / 96 |
 | Errors | 0 |
 | Known and blocked | 3 |
@@ -79,7 +79,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a11-polish-publish | 5 | 1229 | 0 | 5 | 125 | 0/5 | 0/5 |
 | a2-typescript | 3 | 727 | 2 | 3 | 76 | 0/3 | 0/3 |
 | a3-api-consumption | 4 | 1190 | 4 | 7 | 111 | 1/4 | 3/4 |
-| a4-auth-client | 3 | 1351 | 1 | 4 | 80 | 1/3 | 1/3 |
+| a4-auth-client | 3 | 1400 | 3 | 6 | 80 | 1/3 | 3/3 |
 | a5-core-token-features | 5 | 2246 | 5 | 5 | 148 | 2/5 | 0/5 |
 | a6-chat-realtime | 3 | 1387 | 3 | 3 | 78 | 0/3 | 0/3 |
 | a7-voice-video | 5 | 980 | 5 | 5 | 138 | 0/5 | 0/5 |
@@ -178,8 +178,8 @@ so they do not hold the audit red. They are **not** resolved.
 | a3-api-consumption/0003-loading-empty-error-states.html | 1005 | 8 | 1 | 2 | 27 | — | yes |
 | a3-api-consumption/0004-pagination-infinite-scroll.html | 903 | 6 | 1 | 2 | 29 | — | yes |
 | a4-auth-client/0001-jwt-storage.html | 1033 | 6 | 1 | 2 | 25 | — | yes |
-| a4-auth-client/0002-auth-context-protected-routes.html | 2143 | 7 | 0 | 1 | 26 | yes | n/a |
-| a4-auth-client/0003-handling-401s-logout.html | 877 | 6 | 0 | 1 | 29 | — | n/a |
+| a4-auth-client/0002-auth-context-protected-routes.html | 2220 | 7 | 1 | 2 | 26 | yes | yes |
+| a4-auth-client/0003-handling-401s-logout.html | 946 | 6 | 1 | 2 | 29 | — | yes |
 | a5-core-token-features/0001-token-generation-display.html | 3241 | 14 | 1 | 1 | 30 | yes | n/a |
 | a5-core-token-features/0002-qr-generation-scanning.html | 1740 | 16 | 1 | 1 | 30 | — | n/a |
 | a5-core-token-features/0003-token-list-management.html | 1760 | 16 | 1 | 1 | 30 | — | n/a |

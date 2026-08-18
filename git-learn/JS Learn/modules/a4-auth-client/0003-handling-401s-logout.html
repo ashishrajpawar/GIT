@@ -220,9 +220,27 @@ export function AuthProvider({ children }) {
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>First, what a response should trigger</h2>
+
+    <p>The interceptor is a lot of <code>await</code> around three possible answers: let it through, refresh and try again, or give up and log out. Choosing between them needs no network at all — and choosing wrong gives you either an infinite refresh loop or a user logged out for a permission error.</p>
+
+    <div id="exercise-plan"></div>
+
+    <h3>Check your work</h3>
+
+    <div id="pg-exercise-plan"></div>
+
+    <hr>
+
+    <h2>Then the interceptor around it</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <h2>In your own words</h2>
+
+    <div id="explain-a4-0003"></div>
 
     <hr>
 
@@ -236,12 +254,95 @@ export function AuthProvider({ children }) {
   </div>
 
   <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
+    createSolution("exercise-plan", {
+      exercise: "Write <code>planFor(response)</code>. Given one API response, it returns what the client should do next — as a string, with no awaiting and no fetching.\n\n<code>response</code> is <code>{ status, isRetry, isRefreshEndpoint }</code>. <code>isRetry</code> means this request has already been retried once after a refresh. <code>isRefreshEndpoint</code> means this response came from <code>/auth/refresh</code> itself.\n\nReturn <code>'pass'</code>, <code>'refresh-then-retry'</code>, or <code>'logout'</code>.\n\nFour rules, and the order they are tested in is the answer:\n\n1. Anything that is not a 401 is <code>'pass'</code>. <strong>A 403 included</strong> — that means authenticated but not allowed, and no new access token will change it.\n\n2. A 401 <em>from the refresh endpoint</em> is <code>'logout'</code>. The server just rejected the refresh token; refreshing again is the same call.\n\n3. A 401 on a request that has already been retried is <code>'logout'</code>. The refresh appeared to work and the server still says no.\n\n4. Any other 401 is <code>'refresh-then-retry'</code>.",
+      hints: [
+        "Rule 1 first means everything after it can assume a 401, and none of the later branches has to re-check the status.",
+        "Rules 2 and 3 both end in 'logout' but they are not the same condition — writing them as one `||` is fine, writing only one of them is an infinite loop.",
+        "There is no fourth condition to test: rule 4 is whatever is left."
+      ],
+      solution: `function planFor(response) {
+  // 1. Only a 401 means "your access token is no good". A 403 is the server
+  //    saying you are who you claim and still may not do this -- a fresh token
+  //    is the same answer, so do not spend a refresh on it.
+  if (response.status !== 401) return 'pass';
+
+  // 2. The refresh endpoint itself said no. There is nothing left to refresh
+  //    WITH, and calling it again is the identical request.
+  if (response.isRefreshEndpoint) return 'logout';
+
+  // 3. We already refreshed and retried, and it is still 401. Retrying again
+  //    is where the infinite loop lives.
+  if (response.isRetry) return 'logout';
+
+  // 4. A first 401 on an ordinary request: the access token has probably just
+  //    expired, which is the case this whole lesson exists for.
+  return 'refresh-then-retry';
+}`
+    });
+
+    createPlayground("pg-exercise-plan", `// Write planFor(response) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+const plan = (status, isRetry, isRefreshEndpoint) => {
+  try { return planFor({ status, isRetry, isRefreshEndpoint }); }
+  catch (e) { return "threw " + e.message; }
+};
+
+try {
+  try {
+    check("a 200 passes through", plan(200, false, false) === "pass", "got " + plan(200, false, false));
+    check("a 404 passes through", plan(404, false, false) === "pass", "got " + plan(404, false, false));
+    // The one people get wrong: 403 is not an expired token.
+    check("a 403 passes through rather than refreshing",
+          plan(403, false, false) === "pass",
+          "got " + plan(403, false, false) + " -- a new access token cannot grant a permission you do not have");
+    check("a 500 passes through", plan(500, false, false) === "pass", "got " + plan(500, false, false));
+  } catch (e) { check("non-401s pass through", false, "threw " + e.message); }
+
+  try {
+    check("a first 401 refreshes and retries",
+          plan(401, false, false) === "refresh-then-retry", "got " + plan(401, false, false));
+  } catch (e) { check("a first 401 refreshes", false, "threw " + e.message); }
+
+  try {
+    check("a 401 from the refresh endpoint logs out",
+          plan(401, false, true) === "logout",
+          "got " + plan(401, false, true) + " -- refreshing the refresh is the same call again");
+  } catch (e) { check("a 401 from the refresh endpoint logs out", false, "threw " + e.message); }
+
+  try {
+    check("a 401 on an already-retried request logs out",
+          plan(401, true, false) === "logout",
+          "got " + plan(401, true, false) + " -- this is where the infinite refresh loop starts");
+  } catch (e) { check("a retried 401 logs out", false, "threw " + e.message); }
+
+  try {
+    // A 403 that happens to be a retry is still just a 403.
+    check("isRetry does not change what a non-401 means",
+          plan(403, true, false) === "pass", "got " + plan(403, true, false));
+  } catch (e) { check("isRetry does not change a non-401", false, "threw " + e.message); }
+} catch (e) {
+  console.log("Write planFor(response) above, then press Run.");
+}`);
+
+    createExplain("explain-a4-0003", {
+      prompt: "A 403 is deliberately treated the same as a 200 here — passed straight through. Explain why refreshing the access token cannot help a 403, and what the user would see if the client retried one anyway."
+    });
+
     createSolution("exercise-1", {
+      unverifiable: "the interceptor is TypeScript wired into a React Native client, needing a device and a running API",
       exercise: "Implement the full silent refresh flow: (1) Create the refresh interceptor with deduplication, (2) Enhance the API client to retry failed requests after refresh, (3) Connect the force-logout handler to AuthContext, (4) Handle the edge case where network is offline during refresh (don't clear tokens), (5) Test by: setting access token expiry to 10 seconds, making API calls, waiting for expiry, and verifying the app silently refreshes without the user seeing a login screen.",
       hints: [
         "The refreshPromise singleton ensures only one refresh happens even if multiple 401s arrive simultaneously.",
