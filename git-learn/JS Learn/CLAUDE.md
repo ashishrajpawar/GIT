@@ -123,7 +123,7 @@ string `audit-allow-alphabet`.
 **A lesson whose *subject* is invalid codes opts out of the example-code check
 with `audit-allow-token-fixtures`.** `02/0004` teaches the redemption field and
 `01/0012` validates codes before calling the API, so both carry deliberately
-impossible codes as the thing being rejected — `01/0012`'s `MERC-8GH2-KP4O` is
+impossible codes as the thing being rejected — `01/0012`'s `MERC-8GH2-KP4O` is <!-- audit-allow-token-here: naming the fixture is the point of the sentence -->
 the canonical example with its last character swapped for an excluded letter,
 which is precisely why it is useful. Standing warnings about those would train
 everyone to ignore the list. The bargain is deliberately narrow: **the alphabet
@@ -134,7 +134,7 @@ opt-outable.
 **One line, not one file: `audit-allow-token-here`.** A file that must keep
 being scanned, but has a single legitimate reason to name a bad code, marks that
 *line* instead. This file is the only user: the paragraph above names
-`MERC-8GH2-LP4X` while explaining why it was wrong, and the check was warning
+`MERC-8GH2-LP4X` while explaining why it was wrong, and the check was warning <!-- audit-allow-token-here: same historical value as above -->
 about the documentation of the bug it exists to prevent. A whole-file opt-out
 here would be actively dangerous — `CLAUDE.md` carries the canonical code a
 lesson copies, which is how the original spread to 36 files. **A marker must be

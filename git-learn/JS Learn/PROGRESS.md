@@ -22,7 +22,7 @@ with this one, this one is right — everything below is measured, not asserted.
 | Ran clean but had nothing to run | 0 / 96 |
 | Errors | 0 |
 | Known and blocked | 3 |
-| Warnings | 3 |
+| Warnings | 1 |
 
 Student-completed lessons are **not** tracked here — that comes from the student
 or from `progress.js` localStorage, and is never inferred from the files.
@@ -107,7 +107,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Tables queried but never created | participants, deletion_queue, calls |
 | Broken relative links | ok |
 | search-index.json | 96 entries, 0 dead, 0 unindexed |
-| Example tokens valid under alphabet | 2 invalid |
+| Example tokens valid under alphabet | ok |
 
 ## Errors
 
@@ -128,11 +128,9 @@ so they do not hold the audit red. They are **not** resolved.
   - **why:** Call records depend on what WebRTC signalling actually needs to persist, which B6 has not settled.
   - **gate:** B2 schema rewrite, informed by B6 (signalling) _(since 2026-08-18)_
 
-## Warnings (3)
+## Warnings (1)
 
 - link (legacy): modules/07-store-compliance-and-safety/0005-data-export-and-terms.html -> ./privacy-policy.html
-- token: "MERC-8GH2-KP4O" uses characters excluded from the alphabet (1 file(s))
-- token: "MERC-8GH2-LP4X" uses characters excluded from the alphabet (1 file(s))
 
 ## Per-lesson detail
 
