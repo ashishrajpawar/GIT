@@ -177,9 +177,29 @@ export { API_URL };</code></pre>
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>First, the join that goes wrong</h2>
+
+    <p>"Never hardcode the URL" is easy to agree with. The part that actually bites is what happens when you glue the pieces together — one stray slash and you are requesting <code>/v1//tokens</code>, which most servers treat as a different path and answer with a 404.</p>
+
+    <p>It needs no network to get right, so write it first.</p>
+
+    <div id="exercise-url"></div>
+
+    <h3>Check your work</h3>
+
+    <div id="pg-exercise-url"></div>
+
+    <hr>
+
+    <h2>Then the calls themselves</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <h2>In your own words</h2>
+
+    <div id="explain-a3-0001"></div>
 
     <hr>
 
@@ -195,6 +215,7 @@ export { API_URL };</code></pre>
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -221,7 +242,100 @@ console.log("401:", unauth.ok, unauth.json());
 // Key lesson: fetch doesn't throw on 4xx/5xx!
 // You must check response.ok yourself.`);
 
+    createSolution("exercise-url", {
+      exercise: "Write <code>buildUrl(baseUrl, path, params)</code>. It joins the three into the string you hand to <code>fetch</code>. No network, no fetch — just the string.\n\n<code>params</code> is optional and is a plain object.\n\nFour rules:\n\n1. Exactly one slash between base and path, whatever the two look like. <code>'https://api.tokn.app/v1/'</code> and <code>'/tokens'</code> must give <code>'https://api.tokn.app/v1/tokens'</code>, not <code>'…/v1//tokens'</code>.\n\n2. Leave out any param whose value is <code>undefined</code> or <code>null</code>. <strong>Keep <code>0</code> and <code>false</code></strong> — they are answers, not absences.\n\n3. Percent-encode keys and values, so a label of <code>'Gym & Pool'</code> survives the trip.\n\n4. No <code>?</code> at all when nothing is left to send.",
+      hints: [
+        "Trim a trailing slash off the base and a leading one off the path, then join with exactly one. Doing it from both ends means you never have to care which form you were given.",
+        "`value == null` is true for both null and undefined, and false for 0 and false — which is exactly the distinction rule 2 asks for.",
+        "encodeURIComponent() is the one that escapes &, = and spaces. URLSearchParams does the same job and sorts nothing, so either is fine."
+      ],
+      solution: `function buildUrl(baseUrl, path, params) {
+  // 1. Strip from both ends, then join with exactly one slash. Now it does not
+  //    matter whether the caller supplied the slashes or not.
+  const base = String(baseUrl).replace(/\\/+$/, '');
+  const tail = String(path).replace(/^\\/+/, '');
+  const url = base + '/' + tail;
+
+  if (!params) return url;
+
+  // 2. == null catches null AND undefined, and nothing else -- so 0 and false
+  //    survive, which they must: maxUses=0 is a real filter, not a missing one.
+  const pairs = [];
+  for (const key of Object.keys(params)) {
+    const value = params[key];
+    if (value == null) continue;
+    // 3. Encode both halves: a label can legitimately contain & or =.
+    pairs.push(encodeURIComponent(key) + '=' + encodeURIComponent(value));
+  }
+
+  // 4. A bare '?' is not a URL improvement.
+  return pairs.length ? url + '?' + pairs.join('&') : url;
+}`
+    });
+
+    createPlayground("pg-exercise-url", `// Write buildUrl(baseUrl, path, params) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+
+try {
+  try {
+    // All four slash combinations, because a fix that only handles the base
+    // passes two of them by luck.
+    check("base with slash + path with slash",
+      buildUrl('https://api.tokn.app/v1/', '/tokens') === 'https://api.tokn.app/v1/tokens',
+      "got " + buildUrl('https://api.tokn.app/v1/', '/tokens'));
+    check("base without slash + path with slash",
+      buildUrl('https://api.tokn.app/v1', '/tokens') === 'https://api.tokn.app/v1/tokens',
+      "got " + buildUrl('https://api.tokn.app/v1', '/tokens'));
+    check("base with slash + path without slash",
+      buildUrl('https://api.tokn.app/v1/', 'tokens') === 'https://api.tokn.app/v1/tokens',
+      "got " + buildUrl('https://api.tokn.app/v1/', 'tokens'));
+    check("base without slash + path without slash",
+      buildUrl('https://api.tokn.app/v1', 'tokens') === 'https://api.tokn.app/v1/tokens',
+      "got " + buildUrl('https://api.tokn.app/v1', 'tokens'));
+  } catch (e) { check("joining base and path", false, "threw " + e.message); }
+
+  try {
+    check("no params means no question mark",
+      buildUrl('https://api.tokn.app/v1', '/tokens').indexOf('?') === -1,
+      "got " + buildUrl('https://api.tokn.app/v1', '/tokens'));
+    check("an empty params object also means no question mark",
+      buildUrl('https://api.tokn.app/v1', '/tokens', {}).indexOf('?') === -1,
+      "got " + buildUrl('https://api.tokn.app/v1', '/tokens', {}));
+    check("every param dropped means no question mark",
+      buildUrl('https://api.tokn.app/v1', '/tokens', { cursor: null, q: undefined }).indexOf('?') === -1,
+      "got " + buildUrl('https://api.tokn.app/v1', '/tokens', { cursor: null, q: undefined }));
+  } catch (e) { check("the question mark is conditional", false, "threw " + e.message); }
+
+  try {
+    // 0 and false are the whole point: a truthiness filter silently drops both,
+    // and 'maxUses=0' is a real query meaning 'tokens with no uses left'.
+    const u = buildUrl('https://api.tokn.app/v1', '/tokens', { maxUses: 0, revoked: false, cursor: null });
+    check("a param of 0 survives", u.indexOf('maxUses=0') !== -1, "got " + u);
+    check("a param of false survives", u.indexOf('revoked=false') !== -1, "got " + u);
+    check("a param of null is dropped", u.indexOf('cursor') === -1, "got " + u);
+  } catch (e) { check("falsy params are kept, absent ones dropped", false, "threw " + e.message); }
+
+  try {
+    const u = buildUrl('https://api.tokn.app/v1', '/tokens', { label: 'Gym & Pool' });
+    check("values are percent-encoded",
+      u.indexOf('Gym%20%26%20Pool') !== -1 || u.indexOf('Gym+%26+Pool') !== -1,
+      "got " + u + " -- an unescaped & starts a new parameter");
+  } catch (e) { check("values are percent-encoded", false, "threw " + e.message); }
+} catch (e) {
+  console.log("Write buildUrl(baseUrl, path, params) above, then press Run.");
+}`);
+
+    createExplain("explain-a3-0001", {
+      prompt: "<code>buildUrl</code> makes it easy to put anything in a query string. Explain why a token code must still never appear in one — and where the redemption request puts it instead."
+    });
+
     createSolution("exercise-1", {
+      unverifiable: "the calls run against a live Token API from a device",
       exercise: "Write a complete set of fetch calls to test your Token API from the mobile app: (1) Register a new user, (2) Login and store the tokens, (3) Create a token with the access token, (4) List all tokens, (5) Revoke the token. Handle errors for each call (check response.ok, parse error messages). Run these against your local API from the previous module.",
       hints: [
         "Start with the base URL constant. Use the same headers pattern for all authenticated requests.",
