@@ -12,16 +12,8 @@ how far it got.
 
 ## In progress
 
-**Module 02 framing cleanup — all three grades**, started 2026-08-18 from clean
-tree at `8a77032`. Student's explicit direction.
-
-One lesson per commit, each re-verified with its `--wrong` case before the
-commit. If this dies mid-run, `git log` shows which lessons are done and the
-inventory below shows what remains.
-
-**Never bulk-edit through a shell.** A blanket replacement is exactly how four
-quiz strings in `0011` were broken, and here it would also eat the deliberate
-contrasts, which are the most valuable sentences in the module.
+**Nothing.** Working tree clean as of 2026-08-18. The Module 02 framing cleanup
+landed across all 14 lessons and the README; all 14 re-verified.
 
 ## Next action
 
@@ -36,7 +28,7 @@ the order it becomes due:
 
 | Work | Gate |
 |---|---|
-| **The WhatsApp-clone framing still in Module 02** — see below | none; decide scope first |
+| **Nothing queued for Module 02** — the cleanup is done, see below | — |
 | **Phase 3** — the ten C-modules | just-in-time; the student is nowhere near |
 | **Phase 4** — the operating track | after launch |
 | The three orphan tables | blocked behind the B2 rewrite, itself behind C5/E2EE |
@@ -44,35 +36,43 @@ the order it becomes due:
 Nothing else is queued. M1 and M2 are both done, and the `0013` rename landed
 2026-08-18.
 
-### The framing claim that was false, and what is actually left
+### The framing cleanup, and what the word-grep could not see
 
 This file asserted **"Module 02 carries zero WhatsApp-clone framing"** after the
-Phase 1.5 retrofit. Measured on 2026-08-18, that is wrong: `chat` appears in 11
-of 15 files and `avatar` in 11. `Priya` is genuinely gone, which is probably why
-the claim felt true.
+Phase 1.5 retrofit. Measured on 2026-08-18 it was false, and the cleanup that
+followed found the claim was not merely cosmetic — **the framing was load-bearing
+and several lessons were broken by it**:
 
-The claim was safe to write and wrong to trust, and it is the same failure mode
-as "Modules 1 and 2 complete" — **prose asserting something checkable**. The
-retrofit reframed the *narrative* of each lesson and left the *fixtures* alone,
-so the two drifted apart with nothing measuring the gap.
+- `0009` sample rows 1–2 were tokens, rows 3–4 were still `Family Group` and
+  `Work Team` with `name`/`preview`. The renderer reads `item.name[0]`, so the
+  two *token* rows threw `TypeError`.
+- `0014` had the same split list, plus one line still carrying shell-mangle
+  damage (`timy!'`) from a previous bulk edit.
+- `0013`'s detail screen rendered `isGroup`, a variable it never destructured —
+  `ReferenceError` in the capstone.
+- `0007`'s eighth fixture was the only non-token in the list, so that row
+  rendered blank.
+- `0002` defined `handleChatPress` while the call site said `handleTokenPress`.
+- `0009` showed a badge reading **"Group"** whenever a token was *paused*, and a
+  header reading **"online"** — presence, in a product built so nobody learns who
+  the holder is.
 
-Three grades of leftover, and they need different treatment:
+**The word-grep was the weakest instrument in the box.** Searching `chat` and
+`avatar` never found the largest signal: WhatsApp's whole palette — `#075E54`,
+`#25D366`, `#128C7E`, `#DCF8C6`, `#ECE5DD` — was the app chrome in 13 of 15
+files, 95 occurrences. When looking for framing, **grep the colours too.**
 
-- **Genuinely wrong.** `0007` has a contact named `Mom`, `i.pravatar.cc` photo
-  URLs, and the preview *"Call me when you're free beta"*. `0009` paints avatar
-  circles `#128C7E` — WhatsApp's brand green. This is a person-to-person
-  messenger, and it contradicts the premise that you never learn who the holder
-  is.
-- **Neutral identifiers.** `ChatRow`, `styles.chatList`, `loadChats`,
-  `SAMPLE_CHATS` — including inside `0013` itself. Harmless to a reader,
-  cheap to rename, worth doing while a file is open rather than as a sweep.
-- **Deliberate contrast — do not touch.** `0002` says "A chat app puts a photo
-  of a person on every row. Token cannot, and would not want to." Rewriting that
-  destroys the point it is making. Any sweep must read each hit in context; a
-  bulk replace would eat these first.
+No palette had to be invented: `0003` §10 already defines `TokenColors` and says
+"keep these handy — you'll use them throughout the course". It had been written
+and never applied, so the reference and the examples on the same page disagreed.
+The mapping is 1:1 — ink/accent/accentSoft/threadBg.
 
-**And do not bulk-edit through a shell** — that is what broke four quiz strings
-in `0011`.
+**Four deliberate contrasts are kept and must stay** — `0002:400-401`,
+`0003:370`, `0013:76`, `0014:33`. Each says some version of *"a chat app shows a
+face here; Token cannot, because there is no one to picture."* They are the
+sharpest statements of the product in the module, and a bulk replace eats them
+first. That is the reason this was done file by file, with the editor, and
+**never through a shell** — the same rule that broke four quiz strings in `0011`.
 
 ## Blocked on
 
@@ -175,10 +175,22 @@ Durable gotchas only. Anything narrative is in `HANDOFF.md`.
   Module 01.
 - The three orphan tables (`participants`, `deletion_queue`, `calls`) are schema
   gaps for the B2 rewrite, not quick fixes. B2 is itself waiting on C5 (E2EE).
-- **Module 02's framing is reframed in the prose, not in the fixtures.** The
-  "zero WhatsApp-clone framing" claim that stood here was measured false on
-  2026-08-18 — see *Next action*. `Priya` is gone; `chat` and `avatar` are not.
-  Treat a hit as a leftover to read in context, never as a regression to revert.
+- **Module 02's framing cleanup is done** (2026-08-18) — fixtures, identifiers
+  and palette, all 14 lessons re-verified. Four `avatar`/`chat` hits remain **on
+  purpose**: they are the "a chat app shows a face here, Token cannot" contrasts
+  at `0002:400-401`, `0003:370`, `0013:76`, `0014:33`. Do not "finish the job"
+  by removing them.
+- **When checking for framing, grep the colours, not just the words.** The
+  word-grep missed 95 WhatsApp-palette hexes across 13 files — the biggest
+  signal in the module. Product framing hides in constants.
+- **A reframe that stops at the prose leaves crashes behind.** Phase 1.5
+  rewrote the narrative and left the fixtures; five lessons had a live
+  `TypeError`, `ReferenceError` or blank row where the two halves met. If a
+  rename touches a data shape, re-run the lesson, and check *every* row of a
+  sample list — the defect was always in the entries nobody re-read.
+- **The student has asked not to be asked where they are in Module 01.** Do not
+  ask again, and do not infer it from the files either. Pitch to the profile in
+  `CLAUDE.md` and let them steer.
 - **A rename is never just the file.** `02/0013` reached into
   `search-index.json`, the module README, the nav in two neighbouring lessons,
   the wrong-case file's name *and* its header comment, and

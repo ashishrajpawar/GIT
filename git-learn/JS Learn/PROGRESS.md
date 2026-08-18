@@ -64,7 +64,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Module | Lessons | Avg prose | Playgrounds | Exercises | Questions | Deepened | Verified |
 |---|---|---|---|---|---|---|---|
 | 01-javascript-fundamentals | 13 | 2556 | 85 | 15 | 380 | 0/13 | 13/13 |
-| 02-react-native | 14 | 2642 | 39 | 14 | 355 | 0/14 | 14/14 |
+| 02-react-native | 14 | 2641 | 39 | 14 | 355 | 0/14 | 14/14 |
 | a10-device-security | 2 | 1908 | 2 | 2 | 50 | 1/2 | 0/2 |
 | a11-polish-publish | 5 | 1229 | 0 | 5 | 125 | 0/5 | 0/5 |
 | a2-typescript | 3 | 727 | 2 | 3 | 76 | 0/3 | 0/3 |
@@ -129,19 +129,19 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | 01-javascript-fundamentals/0012-error-handling.html | 2876 | 10 | 8 | 1 | 30 | — | yes |
 | 01-javascript-fundamentals/0013-capstone-token-issuer.html | 3073 | 19 | 13 | 3 | 30 | — | yes |
 | 02-react-native/0001-expo-setup-and-eas-build.html | 2018 | 14 | 2 | 1 | 25 | — | yes |
-| 02-react-native/0002-core-components.html | 2883 | 10 | 4 | 1 | 30 | — | yes |
-| 02-react-native/0003-styling-and-flexbox.html | 2580 | 10 | 3 | 1 | 25 | — | yes |
-| 02-react-native/0004-textinput-and-keyboard.html | 2342 | 12 | 3 | 1 | 25 | — | yes |
-| 02-react-native/0005-usestate.html | 2484 | 14 | 4 | 1 | 25 | — | yes |
+| 02-react-native/0002-core-components.html | 2887 | 10 | 4 | 1 | 30 | — | yes |
+| 02-react-native/0003-styling-and-flexbox.html | 2581 | 10 | 3 | 1 | 25 | — | yes |
+| 02-react-native/0004-textinput-and-keyboard.html | 2349 | 12 | 3 | 1 | 25 | — | yes |
+| 02-react-native/0005-usestate.html | 2486 | 14 | 4 | 1 | 25 | — | yes |
 | 02-react-native/0006-useeffect.html | 2607 | 9 | 3 | 1 | 25 | — | yes |
-| 02-react-native/0007-flatlist.html | 2322 | 12 | 2 | 1 | 25 | — | yes |
+| 02-react-native/0007-flatlist.html | 2318 | 12 | 2 | 1 | 25 | — | yes |
 | 02-react-native/0008-navigation.html | 2854 | 8 | 3 | 1 | 25 | — | yes |
-| 02-react-native/0009-passing-data.html | 2932 | 9 | 3 | 1 | 25 | — | yes |
+| 02-react-native/0009-passing-data.html | 2926 | 9 | 3 | 1 | 25 | — | yes |
 | 02-react-native/0010-forms-login-register.html | 2818 | 7 | 3 | 1 | 25 | — | yes |
 | 02-react-native/0011-images-imagepicker.html | 2251 | 8 | 2 | 1 | 25 | — | yes |
 | 02-react-native/0012-loading-and-error-states.html | 2616 | 10 | 3 | 1 | 25 | — | yes |
-| 02-react-native/0013-token-list-screen.html | 2864 | 6 | 2 | 1 | 25 | — | yes |
-| 02-react-native/0014-message-thread-screen.html | 3416 | 8 | 2 | 1 | 25 | — | yes |
+| 02-react-native/0013-token-list-screen.html | 2863 | 6 | 2 | 1 | 25 | — | yes |
+| 02-react-native/0014-message-thread-screen.html | 3405 | 8 | 2 | 1 | 25 | — | yes |
 | a10-device-security/0001-secure-storage.html | 2244 | 7 | 1 | 1 | 25 | yes | n/a |
 | a10-device-security/0002-biometric-app-lock.html | 1572 | 9 | 1 | 1 | 25 | — | n/a |
 | a11-polish-publish/0001-animations-gestures.html | 1501 | 12 | 0 | 1 | 25 | — | n/a |
