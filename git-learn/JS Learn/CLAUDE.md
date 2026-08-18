@@ -92,7 +92,7 @@ email, or identity. The user can set rules, pause, or revoke at any time.
 Codes are 12 characters in three groups of four: `MERC-8GH2-KP4X`.
 
 **Every example token you write anywhere — lesson, quiz, doc, test — must be
-valid under this alphabet.** The canonical example was `MERC-8GH2-LP4X` for
+valid under this alphabet.** The canonical example was `MERC-8GH2-LP4X` for <!-- audit-allow-token-here: the historical wrong value, named so it stays recognisable -->
 months; the `L` made it a code the product could never generate, and it had
 spread to 36 files including this one before anyone checked. Three quiz answers
 were wrong purely because they were regex tests against it.

@@ -427,7 +427,17 @@ for (const file of tokenScan) {
      canonical-code story it exists to protect. A marker must be claimable only
      by the content it guards. */
   if (file.endsWith(".html") && text.includes("audit-allow-token-fixtures")) continue;
+  /* Line-level opt-out, for a document that must keep being scanned but has one
+     legitimate reason to name a bad code. CLAUDE.md explains that the canonical
+     example used to be MERC-8GH2-LP4X and that the L made it unissuable — the
+     warning was firing on the paragraph documenting the very bug the check
+     exists to prevent, which is the SESSION.md/HANDOFF.md mistake again, one
+     scope smaller. A whole-file marker is wrong here for the reason given
+     below: CLAUDE.md carries the canonical code a lesson copies. */
+  const lineOf = (index) => text.slice(0, index).split("\n").length - 1;
+  const textLines = text.split("\n");
   for (const m of text.matchAll(/\b([A-Z0-9]{4}-[A-Z0-9]{4}(?:-[A-Z0-9]{4})?)\b/g)) {
+    if ((textLines[lineOf(m.index)] || "").includes("audit-allow-token-here")) continue;
     const bad = [...m[1].replace(/-/g, "")].filter((c) => !TOKEN_ALPHABET.includes(c));
     if (!bad.length) continue;
     /* "0001-0004" is a lesson range, not a token. Every real example code in
