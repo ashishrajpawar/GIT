@@ -12,7 +12,16 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean as of 2026-08-18. The `02/0013` rename landed.
+**Module 02 framing cleanup — all three grades**, started 2026-08-18 from clean
+tree at `8a77032`. Student's explicit direction.
+
+One lesson per commit, each re-verified with its `--wrong` case before the
+commit. If this dies mid-run, `git log` shows which lessons are done and the
+inventory below shows what remains.
+
+**Never bulk-edit through a shell.** A blanket replacement is exactly how four
+quiz strings in `0011` were broken, and here it would also eat the deliberate
+contrasts, which are the most valuable sentences in the module.
 
 ## Next action
 
