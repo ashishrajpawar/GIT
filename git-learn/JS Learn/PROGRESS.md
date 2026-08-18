@@ -20,7 +20,8 @@ with this one, this one is right — everything below is measured, not asserted.
 | **Deepened** (all 3 spine sections) | 16 / 96 |
 | **Verified** (code executed) | 27 / 96 |
 | Ran clean but had nothing to run | 0 / 96 |
-| Errors | 3 |
+| Errors | 0 |
+| Known and blocked | 3 |
 | Warnings | 3 |
 
 Student-completed lessons are **not** tracked here — that comes from the student
@@ -99,11 +100,24 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | search-index.json | 96 entries, 0 dead, 0 unindexed |
 | Example tokens valid under alphabet | 2 invalid |
 
-## Errors (3)
+## Errors
+
+None.
+
+## Known and blocked (3)
+
+Real problems with a named gate, acknowledged in `scripts/known-issues.json`
+so they do not hold the audit red. They are **not** resolved.
 
 - schema: table "participants" is queried in 2 lesson(s) but never created
+  - **why:** Group/thread membership has no schema yet. Writing one now would bake in a shape that E2EE key distribution is about to change.
+  - **gate:** B2 schema rewrite, itself behind C5 (E2EE) _(since 2026-08-18)_
 - schema: table "deletion_queue" is queried in 1 lesson(s) but never created
+  - **why:** DPDP erasure needs a retention policy decided first; the queue's columns follow from that, not the other way round.
+  - **gate:** B2 schema rewrite _(since 2026-08-18)_
 - schema: table "calls" is queried in 2 lesson(s) but never created
+  - **why:** Call records depend on what WebRTC signalling actually needs to persist, which B6 has not settled.
+  - **gate:** B2 schema rewrite, informed by B6 (signalling) _(since 2026-08-18)_
 
 ## Warnings (3)
 

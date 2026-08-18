@@ -31,7 +31,7 @@ the order it becomes due:
 | **Nothing queued for Module 02** — the cleanup is done, see below | — |
 | **Phase 3** — the ten C-modules | just-in-time; the student is nowhere near |
 | **Phase 4** — the operating track | after launch |
-| The three orphan tables | blocked behind the B2 rewrite, itself behind C5/E2EE |
+| The three orphan tables | blocked behind the B2 rewrite, itself behind C5/E2EE — now in `scripts/known-issues.json`, so the audit is green and they are still listed |
 
 Nothing else is queued. M1 and M2 are both done, and the `0013` rename landed
 2026-08-18.
@@ -188,6 +188,13 @@ Durable gotchas only. Anything narrative is in `HANDOFF.md`.
   Module 01.
 - The three orphan tables (`participants`, `deletion_queue`, `calls`) are schema
   gaps for the B2 rewrite, not quick fixes. B2 is itself waiting on C5 (E2EE).
+  They are acknowledged in `scripts/known-issues.json` — **acknowledged is not
+  fixed.** When B2 lands and the tables exist, the audit will fail with
+  "no longer matches any error"; that failure is the signal to delete the
+  entries, not to re-word them.
+- **The audit exits OK as of 2026-08-18** — the first time in the project's
+  history. Treat any red audit as real from here on; that is the whole point of
+  having spent the effort to make it green.
 - **Module 02's framing cleanup is done** (2026-08-18) — fixtures, identifiers
   and palette, all 14 lessons re-verified. Four `avatar`/`chat` hits remain **on
   purpose**: they are the "a chat app shows a face here, Token cannot" contrasts

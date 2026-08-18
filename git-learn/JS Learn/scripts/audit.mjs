@@ -462,6 +462,32 @@ for (const [literal, { files, excluded }] of alphabetOffenders) {
   err(`alphabet: "${literal}" ${why} — ${[...files].join(", ")}`);
 }
 
+// -------------------------------------------------- known, blocked issues
+
+/* Split the errors into "new" and "already known and gated". See
+   scripts/known-issues.json for why this exists — in short, the audit had been
+   exiting FAIL on the same three orphan tables every run, and a build that is
+   always red is read as often as a warning list that is mostly noise.
+
+   Kept honest from both ends: an unmatched error still fails, AND an
+   acknowledgement matching nothing fails as stale. Without that second rule
+   this file becomes where errors go to be forgotten. */
+const knownPath = path.join(ROOT, "scripts", "known-issues.json");
+const known = exists(knownPath) ? JSON.parse(read(knownPath)).acknowledged ?? [] : [];
+
+const acknowledged = [];
+const liveErrors = [];
+for (const e of errors) {
+  const hit = known.find((k) => e.includes(k.match));
+  (hit ? acknowledged : liveErrors).push(hit ? { text: e, ...hit } : e);
+}
+
+const stale = known.filter((k) => !errors.some((e) => e.includes(k.match)));
+stale.forEach((k) =>
+  liveErrors.push(
+    `known-issues: "${k.match}" no longer matches any error — the problem is ` +
+    `fixed or the check changed; delete the entry`));
+
 // ---------------------------------------------------------------- report
 
 const track = lessons.filter((l) => !l.legacy);
@@ -501,7 +527,8 @@ with this one, this one is right — everything below is measured, not asserted.
 | **Deepened** (all 3 spine sections) | ${track.filter((l) => l.deepened).length} / ${track.length} |
 | **Verified** (code executed) | ${track.filter((l) => l.verified === "verified").length} / ${track.length} |
 | Ran clean but had nothing to run | ${track.filter((l) => l.verified === "nothing-to-verify").length} / ${track.length} |
-| Errors | ${errors.length} |
+| Errors | ${liveErrors.length} |
+| Known and blocked | ${acknowledged.length} |
 | Warnings | ${warnings.length} |
 
 Student-completed lessons are **not** tracked here — that comes from the student
@@ -555,7 +582,14 @@ ${[...byModule.entries()]
 | search-index.json | ${indexStatus} |
 | Example tokens valid under alphabet | ${badTokens.size === 0 ? "ok" : badTokens.size + " invalid"} |
 
-${errors.length ? `## Errors (${errors.length})\n\n${errors.map((e) => `- ${e}`).join("\n")}\n` : "## Errors\n\nNone.\n"}
+${liveErrors.length ? `## Errors (${liveErrors.length})\n\n${liveErrors.map((e) => `- ${e}`).join("\n")}\n` : "## Errors\n\nNone.\n"}
+${acknowledged.length ? `## Known and blocked (${acknowledged.length})
+
+Real problems with a named gate, acknowledged in \`scripts/known-issues.json\`
+so they do not hold the audit red. They are **not** resolved.
+
+${acknowledged.map((a) => `- ${a.text}\n  - **why:** ${a.why}\n  - **gate:** ${a.gate} _(since ${a.since})_`).join("\n")}
+` : ""}
 ${warnings.length ? `## Warnings (${warnings.length})\n\n${warnings.slice(0, 40).map((w) => `- ${w}`).join("\n")}${warnings.length > 40 ? `\n- …and ${warnings.length - 40} more` : ""}\n` : ""}
 ## Per-lesson detail
 
@@ -575,13 +609,17 @@ if (!QUIET) {
   console.log(`Deepened            : ${track.filter((l) => l.deepened).length}/${track.length}`);
   console.log(`Verified            : ${track.filter((l) => l.verified === "verified").length}/${track.length}`);
   console.log(`Answer positions    : ${[0, 1, 2, 3].map((i) => `${i}=${pct(positions[i] || 0)}`).join("  ")}`);
-  if (errors.length) {
-    console.log(`\n${errors.length} ERROR(S):`);
-    errors.slice(0, 25).forEach((e) => console.log("  " + e));
-    if (errors.length > 25) console.log(`  …and ${errors.length - 25} more`);
+  if (liveErrors.length) {
+    console.log(`\n${liveErrors.length} ERROR(S):`);
+    liveErrors.slice(0, 25).forEach((e) => console.log("  " + e));
+    if (liveErrors.length > 25) console.log(`  …and ${liveErrors.length - 25} more`);
+  }
+  if (acknowledged.length) {
+    console.log(`\n${acknowledged.length} known and blocked (not resolved — see PROGRESS.md):`);
+    acknowledged.forEach((a) => console.log(`  ${a.text}\n      gate: ${a.gate}`));
   }
   if (warnings.length) console.log(`\n${warnings.length} warning(s) — see PROGRESS.md`);
 }
-console.log(`\n${errors.length ? "FAIL" : "OK"}  —  PROGRESS.md written`);
+console.log(`\n${liveErrors.length ? "FAIL" : "OK"}  —  PROGRESS.md written`);
 
-if (CHECK && errors.length) process.exit(1);
+if (CHECK && liveErrors.length) process.exit(1);

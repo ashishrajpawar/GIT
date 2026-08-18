@@ -23,6 +23,7 @@ Five steps, in order:
 | File | Owns | Written by |
 |---|---|---|
 | `PROGRESS.md` | Anything a script can compute — counts, coverage, verification state | **Generated only.** Never hand-edit |
+| `scripts/known-issues.json` | Real errors that are known, gated and deliberately not blocking the audit | Hand, one entry per problem |
 | `SESSION.md` | In progress / Next action / Blocked, **and per-item phase status** | Hand, before each unit of work |
 | `CLAUDE.md` (this file) | Architecture invariants, conventions, product rules | Hand |
 | `HANDOFF.md` | Narrative — why decisions were made, what failed, session log | Hand, appended each session |
@@ -34,6 +35,17 @@ Five steps, in order:
 countable thing is in `PROGRESS.md`. Three files, three different questions —
 and deliberately no status column in the phase tables, because a fact with
 three homes has three chances to be wrong.
+
+**A green audit is the point.** It used to exit `FAIL` on the same three orphan
+tables every single run, which trains everyone to ignore the exit code — and
+then a *new* error lands in a build nobody reads. That is how this course lost
+its fill-blank warning and its example-code check. Real problems that cannot be
+fixed yet get an entry in `scripts/known-issues.json` with a **why** and a
+**gate**; they print under "Known and blocked", still visible, and stop holding
+the build red. **An entry is not a fix.** The list is kept honest from both
+ends: an unacknowledged error fails, and an acknowledgement that no longer
+matches any error *also* fails, as stale — otherwise the file becomes where
+errors go to be forgotten.
 
 **The rule that prevents drift: this file and `HANDOFF.md` never restate a
 number the audit can compute.** They point at `PROGRESS.md` instead. Prose
