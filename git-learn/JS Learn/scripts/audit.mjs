@@ -233,6 +233,13 @@ function validateQuestion(q, file, i) {
   return undefined;
 }
 
+/* Mirrors explanationNamesAPosition() in assets/quiz.js. */
+const namesAPosition = (text) =>
+  /\b(?:option|answer|choice)\s+[A-D]\b/i.test(text) ||
+  /\bthe\s+(?:first|second|third|fourth|last)\s+(?:option|answer|choice|one)\b/i.test(text);
+
+const fixedOrder = { total: 0, positions: {} };
+
 // ---------------------------------------------------------------- scan
 
 const lessonFiles = walk(path.join(ROOT, "modules"))
@@ -258,8 +265,20 @@ for (const file of lessonFiles) {
       validateQuestion(q, id, i);
       const t = q.type || "multiple-choice";
       typeCounts[t] = (typeCounts[t] || 0) + 1;
-      if (["multiple-choice", "spot-the-bug", "which-breaks"].includes(t) && typeof q.correct === "number")
+      if (["multiple-choice", "spot-the-bug", "which-breaks"].includes(t) && typeof q.correct === "number") {
         positions[q.correct] = (positions[q.correct] || 0) + 1;
+        /* quiz.js shuffles options at render, so authored position is invisible
+           to the student — EXCEPT where it refuses to shuffle: a question whose
+           explanation names an option by position renders as authored, because
+           shuffling would make the explanation contradict the screen. Those are
+           the only ones where clustering is still a scoring exploit, so they get
+           counted separately. Predicate copied from assets/quiz.js; if it
+           changes there, change it here. */
+        if (namesAPosition(q.explanation || "")) {
+          fixedOrder.total++;
+          fixedOrder.positions[q.correct] = (fixedOrder.positions[q.correct] || 0) + 1;
+        }
+      }
     });
   }
 
@@ -548,6 +567,15 @@ ${keyed} keyed questions (multiple-choice, spot-the-bug, which-breaks).
 > deliberately unchanged: rewriting 1,284 keys risks breaking them, while a
 > renderer change cannot. What this table is good for is catching a *new* batch
 > of questions authored with the same habit.
+>
+> **The one place authored order still reaches the student:** \`quiz.js\` refuses
+> to shuffle a question whose explanation names an option by position ("Option A
+> creates a label statement"), because shuffling would make the explanation
+> contradict the screen. Those render exactly as authored, so clustering in them
+> is a real if small scoring edge — **${fixedOrder.total} question(s)**, distributed
+> ${[0, 1, 2, 3].map((i) => `${i}=${fixedOrder.total ? ((100 * (fixedOrder.positions[i] || 0)) / fixedOrder.total).toFixed(1) + "%" : "—"}`).join("  ")}.
+> Rewriting those explanations to stop naming positions is the fix, and it frees
+> them to shuffle like the rest. That is deepening-pass work.
 
 | Position | Count | Share |
 |---|---|---|
@@ -608,7 +636,9 @@ if (!QUIET) {
   console.log(`Avg prose / lesson  : ${avg(track.map((l) => l.words))} words`);
   console.log(`Deepened            : ${track.filter((l) => l.deepened).length}/${track.length}`);
   console.log(`Verified            : ${track.filter((l) => l.verified === "verified").length}/${track.length}`);
-  console.log(`Answer positions    : ${[0, 1, 2, 3].map((i) => `${i}=${pct(positions[i] || 0)}`).join("  ")}`);
+  console.log(`Answer positions    : ${[0, 1, 2, 3].map((i) => `${i}=${pct(positions[i] || 0)}`).join("  ")}  (authored; shuffled at render)`);
+  console.log(`  render-as-authored: ${fixedOrder.total} question(s) — ` +
+    `${[0, 1, 2, 3].map((i) => `${i}=${fixedOrder.total ? ((100 * (fixedOrder.positions[i] || 0)) / fixedOrder.total).toFixed(1) + "%" : "—"}`).join("  ")}`);
   if (liveErrors.length) {
     console.log(`\n${liveErrors.length} ERROR(S):`);
     liveErrors.slice(0, 25).forEach((e) => console.log("  " + e));

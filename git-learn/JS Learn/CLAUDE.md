@@ -552,11 +552,27 @@ summarised here rather than left in the ADR:
    Mix of types: predict-output, spot-the-bug, fill-blank, which-breaks,
    order-steps. Not all multiple-choice.
 
-   **Answer positions must vary.** Existing lessons put the correct answer
-   at index 1 in 64% of questions — always picking the second option scores
-   ~64% course-wide (measured 63.6% across 1,284 keyed questions on
-   2026-08-15). Do not add to that pattern. `order-steps` steps are
-   shuffled at render, so `correctOrder` may be authored in any order.
+   **Answer positions: the exploit is fixed in the renderer, not in the data.**
+   61.4% of keyed questions still have `correct` at index 1, and the audit still
+   prints it — but `quiz.js` shuffles options at render (`optionDisplayOrder`),
+   so that clustering is invisible to students and picking the second option
+   scores nothing. The paragraph here claimed the ~64% exploit was live long
+   after `quiz.js` had killed it; that was the same stale-prose failure as the
+   playground loop-guard note below. Authored keys are deliberately left alone —
+   rewriting 1,284 of them can break keys, a renderer change cannot.
+
+   Two carve-outs where authored order *does* reach the student, so keep varying
+   positions when you write:
+   - A question whose **explanation names a position** ("Option A creates…")
+     renders as authored, because shuffling would contradict the explanation.
+     The audit reports this subset separately — it is the only real residual.
+     Better still, do not write explanations that name a position.
+   - Options whose meaning depends on position ("All of the above", "Both…")
+     are pinned last. And per the note above, `quiz.js` shuffling is exactly why
+     "Both A and B" is broken wherever it sits.
+
+   `order-steps` steps are shuffled at render, so `correctOrder` may be authored
+   in any order.
 
    **Never tag a "which is correct?" question as `which-breaks`.** The renderer
    prints a fixed "Which of these will fail?" prompt, so the key ends up
@@ -668,6 +684,7 @@ inside `audit.mjs`**, as an error; run it alone to see the detail:
 node scripts/check-pre-blocks.mjs                    # whole course
 node scripts/check-pre-blocks.mjs modules/02-react-native
 node scripts/test-check-pre-blocks.mjs               # 14 assertions — see below
+node scripts/test-quiz-shuffle.mjs                   # the option shuffle still shuffles
 ```
 
 It reports exactly one thing: a `'` or `"` string left open at end of line

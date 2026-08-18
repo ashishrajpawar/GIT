@@ -41,6 +41,15 @@ or from `progress.js` localStorage, and is never inferred from the files.
 > deliberately unchanged: rewriting 1,284 keys risks breaking them, while a
 > renderer change cannot. What this table is good for is catching a *new* batch
 > of questions authored with the same habit.
+>
+> **The one place authored order still reaches the student:** `quiz.js` refuses
+> to shuffle a question whose explanation names an option by position ("Option A
+> creates a label statement"), because shuffling would make the explanation
+> contradict the screen. Those render exactly as authored, so clustering in them
+> is a real if small scoring edge — **48 question(s)**, distributed
+> 0=16.7%  1=52.1%  2=27.1%  3=4.2%.
+> Rewriting those explanations to stop naming positions is the fix, and it frees
+> them to shuffle like the rest. That is deepening-pass work.
 
 | Position | Count | Share |
 |---|---|---|

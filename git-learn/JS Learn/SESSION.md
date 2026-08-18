@@ -155,6 +155,22 @@ Durable gotchas only. Anything narrative is in `HANDOFF.md`.
 
 ### Tooling limits worth knowing
 
+- **The answer-position clustering is not a live defect.** 61.4% of keys sit at
+  index 1 and the audit still prints it, but `quiz.js` shuffles options at
+  render, so it never reaches a student. `CLAUDE.md` claimed the ~64% scoring
+  exploit was live long after the renderer had killed it — stale prose again,
+  same shape as the playground loop-guard note. The stdout line now says
+  "authored; shuffled at render".
+- **The one real residual is 48 questions** whose *explanation names a position*
+  ("Option A creates…"). `quiz.js` refuses to shuffle those, because shuffling
+  would contradict the explanation, so they render as authored (1=52.1%). The
+  fix is to stop writing explanations that name positions — then they shuffle
+  like everything else. Deepening-pass work; the audit reports the subset.
+- **`test-quiz-shuffle.mjs` guards the whole argument.** The defence against
+  "pick the second option" is one function, and the docs now tell authors not to
+  worry about it — so a silent regression there would be expensive. Verified by
+  neutering the Fisher-Yates loop: the suite goes to 100% stay-put and fails.
+
 - **`verify-lesson.mjs` has no opinion about display `<pre>` blocks** — it runs
   what a lesson executes, and a display block is executed by nobody. That gap is
   now covered by `check-pre-blocks.mjs`, which runs inside the audit as an
