@@ -12,8 +12,17 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean as of 2026-08-18. The Module 02 framing cleanup
-landed across all 14 lessons and the README; all 14 re-verified.
+**Rewriting the explanations that name an option by position**, so those
+questions are free to shuffle. Started 2026-08-18 at 48; **35 remain**. Each is
+a hand edit — see the warning below about what unpinning a question can expose.
+
+Two defects surfaced *because* of this work, both bigger than the work itself:
+
+- **A mis-keyed question.** `a3/0002` q10 asked which base URL is correct, its
+  explanation said the no-trailing-slash one, and `correct` pointed at the
+  trailing-slash one. Swept all 2,575 for "Option X is correct" disagreeing with
+  the key: exactly one. Fixed.
+- **17 inverted `which-breaks` questions.** Fixed and now guarded — see below.
 
 ## Next action
 
@@ -152,6 +161,19 @@ Durable gotchas only. Anything narrative is in `HANDOFF.md`.
 - **Never bulk-edit lesson content through a shell**, not only when writing it.
   A blanket replacement injected real newlines into four quiz strings in `0011`
   and broke the whole block.
+
+### The two findings from the answer-position work
+
+- **A check can be right about *what* and wrong about *how words end*.** The
+  which-breaks inversion check has existed since August and missed 17 questions
+  because `\bcorrect\b` does not match **"correctly"** — and the adverb is how
+  people naturally word that question. Same family as the fill-blank check whose
+  `_{2,}` matched `__dirname`. Do not assume a stem covers its inflections.
+- **`--unverifiable` is a property of the lesson, not of the run**, and
+  `verification-log.json` is the only place it is recorded. Running
+  `verify-lesson` without it fails on the missing self-check, and **a failing run
+  deletes the entry**, so the lesson silently drops to `unverified`. I did this
+  to `a3/0002`. Check the log before re-verifying a lesson you did not write.
 
 ### Tooling limits worth knowing
 
