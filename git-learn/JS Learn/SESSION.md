@@ -12,7 +12,7 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean as of 2026-08-17, last commit `59089b0`.
+**Nothing.** Working tree clean as of 2026-08-18. The `02/0013` rename landed.
 
 ## Next action
 
@@ -27,21 +27,43 @@ the order it becomes due:
 
 | Work | Gate |
 |---|---|
-| **Rename `0013`/`0014`** so the filenames stop saying `chat` | none — do it any time |
+| **The WhatsApp-clone framing still in Module 02** — see below | none; decide scope first |
 | **Phase 3** — the ten C-modules | just-in-time; the student is nowhere near |
 | **Phase 4** — the operating track | after launch |
 | The three orphan tables | blocked behind the B2 rewrite, itself behind C5/E2EE |
 
-Nothing else is queued. M1 and M2 are both done.
+Nothing else is queued. M1 and M2 are both done, and the `0013` rename landed
+2026-08-18.
 
-### The filename rename, spelled out
+### The framing claim that was false, and what is actually left
 
-`0013-chat-list-screen.html` and `0014-message-thread-screen.html` now carry
-titles, breadcrumbs and content that all say *Token List Screen* and *Message
-Thread Screen*; only the filenames disagree. Renaming touches
-`search-index.json`, `modules/02-react-native/README.html`, and the prev/next
-nav in `0012`, `0013` and `0014`. Small and self-contained — and the audit's
-broken-link check catches a missed reference, so it is safe to attempt.
+This file asserted **"Module 02 carries zero WhatsApp-clone framing"** after the
+Phase 1.5 retrofit. Measured on 2026-08-18, that is wrong: `chat` appears in 11
+of 15 files and `avatar` in 11. `Priya` is genuinely gone, which is probably why
+the claim felt true.
+
+The claim was safe to write and wrong to trust, and it is the same failure mode
+as "Modules 1 and 2 complete" — **prose asserting something checkable**. The
+retrofit reframed the *narrative* of each lesson and left the *fixtures* alone,
+so the two drifted apart with nothing measuring the gap.
+
+Three grades of leftover, and they need different treatment:
+
+- **Genuinely wrong.** `0007` has a contact named `Mom`, `i.pravatar.cc` photo
+  URLs, and the preview *"Call me when you're free beta"*. `0009` paints avatar
+  circles `#128C7E` — WhatsApp's brand green. This is a person-to-person
+  messenger, and it contradicts the premise that you never learn who the holder
+  is.
+- **Neutral identifiers.** `ChatRow`, `styles.chatList`, `loadChats`,
+  `SAMPLE_CHATS` — including inside `0013` itself. Harmless to a reader,
+  cheap to rename, worth doing while a file is open rather than as a sweep.
+- **Deliberate contrast — do not touch.** `0002` says "A chat app puts a photo
+  of a person on every row. Token cannot, and would not want to." Rewriting that
+  destroys the point it is making. Any sweep must read each hit in context; a
+  bulk replace would eat these first.
+
+**And do not bulk-edit through a shell** — that is what broke four quiz strings
+in `0011`.
 
 ## Blocked on
 
@@ -144,5 +166,12 @@ Durable gotchas only. Anything narrative is in `HANDOFF.md`.
   Module 01.
 - The three orphan tables (`participants`, `deletion_queue`, `calls`) are schema
   gaps for the B2 rewrite, not quick fixes. B2 is itself waiting on C5 (E2EE).
-- Module 02 carries **zero WhatsApp-clone framing**. If a future edit
-  reintroduces "chat", "Priya" or an avatar, it is a regression, not a leftover.
+- **Module 02's framing is reframed in the prose, not in the fixtures.** The
+  "zero WhatsApp-clone framing" claim that stood here was measured false on
+  2026-08-18 — see *Next action*. `Priya` is gone; `chat` and `avatar` are not.
+  Treat a hit as a leftover to read in context, never as a regression to revert.
+- **A rename is never just the file.** `02/0013` reached into
+  `search-index.json`, the module README, the nav in two neighbouring lessons,
+  the wrong-case file's name *and* its header comment, and
+  `verification-log.json`. The log is generated: prune the stale key with a
+  script and let a real verifier run write the new one.

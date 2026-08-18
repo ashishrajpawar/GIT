@@ -4,7 +4,7 @@
      Regenerate with: node scripts/audit.mjs
      Hand-written session state lives in SESSION.md, never here. -->
 
-Generated 2026-08-17 from the files on disk. Where any other document disagrees
+Generated 2026-08-18 from the files on disk. Where any other document disagrees
 with this one, this one is right — everything below is measured, not asserted.
 
 ## Summary
@@ -140,7 +140,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | 02-react-native/0010-forms-login-register.html | 2818 | 7 | 3 | 1 | 25 | — | yes |
 | 02-react-native/0011-images-imagepicker.html | 2251 | 8 | 2 | 1 | 25 | — | yes |
 | 02-react-native/0012-loading-and-error-states.html | 2616 | 10 | 3 | 1 | 25 | — | yes |
-| 02-react-native/0013-chat-list-screen.html | 2864 | 6 | 2 | 1 | 25 | — | yes |
+| 02-react-native/0013-token-list-screen.html | 2864 | 6 | 2 | 1 | 25 | — | yes |
 | 02-react-native/0014-message-thread-screen.html | 3416 | 8 | 2 | 1 | 25 | — | yes |
 | a10-device-security/0001-secure-storage.html | 2244 | 7 | 1 | 1 | 25 | yes | n/a |
 | a10-device-security/0002-biometric-app-lock.html | 1572 | 9 | 1 | 1 | 25 | — | n/a |

@@ -1,11 +1,11 @@
 /* Wrong-answer cases for 02/0013 — the token list screen.
  *
- *   node scripts/verify-lesson.mjs modules/02-react-native/0013-chat-list-screen.html \
- *        --wrong scripts/cases/0013-chat-list-screen.mjs
+ *   node scripts/verify-lesson.mjs modules/02-react-native/0013-token-list-screen.html \
+ *        --wrong scripts/cases/0013-token-list-screen.mjs
  *
- * (The file is still named 0013-chat-list-screen.html. Renaming it touches
- * search-index.json, the module README and prev/next nav in three lessons, so
- * it is its own unit rather than a rider on this retrofit.)
+ * (Renamed from 0013-chat-list-screen on 2026-08-18. The lesson's title, h1 and
+ * content had said "Token List Screen" since the retrofit; only the filename
+ * still said "chat".)
  *
  * `alternatives` are other correct styles — all must PASS.
  * `mistakes` must each FAIL, and `expect` names the check it should trip.
