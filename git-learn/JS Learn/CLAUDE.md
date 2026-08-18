@@ -18,6 +18,17 @@ Five steps, in order:
 4. `git status` + `git log -5` — uncommitted work is the only thing at risk
 5. Reconcile and continue
 
+**The audit should say `OK`.** It has since 2026-08-18, which is the first time
+in the project's history — so a red audit now means something rather than being
+the background state. If you touch `assets/` or `scripts/`, run the five suites
+too; together they take a few seconds:
+
+```bash
+node scripts/test-quiz-shuffle.mjs      node scripts/test-dom-sandbox.mjs
+node scripts/test-check-pre-blocks.mjs  node scripts/test-playground-dom.mjs
+node scripts/test-explain.mjs
+```
+
 ### Document precedence — one fact, one home
 
 | File | Owns | Written by |
@@ -168,8 +179,10 @@ modules/
   01-javascript-fundamentals/       ← 12 lessons + `0013` capstone (see PROGRESS.md
                                        for what carries practice and what is verified)
   02-react-native/                  ← 14 lessons, retrofitted 2026-08-17: practice
-                                       pattern throughout, Token framing throughout,
-                                       all verified by execution
+                                       pattern throughout. WhatsApp fixtures and
+                                       palette removed 2026-08-18 — four `chat`/
+                                       `avatar` mentions remain ON PURPOSE (the
+                                       "Token cannot show a face" contrasts)
   x1-git-dev-environment/           ← 3 lessons, complete
   a2-typescript/                    ← 3 lessons, complete
   x2-debugging/                     ← 2 lessons, complete
@@ -177,8 +190,9 @@ modules/
   b2-schema-design/                 ← 3 lessons, complete
   b3-node-http-server/              ← 4 lessons, complete
   b4-auth-server/                   ← 3 lessons, complete
-  a3-api-consumption/               ← 4 lessons, complete
-  a4-auth-client/                   ← 3 lessons, complete
+  a3-api-consumption/               ← 4 lessons; M3 pass 2026-08-18 (0002 is
+                                       TypeScript, so it cannot be executed)
+  a4-auth-client/                   ← 3 lessons; M3 pass 2026-08-18
   (03-firebase-backend/)           ← DELETED 2026-08-16. Firebase is out of
                                       scope; Track B replaces it. In git history
                                       if it is ever wanted back

@@ -274,6 +274,11 @@ Phase 2 — Verify and deepen
   Every verifiable lesson executed; the rest marked unverifiable with a reason
   ~20 spine lessons gain: Why this way / When this breaks / What this costs you
 
+Maintenance (ungated, runs alongside)
+  M1  execute every lesson that never had been              done 2026-08-17
+  M2  the example codes that could never be generated       done 2026-08-17
+  M3  extract the plain function from Track A/B lessons     started 2026-08-18
+
 Phase 3 — Foundations, re-architected
   X1  Git & Dev Environment
   C0  Architecture & System Design        ← new
@@ -437,10 +442,11 @@ The ten C-modules, each written **just-in-time** at the point in the sequence
 above where the student reaches it. Never batched ahead — writing 36 lessons
 now would repeat exactly the mistake that produced 95 unverified ones.
 
-## Maintenance — M1 and M2
+## Maintenance — M1, M2 and M3
 
-Not phase work: neither writes a lesson, and neither is gated on where the
-student has reached. Added 2026-08-17, after `7c86660` fixed three fill-blank
+Not phase work: none of them writes a new lesson, and none is gated on where the
+student has reached. M1 and M2 are **done**; M3 started 2026-08-18 and is the
+only one still open. Added 2026-08-17, after `7c86660` fixed three fill-blank
 questions nobody could answer and found a fourth defect purely by re-running
 the verifier over the files it had touched. That is the argument for M1.
 
@@ -463,6 +469,12 @@ Three things make this cheaper than it looks:
   That is the un-retrofitted state, not a defect, and it is Phase 1.5/3 work.
   Record those as `unverifiable` for the solution and keep the other three
   sections, which still run.
+  > **Superseded 2026-08-18 — see M3.** This was the best answer available
+  > before `createSolution` had a per-exercise `unverifiable` field. Marking the
+  > whole lesson is now the *last* resort: it skips every solution, so a pure
+  > function sitting beside a React Native screen goes untested. That is exactly
+  > how 69 lessons ended up at `unverifiable` with honest reasons and untested
+  > logic inside them.
 - **Order by risk, not by module number.** The Phase 2 spine is already
   verified. Start with lessons carrying executable `predict-output` questions,
   since those are where wrong keys hide.
@@ -511,6 +523,41 @@ stayed reported forever and the list could never reach zero. And
 `[A-Z0-9]{4}-[A-Z0-9]{4}` matched lesson ranges like `0001-0004`. Every real
 example code carries a letter label in its first group, so all-digit first
 groups are skipped.
+
+### M3 — The plain function inside a Track A/B lesson
+
+Added 2026-08-18, when M1 finished and left 69 lessons at `unverifiable`. Every
+one of those reasons was **true** — an Express route really does need Postgres
+— and every one of them was also hiding something testable.
+
+The insight is Phase 1.5's, applied outside Module 02: **the deliverable a
+lesson advertises is rarely the thing it teaches.** `a3/0004` advertises an
+infinite-scroll FlatList; what it teaches is what to do with a page of results
+when it lands. `a4/0001` advertises a splash screen; what it teaches is that
+only a 401 ends a session. Those are plain functions, and they run here.
+
+Method, per lesson:
+
+1. Read the lesson for the decision it keeps circling. It is usually the thing
+   its own quiz questions are about, and usually has no `await` in it.
+2. Excuse the un-runnable exercise **per-exercise**:
+   `createSolution("exercise-1", { unverifiable: "…", … })`.
+3. Add the function as its own `createSolution` + `pg-exercise-<stage>`
+   self-check, following the practice pattern in `CLAUDE.md`.
+4. Write the `--wrong` cases. A staged lesson exports `stages`.
+5. Verify. At least one exercise must execute or the lesson stays
+   `unverifiable`, which is the guard that keeps the count honest.
+
+**Check the neighbouring lessons while you are there.** Writing the function
+down has surfaced a contradiction with an adjacent lesson three times out of
+six — a rule stated in prose on one page and broken by code on the next. Those
+are worth more than the verification.
+
+Roughly **19 lessons** have an extractable function; A5 is the largest block.
+About **40** are genuinely infra-bound and should keep the whole-lesson flag.
+**Four are TypeScript** — `a2/*` and `a3/0002` — and no rewrite reaches them,
+because the runner executes JavaScript. That category needs a TS-aware runner
+or nothing.
 
 ## Phase 4 — The operating track
 

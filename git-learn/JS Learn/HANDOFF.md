@@ -583,6 +583,221 @@ injected real newlines into four quiz code strings, breaking the whole block,
 and successive fixes kept being mangled by escape handling until the bytes were
 edited directly.
 
+### Session of 2026-08-18 — the documents were right and the code was wrong
+
+Sixteen commits, and one sentence covers nearly all of them: **every defect
+found today was a claim that had been true when it was written.** Not sloppy
+prose — accurate prose, describing code that later moved. Module 02's framing,
+the answer-position exploit, the permanently-red audit, three retry rules, a
+check that had been correct since August. The code drifted and nothing was
+measuring the gap.
+
+That is the same failure as "Modules 1 and 2 complete" and the playground
+loop-guard paragraph this file already records. It is now clear it is not an
+occasional lapse but *the* recurring defect of this project, and most of today's
+tooling work was aimed at it specifically.
+
+#### The rename that was not just a rename
+
+`02/0013` still said `chat` in its filename while its title, `<h1>` and content
+had said *Token List Screen* since the retrofit. `SESSION.md` said both `0013`
+and `0014` needed renaming; `0014` already matched its own title, so only one
+did. The rename reached `search-index.json`, the module README, the nav in two
+neighbouring lessons, the wrong-case file's **name and its header comment**, and
+`verification-log.json` — where a rename leaves an orphan key that the generator
+never prunes.
+
+`search-index.json` also had `0013` keyed `"Modal Alert dialog popup"` —
+keywords belonging to some other lesson entirely, so search could not find the
+capstone at all.
+
+#### Module 02 — the framing was load-bearing
+
+`SESSION.md` asserted "Module 02 carries zero WhatsApp-clone framing". Measured:
+`chat` in 11 of 15 files, `avatar` in 11. Only `Priya` was genuinely gone, which
+is probably why the claim felt true.
+
+**And it was not cosmetic. Five lessons were broken by it:**
+
+- `0009` sample rows 1–2 were tokens, rows 3–4 were still `Family Group` and
+  `Work Team` with `name`/`preview`. The renderer reads `item.name[0]`, so the
+  two *token* rows threw `TypeError`. The revealed solution crashed on its own
+  data.
+- `0014` had the same split list, plus a line still carrying shell-mangle damage
+  (`timy!'`) from an earlier bulk edit.
+- `0013`'s detail screen rendered `isGroup`, a variable it never destructured —
+  `ReferenceError`, in the capstone.
+- `0007`'s eighth fixture was the only non-token in the list, so that row
+  rendered blank in the lesson about rendering lists.
+- `0002` defined `handleChatPress` while the call site already said
+  `handleTokenPress`.
+
+Plus two that were wrong rather than broken: `0009` showed a badge reading
+**"Group"** whenever a token was *paused*, and a header reading **"online"** —
+presence, in a product built so that nobody learns who the holder is.
+
+**The word-grep was the weakest instrument used all day.** Searching `chat` and
+`avatar` never found the largest signal: WhatsApp's entire palette — `#075E54`,
+`#25D366`, `#128C7E`, `#DCF8C6`, `#ECE5DD` — was the app chrome in 13 of 15
+files, 95 occurrences. Product framing hides in constants. No palette had to be
+invented: `0003` §10 already defined `TokenColors` and said "keep these handy —
+you'll use them throughout the course", written and never applied, so the
+reference and the examples disagreed *on the same page*.
+
+Four `chat`/`avatar` mentions were kept deliberately and must stay — the "a chat
+app puts a photo of a person on every row; Token cannot, and would not want to"
+contrasts. They are the sharpest statements of the product in the module, and a
+bulk replace eats them first. That is why this was done file by file.
+
+#### Three checks, and what it costs to make one worth reading
+
+**`check-pre-blocks.mjs`** closes a real gap: `verify-lesson.mjs` runs what a
+lesson *executes*, and a display `<pre>` is executed by nobody — which is how
+`0014` sat marked `verified` while carrying a block that does not parse.
+
+Getting it quiet took three rounds, recorded in the file because each was a
+chance to silence the signal instead of the noise: **71 findings** (all shell
+`#` comments — "see what's changed"), then **42** (non-JS blocks: a status-code
+table, a screen's UI copy), then **16** (JSX children spanning lines), then
+**0** once the quote had to sit in a code position.
+
+Zero findings is either a clean course or a dead check, and they look identical
+from outside. `test-check-pre-blocks.mjs` is the only thing that tells them
+apart — 14 assertions including the literal `0014` line, *and* the same damage
+inside blocks that also contain `#` comments and JSX, the two suppressions most
+likely to have swallowed it.
+
+**`known-issues.json`** ends the permanently-red audit. It had exited FAIL on
+the same three orphan tables every run, and a build that is always red is read
+as often as a warning list that is mostly noise — after which a *new* error
+lands in a build nobody looks at. Acknowledged errors print under "Known and
+blocked" with a **why** and a **gate**, still fully visible, and stop holding
+the build red.
+
+The rule that keeps it honest is the second one: **an entry matching no error
+also fails, as stale.** Without it the file becomes where errors go to be
+forgotten. When B2 lands and `participants` exists, the audit will fail with
+"no longer matches any error" — that is the signal to delete the entry.
+
+**The warning list** went 3 → 1. Both token warnings were *correct content*:
+`01/0012` feeds deliberately invalid codes to a validator, and `CLAUDE.md` names
+`MERC-8GH2-LP4X` while explaining why it was wrong — the check was warning about
+the paragraph documenting the bug the check exists to prevent. A whole-file
+opt-out on `CLAUDE.md` would be dangerous, since that is the file carrying the
+canonical code lessons copy, so a line-level `audit-allow-token-here` was added
+instead. Then writing the paragraph that documents the new marker named both
+codes on unmarked lines and put warnings straight back to 3 — the third instance
+that day of a document being punished for describing a defect accurately.
+
+#### The answer-position exploit that had already been fixed
+
+`CLAUDE.md` told every author that "always picking the second option scores ~64%
+course-wide". Untrue since `quiz.js` started shuffling options at render: the
+fix landed in the renderer and the warning stayed in the prose.
+
+Measured: 1,368 keyed questions, 61.4% authored at index 1, all shuffled — and
+**48 that render as authored**, because `quiz.js` refuses to shuffle a question
+whose explanation names an option by position. Those 48 were the only real
+residual, and all of them have now been reworded, so `render-as-authored: 0` and
+every question in the course shuffles.
+
+Several were never about options at all. "The second one uses the old value"
+meant the second *revocation*; "calls B and C await the same promise" meant the
+other two *API calls*; "only the last one is valid" meant the most recently
+issued *refresh token*. Those questions had been locked to authored order by a
+turn of phrase.
+
+**The work was instrumental rather than valuable in itself** — three defects
+surfaced only because of it:
+
+- **A mis-keyed question.** `a3/0002` q10 asked which base URL is correct, the
+  explanation said the no-trailing-slash one, and `correct` pointed at the one
+  *with* the slash. Swept all 2,575 for "Option X is correct" disagreeing with
+  the key: exactly one.
+- **17 inverted `which-breaks` questions**, showing "Which of these will fail?"
+  while rewarding the option that works.
+- **An all-of-the-above answer safe only by accident.** `01/0006` q27's "All
+  three" is not recognised by `isPositionPinned`, so it was eligible to be
+  shuffled into the middle where the correct answer reads as nonsense. It was
+  protected purely by a *second* defect — its explanation naming a position —
+  which this very task would have removed.
+
+That last one is the warning for anyone continuing this work: unpinning a
+question can expose something the pinning was accidentally hiding. Read the
+options, not just the explanation.
+
+#### `\bcorrect\b` does not match "correctly"
+
+The sharpest finding of the day. The check for inverted `which-breaks` questions
+**already existed**, and had since the ten conversions on 2026-08-15. It tested
+
+    /\b(correct|right|best|proper)\b/i
+
+and all seventeen survivors were worded with the **adverb** — "Which code
+correctly prevents infinite retry loops?". `\b` needs a non-word character after
+"correct", and "correctly" carries straight on into "ly", so none of them
+matched. The check was right about what it wanted and wrong about how words end.
+
+Same family as the fill-blank check whose `_{2,}` matched the leading
+underscores of `__dirname`: a check making the exact mistake it was written to
+catch. The lesson is narrower than "write better regexes" — **do not assume a
+stem covers its inflections**, because the adverb is how people naturally word
+that question.
+
+An attempt to widen the *option*-naming check the same way was **backed out**:
+"of these" / "of them" / "all three" gave two false positives out of three hits,
+because "All three get equal space" is about flex children and "both of them" is
+about two sessions. "of the above" is the only phrase that cannot mean something
+else. The attempt is recorded in the code so nobody repeats it.
+
+#### Why 69 lessons sat at `unverifiable` — and what actually unblocked them
+
+Every stated reason was **true**. An Express route really does need Postgres.
+The problem was granularity: `--unverifiable` is a property of the *lesson* and
+skips every solution, so a page holding both a React Native screen **and** a
+pure function had to declare the whole thing unrunnable, and whatever was
+testable in it went untested.
+
+`createSolution` now takes its own `unverifiable: "<reason>"`. That exercise is
+skipped with the reason recorded; the others still run. The metric stays honest
+by one rule, verified by injection: **at least one exercise must actually
+execute**, or the status stays `unverifiable` however many playgrounds the page
+has.
+
+This supersedes M1's advice in `TOKEN-TRACK.md`, which said to record such
+lessons as `unverifiable` and keep the other three sections. That was the best
+available answer before the opt-out existed; it is now the second-best one.
+
+Six lessons followed, and **reframing each around its function kept finding
+contradictions between lessons** — every one a case of a page stating a rule
+that a neighbour's code breaks:
+
+- `a3/0002`'s client throws `ApiError(429, retryable: true)` with the reset
+  time. `a3/0003`'s retry helper tested `status < 500`, so a rate limit — the
+  one response that says *come back, and here is when* — was **never retried**,
+  and the `retryable` flag the previous lesson computes was never read by the
+  lesson that needed it.
+- `a4/0001`'s splash screen sent a **network error to `Login`**, destroying a
+  valid session over a tunnel. Its own comment said "could show offline screen
+  or retry" and the code did the other thing — and `a4/0003`, two lessons later,
+  states the rule correctly in prose.
+- `a4/0002`'s own quiz warns against leaving `Login` in the navigator stack, and
+  nothing tested it until `screensFor`.
+
+Both bugs are now wrong-cases, so the lessons fail if anyone reintroduces them.
+
+#### Process notes, all from mistakes made today
+
+- **`git checkout --` during an injection test reverts uncommitted work.** Lost
+  the same lesson edit twice that way. Commit before testing a check.
+- **`--unverifiable` is a property of the lesson, not the run**, and the log is
+  the only place it is recorded. Running `verify-lesson` without it fails on the
+  missing self-check, and **a failing run deletes the entry** — so the lesson
+  silently drops to `unverified`. Did this to `a3/0002` and committed before
+  reading the output, which was the actual mistake.
+- A straight `"` inside a double-quoted explanation string breaks the block. The
+  audit's parse check caught it immediately, which is the system working.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees
