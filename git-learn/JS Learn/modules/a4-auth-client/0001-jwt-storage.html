@@ -271,9 +271,18 @@ export function SplashScreen({ navigation }) {
         body: JSON.stringify({ refreshToken }),
       });
 
-      if (!res.ok) {
-        // Refresh token expired or revoked — go to login
+      if (res.status === 401 || res.status === 403) {
+        // The server REJECTED the token: expired or revoked. This is the only
+        // case that ends the session, and the stored token is now useless.
+        await clearRefreshToken();
         navigation.replace('Login');
+        return;
+      }
+
+      if (!res.ok) {
+        // 5xx — the server is having a bad day. That says nothing about
+        // whether the session is valid, so keep the token and try later.
+        navigation.replace('Offline');
         return;
       }
 
@@ -283,8 +292,9 @@ export function SplashScreen({ navigation }) {
 
       navigation.replace('Main');
     } catch {
-      // Network error — could show offline screen or retry
-      navigation.replace('Login');
+      // Network error — a tunnel, not a rejection. Sending the user to Login
+      // here throws away a perfectly good session because a train moved.
+      navigation.replace('Offline');
     }
   }
 
@@ -293,9 +303,27 @@ export function SplashScreen({ navigation }) {
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>First, the decision the splash screen makes</h2>
+
+    <p>Every branch above ends in <code>navigation.replace(...)</code>, and choosing which one is the entire job. It is also where sessions get thrown away: the difference between "the server said no" and "I could not reach the server" is one <code>catch</code> block, and getting it wrong logs people out on trains.</p>
+
+    <div id="exercise-startup"></div>
+
+    <h3>Check your work</h3>
+
+    <div id="pg-exercise-startup"></div>
+
+    <hr>
+
+    <h2>Then the screens</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <h2>In your own words</h2>
+
+    <div id="explain-a4-0001"></div>
 
     <hr>
 
@@ -309,12 +337,98 @@ export function SplashScreen({ navigation }) {
   </div>
 
   <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
+    createSolution("exercise-startup", {
+      exercise: "Write <code>decideStartup(state)</code>. It takes what the splash screen knows and returns where to go. No navigation, no fetch — just the decision.\n\n<code>state</code> is <code>{ refreshToken, outcome }</code>. <code>refreshToken</code> is the stored string or <code>null</code>. <code>outcome</code> is what the refresh call produced, and is one of:\n\n<ul><li><code>null</code> — not attempted, because there was no token</li><li><code>{ ok: true }</code></li><li><code>{ ok: false, status: 401 }</code> — the server rejected it</li><li><code>{ ok: false, status: 503 }</code> — the server is unwell</li><li><code>{ ok: false, networkError: true }</code> — it never arrived</li></ul>\n\nReturn <code>{ screen, clearToken }</code> where <code>screen</code> is <code>'login'</code>, <code>'main'</code> or <code>'offline'</code>.\n\nThe rules:\n\n1. No stored token at all → <code>'login'</code>. Nothing to clear.\n\n2. Refresh succeeded → <code>'main'</code>.\n\n3. <strong>Only a 401 or 403 ends the session</strong> → <code>'login'</code>, and <code>clearToken: true</code>, because that token will never work again.\n\n4. A network error or a 5xx → <code>'offline'</code>, and <strong>keep the token</strong>. Neither one is the server saying no.",
+      hints: [
+        "Handle the no-token case first — it is the only one where `outcome` is null, and getting it out of the way means nothing below has to guard for it.",
+        "clearToken is true in exactly one branch. If you find yourself setting it in two, one of them is treating a failure to reach the server as a rejection.",
+        "A 503 and a dropped connection deserve the same answer. Grouping them makes rule 4 one branch rather than two."
+      ],
+      solution: `function decideStartup(state) {
+  // 1. Nothing stored — first launch, or a previous logout.
+  if (!state.refreshToken) return { screen: 'login', clearToken: false };
+
+  const outcome = state.outcome;
+
+  // 2. It worked.
+  if (outcome && outcome.ok) return { screen: 'main', clearToken: false };
+
+  // 3. The ONLY case that ends a session: the server looked at the token and
+  //    refused it. Now it is worthless, so drop it.
+  if (outcome && (outcome.status === 401 || outcome.status === 403)) {
+    return { screen: 'login', clearToken: true };
+  }
+
+  // 4. Everything else -- no connection, a 500, a 503 -- says something about
+  //    the network or the server, and nothing about the session. Keep the
+  //    token: the user is still logged in, they just cannot prove it yet.
+  return { screen: 'offline', clearToken: false };
+}`
+    });
+
+    createPlayground("pg-exercise-startup", `// Write decideStartup(state) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+const TOKEN = "rt_9f3c";   // a stored token, so 'kept' and 'cleared' differ visibly
+
+try {
+  try {
+    const r = decideStartup({ refreshToken: null, outcome: null });
+    check("no stored token goes to login", r.screen === "login", "got " + r.screen);
+    check("nothing to clear when nothing was stored", r.clearToken === false, "got " + r.clearToken);
+  } catch (e) { check("no stored token goes to login", false, "threw " + e.message); }
+
+  try {
+    const r = decideStartup({ refreshToken: TOKEN, outcome: { ok: true } });
+    check("a successful refresh goes to main", r.screen === "main", "got " + r.screen);
+    check("a successful refresh keeps the token", r.clearToken === false, "got " + r.clearToken);
+  } catch (e) { check("a successful refresh goes to main", false, "threw " + e.message); }
+
+  try {
+    const r = decideStartup({ refreshToken: TOKEN, outcome: { ok: false, status: 401 } });
+    check("a rejected token goes to login", r.screen === "login", "got " + r.screen);
+    check("a rejected token is cleared", r.clearToken === true,
+          "got " + r.clearToken + " -- it will never work again, so keeping it just fails again next launch");
+    const f = decideStartup({ refreshToken: TOKEN, outcome: { ok: false, status: 403 } });
+    check("a 403 is treated the same as a 401", f.screen === "login" && f.clearToken === true,
+          "got " + f.screen + "/" + f.clearToken);
+  } catch (e) { check("a rejected token ends the session", false, "threw " + e.message); }
+
+  try {
+    // The whole point of the lesson: this is NOT a rejection.
+    const r = decideStartup({ refreshToken: TOKEN, outcome: { ok: false, networkError: true } });
+    check("a network error does NOT go to login", r.screen === "offline",
+          "got " + r.screen + " -- a tunnel is not the server saying no");
+    check("a network error keeps the token", r.clearToken === false,
+          "got " + r.clearToken + " -- the session is still valid, it just cannot be proved right now");
+  } catch (e) { check("a network error does not end the session", false, "threw " + e.message); }
+
+  try {
+    const r = decideStartup({ refreshToken: TOKEN, outcome: { ok: false, status: 503 } });
+    check("a 503 does not go to login", r.screen === "offline", "got " + r.screen);
+    check("a 503 keeps the token", r.clearToken === false, "got " + r.clearToken);
+  } catch (e) { check("a 5xx does not end the session", false, "threw " + e.message); }
+} catch (e) {
+  console.log("Write decideStartup(state) above, then press Run.");
+}`);
+
+    createExplain("explain-a4-0001", {
+      prompt: "Only a 401 or 403 clears the stored refresh token. Explain what the user experiences if a network error clears it too — and why that bug is invisible to anyone testing on office wifi."
+    });
+
     createSolution("exercise-1", {
+      unverifiable: "the screens are React Native with expo-secure-store, needing a device keychain and a running API",
       exercise: "Build Token's complete login flow: (1) Install expo-secure-store, (2) Create the auth store module (app/src/auth/store.ts) with get/set/clear functions, (3) Build the LoginScreen with email + password inputs and error handling, (4) Build the RegisterScreen with displayName added, (5) Build the SplashScreen that checks for an existing refresh token on app launch and either refreshes or redirects to login.",
       hints: [
         "Use secureTextEntry on the password TextInput to show dots instead of characters.",
