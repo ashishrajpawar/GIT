@@ -645,6 +645,32 @@ node scripts/test-explain.mjs          # explain.js: saving, restoring, key
                                        # collisions, storage being unavailable
 ```
 
+**`verify-lesson.mjs` only runs what a lesson *executes*.** A plain
+`<pre><code>` block is display-only — nothing parses it — so a broken one
+passes every check and fails in the student's editor when they copy it.
+`02/0014` carried a shell-mangle fragment (`timy!',`) for a fortnight while
+marked `verified`. `scripts/check-pre-blocks.mjs` closes that gap and **runs
+inside `audit.mjs`**, as an error; run it alone to see the detail:
+
+```bash
+node scripts/check-pre-blocks.mjs                    # whole course
+node scripts/check-pre-blocks.mjs modules/02-react-native
+node scripts/test-check-pre-blocks.mjs               # 14 assertions — see below
+```
+
+It reports exactly one thing: a `'` or `"` string left open at end of line
+inside a **JavaScript** block, where the quote sits in a code position. That
+narrowness is deliberate and hard-won — the first version fired 71 times, all
+wrong, because shell `#` comments say things like "see what's changed". Three
+suppressions followed (non-JS blocks, `#`/`--` comment lines, JSX children),
+and each one is a chance to have silenced the signal instead of the noise.
+**`test-check-pre-blocks.mjs` is what proves it did not** — it asserts the real
+`0014` line is still caught, including when the same block also contains `#`
+lines and JSX. A clean course and a broken check look identical from outside;
+that suite is the only thing that tells them apart. If the check ever starts
+crying wolf, tighten `looksLikeJavaScript` or `blankJsxChildren` and add the
+case to the suite — do not demote it to a warning and walk away.
+
 Run both after touching `dom-sandbox.js` or `playground.js`. `verify-lesson.mjs`
 reimplements the execution call, so it cannot catch a bug in the widget itself —
 that is what `test-playground-dom.mjs` is for.

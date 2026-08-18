@@ -24,6 +24,7 @@ import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
+import { scanPreBlocks } from "./check-pre-blocks.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = new Set(process.argv.slice(2));
@@ -352,6 +353,20 @@ if (exists(indexPath)) {
   missing.forEach((m) => err(`search-index: lesson not indexed — ${m.id}`));
   indexStatus = `${idx.length} entries, ${dead.length} dead, ${missing.length} unindexed`;
 }
+
+// -------------------------------------------------- display <pre> blocks
+
+/* verify-lesson.mjs only runs what a lesson EXECUTES. A plain <pre><code>
+   block is display-only, so a broken one passes every check and still fails in
+   the student's editor when they copy it. 02/0014 carried a shell-mangle
+   fragment (`timy!',`) for a fortnight while marked `verified`.
+
+   An error, not a warning: the block is wrong, there is nothing to weigh up,
+   and it is the paste that a lesson exists to hand over. See
+   scripts/test-check-pre-blocks.mjs for what it does and does not catch. */
+const preScan = scanPreBlocks(path.join(ROOT, "modules"));
+preScan.findings.forEach((f) =>
+  err(`display block: unterminated ${f.quote} string — ${f.file}:${f.line}`));
 
 // -------------------------------------------------- token alphabet
 

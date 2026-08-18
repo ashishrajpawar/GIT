@@ -155,6 +155,19 @@ Durable gotchas only. Anything narrative is in `HANDOFF.md`.
 
 ### Tooling limits worth knowing
 
+- **`verify-lesson.mjs` has no opinion about display `<pre>` blocks** — it runs
+  what a lesson executes, and a display block is executed by nobody. That gap is
+  now covered by `check-pre-blocks.mjs`, which runs inside the audit as an
+  error. Its scope is one defect: an unterminated `'`/`"` in a JS block. It is
+  **not** a syntax check, and deliberately so — the blocks are JSX, fragments,
+  SQL and shell, and a parser would reject nearly all of them.
+- **When a check is tuned to silence false positives, write the suite that
+  proves it still fires.** `check-pre-blocks` went from 71 findings (all wrong)
+  to 0 across three suppressions. Zero findings is either a clean course or a
+  dead check and the two are indistinguishable from outside;
+  `test-check-pre-blocks.mjs` is the only thing that tells them apart, and it
+  asserts the original `0014` damage is still caught.
+
 - `verify-lesson.mjs` shims `setTimeout` and `clearTimeout` onto a drainable
   queue but **does not model Node's phase ordering** — `process.nextTick` and
   `setImmediate` questions are skipped, because the sandbox gets them wrong.
