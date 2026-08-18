@@ -121,12 +121,24 @@ A lesson that shows a wrong alphabet deliberately opts out by containing the
 string `audit-allow-alphabet`.
 
 **A lesson whose *subject* is invalid codes opts out of the example-code check
-with `audit-allow-token-fixtures`.** Only `02/0004` has it — it teaches the
-redemption field, so it carries six deliberately impossible codes to reject, and
-six standing warnings would train everyone to ignore the list. The bargain is
-deliberately narrow: **the alphabet check is an error and still applies to
-opted-out files.** A wrong example code is one bad code; a wrong alphabet is an
-unlimited supply, and that one is never opt-outable.
+with `audit-allow-token-fixtures`.** `02/0004` teaches the redemption field and
+`01/0012` validates codes before calling the API, so both carry deliberately
+impossible codes as the thing being rejected — `01/0012`'s `MERC-8GH2-KP4O` is
+the canonical example with its last character swapped for an excluded letter,
+which is precisely why it is useful. Standing warnings about those would train
+everyone to ignore the list. The bargain is deliberately narrow: **the alphabet
+check is an error and still applies to opted-out files.** A wrong example code
+is one bad code; a wrong alphabet is an unlimited supply, and that one is never
+opt-outable.
+
+**One line, not one file: `audit-allow-token-here`.** A file that must keep
+being scanned, but has a single legitimate reason to name a bad code, marks that
+*line* instead. This file is the only user: the paragraph above names
+`MERC-8GH2-LP4X` while explaining why it was wrong, and the check was warning
+about the documentation of the bug it exists to prevent. A whole-file opt-out
+here would be actively dangerous — `CLAUDE.md` carries the canonical code a
+lesson copies, which is how the original spread to 36 files. **A marker must be
+claimable only by the content it guards.**
 
 ### Token repo layout (one git repo, four folders)
 

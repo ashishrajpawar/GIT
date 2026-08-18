@@ -192,8 +192,18 @@ Durable gotchas only. Anything narrative is in `HANDOFF.md`.
   lesson needs one, add it to the sandbox *and* to `scripts/test-dom-sandbox.mjs`
   in the same commit.
 - A file containing **`audit-allow-token-fixtures`** is skipped by the
-  example-code check. Only `02/0004` has it, because its subject *is* invalid
-  codes. The alphabet check is an error and still applies to opted-out files.
+  example-code check. `02/0004` and `01/0012` have it, because their subject
+  *is* invalid codes. The alphabet check is an error and still applies to
+  opted-out files — verified by injection, not assumed.
+- **`audit-allow-token-here`** is the line-level version, and `CLAUDE.md` is its
+  only user: it names `MERC-8GH2-LP4X` while explaining why that code was wrong.
+  A whole-file opt-out there would suppress the canonical-code protection that
+  matters most. Verified that a bad code *elsewhere* in `CLAUDE.md` is still
+  caught.
+- **Warnings are down to 1** (a real broken link in legacy Module 07). Both
+  token warnings were correct content — the list was mostly noise, which is the
+  state that hid three unanswerable questions behind 24 blank-count warnings.
+  Treat a warning as real now.
 
 ### Standing facts
 
