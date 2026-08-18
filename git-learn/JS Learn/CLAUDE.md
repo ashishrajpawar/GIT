@@ -781,6 +781,34 @@ node scripts/verify-lesson.mjs modules/b7-token-engine/0001-token-generation-red
      --unverifiable "the revealed solution is an Express route needing Postgres"
 ```
 
+**Prefer the per-exercise opt-out to the whole-lesson one.** `--unverifiable` is
+all-or-nothing: it skips *every* solution, so a lesson holding both a React
+Native screen and a pure function had to declare the whole thing unrunnable, and
+the function went untested. That is what kept 69 lessons at `unverifiable` while
+most of them contained something perfectly testable. A `createSolution` can now
+carry its own reason:
+
+```js
+createSolution("exercise-1", {
+  unverifiable: "the screen is React Native with FlatList, needing a device and a running API",
+  exercise: "...", solution: `...`
+});
+```
+
+That exercise is skipped with its reason recorded; every *other* exercise in the
+lesson still runs, and the lesson reaches `verified`. **The metric stays honest
+by one rule: at least one exercise must actually execute.** Excuse them all and
+the status is `unverifiable` however many playgrounds the page has — the same
+guard as `nothing-to-verify`, and for the same reason.
+
+The pattern this unlocks is Phase 1.5's: **find the plain function inside the
+lesson and give it its own exercise.** `a3/0004` is the worked example — the
+screen is excused, and `applyPage` (stale responses, refresh-replaces-append,
+overlapping pages, `hasMore`) is written, self-checked and covered by seven
+wrong-cases. Roughly 25 of the remaining `unverifiable` lessons look like this.
+Four cannot be helped this way at all: `a2/*` and `a3/0002` are TypeScript, and
+the runner executes JavaScript.
+
 **Staged exercises** — a page that builds one program in several steps names its
 exercises `exercise-<stage>` and their self-checks `pg-exercise-<stage>`
 (`exercise-gen` → `pg-exercise-gen`). One-exercise lessons keep the original

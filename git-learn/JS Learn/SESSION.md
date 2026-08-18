@@ -14,6 +14,13 @@ how far it got.
 
 **Nothing.** Working tree clean as of 2026-08-18.
 
+**Next unit: Phase 1.5's pattern for Track A/B.** The blocker is now removed —
+see below. `a3/0004` is done and is the worked example; ~24 more look like it.
+One lesson per commit: find the plain function, excuse the un-runnable exercise
+with a per-exercise reason, add `createSolution` + self-check, write the
+`--wrong` cases, verify. **Not a batch job** — `a3/0004` alone needed seven
+wrong-cases to be worth anything.
+
 The answer-position work is **finished**: `render-as-authored` is **0**, so
 every question in the course now shuffles its options. Three defects surfaced
 *because* of that work, all bigger than the work itself:
@@ -177,6 +184,25 @@ Durable gotchas only. Anything narrative is in `HANDOFF.md`.
   `verify-lesson` without it fails on the missing self-check, and **a failing run
   deletes the entry**, so the lesson silently drops to `unverified`. I did this
   to `a3/0002`. Check the log before re-verifying a lesson you did not write.
+
+### Why 69 lessons sat at `unverifiable`
+
+Every stated reason was **true** — an Express route really does need Postgres.
+The problem was that `--unverifiable` is a property of the *lesson*, so one
+un-runnable exercise made the whole page unrunnable and any pure function in it
+went untested. `a3/0004` is the case in point: its exercise is a FlatList
+screen, and its actual subject is what to do with a page of results when it
+arrives, which is a plain function.
+
+`createSolution` now takes its own `unverifiable: "<reason>"`. The screen is
+excused, `applyPage` is executed, and the lesson is `verified`. **At least one
+exercise must actually execute** or the status stays `unverifiable` — otherwise
+the opt-out becomes a way to mark work done by declaring it undoable.
+
+Rough shape of the remaining 68: **~24 have an extractable function** (validation,
+routing, merging, retry rules, rate limiting), **~40 are genuinely infra** (a
+device, a VPS, two phones), and **4 are TypeScript**, which the runner cannot
+execute at all — that one needs a TS-aware runner, not a rewrite.
 
 ### Tooling limits worth knowing
 

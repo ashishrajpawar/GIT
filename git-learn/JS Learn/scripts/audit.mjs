@@ -107,6 +107,9 @@ function extractQuizzes(html, file) {
       createQuiz: (id, qs) => Array.isArray(qs) && out.push(...qs),
       createPlayground() {},
       createSolution() {},
+      /* Same reason as the three above: an unstubbed component makes the block
+         throw, and the audit then reports a working lesson as broken. */
+      createExplain() {},
       document: permissive,
       window: permissive,
       localStorage: permissive,

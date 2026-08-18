@@ -225,9 +225,29 @@ const { items: tokens, loading, loadingMore, loadMore, refresh } = usePaginatedA
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>First, the part that has no screen in it</h2>
+
+    <p>Everything above is wiring. The decision that actually goes wrong in production is smaller than any of it: <strong>when a page of results comes back, what do you do with it?</strong> Append it? Replace what you have? Ignore it entirely?</p>
+
+    <p>Get that wrong and the bug does not look like a pagination bug. It looks like duplicated rows, or a list that flickers back to old data after a pull-to-refresh, or a token appearing twice with the same code. So write that decision on its own, where you can test it without a phone.</p>
+
+    <div id="exercise-merge"></div>
+
+    <h3>Check your work</h3>
+
+    <div id="pg-exercise-merge"></div>
+
+    <hr>
+
+    <h2>Then the screen around it</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <h2>In your own words</h2>
+
+    <div id="explain-a3-0004"></div>
 
     <hr>
 
@@ -241,12 +261,107 @@ const { items: tokens, loading, loadingMore, loadMore, refresh } = usePaginatedA
   </div>
 
   <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
+    createSolution("exercise-merge", {
+      exercise: "Write <code>applyPage(state, response)</code>. It takes the list's current state and one page of results, and returns the new state. No React, no FlatList — a plain function.\n\n<code>state</code> is <code>{ items, nextCursor, hasMore, requestId }</code>. <code>response</code> is <code>{ requestId, cursor, items, nextCursor }</code>, where <code>cursor</code> is the cursor that was <em>sent</em> — <code>null</code> means this was a refresh from the top.\n\nFour rules:\n\n1. If <code>response.requestId</code> is not <code>state.requestId</code>, the response is stale — the user refreshed while it was in flight. Return <strong>the same state object</strong>, unchanged.\n\n2. If <code>response.cursor</code> is <code>null</code> it was a refresh: <strong>replace</strong> items, do not append.\n\n3. Otherwise append — but drop any item whose <code>id</code> is already present, and any duplicate <em>within</em> the incoming page. Pages overlap when rows are inserted between requests.\n\n4. <code>hasMore</code> is true only while <code>nextCursor</code> is not null.",
+      hints: [
+        "Rule 1 is an identity check, not a value check: return `state` itself, so React sees the same reference and skips the re-render.",
+        "A Set of ids you have already kept handles both kinds of duplicate at once — the ones already in the list and the ones repeated inside the page.",
+        "Build the new items array first, then return one object at the end. Deciding replace-vs-append up front keeps the rest identical."
+      ],
+      solution: `function applyPage(state, response) {
+  // 1. Stale response — the user has moved on. Same object, so React skips it.
+  if (response.requestId !== state.requestId) return state;
+
+  // 2. A refresh sent no cursor, so it replaces rather than extends.
+  const isRefresh = response.cursor === null;
+  const base = isRefresh ? [] : state.items;
+
+  // 3. One Set covers both overlaps: already-held ids and repeats in the page.
+  const seen = new Set(base.map(item => item.id));
+  const merged = base.slice();
+  for (const item of response.items) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    merged.push(item);
+  }
+
+  return {
+    items: merged,
+    nextCursor: response.nextCursor,
+    hasMore: response.nextCursor !== null,
+    requestId: state.requestId,
+  };
+}`
+    });
+
+    createPlayground("pg-exercise-merge", `// Write applyPage(state, response) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+const t = (id) => ({ id, label: "token " + id });
+
+try {
+  // Deliberately 3 held and a 2-item page that overlaps by exactly one AND
+  // repeats one of its own, so append / dedupe-outer-only / dedupe-inner-only
+  // all produce different answers. Equal-length fixtures would hide two of them.
+  const held = { items: [t("a"), t("b"), t("c")], nextCursor: "c2", hasMore: true, requestId: 7 };
+
+  try {
+    const same = applyPage(held, { requestId: 9, cursor: "c2", items: [t("z")], nextCursor: null });
+    check("a stale response returns the SAME state object", same === held,
+          "got a new object — React will re-render for a response the user has already moved past");
+  } catch (e) { check("a stale response returns the SAME state object", false, "threw " + e.message); }
+
+  try {
+    const r = applyPage(held, { requestId: 7, cursor: null, items: [t("x"), t("y")], nextCursor: "c9" });
+    check("a refresh replaces the list", r.items.map(i => i.id).join(",") === "x,y",
+          "got " + r.items.map(i => i.id).join(",") + " — a refresh must not append to stale rows");
+  } catch (e) { check("a refresh replaces the list", false, "threw " + e.message); }
+
+  try {
+    const r = applyPage(held, { requestId: 7, cursor: "c2", items: [t("c"), t("d"), t("d")], nextCursor: "c3" });
+    check("an overlapping page is appended without repeating a held id",
+          r.items.map(i => i.id).join(",") === "a,b,c,d",
+          "got " + r.items.map(i => i.id).join(","));
+    check("a duplicate inside the incoming page is dropped too",
+          r.items.filter(i => i.id === "d").length === 1,
+          "'d' appears " + r.items.filter(i => i.id === "d").length + " times");
+  } catch (e) { check("an overlapping page merges cleanly", false, "threw " + e.message); }
+
+  try {
+    const end = applyPage(held, { requestId: 7, cursor: "c2", items: [t("e")], nextCursor: null });
+    check("hasMore goes false when nextCursor is null", end.hasMore === false,
+          "got " + end.hasMore);
+    const more = applyPage(held, { requestId: 7, cursor: "c2", items: [t("e")], nextCursor: "c4" });
+    check("hasMore stays true while a cursor comes back", more.hasMore === true,
+          "got " + more.hasMore);
+  } catch (e) { check("hasMore tracks nextCursor", false, "threw " + e.message); }
+
+  try {
+    const r = applyPage(held, { requestId: 7, cursor: "c2", items: [t("d")], nextCursor: "c3" });
+    check("the original items array is not mutated", held.items.length === 3,
+          "held.items is now " + held.items.length + " long — you appended in place");
+  } catch (e) { check("the original items array is not mutated", false, "threw " + e.message); }
+} catch (e) {
+  console.log("Write applyPage(state, response) above, then press Run.");
+}`);
+
+    createExplain("explain-a3-0004", {
+      prompt: "A stale response returns <em>the same state object</em> rather than a copy with the same contents. Explain what breaks if you return a copy instead — and why that is the same idea as <code>sort()</code> reordering React state in place."
+    });
+
     createSolution("exercise-1", {
+      unverifiable: "the screen is React Native with FlatList, needing a device and a running API",
       exercise: "Build the full paginated token list screen: (1) Create the usePaginatedApi hook, (2) Build TokenListScreen using it with FlatList's onEndReached and onRefresh, (3) Show a loading footer while fetching more items, (4) Handle the edge case where the user pulls to refresh while a load-more is in progress, (5) Build a MessageThread screen with inverted FlatList for chat-style pagination (newest at bottom, older on scroll up).",
       hints: [
         "onEndReachedThreshold of 0.5 means 'fire when 50% of the remaining content is visible' — good balance between eagerness and not over-fetching.",

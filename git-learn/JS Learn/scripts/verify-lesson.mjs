@@ -131,6 +131,11 @@ for (const b of blocks) {
     createPlayground: (id, code, opts) => (playgrounds[id] = { code, opts: opts || {} }),
     createSolution: (id, cfg) => (solutions[id] = cfg),
     createQuiz: (id, qs) => (quizzes[id] = qs),
+    /* Stubbed for the same reason as the other three: a lesson calling a
+       component this context does not define fails to evaluate, and the
+       failure reads as a broken lesson rather than a missing stub. Nothing is
+       asserted about the prompt — test-explain.mjs owns explain.js. */
+    createExplain: () => {},
     document: permissive, window: permissive, console: { log() {}, warn() {}, error() {} },
     setTimeout() {}, addEventListener() {},
   };
@@ -309,10 +314,33 @@ const MARKER = "// --- Self-check: leave everything below this line alone ---";
 const stripDemo = (src) =>
   src.split("\n").filter((l) => !/^(console\.log|const \w+ = (create|make))/.test(l)).join("\n");
 
+let solutionsExecuted = 0;
+const excused = [];
+
 for (const [id, cfg] of Object.entries(solutions)) {
   const pgId = pairFor(id);
   const pg = playgrounds[pgId];
   if (unverifiableReason) { ok(`${id}: not executed — ${unverifiableReason}`); continue; }
+  /* Per-exercise opt-out. Whole-lesson --unverifiable was the only escape, and
+     it is all-or-nothing: a lesson containing BOTH a React Native screen and a
+     pure function had to declare the whole thing unrunnable, so the function
+     went untested and the lesson stayed at `unverifiable` however much of it
+     was checkable. That blocked the Phase 1.5 pattern — find the plain function
+     and test it — for every Track A/B lesson whose headline deliverable needs a
+     device or a database.
+
+     A `createSolution` may now carry `unverifiable: "<reason>"`. It is skipped
+     with its reason recorded, and the OTHER exercises in the lesson still run.
+
+     The metric stays honest by one rule, enforced below: a lesson only reaches
+     `verified` if at least one exercise was actually EXECUTED. Excuse them all
+     and it is still `unverifiable`, which is what stops this becoming a way to
+     mark work done by declaring it undoable. */
+  if (cfg.unverifiable) {
+    ok(`${id}: not executed — ${cfg.unverifiable}`);
+    excused.push(`${id}: ${cfg.unverifiable}`);
+    continue;
+  }
   if (!pg || !pg.code.includes(MARKER)) { fail(`${id}: no self-check found in ${pgId}`); continue; }
   const selfCheck = pg.code.split(MARKER)[1];
   const impl = stripDemo(cfg.solution);
@@ -321,7 +349,7 @@ for (const [id, cfg] of Object.entries(solutions)) {
   const bad = logs.filter((l) => l.startsWith("FAIL"));
   const passed = logs.filter((l) => l.startsWith("PASS"));
   if (bad.length) { bad.forEach((b) => fail(`${id}: ${b}`)); }
-  else ok(`${id}: all ${passed.length} checks pass`);
+  else { solutionsExecuted++; ok(`${id}: all ${passed.length} checks pass`); }
 }
 
 // ---- 5. optional: alternatives and mistakes -------------------------------
@@ -383,10 +411,20 @@ const ranSomething =
   Object.keys(playgrounds).length > 0 ||
   (!unverifiableReason && Object.keys(solutions).length > 0);
 
+/* Every exercise excused and none executed is `unverifiable`, not `verified` —
+   otherwise per-exercise opt-outs would become a way to mark a lesson done by
+   declaring its contents unrunnable, which is the same overstatement the
+   `nothing-to-verify` status was added to prevent. */
+const allSolutionsExcused =
+  !unverifiableReason && excused.length > 0 && solutionsExecuted === 0;
+const effectiveReason = unverifiableReason
+  || (allSolutionsExcused ? excused.join("; ") : null);
+
 if (failures) delete log[lessonId];
 else log[lessonId] = {
-  status: unverifiableReason ? "unverifiable" : ranSomething ? "verified" : "nothing-to-verify",
-  reason: unverifiableReason || undefined,
+  status: effectiveReason ? "unverifiable" : ranSomething ? "verified" : "nothing-to-verify",
+  reason: effectiveReason || undefined,
+  excused: excused.length ? excused : undefined,
   at: new Date().toISOString().slice(0, 10),
   solutions: Object.keys(solutions).length,
   playgrounds: Object.keys(playgrounds).length,
@@ -399,10 +437,11 @@ fs.writeFileSync(LOG_PATH, JSON.stringify(ordered, null, 2) + "\n");
 
 const verdict = failures
   ? `FAIL — ${failures} problem(s)`
-  : unverifiableReason
-    ? `OK — everything runnable checked; solution recorded UNVERIFIABLE (${unverifiableReason})`
+  : effectiveReason
+    ? `OK — everything runnable checked; solution recorded UNVERIFIABLE (${effectiveReason})`
     : ranSomething
-      ? "OK — lesson verified"
+      ? `OK — lesson verified` +
+        (excused.length ? ` (${solutionsExecuted} exercise(s) executed, ${excused.length} excused)` : "")
       : "OK — but NOTHING TO VERIFY: no playground, no solution, no executable question";
 console.log(`\n${verdict}\n`);
 process.exit(failures ? 1 : 0);
