@@ -218,11 +218,21 @@ function validateQuestion(q, file, i) {
     if (!Array.isArray(q.variants)) return err(`${at}: no variants array`);
     if (typeof q.correct !== "number" || q.correct < 0 || q.correct >= q.variants.length)
       err(`${at}: correct=${q.correct} out of range (${q.variants.length} variants)`);
-    // A "which is correct?" question tagged which-breaks renders under the
-    // fixed prompt "Which of these will fail?" — the key then rewards the
-    // RIGHT option while the screen asks for the failing one.
+    /* A "which is correct?" question tagged which-breaks renders under the
+       fixed prompt "Which of these will fail?" — the key then rewards the
+       RIGHT option while the screen asks for the failing one.
+
+       This check existed and still missed seventeen of them, every one worded
+       with the ADVERB: `\bcorrect\b` does not match "correctly", because \b
+       needs a non-word character and the word carries on into "ly". "Which code
+       correctly prevents infinite retry loops?" sailed straight through. Same
+       family as the fill-blank check whose `_{2,}` matched `__dirname` — a
+       check making the very mistake it was written to catch. Match the adverbs
+       explicitly, and do not assume a stem covers its inflections. */
     const text = String(q.question || "");
-    if (/\b(correct|right|best|proper)\b/i.test(text) && !/\b(break|fail|wrong|error|reject|NOT )/i.test(text))
+    const asksForWorking = /\b(correct(ly)?|right(ly)?|best|proper(ly)?|safest|will work|should you (use|choose|pick))\b/i;
+    const asksForFailure = /\b(break|fail|wrong|error|reject|NOT |not work|broken|bug|problem|issue|race condition|leak|crash|vulnerab|insecure|bad)\b/i;
+    if (asksForWorking.test(text) && !asksForFailure.test(text))
       err(`${at}: which-breaks phrased as "which is correct?" — semantics inverted`);
   } else if (t === "order-steps") {
     if (!Array.isArray(q.steps) || !Array.isArray(q.correctOrder))
