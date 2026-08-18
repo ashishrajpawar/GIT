@@ -12,17 +12,20 @@ how far it got.
 
 ## In progress
 
-**Rewriting the explanations that name an option by position**, so those
-questions are free to shuffle. Started 2026-08-18 at 48; **35 remain**. Each is
-a hand edit — see the warning below about what unpinning a question can expose.
+**Nothing.** Working tree clean as of 2026-08-18.
 
-Two defects surfaced *because* of this work, both bigger than the work itself:
+The answer-position work is **finished**: `render-as-authored` is **0**, so
+every question in the course now shuffles its options. Three defects surfaced
+*because* of that work, all bigger than the work itself:
 
 - **A mis-keyed question.** `a3/0002` q10 asked which base URL is correct, its
   explanation said the no-trailing-slash one, and `correct` pointed at the
   trailing-slash one. Swept all 2,575 for "Option X is correct" disagreeing with
   the key: exactly one. Fixed.
-- **17 inverted `which-breaks` questions.** Fixed and now guarded — see below.
+- **17 inverted `which-breaks` questions**, each showing "Which of these will
+  fail?" while rewarding the option that works. Fixed, and the check that should
+  have caught them is fixed too.
+- **An all-of-the-above answer that was safe only by accident** (`01/0006` q27).
 
 ## Next action
 
@@ -177,9 +180,11 @@ Durable gotchas only. Anything narrative is in `HANDOFF.md`.
 
 ### Tooling limits worth knowing
 
-- **The answer-position clustering is not a live defect.** 61.4% of keys sit at
-  index 1 and the audit still prints it, but `quiz.js` shuffles options at
-  render, so it never reaches a student. `CLAUDE.md` claimed the ~64% scoring
+- **Answer position is now fully handled.** 61.4% of keys sit at index 1 and the
+  audit still prints it, but `quiz.js` shuffles options at render and — since
+  2026-08-18 — **every** question shuffles, because the 48 whose explanations
+  named a position have all been reworded. `render-as-authored: 0`. If that
+  number ever rises, a new explanation has named an option by letter or place. `CLAUDE.md` claimed the ~64% scoring
   exploit was live long after the renderer had killed it — stale prose again,
   same shape as the playground loop-guard note. The stdout line now says
   "authored; shuffled at render".

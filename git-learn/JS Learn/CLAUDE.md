@@ -573,12 +573,13 @@ summarised here rather than left in the ADR:
    playground loop-guard note below. Authored keys are deliberately left alone —
    rewriting 1,284 of them can break keys, a renderer change cannot.
 
-   Two carve-outs where authored order *does* reach the student, so keep varying
-   positions when you write:
+   Two carve-outs where authored order *does* reach the student:
    - A question whose **explanation names a position** ("Option A creates…")
      renders as authored, because shuffling would contradict the explanation.
-     The audit reports this subset separately — it is the only real residual.
-     Better still, do not write explanations that name a position.
+     All 48 of these were reworded on 2026-08-18, so the audit now reports
+     `render-as-authored: 0` and every question shuffles. **Never write an
+     explanation that names an option by letter or place** — describe what the
+     option *says*. If that number rises above 0, one has crept back in.
    - Options whose meaning depends on position ("All of the above", "Both…")
      are pinned last. And per the note above, `quiz.js` shuffling is exactly why
      "Both A and B" is broken wherever it sits.
