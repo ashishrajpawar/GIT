@@ -12,12 +12,16 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean as of 2026-08-18, last commit `1e5e62f`.
+**M3 on A5**, started 2026-08-19. Working from `3b43bc7`.
+
+`a5/0001` is **done and verified**. Next up is `a5/0002` (QR generation and
+scanning) — not yet started, nothing uncommitted.
 
 ## Next action
 
-**Nothing is queued that is not gated.** Pick from the table below, or — more
-useful — work with the student on the lesson they are actually on.
+If `a5/0001` lands: continue down A5 — `0002` QR, `0003` list management,
+`0004` access rules, `0005` share-path warnings. One commit per lesson, so an
+abrupt stop loses at most one.
 
 | Work | Gate |
 |---|---|
@@ -78,8 +82,13 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `a4/0001` | `decideStartup` | only 401/403 ends a session |
 | `a4/0002` | `screensFor` | a forbidden screen does not exist, it is not covered |
 | `a4/0003` | `planFor` | the `isRetry` guard; a 403 is not refreshable |
+| `a5/0001` | `codeFromBytes` | 248 is *inside* the fold, 247 is not; short block → `null` |
 
-Remaining, roughly: **~19 have an extractable function** (A5 ×5, A6, A8 ×4,
+**A5 note:** `0001` had no `createExplain` prompt and did not load `explain.js`
+at all. Check the rest of A5 for the same gap — the module predates the practice
+pattern being made universal, so it is unlikely to be the only one.
+
+Remaining, roughly: **~18 have an extractable function** (A5 ×5, A6, A8 ×4,
 A11, B2, B3, B5, B7, B10 …), **~40 are genuinely infra** (a device, a VPS, two
 phones, a live TURN server), and **4 are TypeScript**, which the runner cannot
 execute at all.

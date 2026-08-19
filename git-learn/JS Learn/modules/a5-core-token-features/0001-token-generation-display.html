@@ -758,9 +758,27 @@ setTimeout(async () =&gt; {
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>First, the four lines the whole argument is about</h2>
+
+    <p>Everything above this point argues that rejecting the biased range is worth doing. The argument is only worth as much as the code that implements it, and that code is a pure function: bytes in, letters out, no crypto and no database. Write it and the rest of the lesson is plumbing.</p>
+
+    <div id="exercise-bytes"></div>
+
+    <h3>Check your work</h3>
+
+    <div id="pg-exercise-bytes"></div>
+
+    <hr>
+
+    <h2>Then the endpoint and the screen</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <h2>In your own words</h2>
+
+    <div id="explain-a5-0001"></div>
 
     <hr>
 
@@ -776,6 +794,7 @@ setTimeout(async () =&gt; {
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -797,7 +816,115 @@ for (let i = 0; i < 5; i++) {
   console.log(demoGenerateCode());
 }`);
 
+    createSolution("exercise-bytes", {
+      exercise: "Write <code>codeFromBytes(bytes)</code> — the part of the generator that turns random bytes into a token code. No crypto call, no database, no retry loop: the caller draws the bytes and hands them in, so this is a pure function you can test by giving it numbers you chose.\n\n<code>bytes</code> is a list of integers from 0 to 255. Return the formatted code, or <code>null</code>.\n\nThe rules:\n\n1. Walk the bytes <strong>in order</strong>. Each usable one contributes one letter: <code>ALPHABET[byte % 31]</code>, where <code>ALPHABET</code> is the 31-character safe alphabet.\n\n2. <strong>A byte of 248 or more is thrown away.</strong> 256 − (256 % 31) = 248, so 248…255 are exactly the values that would fold back onto the first eight letters and make them 12.5% more likely. Skip them and read the next byte instead.\n\n3. Stop once you have 12 letters. Anything left in <code>bytes</code> is ignored.\n\n4. If the bytes run out before you reach 12, return <code>null</code>. You cannot draw more from in here — that is the caller's job, and a short code is not a code.\n\n5. Return the 12 letters grouped in threes: <code>XXXX-XXXX-XXXX</code>.",
+      hints: [
+        "The threshold is a constant worth naming — REJECT_AT = 248, with `256 - (256 % 31)` in a comment beside it so the number is never a mystery.",
+        "`>= 248` and `> 248` differ by exactly one byte, and that byte is the first biased one. Decide which you mean by asking whether 248 itself is inside the fold.",
+        "Collect into a plain string and check its length at the end. Deciding null-versus-code once, after the loop, is simpler than trying to spot it while looping.",
+      ],
+      solution: `const TOKEN_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';  // 31 characters
+const REJECT_AT = 248;   // 256 - (256 % 31)
+
+function codeFromBytes(bytes) {
+  let letters = '';
+
+  for (const byte of bytes) {
+    if (letters.length === 12) break;      // rule 3: we are done, ignore the rest
+
+    // Rule 2. This is the whole argument of the lesson, and it is one line.
+    // 248..255 are the eight values that would wrap around and land on the
+    // first eight letters a second time. Throwing them away costs ~3% of the
+    // bytes and buys a genuinely uniform code.
+    if (byte >= REJECT_AT) continue;
+
+    letters += TOKEN_ALPHABET[byte % TOKEN_ALPHABET.length];
+  }
+
+  // Rule 4. Not enough usable bytes in this block. The caller draws another
+  // one and asks again -- we must not return a short code, and we must not
+  // pad it either.
+  if (letters.length < 12) return null;
+
+  return letters.slice(0, 4) + '-' + letters.slice(4, 8) + '-' + letters.slice(8, 12);
+}`
+    });
+
+    createPlayground("pg-exercise-bytes", `// Write codeFromBytes(bytes) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+const CANON = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+
+// Twelve usable bytes, deliberately none of them equal to its own alphabet
+// index -- so an implementation that indexes by the raw byte, or skips the
+// % 31 entirely, produces a different code rather than the right one by luck.
+// The last one is 245: it sits in 240..247, which pins the reject threshold
+// from below as well as above.
+const CLEAN = [111, 167, 22, 227, 68, 138, 201, 31, 234, 82, 188, 245];
+
+// The same twelve letters, with the biased range sprinkled through. 248 comes
+// first so that "> 248" and ">= 248" disagree on the very first byte; 100 sits
+// after the twelfth letter so an implementation that never stops collecting
+// runs one letter long.
+const DIRTY = [248, 111, 167, 255, 22, 227, 68, 138, 250, 201, 31, 234, 82, 251, 188, 245, 254, 100];
+
+try {
+  if (typeof codeFromBytes !== "function") throw new Error("not written yet");
+
+  try {
+    const c = codeFromBytes(CLEAN);
+    check("twelve usable bytes give the canonical code", c === "MERC-8GH2-KP4X", "got " + c);
+  } catch (e) { check("twelve usable bytes give the canonical code", false, "threw " + e.message); }
+
+  try {
+    const c = codeFromBytes(DIRTY);
+    check("bytes of 248 and up are skipped, not folded", c === "MERC-8GH2-KP4X",
+          "got " + c + " -- each of 248, 255, 250, 251 must be discarded and the next byte read instead");
+    check("the twelfth letter ends the code", String(c).length === 14,
+          "got " + String(c).length + " characters -- collecting stops at 12 letters, whatever is left over");
+  } catch (e) { check("bytes of 248 and up are skipped, not folded", false, "threw " + e.message); }
+
+  try {
+    const c = codeFromBytes([247, 247, 247, 247, 247, 247, 247, 247, 247, 247, 247, 247]);
+    check("247 is kept -- it is the last unbiased byte", c === "ZZZZ-ZZZZ-ZZZZ",
+          "got " + c + " -- rejecting too eagerly throws away good randomness");
+  } catch (e) { check("247 is kept -- it is the last unbiased byte", false, "threw " + e.message); }
+
+  try {
+    const c = codeFromBytes([248, 248, 248, 248, 248, 248, 248, 248, 248, 248, 248, 248]);
+    check("248 is rejected -- it is the first biased byte", c === null,
+          "got " + c + " -- 256 - (256 % 31) is 248, so 248 is already inside the fold, not just above it");
+  } catch (e) { check("248 is rejected -- it is the first biased byte", false, "threw " + e.message); }
+
+  try {
+    const c = codeFromBytes([111, 167, 22, 248, 255, 250]);
+    check("running out of usable bytes returns null", c === null,
+          "got " + c + " -- the caller draws another block; a short code is not a code");
+  } catch (e) { check("running out of usable bytes returns null", false, "threw " + e.message); }
+
+  try {
+    const c = codeFromBytes([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    check("a byte below 31 maps to the alphabet position of that number", c === "2345-6789-ABCD", "got " + c);
+  } catch (e) { check("a byte below 31 maps to the alphabet position of that number", false, "threw " + e.message); }
+
+  try {
+    const c = codeFromBytes(CLEAN);
+    check("the code is grouped XXXX-XXXX-XXXX", /^[^-]{4}-[^-]{4}-[^-]{4}$/.test(String(c)), "got " + c);
+    const letters = String(c).split("-").join("");
+    check("every character is in the safe alphabet",
+          letters.length === 12 && letters.split("").every(function (ch) { return CANON.indexOf(ch) !== -1; }),
+          "got " + letters + " -- 0, O, 1, I and L are excluded, so an alphabet containing one is the wrong alphabet");
+  } catch (e) { check("the code is grouped XXXX-XXXX-XXXX", false, "threw " + e.message); }
+} catch (e) {
+  console.log("Write codeFromBytes(bytes) above, then press Run.");
+}`);
+
     createSolution("exercise-1", {
+      unverifiable: "the endpoint is an Express route needing Postgres and the screen is React Native with expo-clipboard, needing a device",
       exercise: "Build the full token generation and display flow:\n\n1. Create `shared/src/token.ts` with the alphabet, format regex, formatTokenCode(), isValidTokenCode(), and stripDashes() functions.\n\n2. Create the server endpoint `POST /tokens` that generates a crypto-safe code, inserts it into the database, and returns the created token.\n\n3. Create the `CreateTokenScreen` component with: a label input, create button with loading state, and a success view showing the large formatted code with a copy button.\n\n4. Test: create 3 tokens with different labels and verify each code is unique and matches the XXXX-XXXX-XXXX format.",
       hints: [
         "Use randomBytes(12) from node:crypto on the server — each byte maps to one character via modulo.",
@@ -975,6 +1102,10 @@ const styles = StyleSheet.create({
   doneBtn: { padding: 14, borderRadius: 8, alignItems: 'center', borderWidth: 1, borderColor: '#ddd' },
   doneBtnText: { fontSize: 16, color: '#666' },
 });`
+    });
+
+    createExplain("explain-a5-0001", {
+      prompt: "The biased generator would still have produced codes nobody could guess, and the fix costs four lines. Explain why <em>when</em> you can apply those four lines is the part that settles the argument — and what is true of every code already issued that is not true of any other decision in this course."
     });
 
     createQuiz("lesson-quiz", [
