@@ -15,8 +15,8 @@ how far it got.
 **M3 on A8**, started 2026-08-19 from `970dc82`. A5 is complete (all five
 verified the same day).
 
-`a8/0002` is **done and verified**. Next: `a8/0001` (Vite setup — thin, but the
-`VITE_*`-secrets check is a real function), then `0003` and `0004`.
+`a8/0001` and `a8/0002` are **done and verified**. Next: `a8/0003`
+(browser WebRTC/WS), then `0004` (no-app experience).
 
 ### Follow-up this raised, NOT yet done
 
@@ -117,6 +117,7 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `a5/0004` | `isWithinWindow` | the overnight wrap; the morning belongs to *yesterday* |
 | `a5/0005` | `shareAdvice` | unknown target ⇒ warn; safe actions ignore `target` |
 | `a8/0002` | `redeemState` | the server's vocabulary is not the UI's; unknown reason ⇒ error |
+| `a8/0001` | `checkWebEnv` | the `VITE_` **prefix** is the test, not the name |
 
 **A5 note:** not one of the five had a `createExplain` prompt or loaded
 `explain.js`. All five now do. A5 predates the practice pattern being made

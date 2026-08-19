@@ -134,6 +134,10 @@ const WS_URL = import.meta.env.VITE_WS_URL || '';
 
 export { API_URL, WS_URL };</code></pre>
 
+    <p><strong>Those <code>|| ''</code> defaults are the problem, not the safety net they look like.</strong> A missing <code>VITE_API_URL</code> becomes an empty string, every request becomes a same-origin relative path, and in development that <em>works</em> — the Vite dev server proxies it. It breaks only once the container is on the VPS, where the static files are served by nginx and there is no API behind them. The failure appears a deploy away from the mistake, which is the most expensive place to put it.</p>
+
+    <p>A build-time config error should fail the build. That is what the exercise below does.</p>
+
     <div class="callout warning">
       <div class="callout-title">Important</div>
       <p><code>import.meta.env.VITE_*</code> variables are embedded at build time, not runtime. If you change them, you must rebuild. Never put secrets in <code>VITE_</code> vars — they end up in the browser bundle.</p>
@@ -281,9 +285,27 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>First, the check that fails the build instead of the deploy</h2>
+
+    <p>Everything else in this lesson is configuration you write once and forget. This is the part that goes wrong quietly: a missing variable that only misbehaves in production, and a secret that gets baked into a JavaScript bundle anyone can read.</p>
+
+    <div id="exercise-env"></div>
+
+    <h3>Check your work</h3>
+
+    <div id="pg-exercise-env"></div>
+
+    <hr>
+
+    <h2>Then the project</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <h2>In your own words</h2>
+
+    <div id="explain-a8-0001"></div>
 
     <hr>
 
@@ -299,6 +321,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -318,17 +341,171 @@ const WS_URL = env.VITE_WS_URL || '';
 console.log('API URL:', API_URL);
 console.log('WS URL:', WS_URL);
 
-// Building a fetch URL for token redemption:
-const tokenCode = 'MERC-8GH2-KP4X';
-const redeemUrl = API_URL + '/api/tokens/' + tokenCode + '/redeem';
+// Building a fetch URL for token redemption. The code goes in the BODY --
+// see A8.2 and ADR-0007. The endpoint takes no code at all.
+const redeemUrl = API_URL + '/api/redeem';
 console.log('Redeem endpoint:', redeemUrl);
+console.log('Body would be: ', JSON.stringify({ code: 'MERC8GH2KP4X', nickname: 'Ravi' }));
 
-// Route matching simulation
-const path = '/t/MERC-8GH2-KP4X';
-const match = path.match(/\\/t\\/([A-Z0-9-]+)/);
+// Route matching simulation. The URL carries the undashed code (A5.2).
+const path = '/t/MERC8GH2KP4X';
+const match = path.match(/^\\/t\\/([23456789ABCDEFGHJKMNPQRSTUVWXYZ]{12})$/);
 console.log('Extracted code:', match ? match[1] : 'no match');`);
 
+    createSolution("exercise-env", {
+      exercise: "Write <code>checkWebEnv(env, mode)</code> — the guard that runs before the bundle is built.\n\n<code>env</code> is a plain object of environment variables. <code>mode</code> is <code>'development'</code> or <code>'production'</code>.\n\nReturn <code>{ ok, config, errors }</code>. <code>errors</code> is always an array of strings — empty when everything is fine. <code>config</code> is <code>{ apiUrl, wsUrl }</code> when <code>ok</code>, otherwise <code>null</code>.\n\nThe rules:\n\n1. <code>VITE_API_URL</code> and <code>VITE_WS_URL</code> are <strong>required</strong>. Missing, empty, or nothing but whitespace is an error each. No <code>|| ''</code> — that is the bug this replaces.\n\n2. <strong>A <code>VITE_</code> variable whose name looks like a secret is an error.</strong> Treat a name containing <code>SECRET</code>, <code>KEY</code>, <code>PASSWORD</code>, <code>PEPPER</code>, <code>PRIVATE</code> or <code>CREDENTIAL</code> as a secret, case-insensitively. Everything with a <code>VITE_</code> prefix is inlined into a file the browser downloads.\n\n3. <strong>A variable <em>without</em> the <code>VITE_</code> prefix is never checked for secrets.</strong> <code>TOKEN_CODE_PEPPER</code> belongs in that environment and is not exposed by Vite — failing the build on it would be a false alarm that teaches people to disable the check.\n\n4. In <code>'production'</code>, <code>VITE_API_URL</code> must start <code>https://</code> and <code>VITE_WS_URL</code> must start <code>wss://</code>. In <code>'development'</code>, <code>http://</code> and <code>ws://</code> are expected and fine.\n\n5. Report <strong>every</strong> problem, not just the first. A build that fails once per round trip wastes an afternoon.",
+      hints: [
+        "Push into an errors array rather than returning early. Rule 5 falls out for free, and each check becomes independent of the order you wrote them in.",
+        "Rules 2 and 3 are one condition, not two: only look at a key at all if it starts with VITE_. Getting this backwards means the check fires on the server-side pepper, which is exactly the variable that is being handled correctly.",
+        "Uppercase the key once before testing it for secret words, so VITE_api_key is caught the same as VITE_API_KEY.",
+      ],
+      solution: `const REQUIRED = ['VITE_API_URL', 'VITE_WS_URL'];
+const SECRET_WORDS = ['SECRET', 'KEY', 'PASSWORD', 'PEPPER', 'PRIVATE', 'CREDENTIAL'];
+
+function checkWebEnv(env, mode) {
+  const errors = [];
+  const source = env || {};
+
+  // Rule 1. Present, and actually holding something.
+  for (const name of REQUIRED) {
+    const value = source[name];
+    if (typeof value !== 'string' || value.trim() === '') {
+      errors.push(name + ' is required and must not be empty');
+    }
+  }
+
+  // Rules 2 and 3. The VITE_ prefix is the whole test: it is what decides
+  // whether Vite inlines the value into the browser bundle. A variable
+  // without it is server-side and none of our business here.
+  for (const key of Object.keys(source)) {
+    if (!key.startsWith('VITE_')) continue;
+
+    const upper = key.toUpperCase();
+    if (SECRET_WORDS.some((word) => upper.includes(word))) {
+      errors.push(key + ' looks like a secret and VITE_ variables are inlined into the bundle');
+    }
+  }
+
+  // Rule 4. Only in production -- localhost has no certificate.
+  if (mode === 'production') {
+    const api = source.VITE_API_URL;
+    const ws = source.VITE_WS_URL;
+    if (typeof api === 'string' && api.trim() !== '' && !api.startsWith('https://')) {
+      errors.push('VITE_API_URL must be https:// in production');
+    }
+    if (typeof ws === 'string' && ws.trim() !== '' && !ws.startsWith('wss://')) {
+      errors.push('VITE_WS_URL must be wss:// in production');
+    }
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, config: null, errors: errors };
+  }
+
+  return {
+    ok: true,
+    config: { apiUrl: source.VITE_API_URL, wsUrl: source.VITE_WS_URL },
+    errors: [],
+  };
+}`
+    });
+
+    createPlayground("pg-exercise-env", `// Write checkWebEnv(env, mode) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+
+const PROD = { VITE_API_URL: "https://api.tokn.app", VITE_WS_URL: "wss://api.tokn.app" };
+const DEV = { VITE_API_URL: "http://localhost:3000", VITE_WS_URL: "ws://localhost:3000" };
+
+try {
+  if (typeof checkWebEnv !== "function") throw new Error("not written yet");
+
+  try {
+    const r = checkWebEnv(PROD, "production");
+    check("a good production env passes", r.ok === true && r.errors.length === 0,
+          "got ok=" + r.ok + " errors=" + JSON.stringify(r.errors));
+    check("a passing env returns the config", !!r.config && r.config.apiUrl === PROD.VITE_API_URL,
+          "got " + JSON.stringify(r.config));
+  } catch (e) { check("a good production env passes", false, "threw " + e.message); }
+
+  try {
+    const r = checkWebEnv(DEV, "development");
+    check("http and ws are fine in development", r.ok === true,
+          "got " + JSON.stringify(r.errors) + " -- localhost has no certificate");
+  } catch (e) { check("http and ws are fine in development", false, "threw " + e.message); }
+
+  try {
+    const r = checkWebEnv({ VITE_API_URL: "https://api.tokn.app" }, "production");
+    check("a missing required variable fails", r.ok === false, "got ok=" + r.ok);
+    check("a failing env returns no config", r.config === null, "got " + JSON.stringify(r.config));
+  } catch (e) { check("a missing required variable fails", false, "threw " + e.message); }
+
+  try {
+    const r = checkWebEnv({}, "production");
+    check("BOTH missing variables are reported, not just the first", r.errors.length >= 2,
+          "got " + r.errors.length + " error(s) -- a build that fails one problem at a time wastes an afternoon");
+  } catch (e) { check("BOTH missing variables are reported, not just the first", false, "threw " + e.message); }
+
+  try {
+    const r = checkWebEnv({ VITE_API_URL: "https://api.tokn.app", VITE_WS_URL: "   " }, "production");
+    check("a whitespace-only value counts as missing", r.ok === false,
+          "got ok=" + r.ok + " -- an empty VITE_ var becomes '' in the bundle, same as absent");
+  } catch (e) { check("a whitespace-only value counts as missing", false, "threw " + e.message); }
+
+  try {
+    const env = Object.assign({}, PROD, { VITE_API_KEY: "sk_live_abc123" });
+    const r = checkWebEnv(env, "production");
+    check("a VITE_ variable that looks like a secret fails the build", r.ok === false,
+          "got ok=" + r.ok + " -- VITE_ values are inlined into a file the browser downloads");
+  } catch (e) { check("a VITE_ variable that looks like a secret fails the build", false, "threw " + e.message); }
+
+  try {
+    const env = Object.assign({}, PROD, { VITE_api_key: "sk_live_abc123" });
+    const r = checkWebEnv(env, "production");
+    check("the secret-name check ignores case", r.ok === false, "got ok=" + r.ok);
+  } catch (e) { check("the secret-name check ignores case", false, "threw " + e.message); }
+
+  try {
+    // THE trap. This variable is handled correctly -- it has no VITE_ prefix,
+    // so Vite never exposes it. Failing here is a false alarm, and a check
+    // that cries wolf gets switched off.
+    const env = Object.assign({}, PROD, {
+      TOKEN_CODE_PEPPER: "pepper-value",
+      TOKEN_CODE_KEY: "key-value",
+      DATABASE_PASSWORD: "hunter2",
+    });
+    const r = checkWebEnv(env, "production");
+    check("server-side secrets WITHOUT the VITE_ prefix are ignored", r.ok === true,
+          "got " + JSON.stringify(r.errors) + " -- these are not exposed by Vite, and failing on them trains people to disable the check");
+  } catch (e) { check("server-side secrets WITHOUT the VITE_ prefix are ignored", false, "threw " + e.message); }
+
+  try {
+    const r = checkWebEnv({ VITE_API_URL: "http://api.tokn.app", VITE_WS_URL: "wss://api.tokn.app" }, "production");
+    check("plain http fails in production", r.ok === false, "got ok=" + r.ok);
+  } catch (e) { check("plain http fails in production", false, "threw " + e.message); }
+
+  try {
+    const r = checkWebEnv({ VITE_API_URL: "https://api.tokn.app", VITE_WS_URL: "ws://api.tokn.app" }, "production");
+    check("an unencrypted websocket fails in production", r.ok === false,
+          "got ok=" + r.ok + " -- ws:// from an https page is blocked by the browser anyway");
+  } catch (e) { check("an unencrypted websocket fails in production", false, "threw " + e.message); }
+
+  try {
+    const r = checkWebEnv(undefined, "production");
+    check("no env at all fails rather than throwing", r.ok === false, "got " + JSON.stringify(r));
+  } catch (e) {
+    check("no env at all fails rather than throwing", false, "threw " + e.message);
+  }
+} catch (e) {
+  console.log("Write checkWebEnv(env, mode) above, then press Run.");
+}`);
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is a Vite project, a Dockerfile and an nginx config, which need a build toolchain and a VPS",
       exercise: "Set up the complete web/ directory for Token's redemption page. Create: (1) vite.config.ts with path aliases pointing to ../shared and a dev proxy for /api, (2) App.tsx with React Router routes for /t/:code, /t/:code/chat, /t/:code/call, and a 404 fallback, (3) A placeholder RedeemPage.tsx that extracts the code from the URL and displays it, (4) The Dockerfile (multi-stage build with nginx), (5) .env.development with localhost URLs.",
       hints: [
         "Use path.resolve(__dirname, '../shared') for the @shared alias in vite.config.ts.",
@@ -413,6 +590,10 @@ export function RedeemPage() {
 // 5. .env.development
 // VITE_API_URL=http://localhost:3000
 // VITE_WS_URL=ws://localhost:3000`
+    });
+
+    createExplain("explain-a8-0001", {
+      prompt: "<code>checkWebEnv</code> flags <code>VITE_API_KEY</code> but deliberately ignores <code>TOKEN_CODE_PEPPER</code>, even though the pepper is by far the more dangerous secret to lose. Explain why the prefix — and not the name — is the right thing to test, and what would happen to this check if it warned about both."
     });
 
     createQuiz("lesson-quiz", [
