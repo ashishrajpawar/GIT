@@ -360,15 +360,35 @@ setScanned(false);</code></pre>
 
     <h2>Validating scanned data</h2>
 
-    <p>Not every QR code is a Token. Someone could scan a random URL, a vCard, or WiFi credentials. Always validate before acting:</p>
+    <p>Not every QR code is a Token. Someone could scan a random URL, a vCard, or WiFi credentials — and a QR code is <strong>untrusted input that arrives without a single click</strong>. The user points a camera and something happens. Validate before acting:</p>
 
-    <pre><code>function extractTokenCode(qrData: string): string | null {
-  // Must be a tokn.app URL with a valid 12-char code
-  const match = qrData.match(
-    /^https?:\/\/tokn\.app\/t\/([23456789ABCDEFGHJKMNPQRSTUVWXYZ]{12})$/
+    <pre><code>const TOKEN_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+
+function extractTokenCode(qrData: string): string | null {
+  if (typeof qrData !== 'string') return null;
+
+  // The /i covers the scheme and host, which really are case-insensitive.
+  // It deliberately stops short of judging the code: the capture group takes
+  // any letter or digit and the alphabet is checked below, after normalising.
+  const match = qrData.trim().match(
+    /^https:\/\/tokn\.app\/t\/([0-9A-Za-z-]+)$/i
   );
-  return match ? match[1] : null;
+  if (!match) return null;
+
+  const code = match[1].replace(/-/g, '').toUpperCase();
+  if (code.length !== 12) return null;
+  if ([...code].some((ch) => !TOKEN_ALPHABET.includes(ch))) return null;
+
+  return code;
 }</code></pre>
+
+    <p>Three things in there are load-bearing, and the version this lesson carried until 2026-08-19 got the first one wrong:</p>
+
+    <ul>
+      <li><strong><code>https</code>, not <code>https?</code>.</strong> The table at the top of this lesson says HTTPS is required, and then the validator accepted <code>http://</code> anyway. A printed QR is a thing anyone can put on a wall; accepting cleartext means a scanned code travels somewhere a network can read it. There is no reason to accept a scheme the app never generates.</li>
+      <li><strong>The anchors.</strong> Without <code>^</code> and <code>$</code>, <code>https://evil.example/?next=https://tokn.app/t/MERC8GH2KP4X</code> matches — the redemption URL is sitting inside a URL pointing somewhere else entirely. Anchoring is what makes "is a tokn.app URL" mean the whole string.</li>
+      <li><strong>Normalise, then validate.</strong> Uppercasing before the alphabet check is what lets a lowercased URL through, and returning the uppercased code is what makes it match the hash the server stored. Letting <code>/i</code> do the alphabet check instead looks equivalent and quietly returns a code in whatever case it arrived in.</li>
+    </ul>
 
     <p>If validation fails, show a user-friendly message — not a crash. The user might have accidentally scanned a different QR code on the same page.</p>
 
@@ -519,9 +539,27 @@ function TokenDetailScreen({ route }) {
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>First, the gate everything else sits behind</h2>
+
+    <p>The camera, the permission prompt, the double-scan flag and the brightness boost are all plumbing around one decision: <em>is this string a Token redemption URL, and if so what is the code?</em> Get that wrong and the scanner cheerfully hands a code to whatever was on the wall. It is also the one part of this lesson that needs no camera.</p>
+
+    <div id="exercise-scan"></div>
+
+    <h3>Check your work</h3>
+
+    <div id="pg-exercise-scan"></div>
+
+    <hr>
+
+    <h2>Then the camera and the components</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <h2>In your own words</h2>
+
+    <div id="explain-a5-0002"></div>
 
     <hr>
 
@@ -537,6 +575,7 @@ function TokenDetailScreen({ route }) {
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -556,16 +595,174 @@ console.log('URL:', url);
 console.log('URL length:', url.length);
 
 // Validate a scanned URL
+const TOKEN_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+
 function extractTokenCode(qrData) {
-  const match = qrData.match(/^https?:\\/\\/tokn\\.app\\/t\\/([23456789ABCDEFGHJKMNPQRSTUVWXYZ]{12})$/);
-  return match ? match[1] : null;
+  if (typeof qrData !== 'string') return null;
+  const match = qrData.trim().match(/^https:\\/\\/tokn\\.app\\/t\\/([0-9A-Za-z-]+)$/i);
+  if (!match) return null;
+  const code = match[1].replace(/-/g, '').toUpperCase();
+  if (code.length !== 12) return null;
+  if ([...code].some(ch => !TOKEN_ALPHABET.includes(ch))) return null;
+  return code;
 }
 
-console.log('\\nValid:', extractTokenCode(url));
-console.log('Invalid:', extractTokenCode('https://google.com'));
-console.log('Invalid:', extractTokenCode('https://tokn.app/t/short'));`);
+console.log('\\nValid:          ', extractTokenCode(url));
+console.log('Lowercased:     ', extractTokenCode('https://tokn.app/t/merc8gh2kp4x'));
+console.log('Dashed:         ', extractTokenCode('https://tokn.app/t/MERC-8GH2-KP4X'));
+console.log('Cleartext http: ', extractTokenCode('http://tokn.app/t/MERC8GH2KP4X'));
+console.log('Other site:     ', extractTokenCode('https://google.com'));
+console.log('Too short:      ', extractTokenCode('https://tokn.app/t/short'));
+
+// The one worth staring at: the redemption URL is in there, but the page you
+// would actually be visiting is evil.example.
+console.log('Embedded:       ', extractTokenCode('https://evil.example/?next=' + url));`);
+
+    createSolution("exercise-scan", {
+      exercise: "Write <code>extractTokenCode(raw)</code>. The scanner hands you whatever was in the QR code — a Token URL, a WiFi config, a vCard, someone's holiday photo caption. Return the token code, or <code>null</code>. No camera, no state, no navigation.\n\nThe rules:\n\n1. Anything that is not a string → <code>null</code>. A scanner library handing you <code>undefined</code> must not crash the screen.\n\n2. Trim the surrounding whitespace first — encoders routinely add a trailing newline.\n\n3. The whole string must be a redemption URL: <code>https://tokn.app/t/&lt;code&gt;</code> and nothing else. <strong>The scheme and host are case-insensitive; <code>http://</code> is not accepted at all.</strong> A URL that merely <em>contains</em> a redemption URL is not one.\n\n4. <code>&lt;code&gt;</code> may carry the display dashes (<code>MERC-8GH2-KP4X</code>) or not. Strip them.\n\n5. What is left must be exactly 12 characters, every one of them in the safe alphabet <code>23456789ABCDEFGHJKMNPQRSTUVWXYZ</code> — checked <em>after</em> uppercasing, so a lowercased URL is accepted.\n\n6. Return the code <strong>uppercase and without dashes</strong>, because that is the form the server hashed. Anything failing any rule → <code>null</code>.",
+      hints: [
+        "Rules 3 and 5 want different things from case, which is the whole trick. Put the /i on a pattern that stops before judging the code, and let the capture group take any letter or digit.",
+        "Without ^ and $ the pattern matches anywhere inside the string, and `https://evil.example/?next=<the real URL>` sails through.",
+        "Normalise then validate, in that order: strip the dashes, uppercase, and only then ask whether every character is in the alphabet.",
+      ],
+      solution: `const TOKEN_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+
+// The /i is doing exactly one job: schemes and hostnames are case-insensitive,
+// so HTTPS://TOKN.APP/... is the same URL. It stops short of the code on
+// purpose -- the capture group accepts any letter or digit and rule 5 judges
+// them below. Letting /i validate the alphabet instead would accept the code
+// in whatever case it arrived and return it that way.
+const REDEMPTION_URL = /^https:\\/\\/tokn\\.app\\/t\\/([0-9A-Za-z-]+)$/i;
+
+function extractTokenCode(raw) {
+  // Rule 1. A camera library is not obliged to hand us a string.
+  if (typeof raw !== 'string') return null;
+
+  // Rules 2 and 3. The anchors are what make this "is a redemption URL"
+  // rather than "has one in it somewhere".
+  const match = raw.trim().match(REDEMPTION_URL);
+  if (!match) return null;
+
+  // Rule 4 and the normalising half of rule 5.
+  const code = match[1].replace(/-/g, '').toUpperCase();
+
+  // Rule 5. Length first: it is the cheap check and the common failure.
+  if (code.length !== 12) return null;
+  for (const ch of code) {
+    if (!TOKEN_ALPHABET.includes(ch)) return null;
+  }
+
+  // Rule 6. Uppercase and undashed -- the form code_hash was computed over.
+  return code;
+}`
+    });
+
+    createPlayground("pg-exercise-scan", `// Write extractTokenCode(raw) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+const URL_OK = "https://tokn.app/t/MERC8GH2KP4X";
+
+try {
+  if (typeof extractTokenCode !== "function") throw new Error("not written yet");
+
+  try {
+    check("a redemption URL yields the bare code", extractTokenCode(URL_OK) === "MERC8GH2KP4X",
+          "got " + extractTokenCode(URL_OK));
+  } catch (e) { check("a redemption URL yields the bare code", false, "threw " + e.message); }
+
+  try {
+    const c = extractTokenCode("https://tokn.app/t/MERC-8GH2-KP4X");
+    check("the dashed display form is accepted and stripped", c === "MERC8GH2KP4X",
+          "got " + c + " -- the dashes are display-only, so both forms name the same token");
+  } catch (e) { check("the dashed display form is accepted and stripped", false, "threw " + e.message); }
+
+  try {
+    const c = extractTokenCode("https://tokn.app/t/merc8gh2kp4x");
+    check("a lowercased URL comes back UPPERCASE", c === "MERC8GH2KP4X",
+          "got " + c + " -- the server hashed the uppercase form, so anything else misses");
+  } catch (e) { check("a lowercased URL comes back UPPERCASE", false, "threw " + e.message); }
+
+  try {
+    const c = extractTokenCode("HTTPS://TOKN.APP/t/MERC8GH2KP4X");
+    check("the scheme and host are case-insensitive", c === "MERC8GH2KP4X", "got " + c);
+  } catch (e) { check("the scheme and host are case-insensitive", false, "threw " + e.message); }
+
+  try {
+    const c = extractTokenCode("   " + URL_OK + "\\n");
+    check("surrounding whitespace is trimmed", c === "MERC8GH2KP4X",
+          "got " + c + " -- encoders add a trailing newline more often than you would think");
+  } catch (e) { check("surrounding whitespace is trimmed", false, "threw " + e.message); }
+
+  try {
+    const c = extractTokenCode("http://tokn.app/t/MERC8GH2KP4X");
+    check("cleartext http is refused", c === null,
+          "got " + c + " -- the app never generates an http URL, so accepting one only helps whoever printed it");
+  } catch (e) { check("cleartext http is refused", false, "threw " + e.message); }
+
+  try {
+    const c = extractTokenCode("https://evil.example/?next=" + URL_OK);
+    check("a URL that merely CONTAINS a redemption URL is refused", c === null,
+          "got " + c + " -- without ^ and $ the pattern matches anywhere in the string");
+  } catch (e) { check("a URL that merely CONTAINS a redemption URL is refused", false, "threw " + e.message); }
+
+  try {
+    const a = extractTokenCode("https://tokn.app.evil.example/t/MERC8GH2KP4X");
+    const b = extractTokenCode("https://tokn.app@evil.example/t/MERC8GH2KP4X");
+    check("a host that only starts or ends with tokn.app is refused", a === null && b === null,
+          "got " + a + " and " + b + " -- neither of those is served by tokn.app");
+  } catch (e) { check("a host that only starts or ends with tokn.app is refused", false, "threw " + e.message); }
+
+  try {
+    const a = extractTokenCode("https://tokn.app/t/MERC8GH2KP4X/extra");
+    const b = extractTokenCode("https://tokn.app/t/MERC8GH2KP4X?utm=poster");
+    check("a trailing path or query is refused", a === null && b === null, "got " + a + " and " + b);
+  } catch (e) { check("a trailing path or query is refused", false, "threw " + e.message); }
+
+  try {
+    const c = extractTokenCode("MERC8GH2KP4X");
+    check("a bare code with no URL is refused", c === null,
+          "got " + c + " -- the QR encodes a URL so a browser can open it; a bare code is not what we issued");
+  } catch (e) { check("a bare code with no URL is refused", false, "threw " + e.message); }
+
+  try {
+    const short = extractTokenCode("https://tokn.app/t/MERC8GH2KP4");
+    const long = extractTokenCode("https://tokn.app/t/MERC8GH2KP4XY");
+    check("a code of the wrong length is refused", short === null && long === null,
+          "got " + short + " and " + long);
+  } catch (e) { check("a code of the wrong length is refused", false, "threw " + e.message); }
+
+  try {
+    // O is one of the five excluded characters, so this is 12 characters that
+    // the generator could never have produced.
+    const c = extractTokenCode("https://tokn.app/t/MERC8GH2KP4O");
+    check("a code containing an excluded character is refused", c === null,
+          "got " + c + " -- 0, O, 1, I and L are not in the alphabet, so no token has ever had one");
+  } catch (e) { check("a code containing an excluded character is refused", false, "threw " + e.message); }
+
+  try {
+    const c = extractTokenCode("WIFI:S:CafeNet;T:WPA;P:hunter2;;");
+    check("an unrelated QR payload is refused", c === null, "got " + c);
+  } catch (e) { check("an unrelated QR payload is refused", false, "threw " + e.message); }
+
+  try {
+    const a = extractTokenCode(null);
+    const b = extractTokenCode(undefined);
+    check("a non-string payload returns null rather than throwing", a === null && b === null,
+          "got " + a + " and " + b);
+  } catch (e) {
+    check("a non-string payload returns null rather than throwing", false,
+          "threw " + e.message + " -- a crash here takes the scanner screen down");
+  }
+} catch (e) {
+  console.log("Write extractTokenCode(raw) above, then press Run.");
+}`);
 
     createSolution("exercise-1", {
+      unverifiable: "the components are React Native with expo-camera and react-native-qrcode-svg, needing a device with a camera",
       exercise: "Build the complete QR generation and scanning flow:\n\n1. Create `app/src/components/QRCode.tsx` — a reusable component that takes a token code and renders a QR encoding the redemption URL. Use error correction level M.\n\n2. Create `app/src/components/QRScanner.tsx` — a camera-based scanner that: requests permission, validates scanned data is a tokn.app URL, extracts the code, and calls onScan. Prevent double-fires.\n\n3. Add QR display to the TokenDetail screen with a brightness boost hook.\n\n4. Add a 'Save QR' button that captures the QR as PNG and opens the share sheet.\n\n5. Test: create a token, screenshot the QR, and verify it decodes to the correct tokn.app URL using any QR reader.",
       hints: [
         "react-native-qrcode-svg takes a `value` prop (the URL string) and renders SVG — no base64 or image generation needed.",
@@ -752,6 +949,10 @@ function TokenDetailScreen({ route }) {
     </ScrollView>
   );
 }`
+    });
+
+    createExplain("explain-a5-0002", {
+      prompt: "<code>extractTokenCode</code> anchors its pattern with <code>^</code> and <code>$</code>. Explain what a printed QR code containing <code>https://evil.example/?next=https://tokn.app/t/…</code> would do to a scanner that left the anchors out — and why a QR code deserves more suspicion than a link the user tapped."
     });
 
     createQuiz("lesson-quiz", [

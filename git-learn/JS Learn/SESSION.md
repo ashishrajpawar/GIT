@@ -14,8 +14,8 @@ how far it got.
 
 **M3 on A5**, started 2026-08-19. Working from `3b43bc7`.
 
-`a5/0001` is **done and verified**. Next up is `a5/0002` (QR generation and
-scanning) — not yet started, nothing uncommitted.
+`a5/0001` and `a5/0002` are **done and verified**. Next up is `a5/0003` (token
+list and management) — not yet started, nothing uncommitted.
 
 ## Next action
 
@@ -83,12 +83,20 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `a4/0002` | `screensFor` | a forbidden screen does not exist, it is not covered |
 | `a4/0003` | `planFor` | the `isRetry` guard; a 403 is not refreshable |
 | `a5/0001` | `codeFromBytes` | 248 is *inside* the fold, 247 is not; short block → `null` |
+| `a5/0002` | `extractTokenCode` | anchors; `https` only; normalise *then* validate |
 
-**A5 note:** `0001` had no `createExplain` prompt and did not load `explain.js`
-at all. Check the rest of A5 for the same gap — the module predates the practice
-pattern being made universal, so it is unlikely to be the only one.
+**A5 note:** neither `0001` nor `0002` had a `createExplain` prompt, and neither
+loaded `explain.js`. Assume the whole module is missing it and check as you go —
+A5 predates the practice pattern being made universal.
 
-Remaining, roughly: **~18 have an extractable function** (A5 ×5, A6, A8 ×4,
+**Both A5 lessons so far contained a defect in their own prose, not just a
+missing exercise.** `0001` argued for rejection sampling and never made the
+student write it; `0002` printed a table saying HTTPS is required and then
+validated with `https?` three sections later, and its `extractTokenCode` had no
+`^`/`$`. Read the snippet a lesson already ships before writing the exercise
+around it — twice out of twice, the snippet was the thing that was wrong.
+
+Remaining, roughly: **~17 have an extractable function** (A5 ×5, A6, A8 ×4,
 A11, B2, B3, B5, B7, B10 …), **~40 are genuinely infra** (a device, a VPS, two
 phones, a live TURN server), and **4 are TypeScript**, which the runner cannot
 execute at all.
