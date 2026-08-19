@@ -30,13 +30,13 @@
 
     <h2>The redemption flow — step by step</h2>
 
-    <p>When a holder opens <code>tokn.app/t/MERC-8GH2-KP4X</code>:</p>
+    <p>When a holder opens <code>tokn.app/t/MERC8GH2KP4X</code> — undashed, as <code>a5/0002</code> established, because the dashes are display formatting and a shorter URL makes a less dense QR:</p>
 
     <ol>
       <li><strong>URL parsed</strong> — React Router extracts the code from the URL</li>
-      <li><strong>Token validated</strong> — GET /api/tokens/:code/status checks if the token exists and is active</li>
+      <li><strong>Token validated</strong> — POST /api/redeem/check, code in the body, checks the token exists and is redeemable</li>
       <li><strong>Nickname prompted</strong> — holder enters a display name (no account needed)</li>
-      <li><strong>Redemption submitted</strong> — POST /api/tokens/:code/redeem with the nickname</li>
+      <li><strong>Redemption submitted</strong> — POST /api/redeem with the code and the nickname</li>
       <li><strong>Session created</strong> — server returns a holder JWT and session ID</li>
       <li><strong>Conversation opened</strong> — redirect to the chat page with the session</li>
     </ol>
@@ -52,9 +52,14 @@
   | { status: 'redeeming' }            // POST in progress
   | { status: 'expired' }              // token past expiry date
   | { status: 'revoked' }              // issuer revoked this token
+  | { status: 'paused' }               // issuer paused it — may come back
   | { status: 'maxed' }               // max uses reached
   | { status: 'not-found' }           // code doesn't exist
   | { status: 'error'; message: string }; // network or server error</code></pre>
+
+    <p><code>paused</code> was missing from this union until 2026-08-19, and the omission is instructive. <code>a5/0003</code> treats paused as a first-class state on the issuer's side — it is the one dead-end that is <em>reversible</em> — so a paused token reaching this page had no branch to land in and fell through to <code>error</code>. The holder saw "something went wrong" for a token that is working exactly as its owner intended.</p>
+
+    <p>It also earns different copy from the rest. <code>revoked</code>, <code>expired</code> and <code>maxed</code> are final and the honest message is "this will not work again". <code>paused</code> means <strong>try later</strong> — and it is the only one where telling the holder to come back is true.</p>
 
     <h2>URL parsing with React Router</h2>
 
@@ -64,7 +69,7 @@ export function RedeemPage() {
   const { code } = useParams&lt;{ code: string }&gt;();
   const navigate = useNavigate();
 
-  // code is the token like "MERC-8GH2-KP4X"
+  // code is the token like "MERC8GH2KP4X" -- undashed, as in the URL
   // extracted automatically from /t/:code
 }</code></pre>
 
@@ -72,17 +77,24 @@ export function RedeemPage() {
 
     <p>Before showing the nickname form, check if the token is redeemable:</p>
 
-    <pre><code>// GET /api/tokens/:code/status
-// No auth required — this is a public endpoint
+    <p><strong>The code goes in the body, not the path.</strong> ADR-0007 is explicit about this and it is easy to get wrong here, because <code>/api/tokens/:code/status</code> is the obvious REST shape. A path is written to the proxy access log, kept in browser history, sent onward in <code>Referer</code>, and attached to crash reports — four copies of a capability that is supposed to be a secret. A POST body is in none of them.</p>
+
+    <pre><code>// POST /api/redeem/check   { "code": "MERC8GH2KP4X" }
+// No auth required — this is a public endpoint.
+// The code is in the BODY. Never /api/tokens/:code/status.
 
 interface TokenStatus {
   valid: boolean;
   label: string;          // "Amazon Delivery" — helps holder confirm
-  reason?: 'expired' | 'revoked' | 'max_uses' | 'not_found';
+  reason?: 'expired' | 'revoked' | 'paused' | 'max_uses' | 'not_found';
 }
 
 async function checkTokenStatus(code: string): Promise&lt;TokenStatus&gt; {
-  const response = await fetch(\`/api/tokens/\${code}/status\`);
+  const response = await fetch('/api/redeem/check', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  });
 
   if (response.status === 404) {
     return { valid: false, label: '', reason: 'not_found' };
@@ -95,12 +107,19 @@ async function checkTokenStatus(code: string): Promise&lt;TokenStatus&gt; {
   return response.json();
 }</code></pre>
 
+    <div class="callout warning">
+      <div class="callout-title">This is also why the request is not a GET</div>
+      <p>A GET cannot carry a body in practice, so "code in the body" and "GET" are incompatible. That is a real cost — the check is idempotent and reads nothing, so GET is what it <em>wants</em> to be — and it is paid deliberately. The alternative is a capability in four log files.</p>
+    </div>
+
     <h2>The redemption API call</h2>
 
-    <pre><code>// POST /api/tokens/:code/redeem
-// No auth required — creates a new holder session
+    <pre><code>// POST /api/redeem   { "code": "MERC8GH2KP4X", "nickname": "..." }
+// No auth required — creates a new holder session.
+// Again: the code is in the body.
 
 interface RedeemRequest {
+  code: string;
   nickname: string;  // "Delivery Agent Ravi"
 }
 
@@ -108,14 +127,17 @@ interface RedeemResponse {
   holderSessionId: string;
   holderJwt: string;         // JWT for this holder session
   conversationId: string;
-  issuerId: string;          // not exposed to holder UI, used for WebSocket routing
+  // NO issuerId. This response is delivered to the holder's browser, where
+  // it is visible in devtools whether or not the UI renders it. WebSocket
+  // routing resolves the issuer from conversationId on the SERVER, which is
+  // the only place that mapping needs to exist.
 }
 
 async function redeemToken(code: string, nickname: string): Promise&lt;RedeemResponse&gt; {
-  const response = await fetch(\`/api/tokens/\${code}/redeem\`, {
+  const response = await fetch('/api/redeem', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ nickname }),
+    body: JSON.stringify({ code, nickname }),
   });
 
   if (!response.ok) {
@@ -133,7 +155,7 @@ async function redeemToken(code: string, nickname: string): Promise&lt;RedeemRes
     <pre><code>// Server-side: what the holder JWT contains
 {
   sub: 'holder_session_abc123',    // unique session ID
-  tokenCode: 'MERC-8GH2-KP4X',
+  tokenCode: 'MERC8GH2KP4X',
   nickname: 'Delivery Agent Ravi',
   conversationId: 'conv_xyz',
   iat: 1700000000,
@@ -176,18 +198,22 @@ export function RedeemPage() {
       return;
     }
 
-    fetch(\`/api/tokens/\${code}/status\`)
+    fetch('/api/redeem/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    })
       .then(async (res) =&gt; {
         if (res.status === 404) {
           setState({ status: 'not-found' });
           return;
         }
         const data = await res.json();
-        if (!data.valid) {
-          setState({ status: data.reason || 'error' });
-        } else {
-          setState({ status: 'valid', label: data.label });
-        }
+        // redeemState translates. Assigning data.reason straight into status
+        // is what this page used to do, and the server's vocabulary is not
+        // the UI's: 'max_uses' is not 'maxed', 'not_found' is not
+        // 'not-found', and neither renders any branch at all.
+        setState(redeemState(data));
       })
       .catch((err) =&gt; setState({ status: 'error', message: err.message }));
   }, [code]);
@@ -200,10 +226,10 @@ export function RedeemPage() {
     setState({ status: 'redeeming' });
 
     try {
-      const res = await fetch(\`/api/tokens/\${code}/redeem\`, {
+      const res = await fetch('/api/redeem', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nickname: nickname.trim() }),
+        body: JSON.stringify({ code, nickname: nickname.trim() }),
       });
 
       if (!res.ok) {
@@ -306,9 +332,27 @@ export function RedeemPage() {
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>First, the translation between two vocabularies</h2>
+
+    <p>The server answers in its own words — <code>max_uses</code>, <code>not_found</code> — and the UI renders a different set — <code>maxed</code>, <code>not-found</code>. They look near enough to assign one to the other, and this page did exactly that for months: <code>setState({ status: data.reason })</code>. A maxed-out token then set a status no branch matched, and the holder got a blank screen with no error and nothing to do.</p>
+
+    <div id="exercise-state"></div>
+
+    <h3>Check your work</h3>
+
+    <div id="pg-exercise-state"></div>
+
+    <hr>
+
+    <h2>Then the page</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <h2>In your own words</h2>
+
+    <div id="explain-a8-0002"></div>
 
     <hr>
 
@@ -324,6 +368,7 @@ export function RedeemPage() {
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -365,7 +410,7 @@ function simulateRedemption(tokenStatus, nickname) {
     conversationId: 'conv_' + Math.random().toString(36).slice(2, 8),
   };
   console.log('5. Redeemed! Session:', result.holderSessionId);
-  console.log('   Navigate to: /t/MERC-8GH2-KP4X/chat');
+  console.log('   Navigate to: /t/MERC8GH2KP4X/chat');
 
   return result;
 }
@@ -374,8 +419,149 @@ simulateRedemption('active', 'Delivery Agent Ravi');
 console.log('---');
 simulateRedemption('revoked', 'Someone');`);
 
+    createSolution("exercise-state", {
+      exercise: "Write <code>redeemState(result)</code> — the translation from what the check endpoint answered into what the page renders.\n\n<code>result</code> is one of:\n\n<ul><li><code>{ ok: true, body: { valid: true, label } }</code> — redeemable</li><li><code>{ ok: true, body: { valid: false, reason } }</code> — where <code>reason</code> is <code>'expired'</code>, <code>'revoked'</code>, <code>'paused'</code>, <code>'max_uses'</code> or <code>'not_found'</code></li><li><code>{ ok: false, httpStatus: 404 }</code></li><li><code>{ ok: false, httpStatus: 500 }</code> — or any other status</li><li><code>{ ok: false, networkError: true }</code></li></ul>\n\nReturn a <code>RedeemState</code>: <code>{ status, label? , message? }</code>.\n\nThe rules:\n\n1. Valid → <code>{ status: 'valid', label }</code>. This is the <strong>only</strong> path to <code>'valid'</code>.\n\n2. Translate the reason. <code>'max_uses'</code> becomes <code>'maxed'</code> and <code>'not_found'</code> becomes <code>'not-found'</code> — the server's names are not the UI's, and assigning one to the other is the bug this function exists to stop. <code>'expired'</code>, <code>'revoked'</code> and <code>'paused'</code> pass through unchanged.\n\n3. A 404 → <code>'not-found'</code>.\n\n4. A network error, any other non-OK status, and <strong>any reason you do not recognise</strong> → <code>{ status: 'error', message }</code>. A reason string invented by a newer server must not become a status the page cannot render.\n\n5. <code>valid: false</code> with no reason at all → <code>'error'</code> too. Something is wrong; do not guess.",
+      hints: [
+        "A lookup object from reason to status is clearer than a switch here, because rule 4 becomes one `||` on the lookup miss instead of a default branch you can forget to write.",
+        "Deal with the transport first — networkError, then httpStatus — and only then look inside the body. Mixing the two layers is what makes these functions hard to read.",
+        "Only one line in the whole function should produce 'valid'. If you can reach it from more than one place, one of those places is not checking what it thinks it is.",
+      ],
+      solution: `// The server's vocabulary on the left, the UI's on the right. They are NOT
+// the same words, and that is the entire point of this table existing.
+const REASON_TO_STATUS = {
+  expired: 'expired',
+  revoked: 'revoked',
+  paused: 'paused',
+  max_uses: 'maxed',        // not 'max_uses'
+  not_found: 'not-found',   // not 'not_found'
+};
+
+function redeemState(result) {
+  // Transport first.
+  if (!result || result.networkError) {
+    return { status: 'error', message: 'Could not reach the server' };
+  }
+
+  if (!result.ok) {
+    if (result.httpStatus === 404) return { status: 'not-found' };
+    return { status: 'error', message: 'Server error ' + result.httpStatus };
+  }
+
+  const body = result.body || {};
+
+  // Rule 1. The only route to 'valid' in the whole function.
+  if (body.valid === true) {
+    return { status: 'valid', label: body.label };
+  }
+
+  // Rules 2 and 4. An unknown reason -- one a newer server invented -- lands
+  // on undefined here and falls through to the error below rather than
+  // becoming a status no branch can render.
+  const status = REASON_TO_STATUS[body.reason];
+  if (status) return { status: status };
+
+  // Rule 5, and every reason we do not recognise.
+  return { status: 'error', message: 'Unrecognised response from the server' };
+}`
+    });
+
+    createPlayground("pg-exercise-state", `// Write redeemState(result) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(s) { return s && typeof s === "object" ? s.status : String(s); }
+
+// A label that is not any of the status words, so a function that returns the
+// label where it should return a status is obvious rather than plausible.
+const LABEL = "Amazon Delivery";
+
+try {
+  if (typeof redeemState !== "function") throw new Error("not written yet");
+
+  try {
+    const s = redeemState({ ok: true, body: { valid: true, label: LABEL } });
+    check("a redeemable token is valid and carries its label",
+          s.status === "valid" && s.label === LABEL, "got " + show(s) + "/" + (s && s.label));
+  } catch (e) { check("a redeemable token is valid and carries its label", false, "threw " + e.message); }
+
+  try {
+    const s = redeemState({ ok: true, body: { valid: false, reason: "max_uses" } });
+    check("max_uses becomes maxed", s.status === "maxed",
+          "got " + show(s) + " -- the server says max_uses, the UI renders maxed; passing it straight through matches no branch");
+  } catch (e) { check("max_uses becomes maxed", false, "threw " + e.message); }
+
+  try {
+    const s = redeemState({ ok: true, body: { valid: false, reason: "not_found" } });
+    check("not_found becomes not-found", s.status === "not-found",
+          "got " + show(s) + " -- underscore in, hyphen out");
+  } catch (e) { check("not_found becomes not-found", false, "threw " + e.message); }
+
+  try {
+    const a = redeemState({ ok: true, body: { valid: false, reason: "expired" } });
+    const b = redeemState({ ok: true, body: { valid: false, reason: "revoked" } });
+    check("expired and revoked pass through unchanged",
+          a.status === "expired" && b.status === "revoked",
+          "got " + show(a) + " and " + show(b));
+  } catch (e) { check("expired and revoked pass through unchanged", false, "threw " + e.message); }
+
+  try {
+    const s = redeemState({ ok: true, body: { valid: false, reason: "paused" } });
+    check("a paused token has its own state, not error", s.status === "paused",
+          "got " + show(s) + " -- paused is the one dead-end that comes back, so 'try later' is true and 'something went wrong' is not");
+  } catch (e) { check("a paused token has its own state, not error", false, "threw " + e.message); }
+
+  try {
+    const s = redeemState({ ok: false, httpStatus: 404 });
+    check("a 404 is not-found", s.status === "not-found", "got " + show(s));
+  } catch (e) { check("a 404 is not-found", false, "threw " + e.message); }
+
+  try {
+    const s = redeemState({ ok: false, httpStatus: 500 });
+    check("a 500 is an error, not not-found", s.status === "error",
+          "got " + show(s) + " -- the token may well exist; the server just could not say");
+  } catch (e) { check("a 500 is an error, not not-found", false, "threw " + e.message); }
+
+  try {
+    const s = redeemState({ ok: false, networkError: true });
+    check("a network error is an error", s.status === "error", "got " + show(s));
+  } catch (e) { check("a network error is an error", false, "threw " + e.message); }
+
+  try {
+    // A newer server grows a reason this build has never heard of.
+    const s = redeemState({ ok: true, body: { valid: false, reason: "quarantined" } });
+    check("an unrecognised reason becomes error, not itself", s.status === "error",
+          "got " + show(s) + " -- a status the page cannot render is a blank screen with no way out");
+  } catch (e) { check("an unrecognised reason becomes error, not itself", false, "threw " + e.message); }
+
+  try {
+    const s = redeemState({ ok: true, body: { valid: false } });
+    check("invalid with no reason is an error", s.status === "error", "got " + show(s));
+  } catch (e) { check("invalid with no reason is an error", false, "threw " + e.message); }
+
+  try {
+    // valid must be genuinely true -- not merely present, not truthy-ish.
+    const s = redeemState({ ok: true, body: { valid: false, label: LABEL, reason: "revoked" } });
+    check("a label on an invalid token does not make it valid", s.status === "revoked",
+          "got " + show(s));
+  } catch (e) { check("a label on an invalid token does not make it valid", false, "threw " + e.message); }
+
+  try {
+    const s = redeemState(undefined);
+    check("no result at all is an error rather than a throw", s.status === "error", "got " + show(s));
+  } catch (e) {
+    check("no result at all is an error rather than a throw", false,
+          "threw " + e.message + " -- the page still has to render something");
+  }
+} catch (e) {
+  console.log("Write redeemState(result) above, then press Run.");
+}`);
+
     createSolution("exercise-1", {
-      exercise: "Build the complete redemption flow: (1) A useTokenStatus custom hook that calls GET /api/tokens/:code/status on mount and returns the state. (2) A RedeemForm component that takes the token label, shows a nickname input, validates it (2-50 chars, no empty), and calls the redeem API on submit. (3) Error handling for network failures (show retry button). (4) Store the holder JWT in sessionStorage after successful redemption.",
+      unverifiable: "the page is a React component using React Router and fetch against a running API",
+      exercise: "Build the complete redemption flow: (1) A useTokenStatus custom hook that calls POST /api/redeem/check on mount (code in the body) and returns the state. (2) A RedeemForm component that takes the token label, shows a nickname input, validates it (2-50 chars, no empty), and calls the redeem API on submit. (3) Error handling for network failures (show retry button). (4) Store the holder JWT in sessionStorage after successful redemption.",
       hints: [
         "The custom hook should return { state, retry } where retry re-runs the status check.",
         "Use a discriminated union type for the state so TypeScript narrows correctly in each branch.",
@@ -405,7 +591,11 @@ export function useTokenStatus(code: string | undefined) {
     setState({ status: 'loading' });
 
     try {
-      const res = await fetch(\`/api/tokens/\${code}/status\`);
+      const res = await fetch('/api/redeem/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
 
       if (res.status === 404) {
         setState({ status: 'not-found' });
@@ -458,10 +648,10 @@ export function RedeemForm({ code, label }: Props) {
     setError(null);
 
     try {
-      const res = await fetch(\`/api/tokens/\${code}/redeem\`, {
+      const res = await fetch('/api/redeem', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nickname: nickname.trim() }),
+        body: JSON.stringify({ code, nickname: nickname.trim() }),
       });
 
       if (!res.ok) {
@@ -503,6 +693,10 @@ export function RedeemForm({ code, label }: Props) {
 }`
     });
 
+    createExplain("explain-a8-0002", {
+      prompt: "The check endpoint takes the code in a POST body rather than at <code>/api/tokens/:code/status</code>, and pays a real cost for it — the request stops being a GET even though it only reads. Name the four places the path version would have written the code to, and explain which of them survives longest after the token is revoked."
+    });
+
     createQuiz("lesson-quiz", [
       {
         type: "predict-output",
@@ -514,7 +708,7 @@ export function RedeemForm({ code, label }: Props) {
       {
         type: "spot-the-bug",
         question: "What's wrong with this redemption handler?",
-        code: "async function handleRedeem() {\n  const res = await fetch(`/api/tokens/${code}/redeem`, {\n    method: 'POST',\n    body: JSON.stringify({ nickname }),\n  });\n  const data = await res.json();\n  localStorage.setItem('holderJwt', data.holderJwt);\n  navigate(`/t/${code}/chat`);\n}",
+        code: "async function handleRedeem() {\n  const res = await fetch('/api/redeem', {\n    method: 'POST',\n    body: JSON.stringify({ code, nickname }),\n  });\n  const data = await res.json();\n  localStorage.setItem('holderJwt', data.holderJwt);\n  navigate(`/t/${code}/chat`);\n}",
         options: [
           "navigate() doesn't work in async functions",
           "Missing Content-Type header AND should use sessionStorage (not localStorage) for holder JWT",
@@ -529,7 +723,7 @@ export function RedeemForm({ code, label }: Props) {
         question: "Extract the token code from the URL in a React Router component:",
         code: "const { code } = ___<{ code: string }>();",
         answer: "useParams",
-        explanation: "React Router's useParams() hook returns an object of URL parameters defined in the route pattern. Since the route is /t/:code, useParams() gives you { code: 'MERC-8GH2-KP4X' }. The generic type parameter provides TypeScript safety."
+        explanation: "React Router's useParams() hook returns an object of URL parameters defined in the route pattern. Since the route is /t/:code, useParams() gives you { code: 'MERC8GH2KP4X' }. The generic type parameter provides TypeScript safety."
       },
       {
         question: "Why does the redemption page check token status BEFORE showing the nickname form?",
@@ -586,7 +780,7 @@ export function RedeemForm({ code, label }: Props) {
         explanation: "TypeScript narrows the union based on the status discriminant. Inside the 'valid' branch, TypeScript knows s has a label property. This is exactly how RedeemPage renders different UI for each state — checking state.status tells TypeScript which properties are available."
       },
       {
-        question: "Why is the GET /api/tokens/:code/status endpoint public (no auth required)?",
+        question: "Why is the POST /api/redeem/check endpoint public (no auth required)?",
         options: [
           "It's a bug — all endpoints should require auth",
           "The holder has no account or credentials yet; they need to check validity before they can redeem and get a JWT",
@@ -610,14 +804,14 @@ export function RedeemForm({ code, label }: Props) {
       {
         type: "predict-output",
         question: "What happens when this fetch fails due to the device being offline?",
-        code: "try {\n  const res = await fetch('/api/tokens/ABC/status');\n  console.log('got response:', res.status);\n} catch (err) {\n  console.log('caught:', err.message);\n}",
+        code: "try {\n  const res = await fetch('/api/redeem/check', { method: 'POST' });\n  console.log('got response:', res.status);\n} catch (err) {\n  console.log('caught:', err.message);\n}",
         answer: "caught: Failed to fetch",
         explanation: "When the device is offline, fetch() throws a TypeError with the message 'Failed to fetch' (or similar). It does NOT return a response with an error status code. This is why you need both try/catch (for network failures) AND checking !res.ok (for HTTP errors like 500)."
       },
       {
         type: "fill-blank",
         question: "Complete the holder JWT payload — what field holds the expiration timestamp?",
-        code: "{\n  sub: 'holder_session_abc123',\n  tokenCode: 'MERC-8GH2-KP4X',\n  nickname: 'Ravi',\n  conversationId: 'conv_xyz',\n  iat: 1700000000,\n  ___: 1700086400\n}",
+        code: "{\n  sub: 'holder_session_abc123',\n  tokenCode: 'MERC8GH2KP4X',\n  nickname: 'Ravi',\n  conversationId: 'conv_xyz',\n  iat: 1700000000,\n  ___: 1700086400\n}",
         answer: "exp",
         explanation: "The 'exp' claim (expiration time) is a standard JWT field defined in RFC 7519. It contains a Unix timestamp after which the token is no longer valid. Here, 1700086400 - 1700000000 = 86400 seconds = 24 hours."
       },
@@ -767,7 +961,7 @@ export function RedeemForm({ code, label }: Props) {
       {
         type: "spot-the-bug",
         question: "What's the problem with this useEffect?",
-        code: "useEffect(() => {\n  async function validate() {\n    const res = await fetch(`/api/tokens/${code}/status`);\n    const data = await res.json();\n    setState({ status: 'valid', label: data.label });\n  }\n  validate();\n});",
+        code: "useEffect(() => {\n  async function validate() {\n    const res = await fetch('/api/redeem/check', {\n      method: 'POST',\n      body: JSON.stringify({ code }),\n    });\n    const data = await res.json();\n    setState({ status: 'valid', label: data.label });\n  }\n  validate();\n});",
         options: [
           "You can't call async functions inside useEffect",
           "Missing dependency array — this effect runs on EVERY render, spamming the API",

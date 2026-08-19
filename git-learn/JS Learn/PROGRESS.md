@@ -14,11 +14,11 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1793 words |
+| Avg teaching prose per track lesson | 1798 words |
 | Lessons with a playground | 73 / 96 |
 | Lessons with an exercise | 96 / 96 |
 | **Deepened** (all 3 spine sections) | 16 / 96 |
-| **Verified** (code executed) | 38 / 96 |
+| **Verified** (code executed) | 39 / 96 |
 | Ran clean but had nothing to run | 0 / 96 |
 | Errors | 0 |
 | Known and blocked | 3 |
@@ -83,7 +83,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a5-core-token-features | 5 | 2543 | 10 | 10 | 148 | 2/5 | 5/5 |
 | a6-chat-realtime | 3 | 1387 | 3 | 3 | 78 | 0/3 | 0/3 |
 | a7-voice-video | 5 | 980 | 5 | 5 | 138 | 0/5 | 0/5 |
-| a8-redemption-web | 4 | 1216 | 4 | 4 | 115 | 0/4 | 0/4 |
+| a8-redemption-web | 4 | 1341 | 5 | 5 | 115 | 0/4 | 1/4 |
 | a9-deep-linking | 2 | 1159 | 2 | 2 | 53 | 0/2 | 0/2 |
 | b1-sql-fundamentals | 4 | 905 | 0 | 4 | 103 | 0/4 | 0/4 |
 | b10-security-compliance | 2 | 2470 | 2 | 2 | 50 | 1/2 | 0/2 |
@@ -194,7 +194,7 @@ so they do not hold the audit red. They are **not** resolved.
 | a7-voice-video/0004-incoming-calls.html | 1217 | 9 | 1 | 1 | 29 | — | n/a |
 | a7-voice-video/0005-relay-only-privacy.html | 950 | 9 | 1 | 1 | 27 | — | n/a |
 | a8-redemption-web/0001-vite-react-setup.html | 832 | 12 | 1 | 1 | 29 | — | n/a |
-| a8-redemption-web/0002-token-redemption-flow.html | 1172 | 6 | 1 | 1 | 30 | — | n/a |
+| a8-redemption-web/0002-token-redemption-flow.html | 1670 | 6 | 2 | 2 | 30 | — | yes |
 | a8-redemption-web/0003-browser-webrtc-ws.html | 1322 | 8 | 1 | 1 | 29 | — | n/a |
 | a8-redemption-web/0004-no-app-experience.html | 1538 | 9 | 1 | 1 | 27 | — | n/a |
 | a9-deep-linking/0001-universal-links-app-links.html | 1112 | 7 | 1 | 1 | 28 | — | n/a |

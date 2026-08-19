@@ -12,8 +12,33 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean. **A5 is complete** — all five lessons verified
-2026-08-19, from `3b43bc7` to the A5 close.
+**M3 on A8**, started 2026-08-19 from `970dc82`. A5 is complete (all five
+verified the same day).
+
+`a8/0002` is **done and verified**. Next: `a8/0001` (Vite setup — thin, but the
+`VITE_*`-secrets check is a real function), then `0003` and `0004`.
+
+### Follow-up this raised, NOT yet done
+
+**The code-in-the-URL-path defect is course-wide, not just `a8/0002`.** ADR-0007
+says codes never go in a URL path; `b10/0001` and `01/0012` get it right with
+`POST /api/redeem` and a body. These do not:
+
+| Lesson | Form |
+|---|---|
+| `b3/0002` | `/api/tokens/:code` for GET, PATCH, DELETE — and in ~6 quiz questions |
+| `a9/0002` | `GET /api/tokens/${code}/redeem` |
+| `a2/0002` | `PATCH /tokens/:code` |
+| `a3/0002` | `DELETE /tokens/:code` in a quiz explanation |
+
+`a8/0002` is now internally consistent and correct; the rest is a separate pass,
+and it is bigger than it looks because the path form is baked into quiz keys and
+explanations. **CLAUDE.md also says owner endpoints take `:id`**, so `/tokens/:code`
+is wrong there for a second reason.
+
+Smaller, also not done: the holder JWT carries `tokenCode`. The holder already
+knows the code, so it leaks nothing to them — but JWTs land in logs routinely,
+and ADR-0007 says the code is never logged. Worth a decision, not urgent.
 
 **Found in `0004`, not fixed, deliberately: expiry is modelled twice.** There is
 an `ExpiryPayload` rule carrying `expires_at`, and `0003` reads a
@@ -91,6 +116,7 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `a5/0003` | `displayStatus` | stored ≠ displayed; `max_uses: 0` ≠ unlimited; paused last |
 | `a5/0004` | `isWithinWindow` | the overnight wrap; the morning belongs to *yesterday* |
 | `a5/0005` | `shareAdvice` | unknown target ⇒ warn; safe actions ignore `target` |
+| `a8/0002` | `redeemState` | the server's vocabulary is not the UI's; unknown reason ⇒ error |
 
 **A5 note:** not one of the five had a `createExplain` prompt or loaded
 `explain.js`. All five now do. A5 predates the practice pattern being made
