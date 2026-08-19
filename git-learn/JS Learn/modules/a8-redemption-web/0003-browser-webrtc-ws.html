@@ -225,13 +225,15 @@ export async function startCall(options: CallOptions, withVideo: boolean) {
     await localVideoEl.play();
   }
 
-  // 2. Create peer connection
+  // 2. Create peer connection.
+  //
+  // iceTransportPolicy: 'relay' is NOT optional here, and TURN is not a
+  // fallback for awkward networks -- it is the only path. See below.
   const pc = new RTCPeerConnection({
     iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      // Add your TURN server for NAT traversal
-      // { urls: 'turn:turn.tokn.app:3478', username: '...', credential: '...' }
+      { urls: 'turn:turn.tokn.app:3478', username: turnUser, credential: turnPass },
     ],
+    iceTransportPolicy: 'relay',
   });
 
   // 3. Add local tracks to the connection
@@ -301,6 +303,25 @@ export async function startCall(options: CallOptions, withVideo: boolean) {
 
   return { pc, localStream, endCall };
 }</code></pre>
+
+    <h2>Why every call is relayed, and what it costs</h2>
+
+    <p>WebRTC's default behaviour is to find the shortest path between two peers — LAN if they are on the same network, otherwise a direct internet path discovered via STUN, with TURN as a last resort for hostile NATs. That is the right default for a video-call product and <strong>the wrong one for this product</strong>.</p>
+
+    <p>To find a direct path, each side sends the other its <strong>ICE candidates</strong>, and a candidate is an IP address and port. A direct connection therefore hands the holder the issuer's home IP address. The delivery company that was never supposed to learn a phone number now knows roughly where the user lives, on a page they reached by scanning a QR code. Everything else in this course — the hashed codes, the E2EE messages, the labels instead of names — is undone by one <code>srflx</code> candidate.</p>
+
+    <p><code>iceTransportPolicy: 'relay'</code> tells the browser to gather <em>only</em> relay candidates. Both sides see the TURN server's address and nothing else. This is the same decision as the mobile client — see the architecture summary in <code>CLAUDE.md</code> — and it is stated here in full because this is the page a stranger opens.</p>
+
+    <p><strong>The costs are real and worth saying plainly:</strong></p>
+
+    <ul>
+      <li><strong>Every call goes through TURN</strong>, including two people sitting in the same room. There is no fast path any more.</li>
+      <li><strong>Relay bandwidth is the most likely surprise on the bill.</strong> A self-hosted coturn carries the full media stream of every call in both directions, so a video call costs real egress on your VPS rather than nothing.</li>
+      <li><strong>A TURN outage is a total call outage.</strong> With the default policy a broken TURN server degrades some calls; here it stops all of them, so coturn is now a component that has to be monitored.</li>
+      <li>Latency goes up by the detour through the relay.</li>
+    </ul>
+
+    <p>The alternative is not "a bit less privacy" — it is publishing the user's IP address to the exact party the product exists to keep at arm's length. Pay the bandwidth.</p>
 
     <h2>Differences from React Native WebRTC</h2>
 
@@ -414,9 +435,27 @@ export function useWebSocket(url: string, token: string | null) {
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>First, the decision the reconnect loop makes</h2>
+
+    <p>Two things go wrong in reconnection code and neither shows up in testing, because both need more than one client and a server that is actually unwell. The first is the herd above. The second is retrying something that will never succeed — a holder JWT expires after 24 hours, and a client that reconnects forever with a dead token is a hot loop pointed at your own server.</p>
+
+    <div id="exercise-reconnect"></div>
+
+    <h3>Check your work</h3>
+
+    <div id="pg-exercise-reconnect"></div>
+
+    <hr>
+
+    <h2>Then the modules</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <h2>In your own words</h2>
+
+    <div id="explain-a8-0003"></div>
 
     <hr>
 
@@ -432,52 +471,187 @@ export function useWebSocket(url: string, token: string | null) {
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
-    createPlayground("playground-1", `// Simulating WebSocket reconnection with exponential backoff
+    createPlayground("playground-1", `// Exponential backoff WITHOUT jitter, and what it does to one server.
+const CAP = 30000;
 
-function simulateReconnection() {
-  let attempt = 0;
-  const maxDelay = 30000; // 30 seconds max
-
-  function getDelay() {
-    attempt++;
-    const delay = Math.min(1000 * Math.pow(2, attempt), maxDelay);
-    return delay;
-  }
-
-  console.log('Connection lost! Starting reconnection...');
-  console.log('');
-
-  for (let i = 0; i < 7; i++) {
-    const delay = getDelay();
-    console.log(\`Attempt \${attempt}: wait \${delay}ms (\${delay/1000}s) before retry\`);
-  }
-
-  console.log('');
-  console.log('Pattern: 2s, 4s, 8s, 16s, 30s, 30s, 30s (capped)');
-  console.log('This prevents hammering the server when it\\'s down.');
+function plainDelay(attempt) {
+  return Math.min(1000 * Math.pow(2, attempt - 1), CAP);
 }
 
-simulateReconnection();
+console.log('One client, reconnecting:');
+for (let a = 1; a <= 7; a++) {
+  console.log('  attempt ' + a + ': ' + plainDelay(a) + 'ms');
+}
+
+// The claim usually attached to this code is that it stops clients hammering
+// a server that is down. Watch what 500 of them actually do.
+console.log('');
+console.log('500 clients dropped by ONE server restart, no jitter:');
+const buckets = {};
+for (let client = 0; client < 500; client++) {
+  const d = plainDelay(1);      // every client is on attempt 1 at the same moment
+  buckets[d] = (buckets[d] || 0) + 1;
+}
+for (const d of Object.keys(buckets)) {
+  console.log('  ' + buckets[d] + ' clients all retry at exactly ' + d + 'ms');
+}
+console.log('  -> the restart is followed by one spike, then another, then another');
+
+// Full jitter: spread each client uniformly across its own window.
+function jitteredDelay(attempt, rand) {
+  return Math.floor(rand * Math.min(1000 * Math.pow(2, attempt - 1), CAP));
+}
 
 console.log('');
-console.log('--- ICE candidate flow ---');
-// Simulating ICE candidates
-const candidates = [
-  { type: 'host', address: '192.168.1.5:54321' },
-  { type: 'srflx', address: '203.0.113.1:12345' },
-  { type: 'relay', address: '198.51.100.1:443' },
-];
+console.log('Same 500 clients, full jitter, bucketed by 100ms:');
+const spread = {};
+for (let client = 0; client < 500; client++) {
+  const d = jitteredDelay(3, Math.random());   // window is 0-4000ms
+  const bucket = Math.floor(d / 100) * 100;
+  spread[bucket] = (spread[bucket] || 0) + 1;
+}
+const used = Object.keys(spread).length;
+console.log('  spread across ' + used + ' different 100ms buckets, ~' +
+            Math.round(500 / used) + ' clients each');
+console.log('  -> the same total work, arriving at a rate one box can answer');`);
 
-candidates.forEach(c => {
-  console.log(\`ICE candidate: \${c.type} - \${c.address}\`);
-});
-console.log('Best path chosen: host (LAN) > srflx (STUN) > relay (TURN)');`);
+    createSolution("exercise-reconnect", {
+      exercise: "Write <code>reconnectPlan(attempt, closeCode, rand)</code> — what the socket should do after it closes.\n\n<code>attempt</code> is how many consecutive reconnects have already failed, counting from 1. <code>closeCode</code> is the WebSocket close code. <code>rand</code> is a number in [0, 1) — <strong>passed in rather than taken from <code>Math.random()</code></strong>, so the plan can be tested; the caller supplies the randomness.\n\nReturn <code>{ retry, delayMs, reason }</code>. When <code>retry</code> is false, <code>delayMs</code> is 0.\n\nThe rules:\n\n1. <strong>Close code 1000 is a normal closure</strong> — the client asked to close, or the page navigated away. Do not reconnect. <code>reason: 'closed'</code>.\n\n2. <strong>Close code 4401 means the server rejected the holder JWT.</strong> Do not reconnect: the token is expired or revoked and no number of retries will change that. <code>reason: 'auth'</code> — the page uses it to send the holder back to redeem.\n\n3. After <strong>10 failed attempts</strong>, give up. <code>reason: 'exhausted'</code>. Offer a manual Retry button instead of looping forever.\n\n4. Otherwise reconnect, with <strong>full jitter</strong>: the window doubles each attempt — 1000ms for attempt 1, 2000 for attempt 2, 4000 for attempt 3 — capped at 30000ms, and the actual delay is a random point <em>inside</em> that window: <code>rand × window</code>, floored to a whole millisecond.\n\nThe jitter is the point. Without it every client dropped by the same restart comes back at the same instant, and a single box gets the whole herd at once — repeatedly, because they stay in lockstep.",
+      hints: [
+        "Handle the three no-retry cases first and return early. What is left is one arithmetic expression, and it is much easier to read when nothing else is competing with it.",
+        "The window for attempt 1 should be 1000ms, so the exponent is attempt - 1, not attempt. Check the first value before trusting the rest.",
+        "Math.min caps the window BEFORE the jitter is applied, not after — capping afterwards would squash the whole distribution into the top of the range at high attempt counts.",
+      ],
+      solution: `const BASE_MS = 1000;
+const CAP_MS = 30000;
+const MAX_ATTEMPTS = 10;
+
+function reconnectPlan(attempt, closeCode, rand) {
+  // Rule 1. We closed it, or the page went away.
+  if (closeCode === 1000) {
+    return { retry: false, delayMs: 0, reason: 'closed' };
+  }
+
+  // Rule 2. The server looked at the JWT and refused it. Retrying is a hot
+  // loop against our own API with a credential that will never be accepted;
+  // the holder has to go back through redemption to get a new one.
+  if (closeCode === 4401) {
+    return { retry: false, delayMs: 0, reason: 'auth' };
+  }
+
+  // Rule 3. Somewhere past here a human should decide, not a timer.
+  if (attempt > MAX_ATTEMPTS) {
+    return { retry: false, delayMs: 0, reason: 'exhausted' };
+  }
+
+  // Rule 4. Cap the WINDOW, then pick a point inside it. Capping after the
+  // multiplication would pile every high attempt onto exactly 30000ms, which
+  // is the lockstep this exists to avoid.
+  const window = Math.min(BASE_MS * Math.pow(2, attempt - 1), CAP_MS);
+
+  return { retry: true, delayMs: Math.floor(rand * window), reason: 'backoff' };
+}`
+    });
+
+    createPlayground("pg-exercise-reconnect", `// Write reconnectPlan(attempt, closeCode, rand) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+// 1006 is "abnormal closure" -- what a dropped connection actually looks like.
+const DROPPED = 1006;
+// A rand that is neither 0 nor 0.5, so an implementation that ignores it, or
+// halves the window instead of scaling by it, cannot match by coincidence.
+const R = 0.75;
+
+try {
+  if (typeof reconnectPlan !== "function") throw new Error("not written yet");
+
+  try {
+    const p = reconnectPlan(1, DROPPED, R);
+    check("attempt 1 draws from a 1000ms window", p.retry === true && p.delayMs === 750,
+          "got retry=" + p.retry + " delayMs=" + p.delayMs + " -- window is 1000 * 2^(attempt-1), so attempt 1 is 1000, not 2000");
+  } catch (e) { check("attempt 1 draws from a 1000ms window", false, "threw " + e.message); }
+
+  try {
+    const p = reconnectPlan(3, DROPPED, R);
+    check("the window doubles each attempt", p.delayMs === 3000,
+          "got " + p.delayMs + " -- attempt 3 window is 4000ms, and 0.75 of it is 3000");
+  } catch (e) { check("the window doubles each attempt", false, "threw " + e.message); }
+
+  try {
+    const p = reconnectPlan(9, DROPPED, R);
+    check("the window is capped at 30000ms", p.delayMs === 22500,
+          "got " + p.delayMs + " -- attempt 9 would be 256000ms uncapped; capped it is 30000, and 0.75 of that is 22500");
+  } catch (e) { check("the window is capped at 30000ms", false, "threw " + e.message); }
+
+  try {
+    // The whole point: two clients dropped together must not come back together.
+    const a = reconnectPlan(5, DROPPED, 0.1);
+    const b = reconnectPlan(5, DROPPED, 0.9);
+    check("different rand gives a different delay — this IS the jitter",
+          a.delayMs !== b.delayMs,
+          "got " + a.delayMs + " and " + b.delayMs + " -- without this every client dropped by one restart returns at the same instant");
+  } catch (e) { check("different rand gives a different delay — this IS the jitter", false, "threw " + e.message); }
+
+  try {
+    const p = reconnectPlan(4, DROPPED, 0);
+    check("a rand of 0 gives an immediate retry", p.retry === true && p.delayMs === 0,
+          "got " + p.delayMs + " -- full jitter means the window starts at zero, not at half");
+  } catch (e) { check("a rand of 0 gives an immediate retry", false, "threw " + e.message); }
+
+  try {
+    const p = reconnectPlan(2, DROPPED, 0.3333333);
+    check("the delay is a whole number of milliseconds", Number.isInteger(p.delayMs),
+          "got " + p.delayMs);
+  } catch (e) { check("the delay is a whole number of milliseconds", false, "threw " + e.message); }
+
+  try {
+    const p = reconnectPlan(1, 1000, R);
+    check("a normal closure does not reconnect", p.retry === false && p.reason === "closed",
+          "got retry=" + p.retry + " reason=" + p.reason + " -- we closed it on purpose");
+  } catch (e) { check("a normal closure does not reconnect", false, "threw " + e.message); }
+
+  try {
+    const p = reconnectPlan(1, 4401, R);
+    check("a rejected JWT does not reconnect", p.retry === false && p.reason === "auth",
+          "got retry=" + p.retry + " reason=" + p.reason + " -- the token is dead, so this would be a hot loop against your own API");
+  } catch (e) { check("a rejected JWT does not reconnect", false, "threw " + e.message); }
+
+  try {
+    const p = reconnectPlan(1, 4401, R);
+    check("a no-retry plan has no delay", p.delayMs === 0, "got " + p.delayMs);
+  } catch (e) { check("a no-retry plan has no delay", false, "threw " + e.message); }
+
+  try {
+    const p = reconnectPlan(11, DROPPED, R);
+    check("it gives up after ten attempts", p.retry === false && p.reason === "exhausted",
+          "got retry=" + p.retry + " reason=" + p.reason + " -- past here a person should choose, not a timer");
+  } catch (e) { check("it gives up after ten attempts", false, "threw " + e.message); }
+
+  try {
+    const p = reconnectPlan(10, DROPPED, R);
+    check("the tenth attempt still runs", p.retry === true,
+          "got retry=" + p.retry + " -- ten attempts means ten, not nine");
+  } catch (e) { check("the tenth attempt still runs", false, "threw " + e.message); }
+
+  try {
+    const p = reconnectPlan(1, DROPPED, R);
+    check("a retrying plan says why", p.reason === "backoff", "got " + p.reason);
+  } catch (e) { check("a retrying plan says why", false, "threw " + e.message); }
+} catch (e) {
+  console.log("Write reconnectPlan(attempt, closeCode, rand) above, then press Run.");
+}`);
 
     createSolution("exercise-1", {
+      unverifiable: "the modules are browser WebSocket and RTCPeerConnection clients, needing a browser, a signalling server and a TURN server",
       exercise: "Build the complete WebSocket and WebRTC modules for the web app: (1) A WebSocket client class with auto-reconnection (exponential backoff, max 30s), typed message sending, and event handlers. (2) A WebRTC call manager that handles the complete offer/answer/ICE flow using native browser APIs. (3) A useCall React hook that integrates both — takes video element refs, returns startCall/endCall/toggleMute functions. Handle all browser-specific concerns: HTTPS check, autoplay policy, permission errors.",
       hints: [
         "The WebSocket reconnect delay formula: Math.min(1000 * 2^attempt, 30000)",
@@ -581,7 +755,8 @@ export function useCall(wsClient: TokenWSClient | null) {
     }
 
     const pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+      iceServers: [{ urls: 'turn:turn.tokn.app:3478', username: turnUser, credential: turnPass }],
+      iceTransportPolicy: 'relay',   // never hand the other side an IP address
     });
     pcRef.current = pc;
 
@@ -633,6 +808,10 @@ export function useCall(wsClient: TokenWSClient | null) {
 }`
     });
 
+    createExplain("explain-a8-0003", {
+      prompt: "<code>iceTransportPolicy: 'relay'</code> makes every call cost TURN bandwidth, even between two people in the same room, and turns coturn into a single point of failure for all calls. Explain what a holder would learn about the issuer without it — and why that one fact undoes the hashed codes, the labels and the encrypted messages all at once."
+    });
+
     createQuiz("lesson-quiz", [
       {
         type: "predict-output",
@@ -659,13 +838,13 @@ export function useCall(wsClient: TokenWSClient | null) {
           "onclose doesn't fire when connection drops"
         ],
         correct: 2,
-        explanation: "A fixed 1-second retry means the client hammers the server with connection attempts every second during an outage. With 1000 connected holders, that's 1000 requests/second hitting a struggling server. Exponential backoff (2s, 4s, 8s, 16s, capped at 30s) gives the server breathing room to recover."
+        explanation: "A fixed 1-second retry means the client hammers the server with connection attempts every second during an outage. With 1000 connected holders, that's 1000 requests/second hitting a struggling server. Exponential backoff widens the gap between attempts — but backoff alone still leaves every client in lockstep, because they were all dropped at the same instant and all wait the same amount. Full jitter picks a random point inside each widening window, which is what actually spreads the herd out."
       },
       {
         type: "which-breaks",
         question: "Which WebRTC code will fail in the browser?",
         variants: [
-          "const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });",
+          "const pc = new RTCPeerConnection({ iceServers: [{ urls: 'turn:turn.tokn.app:3478', username: u, credential: c }], iceTransportPolicy: 'relay' });",
           "const offer = await pc.createOffer();\nawait pc.setLocalDescription(offer);",
           "const stream = await navigator.mediaDevices.getUserMedia({ audio: true });\npc.addTrack(stream);"
         ],

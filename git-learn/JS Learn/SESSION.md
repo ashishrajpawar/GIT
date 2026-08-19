@@ -15,8 +15,16 @@ how far it got.
 **M3 on A8**, started 2026-08-19 from `970dc82`. A5 is complete (all five
 verified the same day).
 
-`a8/0001` and `a8/0002` are **done and verified**. Next: `a8/0003`
-(browser WebRTC/WS), then `0004` (no-app experience).
+`a8/0001`–`0003` are **done and verified**. Next: `a8/0004` (no-app
+experience), the last of A8.
+
+**`a8/0003` had the worst defect found so far and it was not the function.**
+The browser `RTCPeerConnection` had no `iceTransportPolicy: 'relay'`, TURN was
+commented out, and the playground taught "best path chosen: host (LAN)". ICE
+candidates *are* IP addresses, so a direct path hands the holder the issuer's
+home IP — on the page a stranger opens after scanning a QR code. **Check
+`a7-voice-video` for the same omission**; it is the mobile half of the same
+decision and was written by the same pass.
 
 ### Follow-up this raised, NOT yet done
 
@@ -118,6 +126,7 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `a5/0005` | `shareAdvice` | unknown target ⇒ warn; safe actions ignore `target` |
 | `a8/0002` | `redeemState` | the server's vocabulary is not the UI's; unknown reason ⇒ error |
 | `a8/0001` | `checkWebEnv` | the `VITE_` **prefix** is the test, not the name |
+| `a8/0003` | `reconnectPlan` | backoff spaces one client, only jitter spaces the herd |
 
 **A5 note:** not one of the five had a `createExplain` prompt or loaded
 `explain.js`. All five now do. A5 predates the practice pattern being made
