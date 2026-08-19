@@ -721,6 +721,28 @@ export default router;</code></pre>
       engine supports it and the interface forbids it, so the capability exists
       and no user can reach it.
     </p>
+    <p>
+      <code>isWithinWindow</code> in the exercise below is the client's half of
+      that, and it is deliberately written before the picker rather than after:
+      a validation rule is much easier to argue with when the function it would
+      have excluded is already sitting there passing its tests. <strong>The
+      remaining risk is the picker itself</strong> — nothing stops someone
+      adding <code>end &gt; start</code> to the form and reintroducing the bug
+      one layer up, where no test in this lesson can see it.
+    </p>
+
+    <h3>Expiry is modelled twice</h3>
+
+    <p>
+      There is an <code>ExpiryPayload</code> rule above carrying
+      <code>expires_at</code>, and <code>a5/0003</code> derives its status badge
+      from a <code>tokens.expires_at</code> column. Both cannot be the source of
+      truth: a token expiring by rule and a token expiring by column would need
+      the badge to consult two places and agree about which wins. Recorded here
+      rather than resolved, because picking one is part of the
+      <strong>B2 schema rewrite</strong> that the next section is also waiting
+      on. Until then, <code>0003</code>'s column is what the client reads.
+    </p>
 
     <h3>Two storage models, and this lesson picked the other one</h3>
 
@@ -768,9 +790,29 @@ export default router;</code></pre>
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>First, the rule the editor kept forbidding</h2>
+
+    <p>The overnight window above is not an edge case to be handled later — it is the single most obvious thing a privacy product's time rule is <em>for</em>. "Do not let this delivery company message me between 22:00 and 06:00" is the request, and <code>end &gt; start</code> — the validation everyone writes first — makes it impossible to express.</p>
+
+    <p>So before building the picker, write the thing the picker has to agree with. This is the client's half of what B7.2 evaluates, and if the two disagree the screen shows a rule that is not the rule being enforced.</p>
+
+    <div id="exercise-window"></div>
+
+    <h3>Check your work</h3>
+
+    <div id="pg-exercise-window"></div>
+
+    <hr>
+
+    <h2>Then the editors</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <h2>In your own words</h2>
+
+    <div id="explain-a5-0004"></div>
 
     <hr>
 
@@ -786,34 +828,230 @@ export default router;</code></pre>
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
-    createPlayground("playground-1", `// Rule payload formatting — try each type
+    createPlayground("playground-1", `// Rule payload formatting. The field names below ARE the contract with the
+// rules engine in B7.2 -- start_time, not start. Getting one wrong does not
+// throw anywhere; it arrives at the server as undefined. See "When this
+// breaks" above, which is where this playground used to be the example.
+const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
 function formatTimeWindow(payload) {
-  const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-  const dayStr = payload.days.map(d => dayNames[d]).join(', ');
-  return dayStr + ' · ' + payload.start + '–' + payload.end;
+  const days = payload.days.map(d => DAY_NAMES[d]).join(', ');
+  // "HH:MM" is zero-padded, so string comparison orders it correctly.
+  const overnight = payload.start_time > payload.end_time ? ' (overnight)' : '';
+  return days + ' · ' + payload.start_time + '–' + payload.end_time + overnight;
 }
 
 function formatContactLimit(payload) {
-  return 'Max ' + payload.max_per_day + ' ' + payload.type + '/day';
+  return 'Max ' + payload.max_messages_per_day + ' messages, '
+       + payload.max_calls_per_day + ' calls per day';
 }
 
 function formatChannelRestrict(payload) {
-  return payload.allowed.join(', ') + ' only';
+  const on = [];
+  if (payload.allow_text) on.push('text');
+  if (payload.allow_voice) on.push('voice');
+  if (payload.allow_video) on.push('video');
+  // Three booleans cannot contradict each other, which is the whole reason
+  // this is not an 'allowed' list and a 'blocked' list.
+  return on.length ? on.join(', ') + ' only' : 'nothing allowed at all';
 }
 
-// Test
-console.log(formatTimeWindow({ days: [1,2,3,4,5], start: '09:00', end: '18:00' }));
-console.log(formatContactLimit({ max_per_day: 3, type: 'messages' }));
-console.log(formatChannelRestrict({ allowed: ['text'], blocked: ['voice', 'video'] }));
+console.log(formatTimeWindow({ days: [1,2,3,4,5], start_time: '09:00', end_time: '18:00', timezone: 'Asia/Kolkata' }));
+console.log(formatContactLimit({ max_messages_per_day: 3, max_calls_per_day: 1 }));
+console.log(formatChannelRestrict({ allow_text: true, allow_voice: false, allow_video: false }));
 
-// Edge case: weekend only
-console.log(formatTimeWindow({ days: [0, 6], start: '10:00', end: '20:00' }));`);
+// The rule the editor used to make unreachable: a do-not-disturb inverse
+// that wraps midnight. The engine has always handled it.
+console.log(formatTimeWindow({ days: [5, 6], start_time: '22:00', end_time: '06:00', timezone: 'Asia/Kolkata' }));
+
+// Every channel off. Representable, and the editor must warn about it --
+// this token can now receive nothing at all.
+console.log(formatChannelRestrict({ allow_text: false, allow_voice: false, allow_video: false }));`);
+
+    createSolution("exercise-window", {
+      exercise: "Write <code>isWithinWindow(payload, at)</code> — given a <code>TimeWindowPayload</code>, is contact permitted at this moment?\n\n<code>payload</code> is <code>{ days, start_time, end_time, timezone }</code> as defined above. <code>at</code> is <code>{ day, minutes }</code>: <code>day</code> is 0=Sun … 6=Sat, <code>minutes</code> is minutes since local midnight (0–1439).\n\n<strong>The timezone is already applied</strong> — the caller converted the instant into local parts. That conversion belongs in one place, and this is not it; keeping it out makes this function pure arithmetic you can reason about.\n\nThe rules:\n\n1. No days selected → <code>false</code>. A rule matching no day matches nothing.\n\n2. <code>start_time &lt; end_time</code> is a same-day window. Permitted when <code>day</code> is listed and <code>minutes</code> falls in <strong>[start, end)</strong> — start inclusive, end exclusive, so 09:00–17:00 and 17:00–21:00 can sit side by side without both claiming 17:00.\n\n3. <strong><code>start_time &gt; end_time</code> is an overnight window</strong> and it must work. It <em>opens</em> on a listed day and closes the next morning. So 22:00–06:00 on Friday covers Friday 23:30 <strong>and</strong> Saturday 02:00 — but <strong>not</strong> Friday 02:00, which belongs to a Thursday window that was never created.\n\n4. <code>start_time === end_time</code> → <code>false</code>. Zero length. Rules only ever narrow, so a rule matching nothing blocks, it does not open the gate.",
+      hints: [
+        "Parse \"HH:MM\" into minutes once, at the top. Comparing two numbers is much easier to get right than comparing two strings, and every rule below is about ordering.",
+        "The overnight case is two separate questions, not one: is this the evening half of a window that opened today, or the morning half of one that opened yesterday?",
+        "Yesterday is (day + 6) % 7. Writing day - 1 gives -1 on a Sunday, which is in no list of days, so Sunday mornings silently stop being covered.",
+      ],
+      solution: `function toMinutes(hhmm) {
+  const [hours, mins] = hhmm.split(':').map(Number);
+  return hours * 60 + mins;
+}
+
+function isWithinWindow(payload, at) {
+  const days = payload.days || [];
+
+  // Rule 1. No day selected means the rule matches nothing.
+  if (days.length === 0) return false;
+
+  const start = toMinutes(payload.start_time);
+  const end = toMinutes(payload.end_time);
+
+  // Rule 4. Zero length. Rules only ever narrow, so "matches nothing" has to
+  // mean blocked -- reading it as "all day" would turn a mis-set picker into
+  // a rule that grants access, which no rule in this system is allowed to do.
+  if (start === end) return false;
+
+  // Rule 2. Same day. Half-open [start, end): if end were inclusive, two
+  // adjacent windows would both claim the instant where they meet.
+  if (start < end) {
+    return days.includes(at.day) && at.minutes >= start && at.minutes < end;
+  }
+
+  // Rule 3. Overnight. The window OPENS on a listed day, so it belongs to
+  // that day even though half of it happens on the next one.
+
+  // The evening half: today is a listed day and we are past the opening time.
+  if (days.includes(at.day) && at.minutes >= start) return true;
+
+  // The morning half: it is early, and the window opened YESTERDAY. Note
+  // (at.day + 6) % 7 rather than at.day - 1, which is -1 on a Sunday and
+  // therefore in nobody's list of days.
+  const openedOn = (at.day + 6) % 7;
+  return days.includes(openedOn) && at.minutes < end;
+}`
+    });
+
+    createPlayground("pg-exercise-window", `// Write isWithinWindow(payload, at) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+const SUN = 0, MON = 1, THU = 4, FRI = 5, SAT = 6;
+function at(day, hhmm) {
+  const [h, m] = hhmm.split(":").map(Number);
+  return { day: day, minutes: h * 60 + m };
+}
+
+// Business hours Mon-Fri. Deliberately 09:00-17:00 rather than a window whose
+// start and end are the same number of minutes from midnight, so > and >=
+// cannot agree by coincidence at either edge.
+const OFFICE = { days: [1, 2, 3, 4, 5], start_time: "09:00", end_time: "17:00", timezone: "Asia/Kolkata" };
+
+// Do-not-disturb inverse, FRIDAY ONLY. One day, on purpose: with several
+// consecutive days listed, an implementation that forgets the window opened
+// yesterday still looks correct, because the neighbouring day is listed too.
+const DND_FRI = { days: [5], start_time: "22:00", end_time: "06:00", timezone: "Asia/Kolkata" };
+
+// Saturday only, so the morning half lands on SUNDAY -- day 0, where the
+// (day + 6) % 7 and day - 1 spellings disagree.
+const DND_SAT = { days: [6], start_time: "22:00", end_time: "06:00", timezone: "Asia/Kolkata" };
+
+try {
+  if (typeof isWithinWindow !== "function") throw new Error("not written yet");
+
+  try {
+    check("a listed day inside the window is permitted",
+          isWithinWindow(OFFICE, at(MON, "10:00")) === true,
+          "got " + isWithinWindow(OFFICE, at(MON, "10:00")));
+  } catch (e) { check("a listed day inside the window is permitted", false, "threw " + e.message); }
+
+  try {
+    check("an unlisted day is not permitted, whatever the time",
+          isWithinWindow(OFFICE, at(SUN, "10:00")) === false,
+          "got " + isWithinWindow(OFFICE, at(SUN, "10:00")));
+  } catch (e) { check("an unlisted day is not permitted, whatever the time", false, "threw " + e.message); }
+
+  try {
+    check("the window opens AT start_time", isWithinWindow(OFFICE, at(MON, "09:00")) === true,
+          "got " + isWithinWindow(OFFICE, at(MON, "09:00")) + " -- >= not >");
+  } catch (e) { check("the window opens AT start_time", false, "threw " + e.message); }
+
+  try {
+    check("a minute before opening is refused", isWithinWindow(OFFICE, at(MON, "08:59")) === false,
+          "got " + isWithinWindow(OFFICE, at(MON, "08:59")));
+  } catch (e) { check("a minute before opening is refused", false, "threw " + e.message); }
+
+  try {
+    check("the window is CLOSED at end_time", isWithinWindow(OFFICE, at(MON, "17:00")) === false,
+          "got " + isWithinWindow(OFFICE, at(MON, "17:00")) + " -- half-open, or 09:00-17:00 and 17:00-21:00 both claim 17:00");
+  } catch (e) { check("the window is CLOSED at end_time", false, "threw " + e.message); }
+
+  try {
+    check("a minute before closing is still permitted", isWithinWindow(OFFICE, at(MON, "16:59")) === true,
+          "got " + isWithinWindow(OFFICE, at(MON, "16:59")));
+  } catch (e) { check("a minute before closing is still permitted", false, "threw " + e.message); }
+
+  try {
+    const r = isWithinWindow(DND_FRI, at(FRI, "23:30"));
+    check("an overnight window works at all in the evening", r === true,
+          "got " + r + " -- validating end > start is what makes 22:00-06:00 unreachable");
+  } catch (e) { check("an overnight window works at all in the evening", false, "threw " + e.message); }
+
+  try {
+    const r = isWithinWindow(DND_FRI, at(SAT, "02:00"));
+    check("an overnight window continues into the next morning", r === true,
+          "got " + r + " -- Saturday 02:00 belongs to the window that opened Friday 22:00");
+  } catch (e) { check("an overnight window continues into the next morning", false, "threw " + e.message); }
+
+  try {
+    const r = isWithinWindow(DND_FRI, at(FRI, "02:00"));
+    check("the morning belongs to YESTERDAY's window, not today's", r === false,
+          "got " + r + " -- Friday 02:00 would need a Thursday window, and Thursday is not listed");
+  } catch (e) { check("the morning belongs to YESTERDAY's window, not today's", false, "threw " + e.message); }
+
+  try {
+    const r = isWithinWindow(DND_FRI, at(SAT, "23:30"));
+    check("an unlisted day does not open its own overnight window", r === false,
+          "got " + r + " -- only Friday is listed, so no window opens on Saturday evening");
+  } catch (e) { check("an unlisted day does not open its own overnight window", false, "threw " + e.message); }
+
+  try {
+    check("the overnight window opens AT start_time",
+          isWithinWindow(DND_FRI, at(FRI, "22:00")) === true,
+          "got " + isWithinWindow(DND_FRI, at(FRI, "22:00")));
+    check("a minute before the overnight window is refused",
+          isWithinWindow(DND_FRI, at(FRI, "21:59")) === false,
+          "got " + isWithinWindow(DND_FRI, at(FRI, "21:59")));
+  } catch (e) { check("the overnight window opens AT start_time", false, "threw " + e.message); }
+
+  try {
+    check("the overnight window is CLOSED at end_time",
+          isWithinWindow(DND_FRI, at(SAT, "06:00")) === false,
+          "got " + isWithinWindow(DND_FRI, at(SAT, "06:00")));
+    check("a minute before the overnight window closes is permitted",
+          isWithinWindow(DND_FRI, at(SAT, "05:59")) === true,
+          "got " + isWithinWindow(DND_FRI, at(SAT, "05:59")));
+  } catch (e) { check("the overnight window is CLOSED at end_time", false, "threw " + e.message); }
+
+  try {
+    const r = isWithinWindow(DND_SAT, at(SUN, "02:00"));
+    check("an overnight window that runs into SUNDAY still works", r === true,
+          "got " + r + " -- yesterday is (day + 6) % 7; day - 1 is -1 here and matches no day");
+  } catch (e) { check("an overnight window that runs into SUNDAY still works", false, "threw " + e.message); }
+
+  try {
+    const zero = { days: [1], start_time: "09:00", end_time: "09:00", timezone: "Asia/Kolkata" };
+    check("a zero-length window permits nothing", isWithinWindow(zero, at(MON, "09:00")) === false,
+          "got " + isWithinWindow(zero, at(MON, "09:00")) + " -- rules only narrow, so matching nothing must block");
+  } catch (e) { check("a zero-length window permits nothing", false, "threw " + e.message); }
+
+  try {
+    const none = { days: [], start_time: "09:00", end_time: "17:00", timezone: "Asia/Kolkata" };
+    check("no days selected permits nothing", isWithinWindow(none, at(MON, "10:00")) === false,
+          "got " + isWithinWindow(none, at(MON, "10:00")));
+  } catch (e) { check("no days selected permits nothing", false, "threw " + e.message); }
+
+  try {
+    check("Thursday evening is outside a Friday-only window",
+          isWithinWindow(DND_FRI, at(THU, "23:30")) === false,
+          "got " + isWithinWindow(DND_FRI, at(THU, "23:30")));
+  } catch (e) { check("Thursday evening is outside a Friday-only window", false, "threw " + e.message); }
+} catch (e) {
+  console.log("Write isWithinWindow(payload, at) above, then press Run.");
+}`);
 
     createSolution("exercise-1", {
+      unverifiable: "the editors are React Native components talking to a running rules API, needing a device",
       exercise: "Build the full access rules system:\n\n1. Create `shared/src/rules.ts` with TypeScript types for all four rule types and their payloads.\n\n2. Create the server-side CRUD endpoints: GET (list), POST (create), PATCH (update), DELETE (remove) for `/tokens/:tokenId/rules`.\n\n3. Build the `TimeWindowSection` component: day picker (7 tappable chips), start/end time inputs, and a save button that calls the API.\n\n4. Build the `ChannelRestrictSection` component: three toggles (text/voice/video) with a warning when all are disabled.\n\n5. Build the `RuleSummary` component that shows a one-line description of each active rule on the TokenDetail screen.\n\n6. Test: create a token, add a time window (Mon–Fri 9–6), add a channel restriction (text only), and verify the summaries display correctly.",
       hints: [
         "Each rule type has its own payload shape — use a discriminated union with rule_type as the discriminator.",
@@ -841,6 +1079,10 @@ console.log(formatTimeWindow({ days: [0, 6], start: '10:00', end: '20:00' }));`)
 // 2. Toggle OFF = rule is disabled (not deleted) — preserves config for re-enable
 // 3. Days are stored as numbers (0-6), displayed as names
 // 4. Pre-fill sensible defaults when enabling a rule for the first time`
+    });
+
+    createExplain("explain-a5-0004", {
+      prompt: "A 22:00–06:00 window listed for Friday covers Saturday 02:00 but not Friday 02:00. Explain why those two answers differ even though the clock reads the same — and what a user would conclude about the product if the editor had simply refused to accept the rule."
     });
 
     createQuiz("lesson-quiz", [

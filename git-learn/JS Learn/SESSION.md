@@ -14,23 +14,25 @@ how far it got.
 
 **M3 on A5**, started 2026-08-19. Working from `3b43bc7`.
 
-`a5/0001`, `a5/0002` and `a5/0003` are **done and verified**. Next up is
-`a5/0004` (access rules UI) — not yet started, nothing uncommitted.
+`a5/0001` through `a5/0004` are **done and verified**. Next up is `a5/0005`
+(share-path warnings) — not yet started, nothing uncommitted. It is the last of
+A5, and the one that carries the product rule from `CLAUDE.md`: a token must
+never travel over a channel that already identifies the user.
 
-**Read `a5/0004` against `a5/0003` before writing it.** `0003` now derives its
-badge from `expires_at`, `max_uses` and `use_count` with a fixed precedence, and
-`0004` is the screen that *sets* those three. If they disagree about what
-`max_uses: 0` or a null expiry means, `0004` is the one to change.
+**Found in `0004`, not fixed, deliberately: expiry is modelled twice.** There is
+an `ExpiryPayload` rule carrying `expires_at`, and `0003` reads a
+`tokens.expires_at` column. Both cannot be the source of truth. Written up in
+`0004`'s "When this breaks" and left for the **B2 rewrite**, which the adjacent
+storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
-If `a5/0001` lands: continue down A5 — `0002` QR, `0003` list management,
-`0004` access rules, `0005` share-path warnings. One commit per lesson, so an
-abrupt stop loses at most one.
+**`a5/0005` — share-path warnings**, the last of A5. One commit per lesson, so
+an abrupt stop loses at most one.
 
 | Work | Gate |
 |---|---|
-| **M3** — extract the plain function from the remaining ~19 logic-rich lessons | none; A5 is the next module and the largest |
+| **M3** — extract the plain function from the remaining ~15 logic-rich lessons | none; A5 is nearly done, A8 is the next cluster |
 | A TypeScript-aware runner, so `a2/*` and `a3/0002` can be verified | needs a decision first — see *Open questions* |
 | **Phase 3** — the ten C-modules | just-in-time; the student is nowhere near |
 | **Phase 4** — the operating track | after launch |
@@ -71,7 +73,7 @@ Per-item status only. The plan itself is in `TOKEN-TRACK.md`; the counts are in
 | 4 — the operating track | not started, deliberately |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
-| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3 and A4 done, ~19 left |
+| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4 done; A5 4 of 5; ~15 left |
 
 ### M3 — where it has reached
 
@@ -90,21 +92,30 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `a5/0001` | `codeFromBytes` | 248 is *inside* the fold, 247 is not; short block → `null` |
 | `a5/0002` | `extractTokenCode` | anchors; `https` only; normalise *then* validate |
 | `a5/0003` | `displayStatus` | stored ≠ displayed; `max_uses: 0` ≠ unlimited; paused last |
+| `a5/0004` | `isWithinWindow` | the overnight wrap; the morning belongs to *yesterday* |
 
-**A5 note:** neither `0001` nor `0002` had a `createExplain` prompt, and neither
-loaded `explain.js`. Assume the whole module is missing it and check as you go —
-A5 predates the practice pattern being made universal.
+**A5 note:** none of `0001`–`0004` had a `createExplain` prompt, and none loaded
+`explain.js`. Assume `0005` is missing it too — A5 predates the practice pattern
+being made universal.
 
-**Both A5 lessons so far contained a defect in their own prose, not just a
-missing exercise.** `0001` argued for rejection sampling and never made the
-student write it; `0002` printed a table saying HTTPS is required and then
-validated with `https?` three sections later, and its `extractTokenCode` had no
-`^`/`$`. Read the snippet a lesson already ships before writing the exercise
-around it — **three times out of three**, the snippet was the thing that was
-wrong. `0003` was the worst: `GET /tokens` returned `code` in every row against
-ADR-0007, its `Token` interface typed `max_uses` as non-nullable so "unlimited"
-was inexpressible, and its sample row had `max_uses: 0` on an *active* token
-with three uses — which contradicts `01/0011`, where the student actually is.
+**Every A5 lesson so far contained a defect in its own prose or snippets, not
+just a missing exercise.** Read what a lesson already ships before writing the
+exercise around it — **four times out of four**, the shipped snippet was the
+thing that was wrong:
+
+- `0001` argued at length for rejection sampling and never made the student
+  write it.
+- `0002` printed a table saying HTTPS is required, then validated with `https?`
+  three sections later, and its `extractTokenCode` had no `^`/`$`.
+- `0003` was the worst: `GET /tokens` returned `code` in every row against
+  ADR-0007, its `Token` interface typed `max_uses` as non-nullable so
+  "unlimited" was inexpressible, and its sample row had `max_uses: 0` on an
+  *active* token with three uses — which contradicts `01/0011`, where the
+  student actually is.
+- `0004` is the sharpest: its playground wrote `payload.start`, `max_per_day`
+  and `allowed`, which are **precisely** the field names its own "When this
+  breaks" section says arrive at the server as `undefined`. A lesson can
+  document a bug in prose and demonstrate it in code on the same page.
 
 **When a lesson's data shape changes, grep the JSX in the same commit.** Fixing
 `0003`'s sample response left `{item.code}` rendering a field that no longer
@@ -112,7 +123,7 @@ existed, plus `status={item.status}` (the exact bug the new section describes)
 and `max_uses > 0` (which hides a zero limit). One prose fix, three live
 defects downstream — the Phase 1.5 lesson, again.
 
-Remaining, roughly: **~16 have an extractable function** (A5 ×5, A6, A8 ×4,
+Remaining, roughly: **~15 have an extractable function** (A5 ×1, A6, A8 ×4,
 A11, B2, B3, B5, B7, B10 …), **~40 are genuinely infra** (a device, a VPS, two
 phones, a live TURN server), and **4 are TypeScript**, which the runner cannot
 execute at all.
