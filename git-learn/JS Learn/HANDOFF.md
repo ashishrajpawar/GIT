@@ -798,6 +798,139 @@ Both bugs are now wrong-cases, so the lessons fail if anyone reintroduces them.
 - A straight `"` inside a double-quoted explanation string breaks the block. The
   audit's parse check caught it immediately, which is the system working.
 
+### Session of 2026-08-19 — M3 through A5 and A8, and what extraction keeps finding
+
+Nine lessons: all five of A5, all four of A8. The count is in `PROGRESS.md`.
+What matters is what the work turned out to be.
+
+#### The premise changed halfway through
+
+M3 was framed as a *verification* exercise — find the testable function hiding
+inside a lesson marked `unverifiable`, so the metric stops lying. That is still
+what it does. But **every one of the nine lessons contained a real defect**, and
+by A8 the extraction had become the cheapest defect-finding process this course
+has. The verification is now the side effect.
+
+The reason is mechanical rather than clever. Writing a self-check forces you to
+state, in executable form, what the lesson claims. Most of these lessons had
+never had their claims stated that precisely, and several of them turned out to
+be arguing with themselves.
+
+#### The three shapes, because they recur
+
+**The lesson argues for something and never makes the student do it.**
+`a5/0001` spends forty lines establishing that rejecting the biased byte range
+is worth four lines of code, then never asks anyone to write the four lines.
+`a8/0001` has a callout saying "never put secrets in `VITE_` vars" and enforces
+it nowhere.
+
+**The prose states a rule the code on the same page breaks.** `a5/0002` prints
+a table saying HTTPS is required and validates with `https?` three sections
+below it. `a5/0004` has a section titled "the client and the engine disagreed
+about field names" — and a playground using `payload.start` and `max_per_day`,
+which are precisely the wrong names that section is about. A lesson can
+document a bug in prose and demonstrate it in code within one scroll.
+
+**Two lessons each look right alone and contradict each other.** This is the
+kind worth the most and the only kind that is invisible from inside the lesson
+being edited. The audit cannot see them either. What found all of them was
+grepping the neighbour for the same noun.
+
+#### The four that were security, not tidiness
+
+Ranked by what they would have cost:
+
+1. **`a8/0003` had no `iceTransportPolicy: 'relay'`**, TURN commented out as
+   optional, and a playground printing "Best path chosen: host (LAN)". ICE
+   candidates are IP addresses. A direct path hands the holder the issuer's home
+   IP on the page a stranger opens after scanning a parcel. `CLAUDE.md` already
+   required relay-only; the lesson simply did not do it, and the playground was
+   actively teaching the opposite. Nothing else in the course matters if this
+   ships — the hashed codes and the E2EE are both undone by one `srflx`
+   candidate.
+2. **`a8/0002` put the token code in the URL path**, twice, against ADR-0007.
+   `/api/tokens/:code/status` is the obvious REST shape, which is exactly the
+   problem: it is what anyone writes without thinking, and a path lands in the
+   access log, browser history, `Referer` and crash reports. Fixed to
+   `POST /api/redeem` with the code in the body, matching what `b10/0001` and
+   `01/0012` already did. **The defect is course-wide** — `b3/0002`, `a9/0002`,
+   `a2/0002` and `a3/0002` still carry it, recorded in `SESSION.md` rather than
+   half-fixed here, because the path form is baked into quiz keys.
+3. **`a8/0004` framed link previews as a feature to optimise.** The mechanism
+   nobody had written down: pasting the URL into WhatsApp makes *Meta's servers*
+   fetch it, so the code is logged at a third party before the recipient taps
+   anything, and the unfurler can burn a single-use token on the way. Generic
+   `og:` tags do nothing because the leak is the request, not the response.
+   Its `noindex` was also in the shared `index.html`, which would have hidden
+   the marketing pages rather than the token pages.
+4. **`a8/0002` returned `issuerId` to the holder's browser**, commented "not
+   exposed to holder UI". It was in devtools regardless. The comment is the
+   interesting part: it records someone thinking about exposure and reaching the
+   wrong conclusion about where the boundary is.
+
+#### The one that was a false claim rather than a missing check
+
+`a8/0003`'s reconnect backoff carried a comment saying it "prevents hammering
+the server when it's down". It does not, and this is worth stating carefully
+because the code looks textbook. Exponential backoff spaces out **one client's**
+attempts. Every client was dropped by the same restart, so they all wait the
+same 1000ms and return in the same millisecond, then again at 2000, then 4000 —
+in lockstep, indefinitely. Only jitter spreads the herd. On a deployment that is
+explicitly one box (ADR-0003), that distinction is the difference between a
+recoverable restart and a restart that cannot complete.
+
+The playground now demonstrates it with 500 simulated clients instead of
+asserting the opposite.
+
+#### Data-model contradictions worth remembering
+
+`a5/0003`'s sample response had `max_uses: 0` on an **active** token with three
+uses — reading `0` as "unlimited", which contradicts `01/0011`, the lesson the
+student is closest to. Null is unlimited; zero permits nothing. Only one is
+falsy, which is the whole reason `if (token.max_uses)` keeps being written and
+keeps being wrong. Its `Token` interface also typed `max_uses` as `number`, so
+"unlimited" was not expressible at all.
+
+The same lesson rendered `token.status` straight into the badge. The column has
+three values but a token also dies when a clock ticks over, and nothing writes
+to the row when that happens — so an expired token showed a green "active"
+badge on the one screen whose entire job is saying what is currently live. Both
+conventions are now in `CLAUDE.md`, because three separate lessons had them
+wrong and they will be got wrong again.
+
+#### Process notes
+
+- **Fixing a lesson's data shape leaves defects in its JSX.** Removing `code`
+  from `a5/0003`'s sample response left `{item.code}` rendering a field that no
+  longer existed, plus `status={item.status}` and `max_uses > 0`. One prose fix,
+  three live defects downstream. This is the Phase 1.5 lesson recurring: grep
+  the render in the same commit.
+- **Fixing prose without fixing the quiz produces a lesson that argues with
+  itself.** `a8/0002` had the path form in six quiz questions. Updating four of
+  them was most of that commit's risk, and skipping them would have left the
+  quiz teaching what the new prose forbids.
+- **Deliberately left alone:** a `React.memo` fill-blank in `a5/0003` passes
+  `props.item.status` to a badge. Consistent with the old model, but the
+  question is about memoisation and rewriting it would muddy a correct question
+  to fix an incidental detail. Flagged rather than edited.
+- **Recorded, not fixed:** expiry is modelled twice — an `ExpiryPayload` rule in
+  `a5/0004` and the `tokens.expires_at` column `a5/0003` reads. Picking one
+  belongs to the B2 rewrite that the adjacent storage-model note is already
+  waiting on. Writing it down beat inventing a third answer.
+- **The whole module was missing `createExplain`.** None of the nine lessons had
+  a prompt or loaded `explain.js`. A5 and A8 predate the practice pattern being
+  made universal, so the other pre-pattern modules almost certainly share it.
+
+#### Two follow-ups that are bigger than one lesson
+
+Both are in `SESSION.md` with detail. Both are security-shaped, which is why
+they were not folded quietly into an unrelated commit:
+
+1. **`a7-voice-video` is the mobile half of the ICE decision** and was written
+   by the same pass as `a8/0003`. If it is missing `iceTransportPolicy`, calls
+   from the app leak the same addresses.
+2. **The code-in-the-URL-path form survives in four other lessons.**
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees

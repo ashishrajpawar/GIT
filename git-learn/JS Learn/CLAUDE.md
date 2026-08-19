@@ -509,22 +509,55 @@ summarised here rather than left in the ADR:
 
 - **Codes never go in a URL path.** A path reaches the proxy's access log,
   browser history, `Referer` and crash reports. Owner endpoints take `:id`; the
-  redemption endpoint takes the code in a POST body.
+  redemption endpoint takes the code in a POST body — `POST /api/redeem` and
+  `POST /api/redeem/check`, both with `{ code }` in the body. This costs the
+  check endpoint its GET, which it would otherwise deserve, and that is the
+  right trade. **Several lessons still violate this** — `b3/0002`, `a9/0002`,
+  `a2/0002`, `a3/0002` — see `SESSION.md`; `a8/0002` is the corrected model.
+  - The one place the code legitimately *is* in a path is the redemption **page**
+    URL the QR encodes, because a browser has to get there somehow. That path is
+    defended with headers instead: `Referrer-Policy: no-referrer`,
+    `Cache-Control: no-store` and a per-path `X-Robots-Tag` from nginx — never a
+    `robots` meta tag, which one SPA `index.html` would apply to the whole site.
 - **Codes never go in a log.** The redeem body is the sensitive part precisely
   because the code was moved there. Log an allow-list of fields, and configure
   the error tracker's scrubbing — it attaches request bodies by default.
 - **The code is returned exactly once**, in the response to `POST /tokens`.
   Everything else shows the label and the state. Showing it again is a separate,
-  logged request.
+  logged request. In particular `GET /tokens` returns **no `code` field at all** —
+  serving a list of codes would mean AES-decrypting every row on every scroll.
+
+### Token state — the two conventions that keep being got backwards
+
+- **`max_uses`: `null` is unlimited, `0` permits no uses at all.** Opposite
+  meanings, and only one of them is falsy, which is why `if (token.max_uses)`
+  is wrong and `token.max_uses != null` is right. `01/0011` teaches this and
+  `a5/0003` shipped a sample row contradicting it. Same for `expires_at`:
+  `null` means never, and `new Date(null)` is 1970, so test for null *before*
+  parsing.
+- **Stored status is not displayed status.** The `status` column holds
+  `active | paused | revoked`, but a token also dies when `expires_at` passes
+  or `use_count` reaches `max_uses`, and nothing writes to the row when a clock
+  ticks over. The badge derives five states from three, in a fixed precedence:
+  **revoked → expired → exhausted → paused → active**. Paused comes last of the
+  four deliberately — a paused-and-expired token reading "paused" offers a
+  Resume button that would achieve nothing. See `a5/0003`.
 
 ### Communication
 - Chat: WebSocket on own server, routed across nodes through Redis pub/sub
 - Voice/video: WebRTC (`react-native-webrtc` on mobile, native APIs in browser)
 - Signalling: own WebSocket server — **not** Firestore
-- STUN: Google (free). TURN: self-hosted coturn
-- `iceTransportPolicy: 'relay'` hides participants' IPs from each other — cover
-  the trade-off, including that it forces **every** call through TURN and makes
-  relay bandwidth the most likely surprise on the bill
+- TURN: self-hosted coturn. STUN is **not** used — see below
+- **`iceTransportPolicy: 'relay'` on both clients, mobile and web.** ICE
+  candidates *are* IP addresses, so any direct path hands each side the other's
+  address — on the redemption page that means a delivery company learning the
+  issuer's home IP, which undoes the hashed codes, the labels and the E2EE all
+  at once. Relay-only is why STUN is pointless here: a `srflx` candidate is
+  exactly the thing being suppressed. Cover the trade-off in any lesson that
+  touches it: **every** call goes through TURN including two people in one room,
+  relay bandwidth is the likeliest surprise on the bill, and a coturn outage
+  becomes a *total* call outage rather than a degraded one. `a8/0003` is the
+  worked version; **check `a7-voice-video` still needs this** (see `SESSION.md`)
 
 ### Push notifications
 - FCM + APNs via Expo Notifications (the only unavoidable third party — only
@@ -944,6 +977,17 @@ Consequences for the build:
 - The app must **warn** when sharing via an identifying channel — a Share
   button that silently hands the code to WhatsApp defeats the product in one
   tap, using a feature the app provided. See `a5/0001`
+- **An unrecognised share target must warn.** Not-on-the-dangerous-list can
+  never mean safe: new apps ship every week, and the system share sheet usually
+  does not report which one the user picked. See `a5/0005`
+- **Pasting a `tokn.app/t/CODE` link into a chat app leaks the code to that
+  platform's servers before the recipient sees anything.** WhatsApp, Telegram,
+  Slack and iMessage all fetch a pasted URL to build a preview card, so the
+  code reaches Meta's or Telegram's crawler and is logged there — and the
+  unfurler is a real client, so it can burn a single-use token on the way.
+  Generic `og:` tags do not help: **the leak is the request, not the response.**
+  A link preview on the redemption page is something to survive, never to
+  improve. See `a8/0004`
 - Onboarding must teach this rule, or users conclude the product does not work
 
 **Where the product is worth most**, which is what lesson examples should

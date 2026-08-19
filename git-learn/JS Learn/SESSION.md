@@ -85,7 +85,23 @@ the course for months. Pitch to the profile in `CLAUDE.md` and let them steer.
 
 ## Blocked on
 
-Nothing.
+**A decision the student owns: ADR-0008, relay-only ICE.** Written 2026-08-19,
+status **proposed**, in the token repo.
+
+`a8/0003` now teaches `iceTransportPolicy: 'relay'` as mandatory. ADR-0003,
+ADR-0004 and `ARCHITECTURE.md` all describe it as *offered* — a setting. That
+is a real disagreement and it was created by this session, so it is flagged
+rather than absorbed: the lesson outran the documented decision.
+
+The argument for making it mandatory is that ICE candidates are IP addresses,
+the holder is a stranger on a web page with no settings screen, and a default
+that leaks is the behaviour of the product. The argument against is the bill:
+every call relayed, coturn on the critical path with no graceful degradation,
+and egress likely to become the binding ceiling before connection count does.
+
+**Either outcome needs work.** Accepted → `a7-voice-video` needs the same
+treatment. Rejected → `a8/0003` must be reverted to match. Nothing else in M3
+depends on it, so it does not block the remaining lessons.
 
 ---
 

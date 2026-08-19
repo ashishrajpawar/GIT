@@ -549,15 +549,31 @@ Method, per lesson:
    `unverifiable`, which is the guard that keeps the count honest.
 
 **Check the neighbouring lessons while you are there.** Writing the function
-down has surfaced a contradiction with an adjacent lesson three times out of
-six — a rule stated in prose on one page and broken by code on the next. Those
-are worth more than the verification.
+down has surfaced a defect in the lesson's own prose or snippets **fifteen
+times out of fifteen** — a rule stated on one page and broken by code on the
+same page or the next. Those are worth more than the verification, and they are
+not incidental: reading a lesson closely enough to extract its function is the
+only process this course has that finds them.
 
-Roughly **19 lessons** have an extractable function; A5 is the largest block.
-About **40** are genuinely infra-bound and should keep the whole-lesson flag.
-**Four are TypeScript** — `a2/*` and `a3/0002` — and no rewrite reaches them,
-because the runner executes JavaScript. That category needs a TS-aware runner
-or nothing.
+The defects cluster into three kinds, which is worth knowing before starting a
+lesson:
+
+- **The lesson argues for something and never makes the student do it**
+  (`a5/0001` on rejection sampling, `a8/0001` on VITE\_ secrets).
+- **The prose states a rule the code on the same page breaks** (`a5/0002`'s
+  HTTPS table above an `https?` regex; `a5/0004`'s "field names are the
+  contract" above a playground using the wrong field names).
+- **Two lessons each look right alone and contradict each other** — the hardest
+  kind, invisible from inside either one, and invisible to the audit.
+  `a5/0003` vs ADR-0007 and `01/0011`; `a8/0002` vs `a5/0002`; `a8/0004` vs
+  `a5/0005`. **Grep the neighbour for the same noun** — `code`, `max_uses`,
+  `expires_at`, `clipboard` — which is what found all of them.
+
+Roughly **10 lessons** still have an extractable function (A6, A11, B2, B3, B5,
+B7, B10 and a few singles); A3, A4, A5 and A8 are done. About **40** are
+genuinely infra-bound and should keep the whole-lesson flag. **Four are
+TypeScript** — `a2/*` and `a3/0002` — and no rewrite reaches them, because the
+runner executes JavaScript. That category needs a TS-aware runner or nothing.
 
 ## Phase 4 — The operating track
 
