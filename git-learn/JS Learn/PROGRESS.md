@@ -14,11 +14,11 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1781 words |
+| Avg teaching prose per track lesson | 1787 words |
 | Lessons with a playground | 73 / 96 |
 | Lessons with an exercise | 96 / 96 |
 | **Deepened** (all 3 spine sections) | 16 / 96 |
-| **Verified** (code executed) | 35 / 96 |
+| **Verified** (code executed) | 36 / 96 |
 | Ran clean but had nothing to run | 0 / 96 |
 | Errors | 0 |
 | Known and blocked | 3 |
@@ -80,7 +80,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a2-typescript | 3 | 727 | 2 | 3 | 76 | 0/3 | 0/3 |
 | a3-api-consumption | 4 | 1190 | 4 | 7 | 111 | 1/4 | 3/4 |
 | a4-auth-client | 3 | 1400 | 3 | 6 | 80 | 1/3 | 3/3 |
-| a5-core-token-features | 5 | 2325 | 7 | 7 | 148 | 2/5 | 2/5 |
+| a5-core-token-features | 5 | 2441 | 8 | 8 | 148 | 2/5 | 3/5 |
 | a6-chat-realtime | 3 | 1387 | 3 | 3 | 78 | 0/3 | 0/3 |
 | a7-voice-video | 5 | 980 | 5 | 5 | 138 | 0/5 | 0/5 |
 | a8-redemption-web | 4 | 1216 | 4 | 4 | 115 | 0/4 | 0/4 |
@@ -182,7 +182,7 @@ so they do not hold the audit red. They are **not** resolved.
 | a4-auth-client/0003-handling-401s-logout.html | 946 | 6 | 1 | 2 | 29 | — | yes |
 | a5-core-token-features/0001-token-generation-display.html | 3314 | 14 | 2 | 2 | 30 | yes | yes |
 | a5-core-token-features/0002-qr-generation-scanning.html | 2061 | 16 | 2 | 2 | 30 | — | yes |
-| a5-core-token-features/0003-token-list-management.html | 1760 | 16 | 1 | 1 | 30 | — | n/a |
+| a5-core-token-features/0003-token-list-management.html | 2338 | 16 | 2 | 2 | 30 | — | yes |
 | a5-core-token-features/0004-access-rules-ui.html | 3011 | 12 | 1 | 1 | 29 | yes | n/a |
 | a5-core-token-features/0005-share-path-warnings.html | 1479 | 5 | 1 | 1 | 29 | — | n/a |
 | a6-chat-realtime/0001-websocket-client.html | 1260 | 10 | 1 | 1 | 26 | — | n/a |

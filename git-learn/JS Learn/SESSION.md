@@ -14,8 +14,13 @@ how far it got.
 
 **M3 on A5**, started 2026-08-19. Working from `3b43bc7`.
 
-`a5/0001` and `a5/0002` are **done and verified**. Next up is `a5/0003` (token
-list and management) — not yet started, nothing uncommitted.
+`a5/0001`, `a5/0002` and `a5/0003` are **done and verified**. Next up is
+`a5/0004` (access rules UI) — not yet started, nothing uncommitted.
+
+**Read `a5/0004` against `a5/0003` before writing it.** `0003` now derives its
+badge from `expires_at`, `max_uses` and `use_count` with a fixed precedence, and
+`0004` is the screen that *sets* those three. If they disagree about what
+`max_uses: 0` or a null expiry means, `0004` is the one to change.
 
 ## Next action
 
@@ -84,6 +89,7 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `a4/0003` | `planFor` | the `isRetry` guard; a 403 is not refreshable |
 | `a5/0001` | `codeFromBytes` | 248 is *inside* the fold, 247 is not; short block → `null` |
 | `a5/0002` | `extractTokenCode` | anchors; `https` only; normalise *then* validate |
+| `a5/0003` | `displayStatus` | stored ≠ displayed; `max_uses: 0` ≠ unlimited; paused last |
 
 **A5 note:** neither `0001` nor `0002` had a `createExplain` prompt, and neither
 loaded `explain.js`. Assume the whole module is missing it and check as you go —
@@ -94,9 +100,19 @@ missing exercise.** `0001` argued for rejection sampling and never made the
 student write it; `0002` printed a table saying HTTPS is required and then
 validated with `https?` three sections later, and its `extractTokenCode` had no
 `^`/`$`. Read the snippet a lesson already ships before writing the exercise
-around it — twice out of twice, the snippet was the thing that was wrong.
+around it — **three times out of three**, the snippet was the thing that was
+wrong. `0003` was the worst: `GET /tokens` returned `code` in every row against
+ADR-0007, its `Token` interface typed `max_uses` as non-nullable so "unlimited"
+was inexpressible, and its sample row had `max_uses: 0` on an *active* token
+with three uses — which contradicts `01/0011`, where the student actually is.
 
-Remaining, roughly: **~17 have an extractable function** (A5 ×5, A6, A8 ×4,
+**When a lesson's data shape changes, grep the JSX in the same commit.** Fixing
+`0003`'s sample response left `{item.code}` rendering a field that no longer
+existed, plus `status={item.status}` (the exact bug the new section describes)
+and `max_uses > 0` (which hides a zero limit). One prose fix, three live
+defects downstream — the Phase 1.5 lesson, again.
+
+Remaining, roughly: **~16 have an extractable function** (A5 ×5, A6, A8 ×4,
 A11, B2, B3, B5, B7, B10 …), **~40 are genuinely infra** (a device, a VPS, two
 phones, a live TURN server), and **4 are TypeScript**, which the runner cannot
 execute at all.

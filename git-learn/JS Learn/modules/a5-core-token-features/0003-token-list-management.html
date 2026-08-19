@@ -38,17 +38,15 @@
   "data": [
     {
       "id": 45,
-      "code": "MERC-8GH2-KP4X",
       "label": "Amazon Delivery",
       "status": "active",
-      "max_uses": 0,
+      "max_uses": null,
       "use_count": 3,
       "expires_at": null,
       "created_at": "2026-08-01T10:30:00.000Z"
     },
     {
       "id": 44,
-      "code": "NB7K-3WFT-P9QD",
       "label": "NoBroker Agent",
       "status": "paused",
       "max_uses": 5,
@@ -64,6 +62,12 @@
 
     <p>Sorted by <code>created_at DESC</code> — newest first. The cursor is the last token's <code>id</code>.</p>
 
+    <h3>Two things this response does not contain</h3>
+
+    <p><strong>There is no <code>code</code> field</strong>, and there never will be on this endpoint. ADR-0007 returns a token code exactly once, in the reply to <code>POST /tokens</code>; after that the database holds only <code>code_hash</code> and <code>code_enc</code>. Seeing a code again is a separate, deliberately logged request for one token. That is a policy, but it is also just mechanics: serving codes in a list would mean AES-decrypting every row on every scroll, and writing a log line for each. The list shows <strong>the label and the state</strong> — which is exactly what a list is for.</p>
+
+    <p><strong><code>max_uses</code> is <code>null</code>, not <code>0</code>.</strong> Null means unlimited. <strong>Zero means zero uses are permitted</strong> — a token nobody can redeem. They are opposite meanings and one is falsy, which is why <code>if (token.max_uses)</code> is the bug Module 01 keeps returning to. A token with three redemptions and <code>max_uses: 0</code> is not a token with an unlimited allowance; it is a contradiction the server should never have stored.</p>
+
     <h2>The TokenList screen</h2>
 
     <pre><code>// app/src/screens/TokenList.tsx
@@ -76,12 +80,12 @@ import { apiRequest } from '../api/client';
 
 interface Token {
   id: number;
-  code: string;
   label: string;
+  // What the SERVER stores. Three values, changed only by an explicit act.
   status: 'active' | 'paused' | 'revoked';
-  max_uses: number;
+  max_uses: number | null;      // null = unlimited; 0 = no uses permitted
   use_count: number;
-  expires_at: string | null;
+  expires_at: string | null;    // null = never expires
   created_at: string;
 }
 
@@ -137,12 +141,17 @@ export function TokenListScreen({ navigation }) {
       &gt;
         &lt;View style={styles.tokenHeader}&gt;
           &lt;Text style={styles.tokenLabel}&gt;{item.label}&lt;/Text&gt;
-          &lt;StatusBadge status={item.status} /&gt;
+          {/* The DERIVED status, not item.status -- see displayStatus below */}
+          &lt;StatusBadge status={displayStatus(item, Date.now())} /&gt;
         &lt;/View&gt;
-        &lt;Text style={styles.tokenCode}&gt;{item.code}&lt;/Text&gt;
+        {/* The list never receives the code. Revealing it is a separate,
+            logged request on TokenDetail. */}
+        &lt;Text style={styles.tokenCode}&gt;••••-••••-••••&lt;/Text&gt;
         &lt;View style={styles.tokenMeta}&gt;
           &lt;Text style={styles.metaText}&gt;
-            Used {item.use_count}{item.max_uses > 0 ? `/${item.max_uses}` : ''} times
+            {/* != null, not > 0: max_uses of 0 is a real limit, and null is
+                the one that means there is no limit to show. */}
+            Used {item.use_count}{item.max_uses != null ? `/${item.max_uses}` : ''} times
           &lt;/Text&gt;
           &lt;Text style={styles.metaText}&gt;
             {new Date(item.created_at).toLocaleDateString()}
@@ -193,13 +202,40 @@ export function TokenListScreen({ navigation }) {
   );
 }</code></pre>
 
+    <h2>Stored status and displayed status are not the same thing</h2>
+
+    <p>The <code>status</code> column has three values, and the state machine below governs all three. But a token can stop working without anybody changing that column: its <code>expires_at</code> passes, or its <code>use_count</code> reaches its <code>max_uses</code>. Nothing writes to the database when a clock ticks over.</p>
+
+    <p>So the badge cannot render <code>token.status</code> directly. If it does, <strong>a token that expired last Tuesday shows a green "active" badge</strong> — and the whole point of this screen is telling the user what is currently live. The stored status is one input to the displayed status, not the answer:</p>
+
+    <table>
+      <thead>
+        <tr><th>Displayed</th><th>Comes from</th><th>Reversible?</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>revoked</code></td><td><code>status</code> column</td><td>No — terminal</td></tr>
+        <tr><td><code>expired</code></td><td><code>expires_at</code> vs now</td><td>No, not by the app</td></tr>
+        <tr><td><code>exhausted</code></td><td><code>use_count</code> vs <code>max_uses</code></td><td>No, not by the app</td></tr>
+        <tr><td><code>paused</code></td><td><code>status</code> column</td><td>Yes — resume</td></tr>
+        <tr><td><code>active</code></td><td>none of the above applied</td><td>—</td></tr>
+      </tbody>
+    </table>
+
+    <p>The order matters, and it is the reason this is worth writing as a function rather than a chain of ternaries in JSX. <strong>Paused comes last of the four</strong>: a paused token that has also expired reads <code>expired</code>, because resuming it would achieve nothing and offering a Resume button on it is a lie. Revoked comes first for the mirror-image reason — it is the one state the user chose, and it outranks whatever the clock says.</p>
+
     <h2>The StatusBadge component</h2>
 
-    <pre><code>function StatusBadge({ status }: { status: 'active' | 'paused' | 'revoked' }) {
+    <p>The badge takes the <em>derived</em> status, so it needs all five:</p>
+
+    <pre><code>type DisplayStatus = 'active' | 'paused' | 'expired' | 'exhausted' | 'revoked';
+
+function StatusBadge({ status }: { status: DisplayStatus }) {
   const colors = {
-    active: { bg: '#dcfce7', text: '#166534' },
-    paused: { bg: '#fef3c7', text: '#92400e' },
-    revoked: { bg: '#fee2e2', text: '#991b1b' },
+    active:    { bg: '#dcfce7', text: '#166534' },
+    paused:    { bg: '#fef3c7', text: '#92400e' },
+    expired:   { bg: '#e2e8f0', text: '#475569' },
+    exhausted: { bg: '#e2e8f0', text: '#475569' },
+    revoked:   { bg: '#fee2e2', text: '#991b1b' },
   };
 
   const { bg, text } = colors[status];
@@ -570,9 +606,27 @@ useEffect(() =&gt; {
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>First, the badge that has to be right</h2>
+
+    <p>Everything else on this screen is a list, a swipe and a spinner. The one thing a user actually reads is the badge, and it is the one thing the server does not hand you. Write the derivation and the rest of the screen has nothing left to get wrong.</p>
+
+    <div id="exercise-status"></div>
+
+    <h3>Check your work</h3>
+
+    <div id="pg-exercise-status"></div>
+
+    <hr>
+
+    <h2>Then the screen</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <h2>In your own words</h2>
+
+    <div id="explain-a5-0003"></div>
 
     <hr>
 
@@ -588,6 +642,7 @@ useEffect(() =&gt; {
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -613,7 +668,151 @@ for (const from of states) {
   }
 }`);
 
+    createSolution("exercise-status", {
+      exercise: "Write <code>displayStatus(token, now)</code> — the function the badge renders. It takes a token exactly as <code>GET /tokens</code> returns it, plus <code>now</code> as a millisecond timestamp (what <code>Date.now()</code> gives you). Return one of <code>'revoked'</code>, <code>'expired'</code>, <code>'exhausted'</code>, <code>'paused'</code>, <code>'active'</code>.\n\nThe fields that matter:\n\n<ul><li><code>status</code> — <code>'active'</code>, <code>'paused'</code> or <code>'revoked'</code>, the stored column</li><li><code>expires_at</code> — an ISO string, or <code>null</code> meaning it never expires</li><li><code>max_uses</code> — a number, or <code>null</code> meaning unlimited. <strong><code>0</code> means zero uses are permitted</strong></li><li><code>use_count</code> — how many redemptions have happened</li></ul>\n\nThe rules, <strong>in this order</strong>:\n\n1. <code>status === 'revoked'</code> → <code>'revoked'</code>. It is terminal and it is the state the user chose, so it outranks the clock.\n\n2. <code>expires_at</code> has passed → <code>'expired'</code>. A token expires <em>at</em> its expiry instant, not a millisecond later.\n\n3. <code>use_count</code> has reached <code>max_uses</code> → <code>'exhausted'</code>. Reached, not passed.\n\n4. <code>status === 'paused'</code> → <code>'paused'</code>. Last of the four on purpose — a paused token that has also expired must read <code>'expired'</code>, or the screen offers a Resume button that cannot work.\n\n5. Otherwise → <code>'active'</code>.",
+      hints: [
+        "null and 0 are different answers for max_uses and only one of them is falsy. `if (token.max_uses)` gets this exactly backwards, which is the bug Module 01 keeps coming back to — compare against null explicitly.",
+        "Date.parse(null) is NaN, but new Date(null) is 1st January 1970. One of those quietly marks every token expired. Test expires_at for null before you parse it.",
+        "Early returns in the order the rules are numbered. If you compute all five conditions first and then pick, you have to re-express the precedence a second time and the two copies drift.",
+      ],
+      solution: `function displayStatus(token, now) {
+  // 1. Revoked is terminal AND it is the one state the user chose deliberately,
+  //    so it outranks anything a clock or a counter has to say.
+  if (token.status === 'revoked') return 'revoked';
+
+  // 2. Expiry. The null test is not optional: new Date(null) is the epoch, so
+  //    an implementation that skips it marks every never-expiring token as
+  //    expired in 1970. <= because a token is dead AT its expiry instant.
+  if (token.expires_at !== null && token.expires_at !== undefined) {
+    if (Date.parse(token.expires_at) <= now) return 'expired';
+  }
+
+  // 3. Uses. null means unlimited, 0 means none permitted -- opposite meanings,
+  //    and only one of them is falsy. That is the whole reason this reads
+  //    'max_uses !== null' and not 'if (token.max_uses)'.
+  if (token.max_uses !== null && token.max_uses !== undefined) {
+    if (token.use_count >= token.max_uses) return 'exhausted';
+  }
+
+  // 4. Paused comes after both dead-ends, so a paused-and-expired token reads
+  //    'expired' and the screen does not offer a Resume that would do nothing.
+  if (token.status === 'paused') return 'paused';
+
+  return 'active';
+}`
+    });
+
+    createPlayground("pg-exercise-status", `// Write displayStatus(token, now) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+
+const NOW = Date.parse("2026-08-19T12:00:00.000Z");
+const YESTERDAY = "2026-08-18T12:00:00.000Z";
+const NEXT_MONTH = "2026-09-01T00:00:00.000Z";
+const EXACTLY_NOW = "2026-08-19T12:00:00.000Z";
+
+// The base token is deliberately mid-life: it has been used three times with
+// no limit and no expiry, so "unlimited" and "exhausted" cannot agree by
+// accident the way they would at use_count 0.
+function tok(over) {
+  return Object.assign({
+    id: 45, label: "Amazon Delivery", status: "active",
+    max_uses: null, use_count: 3, expires_at: null,
+    created_at: "2026-08-01T10:30:00.000Z"
+  }, over);
+}
+
+try {
+  if (typeof displayStatus !== "function") throw new Error("not written yet");
+
+  try {
+    const s = displayStatus(tok({}), NOW);
+    check("no expiry and no limit reads active", s === "active",
+          "got " + s + " -- expires_at null must never expire; new Date(null) is 1970, Date.parse(null) is NaN");
+  } catch (e) { check("no expiry and no limit reads active", false, "threw " + e.message); }
+
+  try {
+    check("a paused token reads paused", displayStatus(tok({ status: "paused" }), NOW) === "paused",
+          "got " + displayStatus(tok({ status: "paused" }), NOW));
+  } catch (e) { check("a paused token reads paused", false, "threw " + e.message); }
+
+  try {
+    check("a revoked token reads revoked", displayStatus(tok({ status: "revoked" }), NOW) === "revoked",
+          "got " + displayStatus(tok({ status: "revoked" }), NOW));
+  } catch (e) { check("a revoked token reads revoked", false, "threw " + e.message); }
+
+  try {
+    const s = displayStatus(tok({ expires_at: YESTERDAY }), NOW);
+    check("an expiry in the past reads expired", s === "expired",
+          "got " + s + " -- the stored status is still 'active'; nothing writes to the row when a clock ticks over");
+  } catch (e) { check("an expiry in the past reads expired", false, "threw " + e.message); }
+
+  try {
+    const s = displayStatus(tok({ expires_at: NEXT_MONTH }), NOW);
+    check("an expiry in the future is still active", s === "active", "got " + s);
+  } catch (e) { check("an expiry in the future is still active", false, "threw " + e.message); }
+
+  try {
+    const s = displayStatus(tok({ expires_at: EXACTLY_NOW }), NOW);
+    check("a token is expired AT its expiry instant", s === "expired",
+          "got " + s + " -- <= not <, or the token is briefly alive after the moment it was supposed to die");
+  } catch (e) { check("a token is expired AT its expiry instant", false, "threw " + e.message); }
+
+  try {
+    const s = displayStatus(tok({ max_uses: null, use_count: 900 }), NOW);
+    check("a max_uses of null is unlimited, however many uses", s === "active",
+          "got " + s + " -- 900 >= null is 900 >= 0, which is true; the null needs its own test");
+  } catch (e) { check("a max_uses of null is unlimited, however many uses", false, "threw " + e.message); }
+
+  try {
+    const s = displayStatus(tok({ max_uses: 5, use_count: 5 }), NOW);
+    check("uses REACHING the limit is exhausted", s === "exhausted",
+          "got " + s + " -- >= not >, or the fifth redemption of a five-use token leaves it looking live");
+  } catch (e) { check("uses REACHING the limit is exhausted", false, "threw " + e.message); }
+
+  try {
+    const s = displayStatus(tok({ max_uses: 5, use_count: 4 }), NOW);
+    check("one use short of the limit is still active", s === "active", "got " + s);
+  } catch (e) { check("one use short of the limit is still active", false, "threw " + e.message); }
+
+  try {
+    const s = displayStatus(tok({ max_uses: 0, use_count: 0 }), NOW);
+    check("a max_uses of 0 permits no uses at all", s === "exhausted",
+          "got " + s + " -- 0 is falsy and null is not unlimited-by-luck; this is the Module 01 trap");
+  } catch (e) { check("a max_uses of 0 permits no uses at all", false, "threw " + e.message); }
+
+  try {
+    const s = displayStatus(tok({ status: "revoked", expires_at: YESTERDAY, max_uses: 2, use_count: 9 }), NOW);
+    check("revoked outranks expired and exhausted together", s === "revoked",
+          "got " + s + " -- the user revoked it; that is what the badge should say happened");
+  } catch (e) { check("revoked outranks expired and exhausted together", false, "threw " + e.message); }
+
+  try {
+    const s = displayStatus(tok({ status: "paused", expires_at: YESTERDAY }), NOW);
+    check("expired outranks paused", s === "expired",
+          "got " + s + " -- reading 'paused' offers a Resume button that would resume nothing");
+  } catch (e) { check("expired outranks paused", false, "threw " + e.message); }
+
+  try {
+    const s = displayStatus(tok({ status: "paused", max_uses: 5, use_count: 5 }), NOW);
+    check("exhausted outranks paused", s === "exhausted", "got " + s);
+  } catch (e) { check("exhausted outranks paused", false, "threw " + e.message); }
+
+  try {
+    const s = displayStatus(tok({ expires_at: YESTERDAY, max_uses: 5, use_count: 5 }), NOW);
+    check("expired outranks exhausted when both apply", s === "expired",
+          "got " + s + " -- either order is defensible; what is NOT defensible is two screens picking differently");
+  } catch (e) { check("expired outranks exhausted when both apply", false, "threw " + e.message); }
+} catch (e) {
+  console.log("Write displayStatus(token, now) above, then press Run.");
+}`);
+
     createSolution("exercise-1", {
+      unverifiable: "the screen is React Native with FlatList, Swipeable and a running API, needing a device",
       exercise: "Build the complete Token List screen with all management features:\n\n1. Create `TokenListScreen` with FlatList, cursor-based pagination (onEndReached), pull-to-refresh, and an empty state.\n\n2. Add a StatusBadge component that shows active (green), paused (yellow), or revoked (red).\n\n3. Implement swipe-to-revoke using react-native-gesture-handler's Swipeable. Show a confirmation Alert before revoking.\n\n4. Add a pause/resume toggle (Switch) with optimistic updates — update UI immediately, roll back on API failure.\n\n5. Wire up the FAB to navigate to CreateToken, and auto-prepend new tokens when returning from creation.\n\n6. Add the PATCH /tokens/:id endpoint on the server that enforces the state machine (revoked tokens cannot be modified, only paused tokens can be resumed).",
       hints: [
         "FlatList's onEndReachedThreshold={0.3} triggers load-more when 30% from the bottom — gives smooth pagination without waiting until the very end.",
@@ -672,6 +871,10 @@ router.patch('/tokens/:id', requireAuth, async (req, res) => {
 
   res.json({ data: result.rows[0] });
 });`
+    });
+
+    createExplain("explain-a5-0003", {
+      prompt: "The <code>status</code> column has three values but the badge shows five. Explain what has to be true about <code>expired</code> and <code>exhausted</code> for that gap to exist — and why <code>displayStatus</code> checks <code>paused</code> <em>after</em> both of them rather than alongside <code>revoked</code>."
     });
 
     createQuiz("lesson-quiz", [
