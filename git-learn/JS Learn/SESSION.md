@@ -12,12 +12,8 @@ how far it got.
 
 ## In progress
 
-**M3 on A5**, started 2026-08-19. Working from `3b43bc7`.
-
-`a5/0001` through `a5/0004` are **done and verified**. Next up is `a5/0005`
-(share-path warnings) — not yet started, nothing uncommitted. It is the last of
-A5, and the one that carries the product rule from `CLAUDE.md`: a token must
-never travel over a channel that already identifies the user.
+**Nothing.** Working tree clean. **A5 is complete** — all five lessons verified
+2026-08-19, from `3b43bc7` to the A5 close.
 
 **Found in `0004`, not fixed, deliberately: expiry is modelled twice.** There is
 an `ExpiryPayload` rule carrying `expires_at`, and `0003` reads a
@@ -27,12 +23,13 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
-**`a5/0005` — share-path warnings**, the last of A5. One commit per lesson, so
-an abrupt stop loses at most one.
+**Continue M3 with the A8 cluster** (redemption web, ×4) — the next group of
+four, and the largest remaining. One commit per lesson, so an abrupt stop loses
+at most one.
 
 | Work | Gate |
 |---|---|
-| **M3** — extract the plain function from the remaining ~15 logic-rich lessons | none; A5 is nearly done, A8 is the next cluster |
+| **M3** — extract the plain function from the remaining ~14 logic-rich lessons | none; A5 done, A8 ×4 is the next cluster |
 | A TypeScript-aware runner, so `a2/*` and `a3/0002` can be verified | needs a decision first — see *Open questions* |
 | **Phase 3** — the ten C-modules | just-in-time; the student is nowhere near |
 | **Phase 4** — the operating track | after launch |
@@ -73,7 +70,7 @@ Per-item status only. The plan itself is in `TOKEN-TRACK.md`; the counts are in
 | 4 — the operating track | not started, deliberately |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
-| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4 done; A5 4 of 5; ~15 left |
+| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5 complete; ~14 left |
 
 ### M3 — where it has reached
 
@@ -93,14 +90,16 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `a5/0002` | `extractTokenCode` | anchors; `https` only; normalise *then* validate |
 | `a5/0003` | `displayStatus` | stored ≠ displayed; `max_uses: 0` ≠ unlimited; paused last |
 | `a5/0004` | `isWithinWindow` | the overnight wrap; the morning belongs to *yesterday* |
+| `a5/0005` | `shareAdvice` | unknown target ⇒ warn; safe actions ignore `target` |
 
-**A5 note:** none of `0001`–`0004` had a `createExplain` prompt, and none loaded
-`explain.js`. Assume `0005` is missing it too — A5 predates the practice pattern
-being made universal.
+**A5 note:** not one of the five had a `createExplain` prompt or loaded
+`explain.js`. All five now do. A5 predates the practice pattern being made
+universal, so **check the other pre-pattern modules for the same gap** — A6–A11
+and B5–B10 are the likely ones.
 
-**Every A5 lesson so far contained a defect in its own prose or snippets, not
-just a missing exercise.** Read what a lesson already ships before writing the
-exercise around it — **four times out of four**, the shipped snippet was the
+**Every A5 lesson contained a defect in its own prose or snippets, not just a
+missing exercise.** Read what a lesson already ships before writing the
+exercise around it — **five times out of five**, the shipped snippet was the
 thing that was wrong:
 
 - `0001` argued at length for rejection sampling and never made the student
@@ -116,6 +115,16 @@ thing that was wrong:
   and `allowed`, which are **precisely** the field names its own "When this
   breaks" section says arrive at the server as `undefined`. A lesson can
   document a bug in prose and demonstrate it in code on the same page.
+- `0005` called the clipboard "a neutral medium" while `0001` spends a section
+  explaining it is a shared surface every app can read and both platforms sync
+  across devices. Both were half-right — neutral about its *destination*, not
+  about its *exposure* — and the fix was to say which.
+
+**Two lessons can each be right and still contradict.** Three of the five A5
+defects were cross-lesson (`0003` vs ADR-0007 and `01/0011`, `0004` vs `0003`,
+`0005` vs `0001`), and none is visible from inside the lesson that carries it.
+The audit cannot see these either. Grepping the neighbour for the same noun —
+`code`, `max_uses`, `expires_at`, `clipboard` — is what found all three.
 
 **When a lesson's data shape changes, grep the JSX in the same commit.** Fixing
 `0003`'s sample response left `{item.code}` rendering a field that no longer
@@ -123,7 +132,7 @@ existed, plus `status={item.status}` (the exact bug the new section describes)
 and `max_uses > 0` (which hides a zero limit). One prose fix, three live
 defects downstream — the Phase 1.5 lesson, again.
 
-Remaining, roughly: **~15 have an extractable function** (A5 ×1, A6, A8 ×4,
+Remaining, roughly: **~14 have an extractable function** (A6, A8 ×4,
 A11, B2, B3, B5, B7, B10 …), **~40 are genuinely infra** (a device, a VPS, two
 phones, a live TURN server), and **4 are TypeScript**, which the runner cannot
 execute at all.

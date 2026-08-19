@@ -67,10 +67,14 @@
     <pre><code>import * as Sharing from 'expo-sharing';
 import * as Clipboard from 'expo-clipboard';
 
-// Copy is always safe — we don't know where they'll paste
+// Copy gets no SHARE-PATH warning: we cannot know the destination, and the
+// most valuable destination — a web form asking for a phone number — is the
+// safe one. That is not the same as saying the clipboard is harmless; see
+// a5/0001, which clears it after 60 seconds because every app on the device
+// can read it and both platforms sync it across a user's machines.
 async function handleCopyCode(code: string) {
   await Clipboard.setStringAsync(code);
-  // No warning needed — clipboard is neutral
+  scheduleClipboardClear(code);   // a5/0001
 }
 
 // Share sheet — we CAN detect the target app (on some platforms)
@@ -332,7 +336,9 @@ export function ShareRuleScreen({ navigation }) {
 
     <h3>User copies code, then opens WhatsApp manually</h3>
 
-    <p>We can't detect this — clipboard is a neutral medium. The warning only triggers on the system share sheet. This is acceptable: the user made a deliberate multi-step choice. The onboarding screen educated them.</p>
+    <p>We can't detect this. The clipboard is neutral <em>about its destination</em> — not harmless, which is a different claim and the one <code>a5/0001</code> answers by clearing it after 60 seconds. The share-path warning only triggers on the system share sheet, and that is acceptable here: the user made a deliberate multi-step choice, and the onboarding screen educated them.</p>
+
+    <p><strong>Warning on copy as well would cost more than it buys.</strong> Pasting into a form field is one of the safe paths — arguably the highest-value one, since it is exactly the "hand a number to a business that will keep it forever" case the product exists for. A warning that fires on the good path teaches the user to dismiss warnings, and then the one that matters is dismissed too.</p>
 
     <h3>User screenshots the QR and sends the screenshot</h3>
 
@@ -358,9 +364,27 @@ export function ShareRuleScreen({ navigation }) {
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>First, the decision the modal is downstream of</h2>
+
+    <p>The modal is markup. The question it exists to ask — <em>does this particular way of getting the code out of the app deserve a warning?</em> — is a function, and it is the one place the product rule is actually enforced. Get it wrong in the safe direction and the app helps the user destroy the thing they installed it for.</p>
+
+    <div id="exercise-advice"></div>
+
+    <h3>Check your work</h3>
+
+    <div id="pg-exercise-advice"></div>
+
+    <hr>
+
+    <h2>Then the modal and the onboarding</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <h2>In your own words</h2>
+
+    <div id="explain-a5-0005"></div>
 
     <hr>
 
@@ -376,6 +400,7 @@ export function ShareRuleScreen({ navigation }) {
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -404,7 +429,161 @@ SHARE_PATHS.filter(p => p.type === 'dangerous').forEach(p => console.log('  ✗ 
 console.log('\\nThe one rule: a token must NEVER travel over');
 console.log('a channel that already identifies the user.');`);
 
+    createSolution("exercise-advice", {
+      exercise: "Write <code>shareAdvice(action, target)</code> — the decision behind the modal.\n\n<code>action</code> is how the code is leaving the app: <code>'qr'</code>, <code>'print'</code>, <code>'request_flow'</code>, <code>'copy'</code> or <code>'share_sheet'</code>. <code>target</code> is the app id the share sheet reported (<code>'com.whatsapp'</code>), or <code>null</code> when the platform did not tell us — which is most of the time.\n\nReturn <code>{ level, warn }</code>. <code>level</code> is <code>'safe'</code>, <code>'identifying'</code> or <code>'unknown'</code>; <code>warn</code> is a boolean.\n\nThe rules:\n\n1. <code>'qr'</code>, <code>'print'</code> and <code>'request_flow'</code> are safe and <strong>never warn</strong>. There is no digital channel at all. <code>target</code> is meaningless for these — ignore it even if one is passed.\n\n2. <code>'copy'</code> is safe and does not warn. The destination is unknowable, and the most valuable destination is a form field, which is safe. A warning on the good path is how you train someone to dismiss the warning on the bad one.\n\n3. <code>'share_sheet'</code> with a <code>target</code> on the identifying list → <code>'identifying'</code>, and warn.\n\n4. <strong><code>'share_sheet'</code> with any other target — including <code>null</code>, an empty string, or an app you have never heard of — is <code>'unknown'</code>, and warns.</strong> This is the rule the whole product rests on: new apps ship every week and none of them are on your list. Not-on-the-dangerous-list must never mean safe.\n\n5. An <code>action</code> you do not recognise is <code>'unknown'</code> and warns, for the same reason.\n\n6. Match targets case-insensitively and ignore surrounding whitespace — ids arrive as <code>'com.whatsapp'</code>, <code>'COM.WhatsApp'</code> and worse.\n\nA few share-sheet targets genuinely are safe — printing, saving to a file. Treat <code>'com.apple.print'</code> and <code>'save_to_files'</code> as a known-safe list.\n\nNote that <code>warn</code> means <em>show the modal</em>, not <em>block</em>. The user can always proceed.",
+      hints: [
+        "Handle the actions that ignore `target` first. Once those have returned, everything left is a share_sheet question and the shape of the code gets much simpler.",
+        "Write the default before the lists. If the last line of the share_sheet branch returns 'unknown' and warns, then forgetting to add an app to a list fails safe — which is the only direction it is allowed to fail in.",
+        "Normalise once, into a local variable: String(target || '').trim().toLowerCase(). Doing it at each comparison is how one comparison ends up missing it.",
+      ],
+      solution: `// Lower-case, because every lookup normalises before it compares.
+const IDENTIFYING = [
+  'com.whatsapp',                          // recipient sees your number
+  'com.apple.mobilemail',                  // your address is the From field
+  'com.google.android.gm',
+  'com.google.android.apps.messaging',     // SMS: your number again
+  'com.apple.messages',
+  'com.instagram.android',
+  'com.facebook.orca',
+  'org.telegram.messenger',                // username links back to you
+  'airdrop',                               // device name -- "Ashish's iPhone"
+  'nearby_share',
+];
+
+// Share-sheet destinations that are not a channel to a person at all.
+const SAFE_TARGETS = ['com.apple.print', 'save_to_files'];
+
+// Actions where the code never touches a digital channel we could name.
+const SAFE_ACTIONS = ['qr', 'print', 'request_flow', 'copy'];
+
+function shareAdvice(action, target) {
+  // Rules 1 and 2. These ignore \`target\` entirely -- a stale app id left in
+  // component state must not turn the QR screen into a warning.
+  if (SAFE_ACTIONS.includes(action)) {
+    return { level: 'safe', warn: false };
+  }
+
+  // Rule 5. An action nobody planned for is not evidence of safety.
+  if (action !== 'share_sheet') {
+    return { level: 'unknown', warn: true };
+  }
+
+  // Rule 6. Normalise once, then compare.
+  const id = String(target == null ? '' : target).trim().toLowerCase();
+
+  if (SAFE_TARGETS.includes(id)) return { level: 'safe', warn: false };
+  if (IDENTIFYING.includes(id)) return { level: 'identifying', warn: true };
+
+  // Rule 4, and the reason this function exists. Everything unrecognised --
+  // null, '', and every app released since this list was written -- lands
+  // here. The only safe default is the one that warns.
+  return { level: 'unknown', warn: true };
+}`
+    });
+
+    createPlayground("pg-exercise-advice", `// Write shareAdvice(action, target) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(r) {
+  return r && typeof r === "object" ? r.level + "/" + r.warn : String(r);
+}
+
+try {
+  if (typeof shareAdvice !== "function") throw new Error("not written yet");
+
+  try {
+    const r = shareAdvice("qr", null);
+    check("showing a QR is safe and does not warn", r.level === "safe" && r.warn === false, "got " + show(r));
+  } catch (e) { check("showing a QR is safe and does not warn", false, "threw " + e.message); }
+
+  try {
+    const r = shareAdvice("copy", null);
+    check("copying does not warn", r.level === "safe" && r.warn === false,
+          "got " + show(r) + " -- a form field is a safe destination, and warning on the good path teaches people to dismiss warnings");
+  } catch (e) { check("copying does not warn", false, "threw " + e.message); }
+
+  try {
+    const a = shareAdvice("print", null);
+    const b = shareAdvice("request_flow", null);
+    check("printing and the request flow do not warn",
+          a.warn === false && b.warn === false, "got " + show(a) + " and " + show(b));
+  } catch (e) { check("printing and the request flow do not warn", false, "threw " + e.message); }
+
+  try {
+    // A stale app id left in component state must not make the QR screen warn.
+    const r = shareAdvice("qr", "com.whatsapp");
+    check("a safe action ignores any target passed with it", r.level === "safe" && r.warn === false,
+          "got " + show(r) + " -- there is no channel here for a target to describe");
+  } catch (e) { check("a safe action ignores any target passed with it", false, "threw " + e.message); }
+
+  try {
+    const r = shareAdvice("share_sheet", "com.whatsapp");
+    check("sharing to WhatsApp is identifying and warns",
+          r.level === "identifying" && r.warn === true,
+          "got " + show(r) + " -- the recipient sees your number in the chat header");
+  } catch (e) { check("sharing to WhatsApp is identifying and warns", false, "threw " + e.message); }
+
+  try {
+    const r = shareAdvice("share_sheet", "  COM.WhatsApp  ");
+    check("target matching ignores case and whitespace",
+          r.level === "identifying" && r.warn === true,
+          "got " + show(r) + " -- it warns either way, but landing in 'unknown' means the list never matched");
+  } catch (e) { check("target matching ignores case and whitespace", false, "threw " + e.message); }
+
+  try {
+    const r = shareAdvice("share_sheet", "airdrop");
+    check("AirDrop is identifying — the device name carries a real name",
+          r.level === "identifying" && r.warn === true, "got " + show(r));
+  } catch (e) { check("AirDrop is identifying — the device name carries a real name", false, "threw " + e.message); }
+
+  try {
+    // THE rule. The platform usually does not say which app was chosen.
+    const r = shareAdvice("share_sheet", null);
+    check("an UNKNOWN share target warns", r.level === "unknown" && r.warn === true,
+          "got " + show(r) + " -- the share sheet rarely reports its target, so this is the common case, not the edge case");
+  } catch (e) { check("an UNKNOWN share target warns", false, "threw " + e.message); }
+
+  try {
+    const r = shareAdvice("share_sheet", "com.someapp.launched.last.tuesday");
+    check("an app not on any list warns", r.level === "unknown" && r.warn === true,
+          "got " + show(r) + " -- not-on-the-dangerous-list must never mean safe; the list is always out of date");
+  } catch (e) { check("an app not on any list warns", false, "threw " + e.message); }
+
+  try {
+    const r = shareAdvice("share_sheet", "");
+    check("an empty target string warns", r.level === "unknown" && r.warn === true, "got " + show(r));
+  } catch (e) { check("an empty target string warns", false, "threw " + e.message); }
+
+  try {
+    const r = shareAdvice("share_sheet", "com.apple.print");
+    check("a known-safe share target does not warn", r.level === "safe" && r.warn === false,
+          "got " + show(r) + " -- a printer is not a channel to a person");
+  } catch (e) { check("a known-safe share target does not warn", false, "threw " + e.message); }
+
+  try {
+    const r = shareAdvice("telepathy", null);
+    check("an unrecognised action warns", r.level === "unknown" && r.warn === true,
+          "got " + show(r) + " -- a branch nobody planned for is not evidence of safety");
+  } catch (e) { check("an unrecognised action warns", false, "threw " + e.message); }
+
+  try {
+    const r = shareAdvice(undefined, undefined);
+    check("no action at all warns rather than throwing", r.level === "unknown" && r.warn === true,
+          "got " + show(r));
+  } catch (e) {
+    check("no action at all warns rather than throwing", false,
+          "threw " + e.message + " -- failing closed means returning a warning, not crashing the share button");
+  }
+} catch (e) {
+  console.log("Write shareAdvice(action, target) above, then press Run.");
+}`);
+
     createSolution("exercise-1", {
+      unverifiable: "the modal and onboarding screens are React Native, needing a device and the system share sheet",
       exercise: "Build the complete share-path warning system:\n\n1. Create the `ShareWarning` modal component with: explanation of why it's dangerous, list of safe alternatives, a primary 'Go Back' button, and a secondary 'Share anyway' button.\n\n2. Integrate the warning into TokenDetail: 'Copy' has no warning, 'Share' always shows the warning modal before opening the system share sheet.\n\n3. Create an onboarding screen that teaches the sharing rule on first launch (Do/Don't lists).\n\n4. Ensure the design makes the safe choice (Go Back) primary/prominent and the dangerous choice (Share anyway) secondary/muted.\n\n5. Test: tap Share on a token detail screen, verify the warning appears, verify 'Go Back' dismisses it, verify 'Share anyway' opens the system share sheet.",
       hints: [
         "The modal uses transparent background + backdrop for the overlay effect.",
@@ -447,6 +626,10 @@ async function handleProceedShare() {
 // Show once after registration (track with AsyncStorage 'onboarding_complete')
 // Single screen with Do/Don't lists
 // "Got it" button navigates to Main`
+    });
+
+    createExplain("explain-a5-0005", {
+      prompt: "<code>shareAdvice</code> returns <code>'unknown'</code> and warns for any share target it does not recognise, rather than treating \"not on the dangerous list\" as safe. Explain what happens to a user six months from now under the other default — and why that is worse than the warning fatigue you would get from occasionally warning about something harmless."
     });
 
     createQuiz("lesson-quiz", [
