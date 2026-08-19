@@ -322,7 +322,7 @@ async function handleRedeemPageLoad(code: string) {
 
     <h2>SEO and meta tags</h2>
 
-    <p>When someone shares a <code>tokn.app/t/CODE</code> link in a chat app, it should show a preview:</p>
+    <p>The meta tags below are written to give away as little as possible, because <strong>a link preview is not a feature this page wants</strong>. Read the next section before the code — the framing matters more than the tags.</p>
 
     <pre><code>&lt;!-- web/index.html — meta tags for link previews --&gt;
 &lt;head&gt;
@@ -343,14 +343,24 @@ async function handleRedeemPageLoad(code: string) {
   &lt;meta name="twitter:description" content="Open this link to connect securely." /&gt;
   &lt;meta name="twitter:image" content="https://tokn.app/og-image.png" /&gt;
 
-  &lt;!-- Security --&gt;
-  &lt;meta name="robots" content="noindex" /&gt;
-  &lt;!-- Don't index individual token pages — they're private --&gt;
+  &lt;!-- NOTE: no robots meta tag here. This file serves every route, so a
+       noindex in it would hide the marketing pages too. The redemption
+       routes get X-Robots-Tag from nginx instead - see the exercise. --&gt;
 &lt;/head&gt;</code></pre>
 
+    <h3>Generating a preview means handing the code to a third party</h3>
+
+    <p>This lesson used to introduce those tags with "when someone shares a <code>tokn.app/t/CODE</code> link in a chat app, it should show a preview". Two things are wrong with that sentence, and the second one is not obvious.</p>
+
+    <p>The first is the product rule from <code>a5/0005</code>: a token must never travel over a channel that already identifies the user. Pasting the link into WhatsApp is precisely the path the app is supposed to warn about, so optimising the experience of doing it is optimising the wrong thing.</p>
+
+    <p>The second is mechanical. <strong>When you paste a URL into WhatsApp, Telegram, Slack or iMessage, that platform's servers fetch the URL</strong> to build the preview card. The code therefore arrives at Meta's or Telegram's crawler infrastructure and is logged there, before the recipient has tapped anything. Generic <code>og:</code> tags do not help with this at all — the leak is the <em>request</em>, not the response. And because the unfurler is a real client hitting a real endpoint, it can also burn a single-use token before a human ever sees it.</p>
+
+    <p>So the tags stay deliberately dull, and the honest summary is: the preview is something to be survived, not improved.</p>
+
     <div class="callout warning">
-      <div class="callout-title">Privacy consideration</div>
-      <p>Individual token URLs (<code>/t/MERC-8GH2-KP4X</code>) should have <code>noindex</code> so search engines don't crawl them. The OG tags are generic — they don't reveal the token label or issuer identity. The preview just says "secure communication link".</p>
+      <div class="callout-title">noindex in this file covers the wrong pages</div>
+      <p>This is one <code>index.html</code> serving every route, so a <code>&lt;meta name="robots" content="noindex"&gt;</code> in it applies to the marketing pages too — the whole site disappears from search results, which is not what anyone intended. Robots directives have to be <strong>per path</strong>, and that means a response header from nginx rather than a tag in the HTML. Writing that rule is the exercise below.</p>
     </div>
 
     <h2>Responsive design for mobile browsers</h2>
@@ -464,9 +474,27 @@ export default function App() {
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>First, the headers that decide what escapes this page</h2>
+
+    <p>The redemption URL carries a capability in its path. ADR-0007 names four places a path leaks to — the access log, browser history, <code>Referer</code>, and crash reports — and two of them are settled by response headers on exactly the right routes. Getting the route matching slightly wrong is how you either publish the codes or delete your own marketing pages from Google.</p>
+
+    <div id="exercise-headers"></div>
+
+    <h3>Check your work</h3>
+
+    <div id="pg-exercise-headers"></div>
+
+    <hr>
+
+    <h2>Then the holder experience</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <h2>In your own words</h2>
+
+    <div id="explain-a8-0004"></div>
 
     <hr>
 
@@ -482,6 +510,7 @@ export default function App() {
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -527,7 +556,140 @@ console.log('--- iOS zoom prevention ---');
 console.log('Input font-size >= 16px? iOS will NOT auto-zoom');
 console.log('Input font-size < 16px? iOS WILL auto-zoom on focus');`);
 
+    createSolution("exercise-headers", {
+      exercise: "Write <code>headersFor(path)</code> — the rule nginx applies to each response. It takes the request path and returns the headers to add.\n\nReturn an object. A <strong>redemption</strong> path gets:\n\n<ul><li><code>'X-Robots-Tag': 'noindex, nofollow, noarchive'</code></li><li><code>'Referrer-Policy': 'no-referrer'</code></li><li><code>'Cache-Control': 'no-store'</code></li></ul>\n\nA <strong>public</strong> path gets:\n\n<ul><li><code>'Referrer-Policy': 'strict-origin-when-cross-origin'</code></li><li><code>'Cache-Control': 'public, max-age=3600'</code></li><li>and <strong>no <code>X-Robots-Tag</code> at all</strong> — the marketing pages need to be findable</li></ul>\n\nThe rules:\n\n1. A path is a redemption path when its <strong>first segment is exactly <code>t</code></strong>: <code>/t/MERC8GH2KP4X</code>, <code>/t/MERC8GH2KP4X/chat</code>, and the bare <code>/t</code>. <code>/terms</code> is <strong>not</strong> one — it merely starts with the same letter, and a prefix test on <code>'/t'</code> would quietly deindex it.\n\n2. Strip the query string and fragment before deciding. <code>/t/MERC8GH2KP4X?utm_source=poster</code> is still a redemption path, and treating it as public is how the codes end up in a search index.\n\n3. <code>no-referrer</code> is not decoration. The code is in the path, so every outbound link and every third-party asset on that page would otherwise send it along in the <code>Referer</code> header — one of the four leaks ADR-0007 names.\n\n4. <code>no-store</code> keeps the page out of the browser's disk cache, which matters because holders are often on a shared or borrowed device.\n\n5. Anything you cannot make sense of — an empty string, a non-string — is treated as a redemption path. Over-blocking one asset is recoverable; publishing one code is not.",
+      hints: [
+        "Cut the query and fragment first, then split on '/'. A leading slash gives you an empty first element, so the segment you want is index 1.",
+        "Compare that segment for equality with 't'. Any test that uses startsWith or includes will also match /terms or /assets/t/..., and over-blocking the marketing pages is a real cost even though it is the safer direction.",
+        "Build the redemption object and the public object separately and return one of them. Trying to share a base object between the two is how X-Robots-Tag ends up on a page that needed indexing.",
+      ],
+      solution: `const REDEMPTION_HEADERS = {
+  'X-Robots-Tag': 'noindex, nofollow, noarchive',
+  // The code is in the path, so any outbound link or third-party asset would
+  // hand it to that other origin in Referer. ADR-0007 names this explicitly.
+  'Referrer-Policy': 'no-referrer',
+  // Holders are often on a borrowed phone. Keep it out of the disk cache.
+  'Cache-Control': 'no-store',
+};
+
+const PUBLIC_HEADERS = {
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Cache-Control': 'public, max-age=3600',
+  // Deliberately no X-Robots-Tag: the marketing pages have to be findable.
+};
+
+function firstSegment(path) {
+  // Query and fragment are not part of the route.
+  const clean = String(path).split('#')[0].split('?')[0];
+  // A leading slash makes split give an empty first element, so index 1 is
+  // the segment we mean.
+  return clean.split('/')[1];
+}
+
+function headersFor(path) {
+  // Rule 5. Anything unrecognisable fails closed.
+  if (typeof path !== 'string' || path === '') {
+    return Object.assign({}, REDEMPTION_HEADERS);
+  }
+
+  // Rule 1. Equality, not a prefix -- '/terms' also starts with '/t'.
+  const segment = firstSegment(path);
+
+  return segment === 't' || path === '/t'
+    ? Object.assign({}, REDEMPTION_HEADERS)
+    : Object.assign({}, PUBLIC_HEADERS);
+}`
+    });
+
+    createPlayground("pg-exercise-headers", `// Write headersFor(path) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+const ROBOTS = "X-Robots-Tag";
+const REF = "Referrer-Policy";
+const CACHE = "Cache-Control";
+// A real code, so the fixture is a path the product would actually serve.
+const TOKEN_PATH = "/t/MERC8GH2KP4X";
+
+try {
+  if (typeof headersFor !== "function") throw new Error("not written yet");
+
+  try {
+    const h = headersFor(TOKEN_PATH);
+    check("a redemption path is not indexed", h[ROBOTS] === "noindex, nofollow, noarchive",
+          "got " + h[ROBOTS]);
+    check("a redemption path sends no referrer", h[REF] === "no-referrer",
+          "got " + h[REF] + " -- the code is IN the path, so Referer would carry it to every other origin the page touches");
+    check("a redemption path is not stored", h[CACHE] === "no-store",
+          "got " + h[CACHE] + " -- holders are often on a borrowed device");
+  } catch (e) { check("a redemption path is not indexed", false, "threw " + e.message); }
+
+  try {
+    const h = headersFor(TOKEN_PATH + "/chat");
+    check("a path BELOW the code is still a redemption path", h[ROBOTS] === "noindex, nofollow, noarchive",
+          "got " + h[ROBOTS] + " -- /t/CODE/chat carries the code just as much as /t/CODE");
+  } catch (e) { check("a path BELOW the code is still a redemption path", false, "threw " + e.message); }
+
+  try {
+    const h = headersFor(TOKEN_PATH + "?utm_source=poster");
+    check("a query string does not turn it into a public page", h[ROBOTS] === "noindex, nofollow, noarchive",
+          "got " + h[ROBOTS] + " -- strip the query before deciding, or a decorated link gets indexed");
+  } catch (e) { check("a query string does not turn it into a public page", false, "threw " + e.message); }
+
+  try {
+    const h = headersFor(TOKEN_PATH + "#top");
+    check("a fragment does not turn it into a public page", h[ROBOTS] === "noindex, nofollow, noarchive",
+          "got " + h[ROBOTS]);
+  } catch (e) { check("a fragment does not turn it into a public page", false, "threw " + e.message); }
+
+  try {
+    // THE trap. /terms starts with "/t" and is a page you very much want found.
+    const h = headersFor("/terms");
+    check("/terms is a PUBLIC page, not a redemption path", h[ROBOTS] === undefined,
+          "got " + h[ROBOTS] + " -- a prefix test on '/t' deindexes your own terms page");
+    check("/terms gets the normal referrer policy", h[REF] === "strict-origin-when-cross-origin",
+          "got " + h[REF]);
+  } catch (e) { check("/terms is a PUBLIC page, not a redemption path", false, "threw " + e.message); }
+
+  try {
+    const a = headersFor("/");
+    const b = headersFor("/about");
+    check("the home and about pages are indexable",
+          a[ROBOTS] === undefined && b[ROBOTS] === undefined,
+          "got " + a[ROBOTS] + " and " + b[ROBOTS] + " -- a noindex in the shared index.html is exactly this bug");
+  } catch (e) { check("the home and about pages are indexable", false, "threw " + e.message); }
+
+  try {
+    const h = headersFor("/assets/app.js");
+    check("static assets stay cacheable", h[CACHE] === "public, max-age=3600",
+          "got " + h[CACHE] + " -- no-store on the bundle makes every page load re-download it");
+  } catch (e) { check("static assets stay cacheable", false, "threw " + e.message); }
+
+  try {
+    const h = headersFor("/t");
+    check("the bare /t is treated as a redemption path", h[ROBOTS] === "noindex, nofollow, noarchive",
+          "got " + h[ROBOTS]);
+  } catch (e) { check("the bare /t is treated as a redemption path", false, "threw " + e.message); }
+
+  try {
+    const a = headersFor("");
+    const b = headersFor(undefined);
+    check("an unrecognisable path fails CLOSED, not open",
+          a[ROBOTS] === "noindex, nofollow, noarchive" && b[ROBOTS] === "noindex, nofollow, noarchive",
+          "got " + a[ROBOTS] + " and " + b[ROBOTS] + " -- over-blocking an asset is recoverable, publishing a code is not");
+  } catch (e) {
+    check("an unrecognisable path fails CLOSED, not open", false,
+          "threw " + e.message + " -- nginx still has to answer the request");
+  }
+} catch (e) {
+  console.log("Write headersFor(path) above, then press Run.");
+}`);
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is a React chat and call UI plus an nginx config, needing a browser, an API and a VPS",
       exercise: "Build the complete no-app holder experience: (1) A ChatPage that shows messages with sender alignment (holder = right/blue, issuer = left/gray), auto-scrolls on new messages, and has a fixed input at the bottom. (2) Responsive CSS using dvh, safe-area-inset-bottom, and 16px font-size on inputs. (3) A ConnectionStatus banner that shows when WebSocket disconnects. (4) App-installed detection: if the Token app is installed, offer to open it; otherwise stay on the web page. (5) Meta tags for link previews (OG tags) that don't reveal private information.",
       hints: [
         "Use flex with h-[100dvh] for the full layout — header (shrink-0), messages (flex-1 overflow-y-auto), input (shrink-0).",
@@ -666,7 +828,12 @@ export async function tryOpenApp(code: string): Promise<boolean> {
 // <meta property="og:title" content="Token — Secure Communication" />
 // <meta property="og:description" content="Open this link to connect securely. No download required." />
 // <meta property="og:image" content="https://tokn.app/og-image.png" />
-// <meta name="robots" content="noindex" />`
+// NO robots meta tag: this file serves every route, so it would hide the
+// marketing pages too. Per-path X-Robots-Tag comes from nginx instead.`
+    });
+
+    createExplain("explain-a8-0004", {
+      prompt: "Pasting <code>tokn.app/t/CODE</code> into WhatsApp makes Meta's servers fetch that URL to build a preview card. Explain what has already happened to the token by the time the recipient sees the message — and why generic <code>og:</code> tags do nothing about it."
     });
 
     createQuiz("lesson-quiz", [

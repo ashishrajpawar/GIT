@@ -12,11 +12,12 @@ how far it got.
 
 ## In progress
 
-**M3 on A8**, started 2026-08-19 from `970dc82`. A5 is complete (all five
-verified the same day).
+**Nothing.** Working tree clean. **A5 and A8 are both complete** — nine lessons
+verified 2026-08-19.
 
-`a8/0001`–`0003` are **done and verified**. Next: `a8/0004` (no-app
-experience), the last of A8.
+Next: **A6 (chat/realtime)**, then the scattered singles (A11, B2, B3, B5, B7,
+B10). Also worth doing before more M3: the two follow-ups below, which are both
+security-shaped and both cross-module.
 
 **`a8/0003` had the worst defect found so far and it was not the function.**
 The browser `RTCPeerConnection` had no `iceTransportPolicy: 'relay'`, TURN was
@@ -103,7 +104,7 @@ Per-item status only. The plan itself is in `TOKEN-TRACK.md`; the counts are in
 | 4 — the operating track | not started, deliberately |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
-| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5 complete; ~14 left |
+| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A8 complete; ~10 left |
 
 ### M3 — where it has reached
 
@@ -127,6 +128,7 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `a8/0002` | `redeemState` | the server's vocabulary is not the UI's; unknown reason ⇒ error |
 | `a8/0001` | `checkWebEnv` | the `VITE_` **prefix** is the test, not the name |
 | `a8/0003` | `reconnectPlan` | backoff spaces one client, only jitter spaces the herd |
+| `a8/0004` | `headersFor` | route matching that neither publishes codes nor hides `/terms` |
 
 **A5 note:** not one of the five had a `createExplain` prompt or loaded
 `explain.js`. All five now do. A5 predates the practice pattern being made
@@ -168,7 +170,7 @@ existed, plus `status={item.status}` (the exact bug the new section describes)
 and `max_uses > 0` (which hides a zero limit). One prose fix, three live
 defects downstream — the Phase 1.5 lesson, again.
 
-Remaining, roughly: **~14 have an extractable function** (A6, A8 ×4,
+Remaining, roughly: **~10 have an extractable function** (A6,
 A11, B2, B3, B5, B7, B10 …), **~40 are genuinely infra** (a device, a VPS, two
 phones, a live TURN server), and **4 are TypeScript**, which the runner cannot
 execute at all.
