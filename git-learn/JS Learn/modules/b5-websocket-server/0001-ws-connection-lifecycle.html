@@ -139,6 +139,45 @@ export function getClients() {
   return clients;
 }</code></pre>
 
+    <div class="callout danger">
+      <div class="callout-title">What that <code>clients</code> Map is, and the much bigger thing it is not</div>
+      <p>Keeping a local <code>userId → sockets</code> map is correct and
+      unavoidable — a WebSocket is a live TCP connection bound to <em>this</em>
+      process, and no amount of architecture moves it elsewhere.
+      <code>ARCHITECTURE.md</code> expects exactly this map.</p>
+      <p><strong>The map is a delivery mechanism. It is not a routing table, and
+      it is not a presence store.</strong> Those two mistakes are the same
+      mistake, and they only bite when a second replica exists — which is
+      precisely when nobody is looking, because it worked on one box for
+      months.</p>
+      <p>Concretely, the rule you must never break:</p>
+      <p><code>clients.get(userId)</code> returning nothing means <strong>"not
+      connected to this node"</strong>. It does <strong>not</strong> mean the
+      user is offline. They may be on the replica next door with a perfectly
+      healthy socket. Concluding "offline" from a local miss is how a
+      two-replica deployment silently drops half its messages — and the failure
+      is silent because nothing errors: the sender's message is accepted, stored,
+      and simply never delivered.</p>
+      <p>Where the answers actually live (ADR-0003):</p>
+      <ul>
+        <li><strong>Is this user online at all?</strong> A Redis presence key
+        with a TTL, refreshed by heartbeat. Not any node's map.</li>
+        <li><strong>How do I reach a socket I do not hold?</strong> Publish to
+        Redis pub/sub. The node holding that socket is subscribed and writes to
+        it. You never learn which node that was, and you should not want to.</li>
+      </ul>
+      <p><code>0002</code> builds the routing on top of this map and is where
+      getting it wrong becomes visible. Read this paragraph again before you
+      write <code>deliverToUser</code> there.</p>
+    </div>
+
+    <p>One consequence worth noticing now: the <code>close</code> handler above
+    deletes the user's entry when their last socket on this node goes away, and
+    that is <em>all</em> it does. It deliberately does not mark them offline
+    anywhere. It cannot — this node has no idea whether they are still connected
+    elsewhere. Presence expires on its own when nothing refreshes the key, which
+    is why it is a TTL and not a flag.</p>
+
     <h2>Authenticating on connect</h2>
 
     <p>Unlike HTTP requests where you send an Authorization header with every call, WebSocket authenticates once — during the upgrade handshake. The token is sent as a query parameter (because you can't set custom headers in the browser's WebSocket API):</p>
@@ -380,9 +419,23 @@ function connect() {
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>Now build it yourself</h2>
+
+    <p>Write <code>sweepSockets(sockets)</code> — one tick of the heartbeat.
+    It is the part of this lesson that is pure decision-making, and it has an
+    ordering trap that kills every connection on the server the first time it
+    runs.</p>
+
+    <div id="exercise-sweep"></div>
+    <div id="pg-exercise-sweep"></div>
+
+    <h3>And the server it belongs to</h3>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="explain-b5-0001"></div>
 
     <hr>
 
@@ -398,6 +451,7 @@ function connect() {
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -441,7 +495,111 @@ sockets.forEach(s => {
 console.log('\\nResult:');
 sockets.forEach(s => console.log(s.name + ': ' + (s.terminated ? 'DISCONNECTED' : 'alive')));`);
 
+    createSolution("exercise-sweep", {
+      exercise: "Write sweepSockets(sockets) — one tick of the heartbeat interval.\n\nsockets is an array of { id, isAlive }. Return { terminate, ping }: two arrays of ids, each in the same order the sockets appeared.\n\nThe rules:\n\n1. isAlive === false means this socket was pinged on the previous tick and never answered. It is dead. Terminate it.\n\n2. Anything else gets pinged. The caller sets isAlive = false on each socket it pings, and the 'pong' handler sets it back to true when the client answers — so surviving to the next tick with false still set is the evidence of death.\n\n3. A socket must never appear in both lists. You do not ping a connection you just terminated.\n\n4. A socket whose isAlive is undefined has just connected and has not been asked anything yet. Ping it; do not terminate it. Only an explicit false is evidence.\n\nThe ordering trap: notice that rule 2 says the CALLER resets the flag. If you reset isAlive = false inside your own loop before deciding, then on the next tick every socket looks dead — including every healthy one. Decide first, mutate after.",
+      hints: [
+        "Build both arrays in one pass with a single if/else. If you find yourself writing two separate filters, check what happens to a socket that matches both.",
+        "!socket.isAlive is true for undefined as well as false. Rule 4 is specifically about that difference, so test for === false.",
+        "This function only decides. It returns ids and changes nothing — which is exactly why it can be tested here without a server."
+      ],
+      solution: `function sweepSockets(sockets) {
+  const terminate = [];
+  const ping = [];
+
+  for (const socket of sockets || []) {
+    // Only an explicit false is evidence of a missed pong. A brand new
+    // socket has undefined and has not been asked anything yet.
+    if (socket.isAlive === false) {
+      terminate.push(socket.id);
+    } else {
+      ping.push(socket.id);
+    }
+  }
+
+  return { terminate, ping };
+}`
+    });
+
+    createPlayground("pg-exercise-sweep", `// Write sweepSockets(sockets) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+
+try {
+  if (typeof sweepSockets !== "function") throw new Error("not written yet");
+
+  try {
+    // Mixed on purpose, and the dead one is in the MIDDLE -- a solution
+    // that slices or assumes position would still pass if it were last.
+    const r = sweepSockets([
+      { id: "a", isAlive: true },
+      { id: "b", isAlive: false },
+      { id: "c", isAlive: true },
+    ]);
+    check("a socket that missed its pong is terminated",
+          r.terminate.join(",") === "b", "got terminate=[" + r.terminate + "]");
+    check("the live sockets are pinged",
+          r.ping.join(",") === "a,c", "got ping=[" + r.ping + "]");
+  } catch (e) { check("a socket that missed its pong is terminated", false, "threw " + e.message); }
+
+  try {
+    const r = sweepSockets([
+      { id: "a", isAlive: true },
+      { id: "b", isAlive: false },
+    ]);
+    const both = r.terminate.filter(function (id) { return r.ping.indexOf(id) !== -1; });
+    check("no socket is both terminated and pinged", both.length === 0,
+          "both lists contain [" + both + "] -- you do not ping a connection you just closed");
+  } catch (e) { check("no socket is both terminated and pinged", false, "threw " + e.message); }
+
+  try {
+    // Brand new socket: connected, never pinged, so isAlive is undefined.
+    // !socket.isAlive is TRUE here, which is the trap.
+    const r = sweepSockets([{ id: "new" }]);
+    check("a brand new socket is pinged, not terminated",
+          r.terminate.length === 0 && r.ping.join(",") === "new",
+          "got terminate=[" + r.terminate + "] ping=[" + r.ping + "] -- undefined means 'not asked yet', not 'did not answer'");
+  } catch (e) { check("a brand new socket is pinged, not terminated", false, "threw " + e.message); }
+
+  try {
+    const r = sweepSockets([]);
+    check("an empty server sweeps to two empty lists",
+          r.terminate.length === 0 && r.ping.length === 0,
+          "got " + JSON.stringify(r));
+  } catch (e) { check("an empty server sweeps to two empty lists", false, "threw " + e.message); }
+
+  try {
+    // THE ordering trap. The caller mutates isAlive after this returns, so
+    // the function must not do it -- and must not decide from a value it
+    // just changed. If sweeping twice kills healthy sockets, this fires.
+    const live = [
+      { id: "a", isAlive: true },
+      { id: "b", isAlive: true },
+    ];
+    const first = sweepSockets(live);
+    const second = sweepSockets(live);
+    check("sweeping twice does not kill healthy sockets",
+          first.terminate.length === 0 && second.terminate.length === 0,
+          "first=[" + first.terminate + "] second=[" + second.terminate + "] -- resetting the flag inside the loop makes every socket look dead next tick");
+  } catch (e) { check("sweeping twice does not kill healthy sockets", false, "threw " + e.message); }
+
+  try {
+    const input = [{ id: "a", isAlive: true }, { id: "b", isAlive: false }];
+    sweepSockets(input);
+    check("the input sockets are not mutated",
+          input[0].isAlive === true && input[1].isAlive === false,
+          "the caller owns the flag; this function only decides");
+  } catch (e) { check("the input sockets are not mutated", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write sweepSockets(sockets) above, then press Run. (" + e.message + ")");
+}`);
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is a Node WebSocket server needing a running HTTP server, Redis and real clients",
       exercise: "Build the complete WebSocket server infrastructure:\n\n1. Create `api/src/ws/server.ts`: attach a WebSocketServer to the HTTP server using the noServer pattern. Handle the upgrade event with authentication.\n\n2. Create `api/src/ws/auth.ts`: extract JWT from the URL query parameter, verify it, and return the user ID.\n\n3. Create `api/src/ws/heartbeat.ts`: ping every 30 seconds, terminate connections that don't respond.\n\n4. Create `api/src/ws/router.ts`: parse incoming JSON, dispatch to handlers by message type, and send error responses for invalid messages.\n\n5. Modify `api/src/index.ts` to use createServer(app) and attach the WebSocket server.\n\n6. Test: connect with wscat (`npx wscat -c 'ws://localhost:3000/ws?token=YOUR_JWT'`), send a JSON message, verify you get a response.",
       hints: [
         "Use noServer: true and manually handle the 'upgrade' event — this lets you reject unauthorized connections before the handshake completes.",
@@ -574,6 +732,10 @@ const httpServer = createServer(app);
 createWsServer(httpServer);
 
 httpServer.listen(3000, () => console.log('HTTP + WS on port 3000'));`
+    });
+
+    createExplain("explain-b5-0001", {
+      prompt: "<code>clients.get(userId)</code> coming back empty is not the same as the user being offline. Explain the difference, what a second replica does to a server that confuses the two, and why the failure would be invisible in testing on one box."
     });
 
     createQuiz("lesson-quiz", [
