@@ -70,9 +70,9 @@ app.listen(PORT, () =&gt; {
     <pre><code>// GET /api/tokens — list tokens
 app.get('/api/tokens', (req, res) =&gt; { ... });
 
-// GET /api/tokens/:code — get one token by code
-app.get('/api/tokens/:code', (req, res) =&gt; {
-  const { code } = req.params;  // URL parameter
+// GET /api/tokens/:id — get one token by its row id
+app.get('/api/tokens/:id', (req, res) =&gt; {
+  const { id } = req.params;  // URL parameter
   // ...
 });
 
@@ -82,17 +82,58 @@ app.post('/api/tokens', (req, res) =&gt; {
   // ...
 });
 
-// PATCH /api/tokens/:code — update a token
-app.patch('/api/tokens/:code', (req, res) =&gt; { ... });
+// PATCH /api/tokens/:id — update a token
+app.patch('/api/tokens/:id', (req, res) =&gt; { ... });
 
-// DELETE /api/tokens/:code — revoke a token
-app.delete('/api/tokens/:code', (req, res) =&gt; { ... });</code></pre>
+// DELETE /api/tokens/:id — revoke a token
+app.delete('/api/tokens/:id', (req, res) =&gt; { ... });
+
+// The one endpoint that takes a code — and it is NOT in the path.
+// See the callout below before you write anything that looks like
+// /api/tokens/MERC-8GH2-KP4X.
+app.post('/api/redeem', (req, res) =&gt; {
+  const { code } = req.body;
+  // ...
+});</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">Why <code>:id</code> and never <code>:code</code></div>
+      <p>The obvious design is <code>/api/tokens/MERC-8GH2-KP4X</code>. It reads
+      well, it needs no extra lookup, and it is what most APIs would do. It is
+      also the one thing ADR-0007 forbids, and the reason is that
+      <strong>a URL path is not private.</strong> It goes places the body never
+      does:</p>
+      <ul>
+        <li>The reverse proxy's access log, in plain text, for as long as logs
+        are kept</li>
+        <li>Browser history, and any sync that copies it between devices</li>
+        <li>The <code>Referer</code> header sent to every other origin the page
+        loads anything from</li>
+        <li>Crash reports and error-tracker breadcrumbs, which attach the URL by
+        default</li>
+      </ul>
+      <p>A token code is a <em>capability</em> — whoever has it can use it. So
+      each of those is a place someone could pick one up. Meanwhile
+      <code>tokens.code</code> does not even exist as a column: the database
+      stores a hash for lookup and an encrypted copy for display, precisely so a
+      leak of the data is not a leak of the codes. Putting the code in a URL
+      undoes all of that in the one place it is easiest to overlook.</p>
+      <p>So <strong>owner endpoints take the row <code>:id</code></strong>. The
+      owner is authenticated and the id means nothing to anyone else. And the
+      redemption endpoint takes the code <strong>in a POST body</strong>:
+      <code>POST /api/redeem</code> and <code>POST /api/redeem/check</code>.
+      That costs the check endpoint the GET it would otherwise deserve, and
+      that is the right trade.</p>
+      <p>The one legitimate exception is the redemption <em>page</em> URL that
+      the QR code encodes — a browser has to get there somehow. That path is
+      defended with headers instead, which is <code>a8/0004</code>'s subject.</p>
+    </div>
 
     <h3>Route parameters</h3>
 
-    <pre><code>// :code becomes req.params.code
-app.get('/api/tokens/:code', (req, res) =&gt; {
-  console.log(req.params.code);  // "MERC-8GH2-KP4X"
+    <pre><code>// :id becomes req.params.id
+app.get('/api/tokens/:id', (req, res) =&gt; {
+  console.log(req.params.id);  // "42" (always a string!)
 });
 
 // Query parameters: /api/tokens?status=active&limit=10
@@ -164,7 +205,7 @@ router.get('/', async (req, res) =&gt; {
   // List user's tokens
 });
 
-router.get('/:code', async (req, res) =&gt; {
+router.get('/:id', async (req, res) =&gt; {
   // Get single token
 });
 
@@ -172,11 +213,11 @@ router.post('/', async (req, res) =&gt; {
   // Create token
 });
 
-router.patch('/:code', async (req, res) =&gt; {
+router.patch('/:id', async (req, res) =&gt; {
   // Update token
 });
 
-router.delete('/:code', async (req, res) =&gt; {
+router.delete('/:id', async (req, res) =&gt; {
   // Revoke token
 });
 
@@ -208,9 +249,9 @@ app.use((err, req, res, next) =&gt; {
 
     <p>Throw errors in route handlers to trigger it:</p>
 
-    <pre><code>router.get('/:code', async (req, res, next) =&gt; {
+    <pre><code>router.get('/:id', async (req, res, next) =&gt; {
   try {
-    const token = await findTokenByCode(req.params.code);
+    const token = await findTokenById(req.params.id);
     if (!token) {
       const err = new Error('Token not found');
       err.status = 404;
@@ -282,9 +323,23 @@ export async function getTokenByCode(code: string) {
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>Now build it yourself</h2>
+
+    <p>Write <code>matchRoute(routes, path)</code> — a miniature of what Express
+    does on every request. It is the part of routing that has caught everyone at
+    least once, and it is pure, so you can hold it to account here rather than
+    with curl.</p>
+
+    <div id="exercise-match"></div>
+    <div id="pg-exercise-match"></div>
+
+    <h3>And the server it belongs to</h3>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="explain-b3-0002"></div>
 
     <hr>
 
@@ -299,12 +354,145 @@ export async function getTokenByCode(code: string) {
 
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
+    createSolution("exercise-match", {
+      exercise: "Write matchRoute(routes, path) — find which registered route handles a request path.\n\nroutes is an array of pattern strings, IN THE ORDER THEY WERE REGISTERED. A pattern is slash-separated segments; a segment starting with ':' is a parameter that matches any single non-empty segment.\n\n  ['/tokens', '/tokens/active', '/tokens/:id', '/tokens/:id/messages']\n\npath is a request path like '/tokens/42'.\n\nReturn { pattern, params } for the FIRST route that matches, or null if none does.\n\nThe rules:\n\n1. First match wins — registration order, not specificity. This is the whole point. Express does NOT prefer the more specific pattern; it walks the list and takes the first one that fits. Register '/tokens/:id' before '/tokens/active' and the literal route becomes unreachable, with id === 'active'.\n\n2. Segment counts must be equal. '/tokens/:id' must not match '/tokens/42/messages', and must not match '/tokens' either.\n\n3. A ':param' segment matches any single non-empty segment, and its value goes into params under the name after the colon. A route with no parameters returns an empty params object.\n\n4. Literal segments must match exactly.\n\nIgnore query strings — assume path is already just the path.",
+      hints: [
+        "Split both the pattern and the path on '/' and drop the empty strings. That single filter handles leading slashes, trailing slashes and '/' itself.",
+        "Compare segment counts before comparing anything else. It is one line and it removes most of the ways this can go wrong.",
+        "Return from inside the loop the moment a pattern fits. If you collect all the matches and then choose between them, you have built specificity-ordering — which is not what Express does."
+      ],
+      solution: `function matchRoute(routes, path) {
+  const wanted = split(path);
+
+  // Registration order. The FIRST match wins, which is why a greedy
+  // pattern registered early hides everything after it.
+  for (const pattern of routes || []) {
+    const parts = split(pattern);
+    if (parts.length !== wanted.length) continue;   // rule 2
+
+    const params = {};
+    let ok = true;
+
+    for (let i = 0; i < parts.length; i++) {
+      if (parts[i].startsWith(":")) {
+        params[parts[i].slice(1)] = wanted[i];
+      } else if (parts[i] !== wanted[i]) {
+        ok = false;
+        break;
+      }
+    }
+
+    if (ok) return { pattern, params };
+  }
+
+  return null;
+}
+
+// '/tokens/42' -> ['tokens', '42']; a trailing or leading slash
+// must not produce a phantom empty segment.
+function split(p) {
+  return String(p).split("/").filter((seg) => seg.length > 0);
+}`
+    });
+
+    createPlayground("pg-exercise-match", `// Write matchRoute(routes, path) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  " ) + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(r) { return JSON.stringify(r); }
+
+// Registered in the CORRECT order: the literal before the parameter.
+const GOOD = ["/tokens", "/tokens/active", "/tokens/:id", "/tokens/:id/messages"];
+// The same routes registered in the WRONG order -- the bug this teaches.
+const BAD = ["/tokens", "/tokens/:id", "/tokens/active", "/tokens/:id/messages"];
+
+try {
+  if (typeof matchRoute !== "function") throw new Error("not written yet");
+
+  try {
+    const r = matchRoute(GOOD, "/tokens/42");
+    check("a parameter segment captures its value",
+          r && r.pattern === "/tokens/:id" && r.params.id === "42",
+          "got " + show(r));
+  } catch (e) { check("a parameter segment captures its value", false, "threw " + e.message); }
+
+  try {
+    const r = matchRoute(GOOD, "/tokens/active");
+    check("a literal registered FIRST wins over a parameter",
+          r && r.pattern === "/tokens/active",
+          "got " + show(r) + " -- /tokens/active was registered before /tokens/:id");
+  } catch (e) { check("a literal registered FIRST wins over a parameter", false, "threw " + e.message); }
+
+  try {
+    // THE bug. Same routes, wrong order. Express does not prefer the more
+    // specific pattern -- so /tokens/active is now unreachable and the
+    // handler sees id === 'active'.
+    const r = matchRoute(BAD, "/tokens/active");
+    check("registration order beats specificity",
+          r && r.pattern === "/tokens/:id" && r.params.id === "active",
+          "got " + show(r) + " -- Express walks the list in order; it does NOT pick the more specific route");
+  } catch (e) { check("registration order beats specificity", false, "threw " + e.message); }
+
+  try {
+    const r = matchRoute(GOOD, "/tokens/42/messages");
+    check("segment counts must match",
+          r && r.pattern === "/tokens/:id/messages" && r.params.id === "42",
+          "got " + show(r) + " -- /tokens/:id has two segments and must not swallow three");
+  } catch (e) { check("segment counts must match", false, "threw " + e.message); }
+
+  try {
+    const r = matchRoute(GOOD, "/tokens");
+    check("a parameter does not match a MISSING segment",
+          r && r.pattern === "/tokens" && Object.keys(r.params).length === 0,
+          "got " + show(r) + " -- /tokens/:id must not match /tokens with id undefined");
+  } catch (e) { check("a parameter does not match a MISSING segment", false, "threw " + e.message); }
+
+  try {
+    const r = matchRoute(GOOD, "/health");
+    check("no match returns null", r === null, "got " + show(r) + " -- this is the 404 path");
+  } catch (e) { check("no match returns null", false, "threw " + e.message); }
+
+  try {
+    const r = matchRoute(GOOD, "/tokens/42/messages/7");
+    check("a longer path than any route returns null", r === null, "got " + show(r));
+  } catch (e) { check("a longer path than any route returns null", false, "threw " + e.message); }
+
+  try {
+    // A trailing slash must not invent an empty final segment and turn
+    // /tokens/ into a two-segment path that /tokens/:id would match.
+    const r = matchRoute(GOOD, "/tokens/");
+    check("a trailing slash does not create a phantom segment",
+          r && r.pattern === "/tokens",
+          "got " + show(r) + " -- splitting on '/' leaves an empty string you must drop");
+  } catch (e) { check("a trailing slash does not create a phantom segment", false, "threw " + e.message); }
+
+  try {
+    const r = matchRoute(["/tokens/:id/messages/:msgId"], "/tokens/7/messages/42");
+    check("several parameters are all captured",
+          r && r.params.id === "7" && r.params.msgId === "42",
+          "got " + show(r));
+  } catch (e) { check("several parameters are all captured", false, "threw " + e.message); }
+
+  try {
+    const r = matchRoute([], "/tokens");
+    check("an empty routing table matches nothing", r === null, "got " + show(r));
+  } catch (e) { check("an empty routing table matches nothing", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write matchRoute(routes, path) above, then press Run. (" + e.message + ")");
+}`);
+
     createSolution("exercise-1", {
-      exercise: "Build Token's Express server with: (1) JSON parsing middleware, (2) CORS for the web client, (3) Request logging, (4) A /health endpoint, (5) A tokens router (api/src/routes/tokens.ts) with GET / (list), GET /:code (detail), POST / (create) — returning placeholder JSON for now, (6) A global error handler, (7) Database connection pool. Test all endpoints with curl.",
+      unverifiable: "the deliverable is an Express server needing Node, a running Postgres and curl",
+      exercise: "Build Token's Express server with: (1) JSON parsing middleware, (2) CORS for the web client, (3) Request logging, (4) A /health endpoint, (5) A tokens router (api/src/routes/tokens.ts) with GET / (list), GET /:id (detail), POST / (create) — returning placeholder JSON for now, (6) A global error handler, (7) Database connection pool, (8) A POST /api/redeem that takes the code in the BODY, never the path. Test all endpoints with curl.",
       hints: [
         "Install: express, cors, pg, dotenv. Dev: @types/express, @types/cors, @types/pg, tsx, typescript.",
         "Remember to use async handlers with try/catch and next(err) for error handling.",
@@ -352,9 +540,9 @@ router.get('/', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.get('/:code', async (req, res, next) => {
+router.get('/:id', async (req, res, next) => {
   try {
-    res.json({ code: req.params.code, message: 'TODO: fetch from DB' });
+    res.json({ id: req.params.id, message: 'TODO: fetch from DB' });
   } catch (err) { next(err); }
 });
 
@@ -372,6 +560,10 @@ import pg from 'pg';
 export const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
 });`
+    });
+
+    createExplain("explain-b3-0002", {
+      prompt: "Registering <code>/tokens/:id</code> before <code>/tokens/active</code> makes the second route unreachable, and nothing warns you — the server starts fine and the handler receives <code>id === 'active'</code>. Explain why Express behaves this way rather than preferring the more specific pattern, and what that implies about the order you add routes to a growing file."
     });
 
     createQuiz("lesson-quiz", [
@@ -392,7 +584,7 @@ export const pool = new pg.Pool({
       {
         type: "spot-the-bug",
         question: "What's the security vulnerability?",
-        code: "router.get('/:code', async (req, res) => {\n  const result = await pool.query(\n    `SELECT * FROM tokens WHERE code = '${req.params.code}'`\n  );\n  res.json(result.rows[0]);\n});",
+        code: "router.get('/:id', async (req, res) => {\n  const result = await pool.query(\n    `SELECT * FROM tokens WHERE id = '${req.params.id}'`\n  );\n  res.json(result.rows[0]);\n});",
         options: [
           "async/await doesn't work with Express",
           "SQL injection — user input is concatenated directly into the query string",
@@ -400,12 +592,12 @@ export const pool = new pg.Pool({
           "res.json can't handle undefined"
         ],
         correct: 1,
-        explanation: "String interpolation in SQL allows injection. An attacker could pass code = \"'; DROP TABLE tokens; --\" and destroy your data. Always use parameterized queries: pool.query('SELECT * FROM tokens WHERE code = $1', [req.params.code])."
+        explanation: "String interpolation in SQL allows injection. An attacker could pass an id of \"'; DROP TABLE tokens; --\" and destroy your data — note that :id being 'meant' to be a number protects you not at all, because Express hands you whatever was in the URL. Always use parameterized queries: pool.query('SELECT * FROM tokens WHERE id = $1', [req.params.id])."
       },
       {
         type: "fill-blank",
         question: "Pass an error to Express's error handler from inside a route:",
-        code: "router.get('/:code', async (req, res, ___) => {\n  try {\n    // ...\n  } catch (err) {\n    ___(err);\n  }\n});",
+        code: "router.get('/:id', async (req, res, ___) => {\n  try {\n    // ...\n  } catch (err) {\n    ___(err);\n  }\n});",
         answer: "next",
         explanation: "The third argument to a route handler is next(). Calling next(err) with an error object skips remaining middleware and routes, jumping straight to the error handler (the 4-argument middleware)."
       },
@@ -434,10 +626,10 @@ export const pool = new pg.Pool({
       },
       {
         type: "predict-output",
-        question: "What does this route handler log when you POST to /api/tokens/MERC-8GH2 with body { \"label\": \"doctor\" }?",
-        code: "app.post('/api/tokens/:code', (req, res) => {\n  console.log(req.params.code, req.query.notify, req.body.label);\n  res.sendStatus(200);\n});\n// POST /api/tokens/MERC-8GH2?notify=true\n// Body: { \"label\": \"doctor\" }",
-        answer: "MERC-8GH2 true doctor",
-        explanation: "req.params.code comes from the :code URL segment. req.query.notify comes from the ?notify=true query string (as a string 'true'). req.body.label comes from the parsed JSON body. Each source serves a different purpose: params identify the resource, query modifies the request, body carries the payload."
+        question: "What does this route handler log when you POST to /api/tokens/42?notify=true with body { \"label\": \"doctor\" }?",
+        code: "app.post('/api/tokens/:id', (req, res) => {\n  console.log(req.params.id, req.query.notify, req.body.label);\n  res.sendStatus(200);\n});\n// POST /api/tokens/42?notify=true\n// Body: { \"label\": \"doctor\" }",
+        answer: "42 true doctor",
+        explanation: "req.params.id comes from the :id URL segment — a string '42', not the number 42. req.query.notify comes from the ?notify=true query string, also a string. req.body.label comes from the parsed JSON body. Each source serves a different purpose: params identify the resource, query modifies the request, body carries the payload. That last one is why a token code travels in the body: the path and the query both end up in access logs, and the body does not."
       },
       {
         type: "spot-the-bug",
@@ -505,15 +697,15 @@ export const pool = new pg.Pool({
       {
         type: "spot-the-bug",
         question: "This route never matches. What's wrong?",
-        code: "// In tokensRouter mounted at /api/tokens\nrouter.get('/api/tokens/:code', async (req, res) => {\n  const { code } = req.params;\n  const result = await pool.query('SELECT * FROM tokens WHERE code = $1', [code]);\n  res.json(result.rows[0]);\n});",
+        code: "// In tokensRouter mounted at /api/tokens\nrouter.get('/api/tokens/:id', async (req, res) => {\n  const { id } = req.params;\n  const result = await pool.query('SELECT * FROM tokens WHERE id = $1', [id]);\n  res.json(result.rows[0]);\n});",
         options: [
           "req.params doesn't work with router.get",
-          "The path doubles up — router is already mounted at /api/tokens, so the full path becomes /api/tokens/api/tokens/:code",
+          "The path doubles up — router is already mounted at /api/tokens, so the full path becomes /api/tokens/api/tokens/:id",
           "You can't destructure req.params",
           "pool.query doesn't support $1 syntax"
         ],
         correct: 1,
-        explanation: "When you mount a router with app.use('/api/tokens', tokensRouter), the router's paths are RELATIVE to that mount point. router.get('/:code') matches /api/tokens/:code. Writing the full path again doubles it up to /api/tokens/api/tokens/:code — a common mistake when splitting routes into files."
+        explanation: "When you mount a router with app.use('/api/tokens', tokensRouter), the router's paths are RELATIVE to that mount point. router.get('/:id') matches /api/tokens/:id. Writing the full path again doubles it up to /api/tokens/api/tokens/:id — a common mistake when splitting routes into files."
       },
       {
         question: "What does app.use('/api') match?",
@@ -540,9 +732,9 @@ export const pool = new pg.Pool({
       {
         type: "order-steps",
         question: "Order how Express resolves which route handler to call for GET /api/tokens/active:",
-        steps: ["Check app.use('/api/tokens', tokensRouter)", "Enter tokensRouter middleware stack", "Skip router.get('/:code/revoke')", "Match router.get('/:code') with code='active'", "Execute matched handler"],
+        steps: ["Check app.use('/api/tokens', tokensRouter)", "Enter tokensRouter middleware stack", "Skip router.get('/:id/revoke')", "Match router.get('/:id') with id='active'", "Execute matched handler"],
         correctOrder: [0, 1, 2, 3, 4],
-        explanation: "Express walks through middleware/routes in registration order. It enters the tokens router, then checks each route definition sequentially. '/:code' matches 'active' because :code is a wildcard segment. This is why you should put specific routes like '/active' BEFORE parameterized routes like '/:code' — otherwise the param route catches everything."
+        explanation: "Express walks through middleware/routes in registration order. It enters the tokens router, then checks each route definition sequentially. '/:id' matches 'active' because :id is a wildcard segment — it does not check that the value looks like an id. This is why specific routes like '/active' must be registered BEFORE parameterized ones like '/:id'; otherwise the param route swallows them. Express matches in the order you registered, never by which pattern is more specific."
       },
       {
         type: "predict-output",
@@ -593,9 +785,9 @@ export const pool = new pg.Pool({
         type: "which-breaks",
         question: "Which route parameter pattern causes a problem?",
         variants: [
-          "router.get('/tokens/:code', handler)  // matches /tokens/MERC-8GH2",
-          "router.get('/tokens/:code/messages/:msgId', handler)  // matches /tokens/ABC/messages/42",
-          "router.get('/tokens/:code', handler)\nrouter.get('/tokens/create', handler)  // 'create' is caught by :code first"
+          "router.get('/tokens/:id', handler)  // matches /tokens/42",
+          "router.get('/tokens/:id/messages/:msgId', handler)  // matches /tokens/7/messages/42",
+          "router.get('/tokens/:id', handler)\nrouter.get('/tokens/create', handler)  // 'create' is caught by :id first"
         ],
         correct: 2,
         explanation: "Route order matters with parameterized paths. Since :code matches ANY string including 'create', the first route catches /tokens/create with code='create'. The literal '/tokens/create' route never fires. Fix: put specific literal routes BEFORE parameterized ones, or use a regex constraint on :code."
@@ -647,10 +839,10 @@ export const pool = new pg.Pool({
       },
       {
         type: "fill-blank",
-        question: "Make a route that matches both /api/tokens and /api/tokens/MERC-8GH2 using an optional parameter:",
-        code: "router.get('/___(code)', (req, res) => {\n  if (req.params.code) { /* single token */ }\n  else { /* list all tokens */ }\n});",
-        answer: ":code?",
-        explanation: "Appending ? to a route parameter makes it optional: '/:code?' matches both '/tokens' (code is undefined) and '/tokens/MERC-8GH2' (code is 'MERC-8GH2'). This is a shortcut but use it sparingly — separate GET / and GET /:code routes are usually clearer for Token's API because list vs. detail are different operations."
+        question: "Make a route that matches both /api/tokens and /api/tokens/42 using an optional parameter:",
+        code: "router.get('/___', (req, res) => {\n  if (req.params.id) { /* single token */ }\n  else { /* list all tokens */ }\n});",
+        answer: ":id?",
+        explanation: "Appending ? to a route parameter makes it optional: '/:id?' matches both '/tokens' (id is undefined) and '/tokens/42' (id is '42'). This is a shortcut but use it sparingly — separate GET / and GET /:id routes are usually clearer for Token's API because list vs. detail are different operations."
       }
     ]);
   </script>

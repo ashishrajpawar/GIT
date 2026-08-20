@@ -14,11 +14,11 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1857 words |
-| Lessons with a playground | 73 / 96 |
+| Avg teaching prose per track lesson | 1860 words |
+| Lessons with a playground | 74 / 96 |
 | Lessons with an exercise | 96 / 96 |
 | **Deepened** (all 3 spine sections) | 16 / 96 |
-| **Verified** (code executed) | 49 / 96 |
+| **Verified** (code executed) | 50 / 96 |
 | Ran clean but had nothing to run | 0 / 96 |
 | Errors | 0 |
 | Known and blocked | 3 |
@@ -88,7 +88,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b1-sql-fundamentals | 4 | 905 | 0 | 4 | 103 | 0/4 | 0/4 |
 | b10-security-compliance | 2 | 2470 | 2 | 2 | 50 | 1/2 | 0/2 |
 | b2-schema-design | 3 | 1032 | 0 | 3 | 81 | 0/3 | 0/3 |
-| b3-node-http-server | 4 | 1500 | 1 | 4 | 117 | 2/4 | 0/4 |
+| b3-node-http-server | 4 | 1593 | 2 | 5 | 117 | 2/4 | 1/4 |
 | b4-auth-server | 3 | 1969 | 0 | 3 | 81 | 2/3 | 0/3 |
 | b5-websocket-server | 3 | 1961 | 6 | 6 | 77 | 0/3 | 3/3 |
 | b6-webrtc-signalling | 2 | 2009 | 2 | 2 | 52 | 1/2 | 0/2 |
@@ -209,7 +209,7 @@ so they do not hold the audit red. They are **not** resolved.
 | b2-schema-design/0002-messaging-schema.html | 1075 | 8 | 0 | 1 | 26 | — | n/a |
 | b2-schema-design/0003-migrations.html | 932 | 11 | 0 | 1 | 29 | — | n/a |
 | b3-node-http-server/0001-nodejs-fundamentals.html | 806 | 10 | 1 | 1 | 29 | — | n/a |
-| b3-node-http-server/0002-express-fastify-setup.html | 912 | 13 | 0 | 1 | 30 | — | n/a |
+| b3-node-http-server/0002-express-fastify-setup.html | 1283 | 13 | 1 | 2 | 30 | — | yes |
 | b3-node-http-server/0003-rest-api-design.html | 2091 | 10 | 0 | 1 | 28 | yes | n/a |
 | b3-node-http-server/0004-input-validation-error-handling.html | 2190 | 9 | 0 | 1 | 30 | yes | n/a |
 | b4-auth-server/0001-password-hashing-registration.html | 905 | 8 | 0 | 1 | 25 | — | n/a |
