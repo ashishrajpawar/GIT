@@ -76,7 +76,8 @@ EXECUTE FUNCTION update_updated_at();</code></pre>
 
     <pre><code>CREATE TABLE tokens (
   id          SERIAL PRIMARY KEY,
-  code        TEXT NOT NULL UNIQUE,
+  code_hash   TEXT NOT NULL UNIQUE,   -- SHA-256(normalised code + pepper)
+  code_enc    BYTEA NOT NULL,          -- AES-256-GCM, for showing it once more
   user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   label       TEXT NOT NULL,
   status      TEXT NOT NULL DEFAULT 'active'
@@ -100,6 +101,61 @@ EXECUTE FUNCTION update_updated_at();</code></pre>
     max_uses IS NULL OR use_count <= max_uses
   )
 );</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">There is no <code>code</code> column, and that is the point</div>
+      <p>Every other table in this course stores what it is about. This one
+      does not: <strong>the token code is never written to the database in the
+      clear.</strong> Two derived columns stand in for it (ADR-0007), and they
+      exist for different jobs.</p>
+      <p><strong><code>code_hash</code> — SHA-256 of the normalised code plus a
+      server-side pepper.</strong> This is the <em>only</em> way a token is
+      looked up. Redemption hashes what the holder typed and matches on this
+      column, so the database never sees the code and a stolen dump contains no
+      usable capabilities.</p>
+      <p><strong><code>code_enc</code> — AES-256-GCM of the same code.</strong>
+      This exists for exactly one feature: the owner asking to see a code they
+      have lost. It is decrypted for one token at a time, on request, and the
+      request is logged. It is never touched by a list query.</p>
+
+      <h4>Why a plain hash, and not bcrypt or argon2</h4>
+      <p>Password hashing is the obvious instinct here and it is wrong for this
+      column. bcrypt and argon2 salt <strong>randomly, per row</strong> — which
+      is exactly what you want for passwords, because you look a user up by
+      their email and then verify one hash. Here there is nothing to look up
+      <em>by</em>: the code is all the holder has. A random salt would mean
+      hashing the candidate against every row in the table to find a match.</p>
+      <p>A pepper gives you what a salt gives you — the same code in someone
+      else's database hashes differently, and a rainbow table is useless —
+      while keeping the hash deterministic, so it can be a <code>UNIQUE</code>
+      index and an O(1) lookup. The reason the slowness of bcrypt is not missed
+      is that a 31<sup>12</sup> keyspace is not brute-forceable at any speed;
+      the threat model is a database dump, not a weak secret.</p>
+
+      <h4>Two environment variables you can never lose</h4>
+      <p><code>TOKEN_CODE_PEPPER</code> and <code>TOKEN_CODE_KEY</code> are
+      required at startup and the server should refuse to boot without them.
+      <strong>Lose them and every token ever issued becomes permanently
+      unusable</strong> — no code will hash to a stored value, and no
+      <code>code_enc</code> will decrypt. There is no recovery path, because
+      the design has deliberately left itself none.</p>
+      <p>So they belong in the disaster-recovery plan, stored somewhere the
+      database backups are <em>not</em>. A backup that contains both the rows
+      and the keys has quietly undone the whole arrangement.</p>
+
+      <h4>What this forces on everything downstream</h4>
+      <ul>
+        <li><code>GET /tokens</code> returns <strong>no code field at all</strong>.
+        Serving one would mean decrypting every row on every scroll.</li>
+        <li>The code is returned <strong>exactly once</strong>, in the reply to
+        <code>POST /tokens</code>. Showing it again is a separate, logged
+        request.</li>
+        <li>You cannot search tokens by code, sort by it, or put it in a log
+        line — there is nothing to search.</li>
+      </ul>
+      <p>Those are real costs. They are the same costs a password column
+      imposes, and nobody argues about that one.</p>
+    </div>
 
     <div class="callout danger">
       <div class="callout-title">The one column on this table that is easy to get backwards</div>
@@ -135,7 +191,9 @@ if (token.max_uses != null) { checkLimit(); }</code></pre>
     <p>Let's unpack the decisions:</p>
 
     <ul>
-      <li><strong>code</strong> — the user-visible identifier (e.g. <code>MERC-8GH2-KP4X</code>). UNIQUE enforced by the database.</li>
+      <li><strong>code_hash</strong> and <strong>code_enc</strong> — and
+      <em>no</em> <code>code</code> column. This is the one row of this table
+      that is not obvious; the callout below is the whole reason.</li>
       <li><strong>label</strong> — who the token is for ("Amazon Delivery", "NoBroker Agent"). The user names them.</li>
       <li><strong>status</strong> — only three valid values, enforced by CHECK. You cannot invent a fourth state by accident.</li>
       <li><strong>max_uses NULL</strong> means unlimited; any number is a cap,
@@ -203,8 +261,9 @@ if (token.max_uses != null) { checkLimit(); }</code></pre>
     <pre><code>-- Token list for a user (the main screen)
 CREATE INDEX idx_tokens_user_id ON tokens(user_id);
 
--- Token lookup by code (the redemption path)
--- Already covered by the UNIQUE constraint on code
+-- Token lookup at redemption: by HASH, never by the code itself.
+-- Already covered by the UNIQUE constraint on code_hash.
+--   SELECT ... FROM tokens WHERE code_hash = $1   -- $1 = hashCode(code)
 
 -- Active tokens only (partial index — smaller, faster)
 CREATE INDEX idx_tokens_active ON tokens(user_id)
@@ -240,7 +299,8 @@ CREATE TABLE users (
 -- Tokens
 CREATE TABLE tokens (
   id          SERIAL PRIMARY KEY,
-  code        TEXT NOT NULL UNIQUE,
+  code_hash   TEXT NOT NULL UNIQUE,   -- SHA-256(normalised code + pepper)
+  code_enc    BYTEA NOT NULL,          -- AES-256-GCM, for showing it once more
   user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   label       TEXT NOT NULL,
   status      TEXT NOT NULL DEFAULT 'active'
@@ -300,9 +360,26 @@ COMMIT;</code></pre>
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>Now build it yourself</h2>
+
+    <p>
+      Write <code>codeHashInput(raw)</code> — the normalisation that turns what
+      a holder typed into the exact string that gets hashed. It is the smallest
+      function in this module and the one with the least room to change its
+      mind later: <strong>every hash in the table was computed by whatever this
+      function did on the day it ran.</strong>
+    </p>
+
+    <div id="exercise-normalise"></div>
+    <div id="pg-exercise-normalise"></div>
+
+    <h3>And the schema it belongs to</h3>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="explain-b2-0001"></div>
 
     <hr>
 
@@ -317,11 +394,131 @@ COMMIT;</code></pre>
 
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
+    createSolution("exercise-normalise", {
+      exercise: "Write codeHashInput(raw) — turn what a holder typed into the canonical string that gets hashed into code_hash.\n\nReturn the canonical 12-character string, or null if the input could never be a valid code.\n\nThe alphabet is exactly these 31 characters:\n\n  23456789ABCDEFGHJKMNPQRSTUVWXYZ\n\nThat is 36 alphanumerics minus the five that are ambiguous when read aloud or off a label: 0, O, 1, I and L.\n\nThe rules:\n\n1. Strip spaces and hyphens, anywhere in the string. MERC-8GH2-KP4X, MERC 8GH2 KP4X and merc8gh2kp4x are the same code typed three ways, and all three must hash identically.\n\n2. Uppercase what is left. A lowercase code that hashes differently is a token the holder cannot redeem.\n\n3. Reject anything not in the alphabet. Do NOT be helpful: an O is not a 0 and an I is not a 1. Neither 0 nor 1 is in the alphabet either, so there is nothing to map them to — a code containing an excluded character was mistyped, and guessing which character was meant would produce a hash for a token that was never issued.\n\n4. The result must be exactly 12 characters. Not 11, not 13.\n\n5. Anything that is not a string — null, undefined, a number — is null.\n\nThe thing to notice while writing it: this function is part of the stored data format, not a UI convenience. Change what it strips or how it cases, and every code_hash already in the table stops matching the code it was made from.",
+      hints: [
+        "Strip and uppercase first, then validate what you are left with. Validating the raw input means validating something you are not going to hash.",
+        "Check the length after stripping, not before. MERC-8GH2-KP4X is fourteen characters as typed and twelve as stored.",
+        "Resist making it forgiving. Every character you decide to strip, map or tolerate is a second input that reaches the same row — and you can never take that decision back once hashes exist."
+      ],
+      solution: `const ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+
+function codeHashInput(raw) {
+  if (typeof raw !== "string") return null;
+
+  // Strip the display formatting (spaces and hyphens only), then
+  // case-fold. Order does not matter
+  // here, but doing both before validating does: we validate the thing we
+  // are going to hash, not the thing the user typed.
+  const compact = raw.replace(/[- ]/g, "").toUpperCase();
+
+  if (compact.length !== 12) return null;
+
+  for (const ch of compact) {
+    // No mapping of O to 0 or I to 1 -- neither is in the alphabet, so
+    // there is nothing to map TO. An excluded character means mistyped.
+    if (ALPHABET.indexOf(ch) === -1) return null;
+  }
+
+  return compact;
+}`
+    });
+
+    createPlayground("pg-exercise-normalise", `// Write codeHashInput(raw) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+// The canonical example code, and its canonical hashed form.
+const CANON = "MERC8GH2KP4X";
+
+try {
+  if (typeof codeHashInput !== "function") throw new Error("not written yet");
+
+  try {
+    const r = codeHashInput("MERC-8GH2-KP4X");
+    check("dashes are stripped", r === CANON, "got " + JSON.stringify(r));
+  } catch (e) { check("dashes are stripped", false, "threw " + e.message); }
+
+  try {
+    const forms = ["MERC-8GH2-KP4X", "MERC 8GH2 KP4X", "merc8gh2kp4x", "  merc-8gh2-kp4x  ", "MERC8GH2KP4X"];
+    const out = forms.map(codeHashInput);
+    const same = out.every(function (v) { return v === CANON; });
+    check("every way of typing the same code normalises identically", same,
+          "got " + JSON.stringify(out) + " -- each of these must hash to one row");
+  } catch (e) { check("every way of typing the same code normalises identically", false, "threw " + e.message); }
+
+  try {
+    // THE one not to be helpful about. O is not in the alphabet, and
+    // neither is 0 -- so there is nothing to "correct" it to.
+    const r = codeHashInput("MERC-8GH2-KP4O");  // audit-allow-token-here: being invalid IS the fixture
+    check("an excluded letter O is rejected, not mapped to zero", r === null,
+          "got " + JSON.stringify(r) + " -- guessing what they meant produces a hash for a token nobody issued");
+  } catch (e) { check("an excluded letter O is rejected, not mapped to zero", false, "threw " + e.message); }
+
+  try {
+    const bad = ["MERC8GH2KP4I", "MERC8GH2KP4L", "MERC8GH2KP40", "MERC8GH2KP41"];
+    const out = bad.map(codeHashInput);
+    check("every excluded character is rejected (0 O 1 I L)",
+          out.every(function (v) { return v === null; }),
+          "got " + JSON.stringify(out));
+  } catch (e) { check("every excluded character is rejected (0 O 1 I L)", false, "threw " + e.message); }
+
+  try {
+    const r = codeHashInput("MERC8GH2KP4");
+    check("eleven characters is not a code", r === null, "got " + JSON.stringify(r));
+  } catch (e) { check("eleven characters is not a code", false, "threw " + e.message); }
+
+  try {
+    const r = codeHashInput("MERC8GH2KP4XY");
+    check("thirteen characters is not a code", r === null,
+          "got " + JSON.stringify(r) + " -- do not truncate; a prefix match is not a match");
+  } catch (e) { check("thirteen characters is not a code", false, "threw " + e.message); }
+
+  try {
+    // Length is checked AFTER stripping -- this is 14 raw, 12 compact.
+    const r = codeHashInput("MERC-8GH2-KP4X");
+    check("length is measured after stripping, not before", r === CANON, "got " + JSON.stringify(r));
+  } catch (e) { check("length is measured after stripping, not before", false, "threw " + e.message); }
+
+  try {
+    const out = [codeHashInput(null), codeHashInput(undefined), codeHashInput(12345678), codeHashInput({})];
+    check("non-strings are null, not a crash",
+          out.every(function (v) { return v === null; }),
+          "got " + JSON.stringify(out));
+  } catch (e) { check("non-strings are null, not a crash", false, "threw " + e.message); }
+
+  try {
+    const r = codeHashInput("");
+    check("an empty string is null", r === null, "got " + JSON.stringify(r));
+  } catch (e) { check("an empty string is null", false, "threw " + e.message); }
+
+  try {
+    // Punctuation that is NOT display formatting must not be stripped --
+    // stripping it would let two different inputs collide on one hash.
+    const r = codeHashInput("MERC_8GH2_KP4X");
+    check("only spaces and hyphens are stripped", r === null,
+          "got " + JSON.stringify(r) + " -- strip more and two different inputs can hash to the same token");
+  } catch (e) { check("only spaces and hyphens are stripped", false, "threw " + e.message); }
+
+  try {
+    const r = codeHashInput("MERC8GH2KP4X");
+    check("an already-canonical code passes through unchanged", r === CANON, "got " + JSON.stringify(r));
+  } catch (e) { check("an already-canonical code passes through unchanged", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write codeHashInput(raw) above, then press Run. (" + e.message + ")");
+}`);
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is a Postgres migration needing a running database",
       exercise: "Create the full initial schema migration file (001_initial_schema.sql) for the Token project. Include all four tables (users, tokens, access_rules, redemption_events), all constraints, indexes, and the updated_at trigger. Run it against your local Postgres and verify with \\dt (list tables) and \\d tokens (describe a table).",
       hints: [
         "Wrap the entire migration in BEGIN; ... COMMIT; so it's atomic — if anything fails, nothing is created.",
@@ -344,7 +541,8 @@ CREATE TABLE users (
 
 CREATE TABLE tokens (
   id          SERIAL PRIMARY KEY,
-  code        TEXT NOT NULL UNIQUE,
+  code_hash   TEXT NOT NULL UNIQUE,   -- SHA-256(normalised code + pepper)
+  code_enc    BYTEA NOT NULL,          -- AES-256-GCM, for showing it once more
   user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   label       TEXT NOT NULL,
   status      TEXT NOT NULL DEFAULT 'active'
@@ -403,11 +601,15 @@ COMMIT;
 -- psql token_dev -c '\\d tokens'`
     });
 
+    createExplain("explain-b2-0001", {
+      prompt: "Suppose that six months after launch someone decides <code>codeHashInput</code> should also strip underscores, to be kinder to people pasting codes out of spreadsheets. Explain exactly what happens to the tokens already in the database — and why that makes this eight-line function harder to change than the table it feeds."
+    });
+
     createQuiz("lesson-quiz", [
       {
         type: "predict-output",
         question: "What happens when you try this INSERT?",
-        code: "INSERT INTO tokens (code, user_id, label, status, revoked_at)\nVALUES ('TEST-1234', 1, 'Test', 'revoked', NULL);",
+        code: "INSERT INTO tokens (code_hash, user_id, label, status, revoked_at)\nVALUES ('a3f9c2e1', 1, 'Test', 'revoked', NULL);",
         answer: "ERROR: new row violates check constraint — status is 'revoked' but revoked_at is NULL",
         explanation: "The CHECK constraint requires that revoked tokens always have a revoked_at timestamp. This prevents an invalid state where a token is marked revoked but nobody knows when it happened."
       },
@@ -446,9 +648,9 @@ COMMIT;
         type: "which-breaks",
         question: "Which INSERT will the database reject?",
         variants: [
-          "INSERT INTO tokens (code, user_id, label, max_uses) VALUES ('A', 1, 'Test', 5);",
-          "INSERT INTO tokens (code, user_id, label, max_uses, use_count) VALUES ('B', 1, 'Test', 3, 5);",
-          "INSERT INTO tokens (code, user_id, label) VALUES ('C', 1, 'Test');"
+          "INSERT INTO tokens (code_hash, user_id, label, max_uses) VALUES ('aaa1', 1, 'Test', 5);",
+          "INSERT INTO tokens (code_hash, user_id, label, max_uses, use_count) VALUES ('bbb2', 1, 'Test', 3, 5);",
+          "INSERT INTO tokens (code_hash, user_id, label) VALUES ('ccc3', 1, 'Test');"
         ],
         correct: 1,
         explanation: "The CHECK constraint says: max_uses IS NULL OR use_count <= max_uses. With max_uses = 3 and use_count = 5, a limit IS set and use_count exceeds it — the database rejects the row. It is impossible to store a token used more times than its limit allows. Note the IS NULL rather than = 0: NULL is the unlimited case, and 0 is a genuine limit that happens to permit nothing."
@@ -467,12 +669,12 @@ COMMIT;
         code: "CREATE TABLE tokens (\n  id SERIAL PRIMARY KEY,\n  code TEXT NOT NULL UNIQUE,\n  user_id INTEGER NOT NULL REFERENCES users(id),\n  holder_email TEXT,\n  holder_phone TEXT,\n  label TEXT NOT NULL\n);",
         options: [
           "SERIAL is not the right type for id",
-          "Storing holder_email and holder_phone defeats Token's privacy model — holders should remain anonymous",
+          "Two things, and they are the same mistake: holder_email and holder_phone identify the holder, and a plaintext code column stores a live capability",
           "The code column should not be UNIQUE",
           "user_id should be TEXT, not INTEGER"
         ],
         correct: 1,
-        explanation: "Token's entire value proposition is that holders never reveal their identity. Storing their email or phone in the tokens table directly contradicts the deny-by-default privacy model. Holders are identified only by a session_id, never by personal contact details."
+        explanation: "Both defects give away exactly what the product exists to withhold. Storing holder_email or holder_phone contradicts the deny-by-default model — holders are identified by a session id and nothing else. And storing the code in the clear means a database dump is a pile of working tokens: ADR-0007 keeps code_hash for lookup and code_enc for the one-off reveal, so there is no code column to leak. The UNIQUE constraint is fine, and belongs on code_hash."
       },
       {
         type: "fill-blank",
@@ -502,7 +704,7 @@ COMMIT;
       {
         type: "predict-output",
         question: "What happens when you INSERT two tokens with the same code?",
-        code: "INSERT INTO tokens (code, user_id, label) VALUES ('MERC-8GH2-KP4X', 1, 'First');\nINSERT INTO tokens (code, user_id, label) VALUES ('MERC-8GH2-KP4X', 2, 'Second');",
+        code: "-- Both users happened to be issued the same code, so it hashes the same.\nINSERT INTO tokens (code_hash, user_id, label) VALUES ('a3f9c2e1', 1, 'First');\nINSERT INTO tokens (code_hash, user_id, label) VALUES ('a3f9c2e1', 2, 'Second');",
         answer: "The second INSERT fails with ERROR: duplicate key value violates unique constraint on column \"code\"",
         explanation: "The UNIQUE constraint on code ensures every token has a globally unique identifier. This is enforced at the database level — even if your application code has a bug that generates duplicates, the database rejects them."
       },
@@ -578,7 +780,7 @@ COMMIT;
         question: "Which query will fail against the Token schema?",
         variants: [
           "SELECT * FROM tokens WHERE user_id = 1 AND status = 'active';",
-          "INSERT INTO tokens (code, user_id, label, max_uses) VALUES ('X', 999, 'Test', 0);",
+          "INSERT INTO tokens (code_hash, user_id, label, max_uses) VALUES ('xxx9', 999, 'Test', 0);",
           "UPDATE tokens SET use_count = use_count + 1 WHERE id = 1 AND (max_uses IS NULL OR use_count < max_uses);"
         ],
         correct: 1,
@@ -640,7 +842,7 @@ COMMIT;
         type: "which-breaks",
         question: "Which tokens table definition has a fatal flaw?",
         variants: [
-          "code TEXT NOT NULL UNIQUE",
+          "code_hash TEXT NOT NULL UNIQUE",
           "status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'revoked'))",
           "user_id INTEGER REFERENCES users(id) ON DELETE CASCADE"
         ],
