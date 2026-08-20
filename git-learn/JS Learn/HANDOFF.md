@@ -1115,6 +1115,90 @@ the standing item in `SESSION.md`. B5 and B8 are the likely ones.
 Status: A6 three of three `unverifiable → verified`. Audit green, five suites
 pass throughout.
 
+### Session of 2026-08-20 (continued) — B5, where the lessons argued with the ADR in writing
+
+Third module of the session. A6 had ended by naming B5 as the next target,
+because it is the server-side twin of everything A6 fixed. That was right, and
+the reason it was right turned out to be stronger than the reason given.
+
+**B5 did not merely violate ADR-0003. Two of its three lessons stated the
+violation in prose, in so many words.**
+
+`0002` looked a recipient up in this process's `clients` Map and gave up on a
+miss, commented *"If no sockets — user is offline"*. `0003` had a section
+headed *"Redis pub/sub — scaling beyond one server (optional for v1)"* which
+concluded *"For Token v1 on a single VPS, in-memory is correct."* ADR-0003 is
+**titled** "scale out ready, deploy on one box" and exists precisely to reject
+that reasoning.
+
+What makes this worth writing down rather than just fixing: **the ordinary
+engineering advice and the project's decision point in opposite directions,
+and the lesson gave the ordinary advice.** "Don't add Redis until you need two
+servers" is what most people would say and it is not wrong in general. It is
+wrong here, for a reason ADR-0003 spells out — the costs are asymmetric.
+Running Redis on one node costs a container. Retrofitting it later means
+rewriting everything that reasoned from a local Map, which by then is the
+routing, the presence, the typing indicators and the rate limiting. And the
+failure it prevents is silent: add a replica to an in-memory design and
+messages between users on different nodes are dropped with nothing logged.
+
+**`0002` contained its own correction and nobody noticed.** One quiz
+explanation described the cross-node failure exactly and named Redis pub/sub as
+the fix, while the lesson body taught the broken version and the playground
+printed "User 3 is OFFLINE" for a user who was merely elsewhere. That is the
+`a7/0005` shape for the second time in one session.
+
+**Which produced the rule now in `SESSION.md`: when a lesson's quiz contradicts
+its body, believe the quiz.** Quiz explanations get written last, when the
+author has thought hardest; the body gets written first and copied from habit.
+Grepping a module's quiz for the ADR keywords is a cheap way to locate the
+body's defects, and it has now worked twice.
+
+**The functions.** `sweepSockets` for `0001` — the heartbeat is a two-tick
+protocol, and a sweep that resets `isAlive` itself collapses it into one and
+closes every healthy connection on the server every thirty seconds. Clients
+reconnect, so it presents as a flaky network. `deliveryPlan` for `0002`,
+separating "which sockets do I write to" (the local map, and nothing else)
+from "is this user reachable" (a Redis presence key), plus the two rules that
+only exist once pub/sub does: never republish what arrived on the channel, and
+recognise your own echo or deliver everything twice. `canSeePresence` for
+`0003`.
+
+**A product decision was taken in `0003` and is flagged for the student.** The
+lesson said *"By default, presence is shown. The issuer can add a rule to hide
+it."* — the `a7/0005` shape a third time, a privacy default that leaks with an
+opt-out the exposed party has to find.
+
+This one was changed rather than flagged-and-left, on the grounds that it
+**applies** an existing decision rather than making a new one: `CLAUDE.md`'s
+governing rule is that nobody gets anything from the user that the user did not
+issue them. A courier holding a delivery token was granted a way to ask about a
+parcel. Presence sampled over a fortnight is a behavioural profile — when they
+wake, when they commute, which evenings they are out, when they are away for a
+week — and no one issued that.
+
+The rule is renamed `share_presence`, **named for what it grants**, so that a
+missing or unreadable rules row fails closed. That naming turned out to sharpen
+an existing quiz question too: it had a missing `WHERE` clause, which under
+`hide_presence` merely silenced everyone's presence, and under
+`share_presence` discloses everyone's globally the moment any one user opts in.
+The fail-open direction is a better argument for the naming than the prose was.
+
+No ADR was written for it — it is one lesson, one exercise and one quiz
+question, and cheap to reverse. But it is a **product** decision rather than a
+technical one, and the last three of those went the wrong way for months before
+anyone looked, so it is called out in `SESSION.md` under a heading the student
+will not miss rather than buried here.
+
+**One cross-lesson contradiction, found by the now-standard neighbour check.**
+`b5/0002` acknowledged `chat:sent` as `{ id, sentAt }` with no `localId`, while
+`a6/0002`'s client — fixed earlier the same session — matches that ack to its
+optimistic message *by* `localId`. The client could never have found the bubble
+to update. Both halves were written by different passes and each was
+self-consistent.
+
+Status: B5 three of three `unverifiable → verified`. 49/96.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees

@@ -12,11 +12,58 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean. **A6 and A7 are both done** — 2026-08-20,
-audit green, five suites pass. A6 is three of three verified.
+**Nothing.** Working tree clean. **A6, A7 and B5 are done** — 2026-08-20,
+audit green, five suites pass throughout. **49/96 verified.**
 
-Next: the scattered singles — **A11, B2, B3, B5, B7, B10** — plus the two
-cross-module follow-ups below.
+### ⚠ One product call needs your confirmation
+
+**Presence is now deny-by-default: the issuer's online status is not sent to
+holders.** `b5/0003` previously decided the opposite — *"By default, presence
+is shown. The issuer can add a rule to hide it."*
+
+This was changed rather than flagged-and-left, because it is **applying** an
+existing decision rather than making a new one: `CLAUDE.md`'s governing product
+rule is that nobody gets anything from the user that the user did not issue
+them. Issuing a courier a delivery token grants a way to ask about a parcel; it
+is not consent to a live feed of when the issuer is at home. Presence sampled
+over a fortnight is a behavioural profile, not a single fact.
+
+The rule is renamed `share_presence` — **named for what it grants**, so a
+missing or unreadable rule fails closed. The asymmetry is deliberate and
+argued in the lesson: the issuer *does* see the holder, who entered the
+relationship knowingly.
+
+**If you disagree, this one is cheap to reverse** — it is one lesson, one
+exercise and one quiz question, and no ADR was written for it. Say so and it
+goes back. It is called out here because it is a product decision, not a
+technical one, and the last three of those went the wrong way for months
+before anyone looked.
+
+### What B5 cost
+
+The prediction from A6 was right and understated. **All three lessons
+contradicted ADR-0003, and two said so in their own prose:**
+
+- `0002` looked the recipient up in *this process's* `clients` Map and, finding
+  nothing, gave up — commented *"If no sockets — user is offline"*. Meanwhile
+  **one of its own quiz explanations** described that exact failure and named
+  Redis pub/sub as the fix. The `a7/0005` shape again: the right answer present
+  in one place, the wrong one taught everywhere else.
+- `0003` said *"Redis pub/sub — optional for v1"* and *"For Token v1 on a single
+  VPS, in-memory is correct."* ADR-0003 is **titled** "scale out ready, deploy on
+  one box".
+- `0001` was the mild one — no Redis mentioned at all, and no statement of what
+  the local map is not.
+
+**Also a cross-lesson contradiction with A6:** `b5/0002` acknowledged
+`chat:sent` as `{ id, sentAt }` with **no `localId`**, while `a6/0002`'s client
+matches the ack to its optimistic message *by* `localId`. The client could
+never have found the bubble to update. Fixed in `b5/0002`.
+
+**The rule B5 produced:** *when a lesson's own quiz contradicts its body,
+believe the quiz.* Twice now the correct answer was sitting in an explanation
+while the code taught the opposite — which means grepping a module's quiz for
+the ADR keywords is a cheap way to find the body's defects.
 
 ### What A6 cost, and the rule it produced
 
@@ -130,15 +177,16 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 cluster left; these are one lesson at a time. One commit per lesson, so an
 abrupt stop loses at most one.
 
-**Start with B5 (websocket server).** It is the server-side twin of everything
-A6 just fixed, so the A6 defects are the checklist: does presence expire, does
-the fan-out dedupe, does anything store state without a timestamp. It is also
-where ADR-0003's "no node-local socket registry" rule is easiest to have
-broken.
+**B5 is done.** Remaining M3 singles: **A11, B2, B3, B7, B10.**
+
+**Take `b3/0002` next**, because it kills two birds: it is an M3 candidate
+*and* it is the worst offender in the code-in-the-URL-path list below
+(`/api/tokens/:code` across GET, PATCH and DELETE plus ~6 quiz questions).
+Doing it as one pass avoids editing the same quiz keys twice.
 
 | Work | Gate |
 |---|---|
-| **M3** — extract the plain function from the remaining ~6 logic-rich lessons | none; A6 and A7 done, singles are what remain |
+| **M3** — extract the plain function from the remaining ~3 logic-rich lessons | none; A6, A7 and B5 done |
 | **Check the message-touching modules against ADR-0002** — A6 mentioned E2EE zero times until 2026-08-20 | none; likely candidates are B5, B8 and the legacy `04` |
 | A TypeScript-aware runner, so `a2/*` and `a3/0002` can be verified | needs a decision first — see *Open questions* |
 | **Phase 3** — the ten C-modules | just-in-time; the student is nowhere near |
@@ -190,7 +238,7 @@ Per-item status only. The plan itself is in `TOKEN-TRACK.md`; the counts are in
 | 4 — the operating track | not started, deliberately |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
-| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8 complete, A7 partly (`0005`); ~6 left |
+| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`); ~3 left |
 
 ### M3 — where it has reached
 
@@ -219,6 +267,9 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `a6/0001` | `connectionIntent` | logout outranks app state; `connecting` ≠ `closed`; `inactive` ≠ gone |
 | `a6/0002` | `applyMessage` | ack replaces *in place*; a known id merges, never appends; status only moves forward |
 | `a6/0003` | `presenceFor` | `unknown` (our socket) outranks `offline` (their TTL); silence past the TTL *is* the signal |
+| `b5/0001` | `sweepSockets` | the heartbeat is a *two-tick* protocol; `undefined` ≠ `false` |
+| `b5/0002` | `deliveryPlan` | local miss ≠ offline; never republish a pub/sub message; ignore your own echo |
+| `b5/0003` | `canSeePresence` | deny by default; status before role; a granting rule fails closed when absent |
 
 **A5 note:** not one of the five had a `createExplain` prompt or loaded
 `explain.js`. All five now do. A5 predates the practice pattern being made
