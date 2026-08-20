@@ -14,7 +14,7 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1872 words |
+| Avg teaching prose per track lesson | 1882 words |
 | Lessons with a playground | 74 / 96 |
 | Lessons with an exercise | 96 / 96 |
 | **Deepened** (all 3 spine sections) | 16 / 96 |
@@ -77,16 +77,16 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | 02-react-native | 14 | 2641 | 39 | 14 | 355 | 0/14 | 14/14 |
 | a10-device-security | 2 | 1908 | 2 | 2 | 50 | 1/2 | 0/2 |
 | a11-polish-publish | 5 | 1229 | 0 | 5 | 125 | 0/5 | 0/5 |
-| a2-typescript | 3 | 727 | 2 | 3 | 76 | 0/3 | 0/3 |
+| a2-typescript | 3 | 781 | 2 | 3 | 76 | 0/3 | 0/3 |
 | a3-api-consumption | 4 | 1190 | 4 | 7 | 111 | 1/4 | 3/4 |
 | a4-auth-client | 3 | 1400 | 3 | 6 | 80 | 1/3 | 3/3 |
 | a5-core-token-features | 5 | 2543 | 10 | 10 | 148 | 2/5 | 5/5 |
 | a6-chat-realtime | 3 | 1912 | 6 | 6 | 78 | 0/3 | 3/3 |
 | a7-voice-video | 5 | 1279 | 6 | 6 | 138 | 0/5 | 1/5 |
-| a8-redemption-web | 4 | 1626 | 8 | 8 | 115 | 0/4 | 4/4 |
+| a8-redemption-web | 4 | 1722 | 8 | 8 | 115 | 0/4 | 4/4 |
 | a9-deep-linking | 2 | 1167 | 2 | 2 | 53 | 0/2 | 0/2 |
 | b1-sql-fundamentals | 4 | 905 | 0 | 4 | 103 | 0/4 | 0/4 |
-| b10-security-compliance | 2 | 2470 | 2 | 2 | 50 | 1/2 | 0/2 |
+| b10-security-compliance | 2 | 2673 | 2 | 2 | 50 | 1/2 | 0/2 |
 | b2-schema-design | 3 | 1032 | 0 | 3 | 81 | 0/3 | 0/3 |
 | b3-node-http-server | 4 | 1593 | 2 | 5 | 117 | 2/4 | 1/4 |
 | b4-auth-server | 3 | 1969 | 0 | 3 | 81 | 2/3 | 0/3 |
@@ -171,7 +171,7 @@ so they do not hold the audit red. They are **not** resolved.
 | a11-polish-publish/0004-environment-config.html | 904 | 13 | 0 | 1 | 25 | — | n/a |
 | a11-polish-publish/0005-store-submission.html | 1227 | 9 | 0 | 1 | 25 | — | n/a |
 | a2-typescript/0001-types-and-interfaces.html | 733 | 9 | 1 | 1 | 26 | — | n/a |
-| a2-typescript/0002-generics-utility-types.html | 702 | 11 | 1 | 1 | 25 | — | n/a |
+| a2-typescript/0002-generics-utility-types.html | 864 | 11 | 1 | 1 | 25 | — | n/a |
 | a2-typescript/0003-typescript-react-native.html | 747 | 9 | 0 | 1 | 25 | — | n/a |
 | a3-api-consumption/0001-fetch-http-fundamentals.html | 689 | 8 | 2 | 2 | 29 | — | yes |
 | a3-api-consumption/0002-api-client-layer.html | 2164 | 8 | 0 | 1 | 26 | yes | n/a |
@@ -194,7 +194,7 @@ so they do not hold the audit red. They are **not** resolved.
 | a7-voice-video/0004-incoming-calls.html | 1217 | 9 | 1 | 1 | 29 | — | n/a |
 | a7-voice-video/0005-relay-only-privacy.html | 1957 | 7 | 2 | 2 | 27 | — | yes |
 | a8-redemption-web/0001-vite-react-setup.html | 991 | 12 | 2 | 2 | 29 | — | yes |
-| a8-redemption-web/0002-token-redemption-flow.html | 1838 | 6 | 2 | 2 | 30 | — | yes |
+| a8-redemption-web/0002-token-redemption-flow.html | 2223 | 6 | 2 | 2 | 30 | — | yes |
 | a8-redemption-web/0003-browser-webrtc-ws.html | 1768 | 8 | 2 | 2 | 29 | — | yes |
 | a8-redemption-web/0004-no-app-experience.html | 1907 | 9 | 2 | 2 | 27 | — | yes |
 | a9-deep-linking/0001-universal-links-app-links.html | 1112 | 7 | 1 | 1 | 28 | — | n/a |
@@ -204,7 +204,7 @@ so they do not hold the audit red. They are **not** resolved.
 | b1-sql-fundamentals/0003-indexes-transactions-constraints.html | 935 | 11 | 0 | 1 | 26 | — | n/a |
 | b1-sql-fundamentals/0004-postgres-specifics.html | 910 | 8 | 0 | 1 | 26 | — | n/a |
 | b10-security-compliance/0001-security-hardening.html | 2987 | 20 | 1 | 1 | 25 | yes | n/a |
-| b10-security-compliance/0002-dpdp-act.html | 1953 | 11 | 1 | 1 | 25 | — | n/a |
+| b10-security-compliance/0002-dpdp-act.html | 2359 | 11 | 1 | 1 | 25 | — | n/a |
 | b2-schema-design/0001-token-schema.html | 1090 | 8 | 0 | 1 | 26 | — | n/a |
 | b2-schema-design/0002-messaging-schema.html | 1075 | 8 | 0 | 1 | 26 | — | n/a |
 | b2-schema-design/0003-migrations.html | 932 | 11 | 0 | 1 | 29 | — | n/a |

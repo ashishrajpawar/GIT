@@ -123,8 +123,10 @@ router.get('/me/data-export', authenticateJWT, async (req, res) => {
   // Gather all user data
   const [user, tokens, messages, consents, redemptions] = await Promise.all([
     db.query('SELECT id, username, created_at FROM users WHERE id = $1', [userId]),
-    db.query('SELECT id, code, label, created_at, revoked_at FROM tokens WHERE user_id = $1', [userId]),
-    db.query('SELECT id, conversation_id, content, created_at FROM messages WHERE sender_id = $1', [userId]),
+    // No 'code' column exists, and no decryption happens here -- see below.
+    db.query('SELECT id, label, status, created_at, revoked_at FROM tokens WHERE user_id = $1', [userId]),
+    // Ciphertext. The server cannot read these and does not try -- see below.
+    db.query('SELECT id, conversation_id, ciphertext, created_at FROM messages WHERE sender_id = $1', [userId]),
     db.query('SELECT purpose, granted, granted_at, withdrawn_at FROM consent_records WHERE user_id = $1', [userId]),
     db.query('SELECT id, token_id, redeemed_at, ip_address FROM redemption_events WHERE token_id IN (SELECT id FROM tokens WHERE user_id = $1)', [userId]),
   ]);
@@ -134,9 +136,18 @@ router.get('/me/data-export', authenticateJWT, async (req, res) => {
     format: 'DPDP-compliant-export-v1',
     user: user.rows[0],
     tokens: tokens.rows,
-    messages: messages.rows,
+    messages: messages.rows,        // ciphertext; the app decrypts on download
     consentRecords: consents.rows,
     redemptionEvents: redemptions.rows,
+    notes: {
+      messages:
+        'Message bodies are end-to-end encrypted. The server cannot decrypt ' +
+        'them. Open this file in the Token app on a device holding your keys ' +
+        'to read them.',
+      tokenCodes:
+        'Token codes are not included. Request an individual code from the ' +
+        'token detail screen; each disclosure is logged.',
+    },
   };
 
   // Return as downloadable JSON
@@ -226,6 +237,37 @@ router.delete('/me', authenticateJWT, async (req, res) => {
 // - Contact details for DPBI ready
 // - Notification template drafted
 // - Logging comprehensive enough to determine breach scope</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">Data portability meets end-to-end encryption</div>
+      <p>An export endpoint is where two of this system's commitments pull
+      against each other, and the obvious implementation quietly breaks both.</p>
+      <p><strong>Messages.</strong> ADR-0002 means the server stores ciphertext
+      and holds no key. So <code>SELECT content</code> does not return the
+      user's messages — it returns bytes the API cannot read. There are two
+      honest options: ship the ciphertext with an explanation of how to read it,
+      or build the export <em>on the device</em>, where the keys are. This
+      lesson does the first because it keeps one export endpoint; the second is
+      better, and is what the app should do once key backup exists.</p>
+      <p>What you must <em>not</em> do is add a server-side decrypt "just for
+      exports". That would mean the server holds keys — the entire guarantee
+      gone, traded for a convenience in a compliance feature.</p>
+      <p><strong>Token codes.</strong> There is no <code>code</code> column;
+      ADR-0007 stores a hash for lookup and an encrypted copy for display. A
+      bulk export would decrypt every code the user has ever issued and write
+      them into one downloadable file — which then sits in a Downloads folder,
+      gets emailed to an accountant, or is handed to whoever asked for it.
+      <strong>A file of live capabilities is a worse artefact than the database
+      it came from</strong>, and it undoes the point of never storing them in
+      the clear. So the export carries labels, states and timestamps; codes stay
+      a per-token, logged disclosure.</p>
+      <p><strong>Neither of these is a loophole in the DPDP Act.</strong> The
+      right is to <em>your</em> personal data in a portable form. Ciphertext you
+      hold the key to is your data, and the fact that your provider cannot read
+      it is the feature you were sold. Saying that plainly inside the export
+      file — which is why <code>notes</code> is in the payload above — is what
+      makes it a compliant answer rather than an evasive one.</p>
+    </div>
 
     <h2>Token's Natural Compliance Advantage</h2>
     <p>Token's privacy-first design means you're already mostly compliant:</p>

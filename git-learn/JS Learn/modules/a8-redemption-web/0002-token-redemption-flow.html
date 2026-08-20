@@ -59,7 +59,28 @@
 
     <p><code>paused</code> was missing from this union until 2026-08-19, and the omission is instructive. <code>a5/0003</code> treats paused as a first-class state on the issuer's side — it is the one dead-end that is <em>reversible</em> — so a paused token reaching this page had no branch to land in and fell through to <code>error</code>. The holder saw "something went wrong" for a token that is working exactly as its owner intended.</p>
 
-    <p>It also earns different copy from the rest. <code>revoked</code>, <code>expired</code> and <code>maxed</code> are final and the honest message is "this will not work again". <code>paused</code> means <strong>try later</strong> — and it is the only one where telling the holder to come back is true.</p>
+    <p>Keep <code>paused</code> as its own state even though — as the page
+    below does — every unusable outcome renders the same screen. The state is
+    not there to pick the wording; it is there so the client can count paused
+    separately from revoked, and so nothing falls through to
+    <code>error</code>.</p>
+
+    <div class="callout warning">
+      <div class="callout-title">The instinct this state provokes is the leak</div>
+      <p>Having named <code>paused</code>, the obvious next move is to give it
+      its own message: <em>revoked and expired are final, but paused means try
+      again later.</em> That is true, it is more helpful, and it is the one
+      piece of copy on this page you must not write.</p>
+      <p>"Try again later" tells whoever typed the code three things at once:
+      that it is <strong>real</strong>, that it is <strong>currently
+      inactive</strong>, and that it will probably <strong>work again</strong>.
+      For someone guessing codes that is the most valuable answer the page could
+      possibly give — better than a successful redemption, because it hands them
+      a target to come back to.</p>
+      <p>And the page cannot tell a guesser from a genuine holder: both arrive
+      anonymously with a code. So the distinction lives in your metrics, not on
+      the screen. See the note under the component below.</p>
+    </div>
 
     <h2>URL parsing with React Router</h2>
 
@@ -274,25 +295,23 @@ export function RedeemPage() {
     &lt;/div&gt;;
   }
 
-  if (state.status === 'not-found') {
-    return &lt;div className="min-h-screen flex items-center justify-center"&gt;
-      &lt;div className="text-center"&gt;
-        &lt;h1 className="text-xl font-bold text-red-600"&gt;Token Not Found&lt;/h1&gt;
-        &lt;p className="mt-2 text-gray-600"&gt;This token code doesn't exist.&lt;/p&gt;
-      &lt;/div&gt;
-    &lt;/div&gt;;
-  }
+  // ONE screen for every unusable outcome. redeemState still tells these
+  // apart -- see the note below for why the page deliberately does not.
+  const UNUSABLE = ['not-found', 'expired', 'revoked', 'paused', 'maxed'];
 
-  if (state.status === 'expired' || state.status === 'revoked' || state.status === 'maxed') {
-    const messages = {
-      expired: 'This token has expired.',
-      revoked: 'This token has been revoked by the issuer.',
-      maxed: 'This token has reached its maximum number of uses.',
-    };
+  if (UNUSABLE.includes(state.status)) {
+    // Distinct internally, for your own metrics. Never rendered, never sent.
+    trackRedeemOutcome(state.status);
+
     return &lt;div className="min-h-screen flex items-center justify-center"&gt;
       &lt;div className="text-center"&gt;
-        &lt;h1 className="text-xl font-bold text-orange-600"&gt;Token Unavailable&lt;/h1&gt;
-        &lt;p className="mt-2 text-gray-600"&gt;{messages[state.status]}&lt;/p&gt;
+        &lt;h1 className="text-xl font-bold text-orange-600"&gt;Link Unavailable&lt;/h1&gt;
+        &lt;p className="mt-2 text-gray-600"&gt;
+          This link is not valid, or is no longer active.
+        &lt;/p&gt;
+        &lt;p className="mt-4 text-sm text-gray-500"&gt;
+          If someone gave you this link, ask them for a new one.
+        &lt;/p&gt;
       &lt;/div&gt;
     &lt;/div&gt;;
   }
@@ -334,6 +353,30 @@ export function RedeemPage() {
     &lt;/div&gt;
   &lt;/div&gt;;
 }</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">Why the page will not tell them which one it is</div>
+      <p>Four outcomes, one screen. That is deliberate, and it costs real
+      usability: a holder whose token genuinely expired is told only that the
+      link is unavailable, and cannot tell that from a typo.</p>
+      <p>The reason is that <strong>this page cannot tell a holder from a
+      guesser.</strong> Both arrive anonymously with a code. So if the page says
+      "this token has been revoked", it has just confirmed to whoever typed it
+      that the code is <em>real</em> — and a revoked token can be un-revoked,
+      a paused one un-paused. <code>b7/0001</code> works out that guessing a
+      code should take about 25,000 years, and that figure holds only while
+      each guess teaches the guesser nothing.</p>
+      <p>Notice the shape, because it is the same one the server uses:
+      <strong>the distinction is kept, and it is kept on our side of the
+      wire.</strong> <code>redeemState</code> still returns
+      <code>'expired'</code> separately from <code>'revoked'</code>, and
+      <code>trackRedeemOutcome</code> counts them — you want to know if
+      redemptions are failing because tokens keep expiring. What changes is that
+      the difference never reaches the screen.</p>
+      <p>The person who <em>can</em> be told is the issuer, on a screen that
+      required them to log in. That is the whole rule in one line: <strong>you
+      may explain yourself to someone who has proved who they are.</strong></p>
+    </div>
 
     <h2>Why sessionStorage, not localStorage?</h2>
 
