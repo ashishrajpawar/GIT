@@ -164,6 +164,29 @@ export async function evaluateRules(
   }
 }</code></pre>
 
+  <div class="callout warning">
+    <div class="callout-title">This query and <code>0001</code>'s disagree about the schema</div>
+    <p>The <code>SELECT</code> above reads <code>revoked_at</code>,
+    <code>paused_at</code> and <code>uses</code>. <code>0001</code>'s
+    redemption check reads a <code>status</code> column and counts rows in
+    <code>conversations</code>. Both cannot be the schema.</p>
+    <p><code>CLAUDE.md</code> and <code>b1/0001</code> settle the first half:
+    there is a <code>status</code> column holding
+    <code>active | paused | revoked</code>. There is a <code>revoked_at</code>
+    timestamp beside it — useful for <em>when</em>, not for <em>whether</em> —
+    and no <code>paused_at</code> at all. So this query is reaching for columns
+    that do not exist, and the version in <code>0001</code> is the one to
+    copy.</p>
+    <p>The second half is genuinely undecided. A <code>uses</code> counter on
+    the row is one number to read and one more thing that can drift out of step
+    with reality; counting <code>conversations</code> is always right and costs
+    a query. <strong>That is a B2 decision, not one to settle here</strong>, and
+    it is noted in <code>SESSION.md</code> rather than quietly picked.</p>
+    <p>Read the logic below for what it teaches — the ordering, the
+    deny-by-default, the rule evaluation — and take the column names from
+    <code>0001</code>.</p>
+  </div>
+
   <h2>Channel Restriction Evaluation</h2>
   <p>
     The simplest rule — a direct boolean check against the action type.
@@ -545,8 +568,22 @@ ws.on('message', async (data) => {
 
   <hr>
 
-  <h2>Exercise</h2>
+  <h2>Now build it yourself</h2>
+
+  <p>
+    Write <code>evaluateRuleSet(rules, action, ctx)</code> — the synchronous
+    core of <code>evaluateRules</code>, with the database lifted out. Every
+    deny-by-default decision in this lesson lives in it, and every one of them
+    is a branch that has to <em>refuse</em> rather than fall through.
+  </p>
+
+  <div id="exercise-rules"></div>
+  <div id="pg-exercise-rules"></div>
+
+  <h3>And the engine it belongs to</h3>
   <div id="exercise-1"></div>
+
+  <div id="explain-b7-0002"></div>
 
   <h2>Knowledge Check</h2>
   <div id="lesson-quiz"></div>
@@ -559,6 +596,7 @@ ws.on('message', async (data) => {
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
   <script>
@@ -610,7 +648,225 @@ const result = evaluateTimeWindow({
 
 console.log('Result:', JSON.stringify(result));`);
 
+    createSolution("exercise-rules", {
+      exercise: "Write evaluateRuleSet(rules, action, ctx) — the part of the engine that needs no database.\n\nrules is the JSONB value from the tokens row. It may be a well-formed object, an empty object, null, or something malformed.\naction is 'message', 'voice_call' or 'video_call'.\nctx is { withinWindow, usedToday } — withinWindow is a boolean (a5/0004's isWithinWindow computed it), and usedToday is { messages, calls }.\n\nReturn { allowed: true } or { allowed: false, reason }.\n\nThe known rule types are exactly: channel_restrict, time_window, contact_limit.\n\nThe rules, in order:\n\n1. rules null or undefined -> allowed. The owner set no restrictions, and that is a real answer rather than a missing one.\n\n2. rules not an object, or an ARRAY -> { allowed: false, reason: 'unreadable rules' }. Note that typeof [] === 'object', so the array test is doing real work. Something is wrong, and something-is-wrong is not consent.\n\n3. Any key that is not one of the three known types -> { allowed: false, reason: 'unsupported rule: ' + thatKey }. Check this BEFORE evaluating any rule. An older server meeting a rule a newer client wrote must refuse, never ignore — silently dropping a restriction the owner set is the worst outcome available.\n\n4. An EMPTY object {} -> allowed. No keys means no unknown keys and no restrictions.\n\n5. channel_restrict: { allow_text, allow_voice, allow_video }. 'message' needs allow_text, 'voice_call' needs allow_voice, 'video_call' needs allow_video. The flag must be exactly true. Missing or undefined -> refuse, reason 'channel not allowed'.\n\n6. time_window present and ctx.withinWindow is not true -> reason 'outside allowed hours'.\n\n7. contact_limit: { max_messages_per_day, max_calls_per_day }. For 'message' compare usedToday.messages against max_messages_per_day; for either call action compare usedToday.calls against max_calls_per_day. At or over the limit -> reason 'daily limit reached'. A limit that is absent is not a limit.\n\n8. ALL present rules must pass, not any. Reaching the end means allowed.",
+      hints: [
+        "Do the shape checks first — null, then not-an-object-or-array, then unknown keys — and return from each. By the time you reach the rules themselves you want to be certain you are holding something you understand.",
+        "Map the action to its channel flag with a lookup object rather than three if statements. It makes the === true test obvious, which is the part that matters.",
+        "Every rule is guarded by an if on its own key, so an absent rule restricts nothing and a present one must pass. Reaching the bottom of the function is the only route to allowed."
+      ],
+      solution: `const KNOWN_RULES = ["channel_restrict", "time_window", "contact_limit"];
+
+const CHANNEL_FLAG = {
+  message: "allow_text",
+  voice_call: "allow_voice",
+  video_call: "allow_video",
+};
+
+function deny(reason) {
+  return { allowed: false, reason: reason };
+}
+
+function evaluateRuleSet(rules, action, ctx) {
+  // 1. No rules set at all is a decision, not a gap.
+  if (rules === null || rules === undefined) return { allowed: true };
+
+  // 2. typeof [] is "object", so the array test is load-bearing.
+  if (typeof rules !== "object" || Array.isArray(rules)) {
+    return deny("unreadable rules");
+  }
+
+  // 3. Refuse what we cannot evaluate, BEFORE evaluating anything.
+  //    Ignoring an unknown rule silently drops a restriction the owner set.
+  const unknown = Object.keys(rules).filter(function (k) {
+    return KNOWN_RULES.indexOf(k) === -1;
+  });
+  if (unknown.length > 0) return deny("unsupported rule: " + unknown[0]);
+
+  // 4. Every rule PRESENT must pass. An absent rule restricts nothing.
+  if (rules.channel_restrict) {
+    // === true, so a missing flag refuses rather than passing.
+    if (rules.channel_restrict[CHANNEL_FLAG[action]] !== true) {
+      return deny("channel not allowed");
+    }
+  }
+
+  if (rules.time_window && ctx.withinWindow !== true) {
+    return deny("outside allowed hours");
+  }
+
+  if (rules.contact_limit) {
+    const limit = rules.contact_limit;
+    if (action === "message") {
+      if (limit.max_messages_per_day != null &&
+          ctx.usedToday.messages >= limit.max_messages_per_day) {
+        return deny("daily limit reached");
+      }
+    } else {
+      if (limit.max_calls_per_day != null &&
+          ctx.usedToday.calls >= limit.max_calls_per_day) {
+        return deny("daily limit reached");
+      }
+    }
+  }
+
+  return { allowed: true };
+}`
+    });
+
+    createPlayground("pg-exercise-rules", `// Write evaluateRuleSet(rules, action, ctx) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(r) { return JSON.stringify(r); }
+
+// Deliberately NOT at any limit, so a limit test that fires by accident
+// is visible rather than coincidentally right.
+function ctx(over) {
+  return Object.assign(
+    { withinWindow: true, usedToday: { messages: 2, calls: 1 } },
+    over || {}
+  );
+}
+const OPEN = { allow_text: true, allow_voice: true, allow_video: true };
+
+try {
+  if (typeof evaluateRuleSet !== "function") throw new Error("not written yet");
+
+  try {
+    const a = evaluateRuleSet(null, "message", ctx());
+    const b = evaluateRuleSet(undefined, "message", ctx());
+    check("no rules at all is allowed", a.allowed === true && b.allowed === true,
+          "got " + show(a) + " and " + show(b) + " -- the owner chose not to restrict");
+  } catch (e) { check("no rules at all is allowed", false, "threw " + e.message); }
+
+  try {
+    const r = evaluateRuleSet({}, "message", ctx());
+    check("an EMPTY rules object is allowed", r.allowed === true,
+          "got " + show(r) + " -- no keys means no unknown keys and no restrictions");
+  } catch (e) { check("an EMPTY rules object is allowed", false, "threw " + e.message); }
+
+  try {
+    // typeof [] === "object", so this slips past a typeof test alone.
+    const r = evaluateRuleSet([], "message", ctx());
+    check("an ARRAY is unreadable, not an empty rules object",
+          r.allowed === false && r.reason === "unreadable rules",
+          "got " + show(r) + " -- typeof [] is 'object'; the Array check is load-bearing");
+  } catch (e) { check("an ARRAY is unreadable, not an empty rules object", false, "threw " + e.message); }
+
+  try {
+    const r = evaluateRuleSet("time_window", "message", ctx());
+    check("a string is unreadable", r.allowed === false && r.reason === "unreadable rules",
+          "got " + show(r));
+  } catch (e) { check("a string is unreadable", false, "threw " + e.message); }
+
+  try {
+    // THE deny-by-default case. Everything the server DOES understand
+    // would pass -- so ignoring the unknown key looks completely fine.
+    const r = evaluateRuleSet(
+      { channel_restrict: OPEN, geo_fence: { country: "IN" } },
+      "message",
+      ctx()
+    );
+    check("an unknown rule type is REFUSED, not ignored",
+          r.allowed === false && r.reason === "unsupported rule: geo_fence",
+          "got " + show(r) + " -- every known rule here passes; ignoring geo_fence drops a restriction the owner set");
+  } catch (e) { check("an unknown rule type is REFUSED, not ignored", false, "threw " + e.message); }
+
+  try {
+    const r = evaluateRuleSet(
+      { channel_restrict: { allow_text: true, allow_voice: false, allow_video: false } },
+      "voice_call",
+      ctx()
+    );
+    check("a disallowed channel is refused",
+          r.allowed === false && r.reason === "channel not allowed", "got " + show(r));
+  } catch (e) { check("a disallowed channel is refused", false, "threw " + e.message); }
+
+  try {
+    // The flag for this action is MISSING entirely, not false.
+    const r = evaluateRuleSet(
+      { channel_restrict: { allow_text: true } },
+      "video_call",
+      ctx()
+    );
+    check("a missing channel flag refuses",
+          r.allowed === false && r.reason === "channel not allowed",
+          "got " + show(r) + " -- undefined is not permission; test for === true");
+  } catch (e) { check("a missing channel flag refuses", false, "threw " + e.message); }
+
+  try {
+    const r = evaluateRuleSet({ channel_restrict: OPEN }, "video_call", ctx());
+    check("an allowed channel passes", r.allowed === true, "got " + show(r));
+  } catch (e) { check("an allowed channel passes", false, "threw " + e.message); }
+
+  try {
+    const r = evaluateRuleSet(
+      { time_window: { days: [1], start_time: "09:00", end_time: "18:00", timezone: "Asia/Kolkata" } },
+      "message",
+      ctx({ withinWindow: false })
+    );
+    check("outside the time window is refused",
+          r.allowed === false && r.reason === "outside allowed hours", "got " + show(r));
+  } catch (e) { check("outside the time window is refused", false, "threw " + e.message); }
+
+  try {
+    const r = evaluateRuleSet(
+      { contact_limit: { max_messages_per_day: 2, max_calls_per_day: 5 } },
+      "message",
+      ctx()
+    );
+    check("reaching the daily message limit refuses",
+          r.allowed === false && r.reason === "daily limit reached",
+          "got " + show(r) + " -- 2 used against a limit of 2; >= not >");
+  } catch (e) { check("reaching the daily message limit refuses", false, "threw " + e.message); }
+
+  try {
+    // The MESSAGE count is at its limit, but this is a call -- and the
+    // call limit is nowhere near. The two counters must not be crossed.
+    const r = evaluateRuleSet(
+      { contact_limit: { max_messages_per_day: 2, max_calls_per_day: 5 } },
+      "voice_call",
+      ctx()
+    );
+    check("the message limit does not block a call", r.allowed === true,
+          "got " + show(r) + " -- messages and calls are counted separately");
+  } catch (e) { check("the message limit does not block a call", false, "threw " + e.message); }
+
+  try {
+    // ALL rules must pass. The channel is fine and the window is not.
+    const r = evaluateRuleSet(
+      { channel_restrict: OPEN, time_window: { days: [1] } },
+      "message",
+      ctx({ withinWindow: false })
+    );
+    check("ALL rules must pass, not any",
+          r.allowed === false && r.reason === "outside allowed hours",
+          "got " + show(r) + " -- one passing rule does not carry a failing one");
+  } catch (e) { check("ALL rules must pass, not any", false, "threw " + e.message); }
+
+  try {
+    const r = evaluateRuleSet(
+      {
+        channel_restrict: OPEN,
+        time_window: { days: [1] },
+        contact_limit: { max_messages_per_day: 10, max_calls_per_day: 5 },
+      },
+      "message",
+      ctx()
+    );
+    check("three rules that all pass is allowed", r.allowed === true, "got " + show(r));
+  } catch (e) { check("three rules that all pass is allowed", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write evaluateRuleSet(rules, action, ctx) above, then press Run. (" + e.message + ")");
+}`);
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is an Express/Postgres rules engine needing a database and a running server",
       exercise: "Build the complete evaluateRules function that handles all three rule types (time_window, contact_limit, channel_restrict). For this exercise, mock the database calls — use a passed-in count instead of querying. The function should accept (rules, action, todayMessageCount, todayCallCount) and return { allowed, reason }. Remember: deny-by-default if anything fails.",
       hints: [
         "Evaluate channel_restrict first — it's the cheapest check (no DB, no time calculation).",
@@ -683,6 +939,10 @@ console.log('Result:', JSON.stringify(result));`);
     return { allowed: false, reason: 'Evaluation error — access denied' };
   }
 }`
+    });
+
+    createExplain("explain-b7-0002", {
+      prompt: "A token carries <code>{ channel_restrict: {...}, geo_fence: {...} }</code>, and this server has never heard of <code>geo_fence</code>. Every rule it <em>does</em> understand would allow the action. Explain why refusing is the only safe answer, and what an older server ignoring a newer rule would mean for the person who set it."
     });
 
     createQuiz("lesson-quiz", [
