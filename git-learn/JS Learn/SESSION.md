@@ -176,10 +176,10 @@ prompted the A7 check above. **Both are now closed.**
 
 ### Follow-ups still open
 
-**The code-in-the-URL-path defect is closed** as of 2026-08-20 — ten lessons,
-see *In progress* above. What remains open from the same ADR is the `code`
-field appearing in **list responses and list types**, found in `a2/0002` during
-the sweep and never grepped for course-wide.
+**The ADR-0007 thread is closed** as of 2026-08-20. Three passes: the
+code-in-the-URL-path sweep (ten lessons), `code` in list responses and list
+types (two more), and the denial-oracle shape (`b7/0001` and `a8/0002`).
+Nothing known is outstanding.
 
 Smaller, also not done: the holder JWT carries `tokenCode`. The holder already
 knows the code, so it leaks nothing to them — but JWTs land in logs routinely,
@@ -193,23 +193,61 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
-**Continue M3 with the scattered singles** — A11, B2, B3, B5, B7, B10. No
-cluster left; these are one lesson at a time. One commit per lesson, so an
-abrupt stop loses at most one.
+**Continue M3 with the scattered singles.** No cluster left; one lesson at a
+time, one commit each, so an abrupt stop loses at most one.
 
-**Done so far in M3:** A3, A4, A5, A6, A8, B5, plus `b3/0002` and `b7/0001`.
-**Remaining singles: A11, B2, B10**, plus `b3/0001`, `b3/0003`, `b3/0004` and
-`b7/0002+`.
+**Done:** A3, A4, A5, A6, A8, B5, plus `b3/0002` and `b7/0001`.
+**Remaining:** A11, B2, B10, `b3/0001`, `b3/0003`, `b3/0004`, `b7/0002`,
+`b7/0003`.
 
-**Two small security passes are queued ahead of them, both cheap:**
+**Take `b7/0002` (access rules engine) next.** It is the neighbour of a lesson
+just read closely, it evaluates `access_rules` — the table `a5/0004` flagged as
+modelling expiry twice — and its `{ allowed: false, reason: 'Token not found' }`
+shape is worth reading against `canRedeem` now that the oracle rule exists.
 
-1. **Grep for `code` in list responses and list types.** `a2/0002`'s
-   `TokenListItem` carried it and `a5/0003` had the identical defect — second
-   sighting, so it is a pattern. ADR-0007: `GET /tokens` returns no `code`
-   field at all.
-2. **Grep for the denial-oracle shape.** `b7/0001` answered code guesses four
-   different ways; `b10/0001` and `b4/0003` also handle redemption failures and
-   have not been read for this.
+**Both queued security passes are done (2026-08-20).** Findings below; the
+next unit is a plain M3 single.
+
+### The two greps, and what they found
+
+**Grep 1 — `code` in list responses and list types.** Mostly clean.
+`a5/0003` is already correct and carries the best statement of the rule in the
+course; no API response body ships codes in a list. Two real finds:
+
+- **`a2/0002` had `TokenListItem` a second time**, in the `Pick<>` teaching
+  section. I fixed the other occurrence *in the same file* earlier the same day
+  and missed this one. **A file is not done because you edited it once.**
+- **`b10/0002` broke two ADRs in one query.** The DPDP export `SELECT`ed
+  `code` (not a column — ADR-0007) *and* `content` from messages (ciphertext
+  under ADR-0002; the server holds no key). It offered a downloadable file
+  containing every code the user had ever issued, plus message bodies the API
+  cannot read.
+
+**Grep 2 — the denial-oracle shape.** `b7/0003` and `b4/0002` are fine:
+authenticated **owner** endpoints, where a 404 to a non-owner is not an oracle.
+
+**`a8/0002` was the same defect I had just fixed in `b7/0001`, rendered as a
+UI** — four distinct screens on the page a stranger opens, including "Token Not
+Found / This token code doesn't exist". Worse than the API version, because a
+screen is plainly readable.
+
+Fixed at the **UI layer only**, mirroring `canRedeem`: `redeemState` still
+tells the outcomes apart and `trackRedeemOutcome` counts them; the difference
+never reaches the screen. **The M3 exercise is untouched.**
+
+**The fix then contradicted the lesson's own prose**, which argued `paused`
+"earns different copy" and should say *try again later*. That is true, more
+helpful, and the one message that must never be written — it confirms the code
+is real, currently inactive, and likely to work again, which is a better answer
+for a guesser than a successful redemption. Rewritten so the instinct is the
+teaching point.
+
+### The rule both greps produced
+
+**Fixing a defect in the API does not fix it in the UI, and vice versa.**
+`b7/0001` and `a8/0002` are the same oracle at two layers, written by
+different passes, each self-consistent. The shape to check for is:
+*internal distinction, external uniformity* — keep the reason, drop the tell.
 
 | Work | Gate |
 |---|---|

@@ -1340,6 +1340,64 @@ useless.
 
 Status: `b7/0001` `unverifiable → verified`. 51/96.
 
+### Session of 2026-08-20 (continued) — two greps, and a defect at two layers
+
+Two cheap security passes, queued after `b7/0001`. Both found something, and
+the second found the more interesting thing.
+
+**`code` in list responses and list types.** Largely clean —`a5/0003` is
+correct and its explanation is the best statement of the rule anywhere in the
+course. But `a2/0002` carried `TokenListItem = Pick<Token, 'code' | …>` a
+**second** time, in the `Pick<>` teaching section, and I had fixed the other
+occurrence in that same file earlier the same day. Worth stating flatly: **a
+file is not done because you edited it once.** The grep that found the first
+occurrence would have found the second if I had read its whole output instead
+of the line I was looking for.
+
+Then `b10/0002`, the DPDP compliance lesson, which broke two ADRs in a single
+`Promise.all`. It selected `code` — not a column, since ADR-0007 stores a hash
+for lookup and an encrypted copy for display — and `content` from messages,
+which is ciphertext the server holds no key for. The export therefore promised
+a downloadable file containing every token code the user had ever issued, plus
+message bodies the API cannot read.
+
+That one deserved prose rather than a rename, because the tension is real:
+**data portability genuinely pulls against end-to-end encryption.** The two
+honest answers are to ship the ciphertext with instructions, or to build the
+export on-device where the keys are. The dishonest one — a server-side decrypt
+"just for exports" — means the server holds keys, and the entire guarantee is
+gone, traded for convenience in a compliance feature. Also worth the sentence
+it got: **a file of live capabilities is a worse artefact than the database it
+came from.**
+
+**The denial-oracle grep is the one with a lesson in it.** `b7/0003` and
+`b4/0002` turned out fine — authenticated owner endpoints, where a 404 to
+someone who does not own the token tells them nothing they could not already
+infer.
+
+`a8/0002` was not fine. It rendered **four distinct screens** — "Token Not
+Found / This token code doesn't exist", against expired, revoked and maxed — on
+the redemption page a stranger opens. That is the identical defect fixed in
+`b7/0001`'s API an hour earlier, at the other end of the same request, written
+by a different pass, each half internally consistent.
+
+**So: fixing a defect in the API does not fix it in the UI.** Obvious once
+said, and it was not said until both had been found. The shape worth naming is
+*internal distinction, external uniformity* — keep the reason for your metrics,
+drop the tell. `redeemState` was left completely untouched; only the rendering
+changed, which also meant the M3 exercise and its wrong-cases survived intact.
+
+**The fix then contradicted the lesson's own argument**, and the contradiction
+is the best part. `a8/0002` had made a careful case that `paused` earns
+different copy from the final states, because "try again later" is the one
+message that is actually true. It is true, it is more helpful, and it is the
+single most valuable sentence the page could hand a guesser: the code is real,
+it is inactive now, and it will probably work later. Rewritten so that the
+instinct is the teaching point rather than the advice.
+
+Status: no lesson changed verification state. 51/96. The ADR-0007 thread is now
+closed across three passes — URL paths, list responses, and denial messages.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees
