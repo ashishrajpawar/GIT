@@ -14,11 +14,11 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1891 words |
+| Avg teaching prose per track lesson | 1894 words |
 | Lessons with a playground | 74 / 96 |
 | Lessons with an exercise | 96 / 96 |
 | **Deepened** (all 3 spine sections) | 16 / 96 |
-| **Verified** (code executed) | 52 / 96 |
+| **Verified** (code executed) | 53 / 96 |
 | Ran clean but had nothing to run | 0 / 96 |
 | Errors | 0 |
 | Known and blocked | 3 |
@@ -92,7 +92,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b4-auth-server | 3 | 1969 | 0 | 3 | 81 | 2/3 | 0/3 |
 | b5-websocket-server | 3 | 1961 | 6 | 6 | 77 | 0/3 | 3/3 |
 | b6-webrtc-signalling | 2 | 2009 | 2 | 2 | 52 | 1/2 | 0/2 |
-| b7-token-engine | 3 | 3063 | 6 | 5 | 77 | 3/3 | 2/3 |
+| b7-token-engine | 3 | 3154 | 7 | 6 | 77 | 3/3 | 3/3 |
 | b8-push-notifications | 1 | 1420 | 1 | 1 | 25 | 0/1 | 0/1 |
 | b9-docker-deployment | 3 | 2298 | 3 | 3 | 77 | 2/3 | 0/3 |
 | x1-git-dev-environment | 3 | 698 | 1 | 3 | 76 | 0/3 | 0/3 |
@@ -222,7 +222,7 @@ so they do not hold the audit red. They are **not** resolved.
 | b6-webrtc-signalling/0002-coturn-setup.html | 1145 | 9 | 1 | 1 | 26 | — | n/a |
 | b7-token-engine/0001-token-generation-redemption.html | 3766 | 12 | 3 | 2 | 25 | yes | yes |
 | b7-token-engine/0002-access-rules-engine.html | 2854 | 7 | 2 | 2 | 26 | yes | yes |
-| b7-token-engine/0003-revocation-pause.html | 2569 | 9 | 1 | 1 | 26 | yes | n/a |
+| b7-token-engine/0003-revocation-pause.html | 2843 | 9 | 2 | 2 | 26 | yes | yes |
 | b8-push-notifications/0001-fcm-apns-expo.html | 1420 | 11 | 1 | 1 | 25 | — | n/a |
 | b9-docker-deployment/0001-docker-fundamentals.html | 2403 | 13 | 1 | 1 | 26 | yes | n/a |
 | b9-docker-deployment/0002-coolify-setup.html | 2663 | 12 | 1 | 1 | 26 | yes | n/a |

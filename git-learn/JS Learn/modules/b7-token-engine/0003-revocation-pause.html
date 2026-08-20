@@ -57,11 +57,42 @@ const VALID_TRANSITIONS: Record&lt;TokenStatus, TokenStatus[]&gt; = {
     own terms.
   </p>
   <p>
-    State is timestamps, not an enum: <code>revoked_at</code> and
-    <code>paused_at</code>, matching B7.1 and B7.2. A timestamp answers "when",
-    which an audit needs, and it cannot drift out of step with a derived status
-    the way a stored one can.
+    This lesson stores state as timestamps — <code>revoked_at</code> and
+    <code>paused_at</code> — rather than an enum. A timestamp answers "when",
+    which an audit needs, and the transition rules become <code>WHERE</code>
+    clauses the database enforces rather than checks in application code that
+    two concurrent requests can both pass. The <code>UPDATE</code> below is the
+    argument in one statement.
   </p>
+
+  <div class="callout warning">
+    <div class="callout-title">The course does not yet agree with itself here</div>
+    <p>That paragraph used to claim it matched B7.1 and B7.2. It does not.
+    <strong>Five places disagree about how token state is stored</strong>, and
+    the disagreement is real rather than a typo:</p>
+    <ul>
+      <li><code>b1/0001</code> and <code>b2/0001</code> — a <code>status</code>
+      enum <em>and</em> a <code>revoked_at</code> timestamp</li>
+      <li><code>b7/0001</code> — reads <code>status</code></li>
+      <li><code>b7/0002</code> — reads <code>revoked_at</code> and
+      <code>paused_at</code></li>
+      <li>this lesson — writes timestamps and argues against the enum, while
+      declaring <code>TokenStatus</code> and a transitions table just
+      above</li>
+    </ul>
+    <p><strong>Both designs have a real case.</strong> An enum is one value to
+    read and the thing a badge renders from; timestamps carry the audit and
+    make transitions atomic. The synthesis most likely to win is what
+    <code>b2/0001</code> half-builds already — <code>status</code> as the value
+    you read, timestamps as the values you write, and a <code>CHECK</code>
+    keeping them in step — but that is a <strong>B2 schema decision and it has
+    not been taken</strong>. It is recorded in <code>SESSION.md</code> rather
+    than settled here by whichever lesson was edited last.</p>
+    <p>What is <em>not</em> in dispute, and what this lesson is really about, is
+    the state machine: which transitions are legal, which are terminal, and
+    which repeated calls must succeed rather than error. That part is identical
+    under either storage model, and it is the exercise below.</p>
+  </div>
   <pre><code>// api/src/routes/tokens.ts
 router.post('/tokens/:id/revoke', authenticate, async (req, res, next) =&gt; {
   const client = await pool.connect();
@@ -501,8 +532,21 @@ async function handleIncomingMessage(tokenId, content) {
 
   <div id="playground-1"></div>
 
-  <h2>Exercise</h2>
+  <h2>Now build it yourself</h2>
+
+  <p>
+    Write <code>planTransition(token, action)</code> — the state machine on its
+    own, with no database under it. It is the part of this lesson that is the
+    same whichever way state ends up being stored.
+  </p>
+
+  <div id="exercise-transition"></div>
+  <div id="pg-exercise-transition"></div>
+
+  <h3>And the endpoints it belongs to</h3>
   <div id="exercise-1"></div>
+
+  <div id="explain-b7-0003"></div>
 
   <h2>Knowledge Check</h2>
   <div id="lesson-quiz"></div>
@@ -515,6 +559,7 @@ async function handleIncomingMessage(tokenId, content) {
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
   <script>
@@ -543,7 +588,151 @@ for (const from of statuses) {
 // Try invalid transition
 console.log('\\nAttempt revoked -> active:', canTransition('revoked', 'active'));`);
 
+    createSolution("exercise-transition", {
+      exercise: "Write planTransition(token, action) — decide what a revoke, pause or resume request should do.\n\ntoken is { status } where status is 'active', 'paused' or 'revoked'.\naction is 'revoke', 'pause' or 'resume'.\n\nReturn { outcome, status, reason }:\n\n  outcome 'changed'    — the state moves. status is the NEW status.\n  outcome 'unchanged'  — already in the requested state. This is a SUCCESS, not an error. status is the current one.\n  outcome 'refused'    — the transition is not legal. status is the current one, unchanged.\n\nreason is a short slug for your logs: 'ok', 'already_revoked', 'already_paused', 'already_active', or 'revoked_is_terminal'.\n\nThe rules:\n\n1. revoked is TERMINAL. Nothing moves out of it. pause and resume on a revoked token are 'refused' with reason 'revoked_is_terminal'.\n\n2. revoke always succeeds. From active or paused it is 'changed' to 'revoked'. From revoked it is 'unchanged' with reason 'already_revoked' — never refused, and never an error. A user hammering the revoke button on a bad connection must not be told their revocation failed.\n\n3. pause moves active -> paused. On an already-paused token it is 'unchanged', reason 'already_paused'.\n\n4. resume moves paused -> active. On an already-active token it is 'unchanged', reason 'already_active'.\n\nThe distinction that matters: 'unchanged' and 'refused' both leave the state alone, and they are NOT the same answer. One is a request that was already satisfied; the other is a request that can never be satisfied. The first returns 204, the second returns an error.",
+      hints: [
+        "Handle revoke before you handle the terminal state. It is the only action with no illegal starting state, and taking it first means the terminal check below it does not need an exception carved out of it.",
+        "Write three tiny builders — changed, unchanged, refused — and return one of them from every branch. It makes it obvious that unchanged and refused report the CURRENT status while only changed reports a new one.",
+        "Before you write it, decide what each outcome becomes over HTTP: changed is 200 or 204, unchanged is 204, refused is 409 or 422. If two outcomes map to the same response you have collapsed something."
+      ],
+      solution: `function planTransition(token, action) {
+  const status = token.status;
+
+  const changed = function (next) {
+    return { outcome: "changed", status: next, reason: "ok" };
+  };
+  const unchanged = function (reason) {
+    return { outcome: "unchanged", status: status, reason: reason };
+  };
+  const refused = function (reason) {
+    return { outcome: "refused", status: status, reason: reason };
+  };
+
+  // Revoke first: it is the one action with no illegal starting state.
+  if (action === "revoke") {
+    return status === "revoked" ? unchanged("already_revoked") : changed("revoked");
+  }
+
+  // Everything else is blocked by the terminal state.
+  if (status === "revoked") return refused("revoked_is_terminal");
+
+  if (action === "pause") {
+    return status === "paused" ? unchanged("already_paused") : changed("paused");
+  }
+
+  // resume
+  return status === "active" ? unchanged("already_active") : changed("active");
+}`
+    });
+
+    createPlayground("pg-exercise-transition", `// Write planTransition(token, action) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function plan(status, action) { return planTransition({ status: status }, action); }
+function show(r) { return JSON.stringify(r); }
+
+try {
+  if (typeof planTransition !== "function") throw new Error("not written yet");
+
+  try {
+    const r = plan("active", "revoke");
+    check("active + revoke -> changed to revoked",
+          r.outcome === "changed" && r.status === "revoked", "got " + show(r));
+  } catch (e) { check("active + revoke -> changed to revoked", false, "threw " + e.message); }
+
+  try {
+    const r = plan("paused", "revoke");
+    check("a paused token can still be revoked",
+          r.outcome === "changed" && r.status === "revoked",
+          "got " + show(r) + " -- pausing must not trap a token out of being revoked");
+  } catch (e) { check("a paused token can still be revoked", false, "threw " + e.message); }
+
+  try {
+    // THE idempotency case. The button gets pressed twice on a bad
+    // connection, and the second press must not report a failure for an
+    // action that already succeeded.
+    const r = plan("revoked", "revoke");
+    check("revoking twice is UNCHANGED, not refused",
+          r.outcome === "unchanged" && r.reason === "already_revoked" && r.status === "revoked",
+          "got " + show(r) + " -- the outcome the caller asked for is already true; that is success");
+  } catch (e) { check("revoking twice is UNCHANGED, not refused", false, "threw " + e.message); }
+
+  try {
+    const r = plan("active", "pause");
+    check("active + pause -> changed to paused",
+          r.outcome === "changed" && r.status === "paused", "got " + show(r));
+  } catch (e) { check("active + pause -> changed to paused", false, "threw " + e.message); }
+
+  try {
+    const r = plan("paused", "pause");
+    check("pausing an already-paused token is unchanged",
+          r.outcome === "unchanged" && r.reason === "already_paused", "got " + show(r));
+  } catch (e) { check("pausing an already-paused token is unchanged", false, "threw " + e.message); }
+
+  try {
+    const r = plan("paused", "resume");
+    check("paused + resume -> changed to active",
+          r.outcome === "changed" && r.status === "active", "got " + show(r));
+  } catch (e) { check("paused + resume -> changed to active", false, "threw " + e.message); }
+
+  try {
+    const r = plan("active", "resume");
+    check("resuming an already-active token is unchanged",
+          r.outcome === "unchanged" && r.reason === "already_active", "got " + show(r));
+  } catch (e) { check("resuming an already-active token is unchanged", false, "threw " + e.message); }
+
+  try {
+    // Terminal means terminal. This is the one place 'refused' is right,
+    // and it must NOT be confused with the idempotent no-op above.
+    const r = plan("revoked", "resume");
+    check("resuming a revoked token is REFUSED",
+          r.outcome === "refused" && r.reason === "revoked_is_terminal" && r.status === "revoked",
+          "got " + show(r) + " -- revoked is terminal; this request can never be satisfied");
+  } catch (e) { check("resuming a revoked token is REFUSED", false, "threw " + e.message); }
+
+  try {
+    const r = plan("revoked", "pause");
+    check("pausing a revoked token is REFUSED",
+          r.outcome === "refused" && r.reason === "revoked_is_terminal", "got " + show(r));
+  } catch (e) { check("pausing a revoked token is REFUSED", false, "threw " + e.message); }
+
+  try {
+    // 'unchanged' and 'refused' must be distinguishable -- one becomes a
+    // 204 and the other an error, so collapsing them breaks the API.
+    const a = plan("revoked", "revoke");
+    const b = plan("revoked", "resume");
+    check("'unchanged' and 'refused' are different answers",
+          a.outcome !== b.outcome,
+          "both came back as " + a.outcome + " -- one request was already satisfied, the other never can be");
+  } catch (e) { check("'unchanged' and 'refused' are different answers", false, "threw " + e.message); }
+
+  try {
+    const results = [
+      plan("active", "revoke"), plan("paused", "revoke"), plan("revoked", "revoke"),
+    ];
+    check("revoke is never refused from any state",
+          results.every(function (r) { return r.outcome !== "refused"; }),
+          "got " + results.map(function (r) { return r.outcome; }).join(",") +
+          " -- there is no state a token cannot be revoked from");
+  } catch (e) { check("revoke is never refused from any state", false, "threw " + e.message); }
+
+  try {
+    const r = plan("paused", "resume");
+    check("a refused or unchanged plan never invents a status",
+          plan("revoked", "pause").status === "revoked" && r.status === "active",
+          "a plan that does not change the state must report the state as it is");
+  } catch (e) { check("a refused or unchanged plan never invents a status", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write planTransition(token, action) above, then press Run. (" + e.message + ")");
+}`);
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is Express routes with Postgres transactions and Redis fan-out, needing a database, Redis and connected sockets",
       exercise: "Build the complete propagateStatusChange function. It must: (1) look up all active WebSocket connections for the token, (2) send a notification message with the new status and a human-readable reason, (3) close each socket with code 1000, (4) end any active calls via a provided endCallByTokenId function, (5) clean up the socket registry. Write the function and a simple in-memory socket registry (registerSocket, getSocketsByTokenId, removeTokenFromRegistry).",
       hints: [
         "The socket registry is a Map<number, Set<WebSocket>> — tokenId to a set of connections.",
@@ -606,6 +795,10 @@ async function propagateStatusChange(tokenId, newStatus) {
   // 5. Clean up registry
   removeTokenFromRegistry(tokenId);
 }`
+    });
+
+    createExplain("explain-b7-0003", {
+      prompt: "Revoking an already-revoked token and resuming an already-revoked token both leave the state exactly as it was. One returns 204 and the other returns an error. Explain what makes them different requests rather than the same one — and what breaks for a user on a bad connection if you collapse them."
     });
 
     createQuiz("lesson-quiz", [
