@@ -236,22 +236,43 @@ export async function notifyIncomingCall(
   recipientToken: string,
   callerName: string,
   callId: string,
-  tokenCode: string
+  tokenLabel: string          // the LABEL, never the code
 ): Promise&lt;void&gt; {
   await sendPushNotification({
     pushToken: recipientToken,
     title: 'Incoming Call',
-    body: `${callerName} is calling via ${tokenCode}`,
+    body: `${callerName} is calling via ${tokenLabel}`,
     data: {
       type: 'call',
       callId,
-      tokenCode,
+      conversationId: callId,   // the app looks the rest up itself
     },
     channelId: 'calls',
     sound: 'ringtone.wav',
     priority: 'high',
   });
 }</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">Never put a token code in a push notification</div>
+      <p>The earlier version of this function took a <code>tokenCode</code> and
+      put it in two places: the visible <code>body</code> text, and the
+      <code>data</code> payload. Both are wrong, and for different reasons.</p>
+      <p><strong>The payload goes through Google and Apple.</strong> FCM and APNs
+      are the one third party this architecture accepts, and the bargain is
+      narrow: they route bytes and learn that a device received something. Put a
+      token code in there and you have handed a live capability — anything that
+      can read it can redeem it — to a company that is explicitly outside the
+      trust boundary. It is also stored on their servers until the device
+      collects it.</p>
+      <p><strong>The body appears on a locked screen.</strong> "Ravi is calling
+      via MERC-8GH2-KP4X" is readable by anyone who can see the phone, and it
+      goes into the notification history the OS keeps.</p>
+      <p>Send the <em>label</em> the issuer chose — "courier", "estate agent" —
+      which is what they wanted to see anyway, and identifiers the app can
+      resolve against its own database. The rule from ADR-0007 is that the code
+      is never logged, and a push payload is a log held by someone else.</p>
+    </div>
 
     <h2>Handling Notification Taps</h2>
     <pre><code>// app/src/services/pushNotifications.ts (continued)
@@ -407,15 +428,17 @@ function buildMessagePayload(recipientToken, senderName, message, conversationId
   };
 }
 
-function buildCallPayload(recipientToken, callerName, callId, tokenCode) {
+function buildCallPayload(recipientToken, callerName, callId, tokenLabel) {
   return {
     to: recipientToken,
     title: "Incoming Call",
-    body: callerName + " is calling via " + tokenCode,
+    // The LABEL the issuer chose ("courier"), never the code.
+    body: callerName + " is calling via " + tokenLabel,
     data: {
       type: "call",
       callId: callId,
-      tokenCode: tokenCode,
+      // conversationId, not the code -- the app looks the rest up itself.
+      conversationId: callId,
     },
     channelId: "calls",
     sound: "ringtone.wav",
@@ -692,7 +715,7 @@ async function getUnreadCount(userId: string): Promise<number> {
                     "It stores the push token for verification"
                 ],
                 correct: 1,
-                explanation: "The data field carries arbitrary JSON that your app can read when the notification arrives or is tapped. Token uses it to pass conversationId, callId, tokenCode, and event type for navigation routing."
+                explanation: "The data field carries arbitrary JSON that your app can read when the notification arrives or is tapped. Token uses it to pass conversationId, callId and the event type, which is enough for navigation routing. Note what it does not pass: the token code. This payload travels through FCM or APNs and is stored there until the device collects it, so anything in it has been handed to Google or Apple — and a code is a capability, not a label."
             },
             {
                 type: "predict-output",

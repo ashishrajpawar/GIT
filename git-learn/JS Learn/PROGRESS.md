@@ -14,7 +14,7 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1863 words |
+| Avg teaching prose per track lesson | 1867 words |
 | Lessons with a playground | 74 / 96 |
 | Lessons with an exercise | 96 / 96 |
 | **Deepened** (all 3 spine sections) | 16 / 96 |
@@ -83,7 +83,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a5-core-token-features | 5 | 2543 | 10 | 10 | 148 | 2/5 | 5/5 |
 | a6-chat-realtime | 3 | 1912 | 6 | 6 | 78 | 0/3 | 3/3 |
 | a7-voice-video | 5 | 1279 | 6 | 6 | 138 | 0/5 | 1/5 |
-| a8-redemption-web | 4 | 1584 | 8 | 8 | 115 | 0/4 | 4/4 |
+| a8-redemption-web | 4 | 1626 | 8 | 8 | 115 | 0/4 | 4/4 |
 | a9-deep-linking | 2 | 1167 | 2 | 2 | 53 | 0/2 | 0/2 |
 | b1-sql-fundamentals | 4 | 905 | 0 | 4 | 103 | 0/4 | 0/4 |
 | b10-security-compliance | 2 | 2470 | 2 | 2 | 50 | 1/2 | 0/2 |
@@ -93,7 +93,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b5-websocket-server | 3 | 1961 | 6 | 6 | 77 | 0/3 | 3/3 |
 | b6-webrtc-signalling | 2 | 2009 | 2 | 2 | 52 | 1/2 | 0/2 |
 | b7-token-engine | 3 | 2813 | 4 | 3 | 77 | 3/3 | 0/3 |
-| b8-push-notifications | 1 | 1206 | 1 | 1 | 25 | 0/1 | 0/1 |
+| b8-push-notifications | 1 | 1420 | 1 | 1 | 25 | 0/1 | 0/1 |
 | b9-docker-deployment | 3 | 2298 | 3 | 3 | 77 | 2/3 | 0/3 |
 | x1-git-dev-environment | 3 | 698 | 1 | 3 | 76 | 0/3 | 0/3 |
 | x2-debugging | 2 | 778 | 1 | 2 | 50 | 0/2 | 0/2 |
@@ -194,7 +194,7 @@ so they do not hold the audit red. They are **not** resolved.
 | a7-voice-video/0004-incoming-calls.html | 1217 | 9 | 1 | 1 | 29 | — | n/a |
 | a7-voice-video/0005-relay-only-privacy.html | 1957 | 7 | 2 | 2 | 27 | — | yes |
 | a8-redemption-web/0001-vite-react-setup.html | 991 | 12 | 2 | 2 | 29 | — | yes |
-| a8-redemption-web/0002-token-redemption-flow.html | 1670 | 6 | 2 | 2 | 30 | — | yes |
+| a8-redemption-web/0002-token-redemption-flow.html | 1838 | 6 | 2 | 2 | 30 | — | yes |
 | a8-redemption-web/0003-browser-webrtc-ws.html | 1768 | 8 | 2 | 2 | 29 | — | yes |
 | a8-redemption-web/0004-no-app-experience.html | 1907 | 9 | 2 | 2 | 27 | — | yes |
 | a9-deep-linking/0001-universal-links-app-links.html | 1112 | 7 | 1 | 1 | 28 | — | n/a |
@@ -223,7 +223,7 @@ so they do not hold the audit red. They are **not** resolved.
 | b7-token-engine/0001-token-generation-redemption.html | 3249 | 12 | 2 | 1 | 25 | yes | n/a |
 | b7-token-engine/0002-access-rules-engine.html | 2621 | 7 | 1 | 1 | 26 | yes | n/a |
 | b7-token-engine/0003-revocation-pause.html | 2569 | 9 | 1 | 1 | 26 | yes | n/a |
-| b8-push-notifications/0001-fcm-apns-expo.html | 1206 | 11 | 1 | 1 | 25 | — | n/a |
+| b8-push-notifications/0001-fcm-apns-expo.html | 1420 | 11 | 1 | 1 | 25 | — | n/a |
 | b9-docker-deployment/0001-docker-fundamentals.html | 2403 | 13 | 1 | 1 | 26 | yes | n/a |
 | b9-docker-deployment/0002-coolify-setup.html | 2663 | 12 | 1 | 1 | 26 | yes | n/a |
 | b9-docker-deployment/0003-logs-backups-monitoring.html | 1827 | 17 | 1 | 1 | 25 | — | n/a |

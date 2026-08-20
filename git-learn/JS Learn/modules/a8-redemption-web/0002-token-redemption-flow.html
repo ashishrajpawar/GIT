@@ -155,14 +155,31 @@ async function redeemToken(code: string, nickname: string): Promise&lt;RedeemRes
     <pre><code>// Server-side: what the holder JWT contains
 {
   sub: 'holder_session_abc123',    // unique session ID
-  tokenCode: 'MERC8GH2KP4X',
+  conversationId: 'conv_xyz',      // what the session is FOR
+  tokenId: 42,                     // the row id, meaningless to anyone else
   nickname: 'Delivery Agent Ravi',
-  conversationId: 'conv_xyz',
   iat: 1700000000,
   exp: 1700086400,                 // 24 hours
 }</code></pre>
 
     <p>This JWT lets the holder send messages and join calls — but only for this one token conversation. No broader access.</p>
+
+    <div class="callout danger">
+      <div class="callout-title">The token code is not in there, and the reason is not the obvious one</div>
+      <p>It would be easy to assume the code is omitted to keep it from the
+      holder. It is not — the holder typed it in. They know it.</p>
+      <p>It is omitted because of where a JWT <em>goes</em>. It rides in an
+      <code>Authorization</code> header on every request, and headers are logged
+      by reverse proxies, captured by error trackers alongside stack traces, and
+      pasted whole into bug reports by people trying to be helpful. ADR-0007
+      says the code is never logged, and "never" has to cover the places you did
+      not think of as logging.</p>
+      <p><code>conversationId</code> identifies the session exactly as well and
+      means nothing to whoever reads it. This is the same reasoning as
+      <code>POST /api/redeem</code> taking the code in the body: <strong>the
+      question is never "who can see this", it is "where does this end up
+      written down".</strong></p>
+    </div>
 
     <div class="callout">
       <div class="callout-title">Privacy design</div>
@@ -811,9 +828,9 @@ export function RedeemForm({ code, label }: Props) {
       {
         type: "fill-blank",
         question: "Complete the holder JWT payload — what field holds the expiration timestamp?",
-        code: "{\n  sub: 'holder_session_abc123',\n  tokenCode: 'MERC8GH2KP4X',\n  nickname: 'Ravi',\n  conversationId: 'conv_xyz',\n  iat: 1700000000,\n  ___: 1700086400\n}",
+        code: "{\n  sub: 'holder_session_abc123',\n  conversationId: 'conv_xyz',\n  tokenId: 42,\n  nickname: 'Ravi',\n  iat: 1700000000,\n  ___: 1700086400\n}",
         answer: "exp",
-        explanation: "The 'exp' claim (expiration time) is a standard JWT field defined in RFC 7519. It contains a Unix timestamp after which the token is no longer valid. Here, 1700086400 - 1700000000 = 86400 seconds = 24 hours."
+        explanation: "The 'exp' claim (expiration time) is a standard JWT field defined in RFC 7519. It contains a Unix timestamp after which the token is no longer valid. Here, 1700086400 - 1700000000 = 86400 seconds = 24 hours. Note what is NOT in this payload: the token code. It would leak nothing to the holder, who typed it in — but a JWT travels in an Authorization header, and those are logged by proxies, captured by error trackers and pasted into bug reports as a matter of routine. conversationId identifies the session just as well and means nothing to anyone who intercepts it."
       },
       {
         question: "The holder JWT expires after 24 hours. Why not make it last longer (e.g., 30 days)?",
@@ -846,7 +863,7 @@ export function RedeemForm({ code, label }: Props) {
           "The issuer's public key for end-to-end encryption"
         ],
         correct: 2,
-        explanation: "Privacy by design: the holder JWT contains sub, tokenCode, nickname, conversationId, and exp. No issuer name, email, phone, or ID is exposed to the holder. The backend routes messages using internal IDs that the holder never sees."
+        explanation: "Privacy by design: the holder JWT contains sub, conversationId, tokenId, nickname and exp. No issuer name, email, phone or ID is exposed to the holder, and the backend routes messages using internal ids the holder never sees. The token CODE is absent too, for a different reason — the holder already knows it, so it is not about them. It is that a JWT rides in an Authorization header, and those end up in proxy logs and error-tracker breadcrumbs. ADR-0007 says the code is never logged, and 'never' has to include the places you did not think of as logging."
       },
       {
         type: "spot-the-bug",
