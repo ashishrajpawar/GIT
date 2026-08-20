@@ -1519,6 +1519,72 @@ never answered — and if it is, the answer is a flag, not an edit.
 Status: `b7/0003` `unverifiable → verified`. B7 complete, three of three.
 53/96.
 
+### Session of 2026-08-20 (continued) — b2/0001, and an escape trap worth writing down
+
+B2 was taken as a decision pass. It turned into a straightforward repair,
+because the biggest thing wrong with `b2/0001` was not either of the questions
+queued against it.
+
+**The canonical token schema lesson had no ADR-0007 in it at all** — zero
+mentions of `code_hash` or `code_enc`, and a `code TEXT NOT NULL UNIQUE`
+column. Meanwhile `b7/0001` has been querying `WHERE code_hash = $1` all
+along. The engine implemented a schema the schema lesson never defined, and
+nobody noticed because the two lessons are five modules apart.
+
+This one was **not** flagged for the student, and the distinction from
+`b7/0003`'s state-model question is the point: ADR-0007 is explicit,
+`CLAUDE.md` restates it at length, and the downstream code already complies.
+There is no argument here that the documents failed to consider. Docs right,
+lesson drifted — fix it.
+
+The callout spends its length on the part that is genuinely counter-intuitive,
+because "why not bcrypt" is the first question anyone sensible asks. bcrypt and
+argon2 salt randomly per row, which is right for passwords: you find the user
+by email and then verify one hash. Here there is nothing to look up *by* — the
+code is all the holder has — so a random salt would mean hashing the candidate
+against every row in the table. A pepper buys the same defence against rainbow
+tables while keeping the hash deterministic, so it can be a `UNIQUE` index and
+an O(1) lookup. **bcrypt's slowness is not missed because the threat model is a
+database dump, not a weak secret**, and 31<sup>12</sup> is not brute-forceable
+at any speed.
+
+`codeHashInput` is the M3 function and it has an unusual property worth naming:
+it is eight lines with no interesting branches, and it is **nearly impossible
+to change once it has run in production**, because every `code_hash` in the
+table was computed by whatever it did on the day it ran. A "small improvement"
+six months later silently orphans rows. That framing is what the explain prompt
+asks about.
+
+**Two quiz questions needed thought rather than a rename.** The privacy
+spot-the-bug now has *two* defects instead of one — `holder_email` and a
+plaintext `code` are the same mistake wearing different clothes, and saying so
+is better teaching than tidying one away. And a which-breaks question listed
+`code TEXT NOT NULL UNIQUE` as one of its *safe* variants; leaving it would
+have given the question two correct answers.
+
+**The escape trap, which cost a failing verify and is worth recording.** The
+solution contained a regex, `/[\s-]/g`. That is correct in the file — but the
+solution is embedded in the lesson inside a **template literal**, and `\s` is
+not a recognised escape there, so it collapses to a bare `s`. The shipped regex
+was `/[s-]/g`: it stripped the letter s and left spaces alone.
+
+CLAUDE.md already warns that a backtick inside a `createSolution` string kills
+the block. **This is the same family and it is quieter** — nothing fails to
+parse, the code runs, and it simply does something else. The fix was to use a
+character class with no backslash in it at all (`/[- ]/g`). General rule:
+**inside generated lesson code, prefer a construct with no backslash to one
+that needs escaping correctly through two layers.** The self-check caught it,
+which is the argument for fixtures that differ from what a wrong answer
+produces — a fixture of `"MERC-8GH2-KP4X"` alone would have passed.
+
+One smaller thing: the new O-fixture tripped the example-code warning, and took
+a line-level `audit-allow-token-here` — the second file ever to use it, after
+`CLAUDE.md`. Being invalid is the entire point of that fixture, and the
+whole-file opt-out would have been far too broad for a lesson that also carries
+the canonical code.
+
+Status: `b2/0001` `unverifiable → verified`. 54/96. Warnings back to 1.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees

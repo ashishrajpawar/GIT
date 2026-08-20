@@ -51,6 +51,31 @@ not a patch.
 column or a query over `conversations`. `b7/0001`, `b7/0002` and `b2/0001`
 disagree three ways. Same B2 decision, same reasoning.
 
+### b2/0001 — the schema lesson had no ADR-0007 in it
+
+**Zero mentions of `code_hash` or `code_enc`.** It stored
+`code TEXT NOT NULL UNIQUE` in the clear, while `b7/0001` already queries
+`WHERE code_hash = $1`. The engine implemented a schema the schema lesson
+never defined.
+
+**Unambiguous, unlike the state-model question above** — ADR-0007 is explicit,
+`CLAUDE.md` restates it at length, and the downstream code already complies.
+Docs right, lesson drifted. Fixed.
+
+The callout covers the genuinely counter-intuitive part: **why not bcrypt or
+argon2.** They salt randomly per row, which is correct for passwords — you find
+the user by email, then verify one hash. Here there is nothing to look up *by*;
+the code is all the holder has, so a random salt would mean hashing the
+candidate against every row. A pepper gives the same protection against rainbow
+tables while keeping the hash deterministic, hence `UNIQUE` and O(1). bcrypt's
+slowness is not missed because 31<sup>12</sup> is not brute-forceable at any
+speed — **the threat is a database dump, not a weak secret.**
+
+M3: `codeHashInput(raw)`. Eight lines, and **nearly impossible to change once
+it has run in production** — every stored hash was computed by whatever it did
+on the day it ran. Mistakes split into too-strict (a real code is rejected and
+a live token stops working) and too-loose (two inputs reach one row).
+
 ### b7/0003 — the distinction the exercise exists for
 
 **`unchanged` and `refused` are different answers.** Both leave the state
@@ -262,13 +287,15 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 **Continue M3 with the scattered singles.** One lesson at a time, one commit
 each.
 
-**Done:** A3, A4, A5, A6, A8, B5, **all of B7**, plus `b3/0002`.
-**Remaining:** A11, B2, B10, `b3/0001`, `b3/0003`, `b3/0004`.
+**Done:** A3, A4, A5, A6, A8, B5, all of B7, plus `b3/0002` and `b2/0001`.
+**Remaining:** A11, B10, `b2/0002`, `b2/0003`, `b3/0001`, `b3/0003`,
+`b3/0004`.
 
-**Take B2 next**, and read it as a *decision* pass rather than an M3 one. Two
-open schema questions are now queued against it — the state model and the use
-count — and B2 is where both belong. Its own M3 function can come out of the
-same reading.
+**Take `b2/0002` (messaging schema) next.** It is the neighbour of a lesson
+just rewritten, and it is where ADR-0002 lands in the schema — a `messages`
+table storing ciphertext, partitioned by time from the first migration. Both
+are things `a6/0002` had to write around and neither has been read against the
+schema. Expect the same class of finding.
 
 | Work | Gate |
 |---|---|
@@ -336,7 +363,7 @@ Per-item status only. The plan itself is in `TOKEN-TRACK.md`; the counts are in
 | 4 — the operating track | not started, deliberately |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
-| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus `b3/0002` and all of B7; ~6 left |
+| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus `b3/0002`, all of B7, and `b2/0001`; ~5 left |
 
 ### M3 — where it has reached
 
@@ -372,6 +399,7 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `b7/0001` | `canRedeem` | `null` ≠ `0` for `max_uses`; null-check `expires_at` before parsing; every refusal looks identical from outside |
 | `b7/0002` | `evaluateRuleSet` | an unknown rule type is *refused*, not ignored; `typeof [] === "object"`; ALL rules must pass |
 | `b7/0003` | `planTransition` | `unchanged` ≠ `refused`; revoked is terminal; revoke is never refused |
+| `b2/0001` | `codeHashInput` | normalisation is part of the *stored format*; do not "helpfully" map excluded letters |
 
 **A5 note:** not one of the five had a `createExplain` prompt or loaded
 `explain.js`. All five now do. A5 predates the practice pattern being made
