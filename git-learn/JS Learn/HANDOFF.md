@@ -1022,6 +1022,99 @@ Status: `a7/0005` moved `unverifiable` → `verified` (43/96). It also had no
 five A5 lessons, which makes it a reliable prediction for the pre-pattern
 modules rather than a coincidence.
 
+### Session of 2026-08-20 (continued) — A6, and three lessons that each shipped a bug
+
+Straight on from the A7 pass, same session. A6 is three lessons; all three were
+`unverifiable`, none had a `createExplain` prompt, and **all three contained a
+live defect** — which is now four modules in a row where the exercise was not
+the most valuable thing the pass produced.
+
+Deliberately, the ADRs were read *before* each exercise was designed rather than
+after. That is the practice A7 argued for and it paid immediately.
+
+**`0001` reconnected a signed-out user.** The AppState listener called
+`connect()` on `'active'` without consulting the session; twenty lines further
+down, in a different file, the AuthContext effect disconnected on logout. Log
+out, switch apps, switch back, and the socket is open again. Each handler is
+correct on its own, which is the whole difficulty — the bug lives in the space
+between two files and belongs to neither.
+
+`connectionIntent({ appState, hasSession, socketState })` is the fix and the
+exercise: one rule, called by every handler, none of which decides anything
+itself. Two handlers cannot contradict each other if neither holds a rule.
+
+**A wrong-case earned its keep within a minute of being written.** The
+signed-out-mid-handshake mistake passed every check, because the self-check only
+tested `'open'` and `'closed'` on that branch and never `'connecting'`. That is
+the fourth time in this project a wrong-case has found a gap in the very
+self-check written alongside it, and it remains the only mechanism that does.
+
+**`0001` also contradicted `a8/0003` outright**, and in the wrong direction:
+`a6` comes *first* in the sequence, so the student meets the wrong version
+before the correction. It said backoff "spreads out reconnection attempts". It
+does not. Backoff widens the gap between *one* client's attempts while leaving
+every client dropped by the same restart in perfect lockstep — same delays, same
+starting instant, arriving in synchronised waves. Only jitter spreads a herd,
+and the lesson taught the weaker ±25% wobble rather than full jitter. On attempt
+5 that is 12–20s versus 0–16s, and the gap widens every attempt.
+
+The playground now *demonstrates* it rather than asserting it: 500 clients,
+three strategies, a histogram of which 2-second bucket they land in. Backoff
+alone puts all 500 in one bucket, which is the entire argument in one line of
+output.
+
+**`0002` had three defects, one per handler**, and they turned out to be the
+same defect three times. `chat:receive` appended with no dedupe — REST history
+and the socket overlap constantly, and a reconnect replays. `chat:sent` could be
+applied by removing and re-appending, moving the message to the end of the
+thread, visible only when theirs arrived while yours was in flight. And
+`chat:delivery-receipt` assigned status unconditionally, so a late delivery
+receipt turned a read message back to delivered.
+
+`applyMessage(list, incoming)` collects all three into ten testable lines. The
+fixture is built so no wrong answer passes by luck — the optimistic message sits
+at index 1 rather than last, so re-appending is visible, and the status test
+starts from `'read'` with `'delivered'` arriving after, so an overwrite moves
+backwards rather than sideways.
+
+**`0003` showed everyone as online whenever the user was offline.**
+`usePresence` only changed state when a `presence:update` arrived, so once the
+client's own socket dropped, the last thing it heard stayed on screen
+indefinitely. The green dot is at its most confident exactly when the app knows
+least.
+
+`presenceFor(state, now)` turns two booleans into three answers, and the third
+is the point. `'offline'` is a claim about *them* — we are connected, we would
+have heard, their TTL lapsed. `'unknown'` is a fact about *us*, and it has to
+outrank everything, because every other branch reasons from information that
+could not have reached us. Collapsing the two into "offline" is the tempting
+safe default and is not safe: it asserts something about a person on no basis.
+
+**The rule this module produced, worth carrying to B5:** *a handler that
+responds to "the state changed" needs to know when it last heard, not only what
+it last heard.* All three lessons are that mistake, and so is the fourth bug
+found on the way — the typing indicator's safety timer depends on
+`[isOtherTyping]`, which only re-runs on a *change*, so repeated
+`typing:update{true}` events are `true → true`, the timer never resets, and the
+indicator vanishes five seconds after they started typing and never returns.
+
+**The finding that reaches beyond A6: the module mentioned encryption zero
+times** across `0002`, `0003` and the README, while sending and storing `text`
+in the clear. ADR-0002 makes E2EE a v1 commitment and `CLAUDE.md` says every
+lesson touching messages must respect it. The crypto itself belongs to C5 and
+was deliberately **not** written ahead of its module — doing key exchange and
+backup badly is worse than doing them late. Instead `0002` now states the
+constraint: what is provisional, what survives encryption unchanged (every piece
+of logic in the lesson works on the envelope, not the contents), and which
+shortcuts are cheap now and impossible later — server-side search, an
+API-generated preview, a server-derived unread count.
+
+**No other message-touching module has been checked for this**, and that is now
+the standing item in `SESSION.md`. B5 and B8 are the likely ones.
+
+Status: A6 three of three `unverifiable → verified`. Audit green, five suites
+pass throughout.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees

@@ -12,8 +12,48 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean. **ADR-0008 is accepted and the A7 pass it
-unblocked is done** — four commits, 2026-08-20, audit green, five suites pass.
+**Nothing.** Working tree clean. **A6 and A7 are both done** — 2026-08-20,
+audit green, five suites pass. A6 is three of three verified.
+
+Next: the scattered singles — **A11, B2, B3, B5, B7, B10** — plus the two
+cross-module follow-ups below.
+
+### What A6 cost, and the rule it produced
+
+Reading each lesson against the ADRs *before* writing the exercise was the
+right call and found more than the exercises did. **Every one of the three
+carried a live defect, and none was visible from inside the file:**
+
+- `0001` reconnected the socket on foreground **without checking whether anyone
+  was signed in**, while a different file disconnected on logout. Log out,
+  switch apps, switch back, socket open again. Both handlers correct alone.
+- `0002` appended incoming messages with no dedupe (REST history and the socket
+  overlap constantly), could reorder a message when its ack landed, and let a
+  late delivery receipt **un-read** a read message.
+- `0003`'s presence never expired and never consulted our own socket, so **a
+  disconnected client showed everyone as online indefinitely**.
+
+**The rule: a "the state changed" handler needs to know when it last heard, not
+only what it last heard.** All three lessons, and the typing-indicator timer
+bug in `0003`, are the same mistake — state stored without a timestamp, then
+trusted forever. Worth checking B5 (websocket server) for the server-side
+twin.
+
+**`a6/0001` contradicted `a8/0003` outright** on backoff, and `a6` comes first
+in the sequence so it was teaching it wrong before the correction arrived. It
+claimed backoff "spreads out reconnection attempts" — it does not; backoff
+widens the gap between *one* client's attempts while leaving every client
+dropped by the same restart in lockstep. It also taught ±25% jitter rather than
+full jitter. `a6/0001`'s playground now demonstrates the difference with 500
+clients and a histogram instead of asserting it.
+
+**A6 mentioned encryption zero times** across `0002`, `0003` and the README
+while sending `text` in the clear — against ADR-0002, which `CLAUDE.md` says
+every lesson touching messages must respect. The crypto belongs to C5 and was
+**not** written ahead of it; `0002` now states the constraint instead: what is
+provisional, what survives encryption unchanged (all of the lesson's logic
+works on the envelope), and which shortcuts are cheap now and impossible later.
+**The other message-touching modules have not been checked for this.**
 
 **The student delegated the decision** ("u decide"). ADR-0008 records that
 explicitly, because it is the one architecture decision here that is not
@@ -49,19 +89,14 @@ taught relay-only correctly while both snippets the student actually copies were
 bare `new RTCPeerConnection({ iceServers })`. It also had **no prose section on
 the topic at all** — the policy existed only in answer text.
 
-Next: **A6 (chat/realtime)**, then the scattered singles (A11, B2, B3, B5, B7,
-B10). Also still open: the two follow-ups below, both security-shaped and both
-cross-module.
+**`a8/0003` was where this thread started.** Its browser `RTCPeerConnection`
+had no `iceTransportPolicy: 'relay'`, TURN was commented out, and the
+playground taught "best path chosen: host (LAN)". ICE candidates *are* IP
+addresses, so a direct path hands the holder the issuer's home IP — on the page
+a stranger opens after scanning a QR code. That fix prompted ADR-0008, which
+prompted the A7 check above. **Both are now closed.**
 
-**`a8/0003` had the worst defect found so far and it was not the function.**
-The browser `RTCPeerConnection` had no `iceTransportPolicy: 'relay'`, TURN was
-commented out, and the playground taught "best path chosen: host (LAN)". ICE
-candidates *are* IP addresses, so a direct path hands the holder the issuer's
-home IP — on the page a stranger opens after scanning a QR code. **Check
-`a7-voice-video` for the same omission**; it is the mobile half of the same
-decision and was written by the same pass.
-
-### Follow-up this raised, NOT yet done
+### Follow-ups still open
 
 **The code-in-the-URL-path defect is course-wide, not just `a8/0002`.** ADR-0007
 says codes never go in a URL path; `b10/0001` and `01/0012` get it right with
@@ -91,13 +126,20 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
-**Continue M3 with the A8 cluster** (redemption web, ×4) — the next group of
-four, and the largest remaining. One commit per lesson, so an abrupt stop loses
-at most one.
+**Continue M3 with the scattered singles** — A11, B2, B3, B5, B7, B10. No
+cluster left; these are one lesson at a time. One commit per lesson, so an
+abrupt stop loses at most one.
+
+**Start with B5 (websocket server).** It is the server-side twin of everything
+A6 just fixed, so the A6 defects are the checklist: does presence expire, does
+the fan-out dedupe, does anything store state without a timestamp. It is also
+where ADR-0003's "no node-local socket registry" rule is easiest to have
+broken.
 
 | Work | Gate |
 |---|---|
-| **M3** — extract the plain function from the remaining ~14 logic-rich lessons | none; A5 done, A8 ×4 is the next cluster |
+| **M3** — extract the plain function from the remaining ~6 logic-rich lessons | none; A6 and A7 done, singles are what remain |
+| **Check the message-touching modules against ADR-0002** — A6 mentioned E2EE zero times until 2026-08-20 | none; likely candidates are B5, B8 and the legacy `04` |
 | A TypeScript-aware runner, so `a2/*` and `a3/0002` can be verified | needs a decision first — see *Open questions* |
 | **Phase 3** — the ten C-modules | just-in-time; the student is nowhere near |
 | **Phase 4** — the operating track | after launch |
@@ -148,7 +190,7 @@ Per-item status only. The plan itself is in `TOKEN-TRACK.md`; the counts are in
 | 4 — the operating track | not started, deliberately |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
-| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A8 complete, A7 partly (`0005`); ~9 left |
+| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8 complete, A7 partly (`0005`); ~6 left |
 
 ### M3 — where it has reached
 
@@ -174,6 +216,9 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `a8/0003` | `reconnectPlan` | backoff spaces one client, only jitter spaces the herd |
 | `a8/0004` | `headersFor` | route matching that neither publishes codes nor hides `/terms` |
 | `a7/0005` | `relayAudit` | only the *succeeded* pair counts; only *our* side is ours to judge; no evidence ≠ safe |
+| `a6/0001` | `connectionIntent` | logout outranks app state; `connecting` ≠ `closed`; `inactive` ≠ gone |
+| `a6/0002` | `applyMessage` | ack replaces *in place*; a known id merges, never appends; status only moves forward |
+| `a6/0003` | `presenceFor` | `unknown` (our socket) outranks `offline` (their TTL); silence past the TTL *is* the signal |
 
 **A5 note:** not one of the five had a `createExplain` prompt or loaded
 `explain.js`. All five now do. A5 predates the practice pattern being made
