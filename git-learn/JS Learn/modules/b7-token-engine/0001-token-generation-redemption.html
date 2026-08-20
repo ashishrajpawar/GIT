@@ -225,19 +225,26 @@ export default router;</code></pre>
     [hashCode(code)]
   );
 
+  // Every rejection below is the SAME status and the SAME message.
+  // Read "The four error messages give the keyspace away" before you
+  // make any of them more helpful.
+  const DENIED = { status: 404, body: { error: 'This link is not valid.' } };
+
   if (tokenRows.length === 0) {
-    return res.status(404).json({ error: 'Token not found' });
+    return res.status(DENIED.status).json(DENIED.body);
   }
 
   const token = tokenRows[0];
 
-  // Validation checks
+  // Validation checks. The REASON is logged, never returned.
   if (token.status !== 'active') {
-    return res.status(403).json({ error: 'Token is not active' });
+    logDenial(token.id, token.status);
+    return res.status(DENIED.status).json(DENIED.body);
   }
 
   if (token.expires_at && new Date(token.expires_at) < new Date()) {
-    return res.status(403).json({ error: 'Token has expired' });
+    logDenial(token.id, 'expired');
+    return res.status(DENIED.status).json(DENIED.body);
   }
 
   if (token.max_uses !== null) {
@@ -246,7 +253,8 @@ export default router;</code></pre>
       [token.id]
     );
     if (parseInt(countRows[0].cnt) >= token.max_uses) {
-      return res.status(403).json({ error: 'Token has reached maximum uses' });
+      logDenial(token.id, 'exhausted');
+      return res.status(DENIED.status).json(DENIED.body);
     }
   }
 
@@ -482,6 +490,75 @@ router.get('/tokens/:id/code', authenticate, async (req, res) =&gt; {
 
   <hr>
 
+  <h2>The four error messages give the keyspace away</h2>
+
+  <p>
+    The section above works out that 31<sup>12</sup> is about 7.9 &times;
+    10<sup>17</sup> codes — roughly 25,000 years of guessing at a million
+    attempts a second. That number is the security of the whole scheme, and
+    <strong>it assumes each guess teaches the attacker nothing.</strong>
+  </p>
+
+  <p>
+    Now look at what the first version of this endpoint replied with:
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>Situation</th><th>What it said</th><th>What that tells a guesser</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>No such code</td><td>404 "Token not found"</td><td>This code does not exist</td></tr>
+      <tr><td>Revoked or paused</td><td>403 "Token is not active"</td><td><strong>This code exists</strong></td></tr>
+      <tr><td>Past its expiry</td><td>403 "Token has expired"</td><td><strong>This code exists</strong></td></tr>
+      <tr><td>Out of uses</td><td>403 "Token has reached maximum uses"</td><td><strong>This code exists, and was popular</strong></td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    The 404-versus-403 split is the serious one. It turns "guess a code that
+    works" into "guess a code that <em>exists</em>", and those are different
+    problems. A guesser who can tell real codes from noise can collect them
+    while they are dead and wait — tokens get un-paused, and a label like
+    "plumber" tells them the code was issued to a plumber.
+  </p>
+
+  <div class="callout danger">
+    <div class="callout-title">Helpful errors and unguessable codes are the same budget</div>
+    <p>Every distinguishable response is roughly one bit per guess handed to
+    whoever is asking. You cannot spend 25,000 years of keyspace on security and
+    then give some of it back at the error handler, because <strong>the attacker
+    gets to choose which measurement to use</strong> and they will use the cheap
+    one.</p>
+    <p>So: <strong>one status code and one message for every refusal.</strong>
+    A code that never existed and a code that was revoked yesterday must be
+    indistinguishable from outside. The real reason is logged, where it is
+    useful to you and invisible to them.</p>
+  </div>
+
+  <p>
+    It costs something real, and it is worth being straight about it: a holder
+    whose token genuinely expired sees "This link is not valid" and cannot tell
+    why. That is annoying, and it is the correct trade — <strong>the issuer can
+    see the true state of every token they own</strong>, on a screen that
+    required them to log in. The person who cannot be told is the person who has
+    not proved they should know.
+  </p>
+
+  <p>
+    Two smaller leaks in the same family, worth knowing about even though this
+    lesson does not fix them:
+  </p>
+
+  <ul>
+    <li><strong>Timing.</strong> A missing code returns before the database
+    counts conversations; a real one does not. The difference is measurable over
+    enough requests. The usual answer is to do the same work regardless.</li>
+    <li><strong>Rate limiting by response.</strong> If you throttle harder on
+    successful lookups than failures, the throttle itself becomes the oracle.
+    Count all redemption attempts the same.</li>
+  </ul>
+
   <h2>When this breaks</h2>
 
   <h3>FOR UPDATE outside a transaction does nothing</h3>
@@ -586,10 +663,25 @@ RETURNING id, user_id;</code></pre>
 
   <hr>
 
-  <h2>Exercise</h2>
+  <h2>Now build it yourself</h2>
+
+  <p>
+    Write <code>canRedeem(token, ctx)</code> — the whole redemption decision,
+    with no database in it. It is where the <code>null</code>-versus-zero rules
+    and the one-message rule both have to hold at the same time.
+  </p>
+
+  <div id="exercise-redeem"></div>
+  <div id="pg-exercise-redeem"></div>
+
+  <h3>And the endpoint it belongs to</h3>
   <div id="exercise-1"></div>
 
   <h2>Knowledge Check</h2>
+  <div id="explain-b7-0001"></div>
+
+  <hr>
+
   <div id="lesson-quiz"></div>
 
   <nav class="lesson-nav">
@@ -600,6 +692,7 @@ RETURNING id, user_id;</code></pre>
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
   <script>
@@ -662,7 +755,201 @@ console.log('256 / 31 = ' + Math.floor(256 / 31) + ' remainder ' + (256 % 31));
 // in which eight characters are 12.5% more common. Nothing fails. The
 // keyspace is simply smaller than the number above claims.`);
 
+    createSolution("exercise-redeem", {
+      exercise: "Write canRedeem(token, ctx) — decide whether a redemption may proceed.\n\ntoken is the row from the database, or null if no row matched the code hash.\n  { id, status, expires_at, max_uses }\n  status is 'active', 'paused' or 'revoked'.\n  expires_at is an ISO string, or null meaning NEVER expires.\n  max_uses is a number, or null meaning UNLIMITED. Zero means no uses are permitted at all.\n\nctx is { useCount, now } — how many conversations already exist for this token, and the current time in ms.\n\nReturn { allow, reason, response }.\n\nreason is for YOUR logs: 'ok', 'not_found', 'revoked', 'expired', 'exhausted' or 'paused'.\n\nresponse is what the holder gets. On success, null. On EVERY failure, the exact same object:\n  { status: 404, body: { error: 'This link is not valid.' } }\n\nThe rules:\n\n1. No token row: reason 'not_found'.\n\n2. Check in this precedence: revoked, then expired, then exhausted, then paused. Paused comes last of the four deliberately — it matches the display order in a5/0003, so the badge the issuer sees and the reason you log agree with each other.\n\n3. expires_at null means never. Test for null BEFORE parsing: new Date(null) is 1 January 1970, which is in the past, so a naive parse marks every never-expiring token as expired.\n\n4. max_uses null means unlimited; max_uses 0 means no uses at all. Only one of those is falsy, so `if (token.max_uses)` is wrong for both. Exhausted means useCount >= max_uses.\n\n5. Every failing branch returns the SAME response object contents. Different messages per reason hand a code-guesser one bit per attempt, and a 404-versus-403 split tells them whether a code exists at all.",
+      hints: [
+        "Write one deny(reason) helper that builds the refusal, and call it from every failing branch. If each branch builds its own response object, one of them will eventually drift into being more helpful than the rest — which is exactly the bug.",
+        "Use != null for both expires_at and max_uses. It catches null and undefined while leaving 0 alone, which is the whole difficulty in one operator.",
+        "Write the four checks in the stated order and do not rearrange them. The order is not style: it decides what you see in your own logs when a token is both paused and expired."
+      ],
+      solution: `const DENIED = Object.freeze({
+  status: 404,
+  body: { error: "This link is not valid." },
+});
+
+// One place builds the refusal, so no branch can drift into being
+// more helpful than the others.
+function deny(reason) {
+  return {
+    allow: false,
+    reason,
+    response: { status: DENIED.status, body: { ...DENIED.body } },
+  };
+}
+
+function canRedeem(token, ctx) {
+  if (!token) return deny("not_found");
+
+  // Precedence: revoked -> expired -> exhausted -> paused.
+  if (token.status === "revoked") return deny("revoked");
+
+  // null BEFORE parsing -- new Date(null) is 1970 and always in the past.
+  if (token.expires_at != null && new Date(token.expires_at).getTime() <= ctx.now) {
+    return deny("expired");
+  }
+
+  // != null, not truthiness: max_uses 0 is falsy and is NOT unlimited.
+  if (token.max_uses != null && ctx.useCount >= token.max_uses) {
+    return deny("exhausted");
+  }
+
+  if (token.status === "paused") return deny("paused");
+
+  return { allow: true, reason: "ok", response: null };
+}`
+    });
+
+    createPlayground("pg-exercise-redeem", `// Write canRedeem(token, ctx) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+const NOW = Date.parse("2026-08-20T12:00:00Z");
+const PAST = "2026-08-19T12:00:00Z";
+const FUTURE = "2026-09-20T12:00:00Z";
+
+function tok(over) {
+  return Object.assign(
+    { id: 42, status: "active", expires_at: null, max_uses: null },
+    over || {}
+  );
+}
+function ask(over, useCount) {
+  return canRedeem(tok(over), { useCount: useCount || 0, now: NOW });
+}
+function show(r) { return JSON.stringify(r); }
+
+try {
+  if (typeof canRedeem !== "function") throw new Error("not written yet");
+
+  try {
+    const r = ask({}, 0);
+    check("an active, unlimited, never-expiring token is allowed",
+          r.allow === true && r.reason === "ok" && r.response === null,
+          "got " + show(r));
+  } catch (e) { check("an active, unlimited, never-expiring token is allowed", false, "threw " + e.message); }
+
+  try {
+    // THE null-vs-zero trap, half one. max_uses null = unlimited, and the
+    // use count is deliberately high so a truthiness test is visible.
+    const r = ask({ max_uses: null }, 999);
+    check("max_uses null is UNLIMITED, not zero",
+          r.allow === true,
+          "got " + show(r) + " -- 999 uses is fine when there is no limit");
+  } catch (e) { check("max_uses null is UNLIMITED, not zero", false, "threw " + e.message); }
+
+  try {
+    // Half two. max_uses 0 permits nothing, and 0 is falsy -- so
+    // A truthiness test skips the check entirely and lets it through.
+    const r = ask({ max_uses: 0 }, 0);
+    check("max_uses 0 permits NO uses at all",
+          r.allow === false && r.reason === "exhausted",
+          "got " + show(r) + " -- 0 is falsy, so a truthiness test treats it as unlimited");
+  } catch (e) { check("max_uses 0 permits NO uses at all", false, "threw " + e.message); }
+
+  try {
+    const r = ask({ max_uses: 3 }, 2);
+    check("under the limit is allowed", r.allow === true, "got " + show(r));
+  } catch (e) { check("under the limit is allowed", false, "threw " + e.message); }
+
+  try {
+    const r = ask({ max_uses: 3 }, 3);
+    check("reaching the limit exhausts it",
+          r.allow === false && r.reason === "exhausted",
+          "got " + show(r) + " -- the 3rd use is the last; >= not >");
+  } catch (e) { check("reaching the limit exhausts it", false, "threw " + e.message); }
+
+  try {
+    // expires_at null = never. new Date(null) is 1970, so a parse before
+    // the null check marks this expired.
+    const r = ask({ expires_at: null }, 0);
+    check("expires_at null means NEVER expires",
+          r.allow === true,
+          "got " + show(r) + " -- new Date(null) is 1970; check for null before parsing");
+  } catch (e) { check("expires_at null means NEVER expires", false, "threw " + e.message); }
+
+  try {
+    const r = ask({ expires_at: PAST }, 0);
+    check("a past expiry is expired", r.allow === false && r.reason === "expired", "got " + show(r));
+  } catch (e) { check("a past expiry is expired", false, "threw " + e.message); }
+
+  try {
+    const r = ask({ expires_at: FUTURE }, 0);
+    check("a future expiry is fine", r.allow === true, "got " + show(r));
+  } catch (e) { check("a future expiry is fine", false, "threw " + e.message); }
+
+  try {
+    const r = canRedeem(null, { useCount: 0, now: NOW });
+    check("a missing token row is not_found",
+          r.allow === false && r.reason === "not_found",
+          "got " + show(r));
+  } catch (e) { check("a missing token row is not_found", false, "threw " + e.message); }
+
+  try {
+    const r = ask({ status: "revoked" }, 0);
+    check("a revoked token is refused", r.allow === false && r.reason === "revoked", "got " + show(r));
+  } catch (e) { check("a revoked token is refused", false, "threw " + e.message); }
+
+  try {
+    // Precedence: paused comes LAST of the four. A paused AND expired
+    // token logs 'expired', matching the badge a5/0003 shows the issuer.
+    const r = ask({ status: "paused", expires_at: PAST }, 0);
+    check("expired outranks paused",
+          r.allow === false && r.reason === "expired",
+          "got " + show(r) + " -- paused is last of the four, same order as the badge in a5/0003");
+  } catch (e) { check("expired outranks paused", false, "threw " + e.message); }
+
+  try {
+    const r = ask({ status: "revoked", expires_at: PAST, max_uses: 0 }, 5);
+    check("revoked outranks everything",
+          r.reason === "revoked",
+          "got " + show(r));
+  } catch (e) { check("revoked outranks everything", false, "threw " + e.message); }
+
+  try {
+    const r = ask({ status: "paused" }, 0);
+    check("a merely paused token is refused", r.allow === false && r.reason === "paused", "got " + show(r));
+  } catch (e) { check("a merely paused token is refused", false, "threw " + e.message); }
+
+  try {
+    // THE oracle check. Every refusal must be byte-identical from outside.
+    const reasons = [
+      canRedeem(null, { useCount: 0, now: NOW }),
+      ask({ status: "revoked" }, 0),
+      ask({ expires_at: PAST }, 0),
+      ask({ max_uses: 0 }, 0),
+      ask({ status: "paused" }, 0),
+    ];
+    const shapes = reasons.map(function (r) { return JSON.stringify(r.response); });
+    const unique = shapes.filter(function (v, i) { return shapes.indexOf(v) === i; });
+    check("every refusal looks identical from outside",
+          unique.length === 1,
+          unique.length + " different responses: " + unique.join("  ||  ") +
+          " -- each distinguishable reply is a bit per guess");
+  } catch (e) { check("every refusal looks identical from outside", false, "threw " + e.message); }
+
+  try {
+    const reasons = [
+      canRedeem(null, { useCount: 0, now: NOW }).reason,
+      ask({ status: "revoked" }, 0).reason,
+      ask({ expires_at: PAST }, 0).reason,
+      ask({ max_uses: 0 }, 0).reason,
+      ask({ status: "paused" }, 0).reason,
+    ];
+    const distinct = reasons.filter(function (v, i) { return reasons.indexOf(v) === i; });
+    check("but the internal reasons stay distinct",
+          distinct.length === 5,
+          "got " + reasons.join(",") + " -- your logs still need to tell these apart");
+  } catch (e) { check("but the internal reasons stay distinct", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write canRedeem(token, ctx) above, then press Run. (" + e.message + ")");
+}`);
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is an Express route needing a running Postgres with a real transaction",
       exercise: "Build the full POST /api/redeem endpoint as an Express route. Take BOTH the code and holder_name from the request body — the code must never appear in the URL, because a path reaches the access log, browser history and Referer. It must: (1) validate holder_name is present, (2) fetch the token by code hash with a row lock, (3) check status is 'active', (4) check expiry, (5) check max_uses against conversation count, (6) create a conversation row, (7) return a holder JWT. Use the pg pool pattern from the lesson.",
       hints: [
         "Use SELECT ... FOR UPDATE to prevent race conditions when two people redeem simultaneously.",
@@ -694,23 +981,24 @@ router.post('/api/redeem', async (req, res) => {
       [hashCode(code)]
     );
 
-    if (tokenRows.length === 0) {
+    // One rejection shape for every reason. The reason is logged.
+    const DENIED = { status: 404, body: { error: 'This link is not valid.' } };
+    const deny = async (tokenId, reason) => {
       await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'Token not found' });
-    }
+      logDenial(tokenId, reason);
+      return res.status(DENIED.status).json(DENIED.body);
+    };
+
+    if (tokenRows.length === 0) return deny(null, 'not_found');
 
     const token = tokenRows[0];
 
     // 3. Check status
-    if (token.status !== 'active') {
-      await client.query('ROLLBACK');
-      return res.status(403).json({ error: 'Token is not active' });
-    }
+    if (token.status !== 'active') return deny(token.id, token.status);
 
     // 4. Check expiry
     if (token.expires_at && new Date(token.expires_at) < new Date()) {
-      await client.query('ROLLBACK');
-      return res.status(403).json({ error: 'Token has expired' });
+      return deny(token.id, 'expired');
     }
 
     // 5. Check max_uses
@@ -720,8 +1008,7 @@ router.post('/api/redeem', async (req, res) => {
         [token.id]
       );
       if (countRows[0].cnt >= token.max_uses) {
-        await client.query('ROLLBACK');
-        return res.status(403).json({ error: 'Maximum uses reached' });
+        return deny(token.id, 'exhausted');
       }
     }
 
@@ -755,6 +1042,10 @@ router.post('/api/redeem', async (req, res) => {
 });
 
 export default router;`
+    });
+
+    createExplain("explain-b7-0001", {
+      prompt: "This lesson computes that guessing a code would take about 25,000 years, and then the endpoint replied &quot;Token not found&quot; to one guess and &quot;Token is not active&quot; to another. Explain what the second reply gives away that the first does not, and why that matters more than the exact wording of either."
     });
 
     createQuiz("lesson-quiz", [
