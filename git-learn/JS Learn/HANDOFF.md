@@ -1398,6 +1398,66 @@ instinct is the teaching point rather than the advice.
 Status: no lesson changed verification state. 51/96. The ADR-0007 thread is now
 closed across three passes — URL paths, list responses, and denial messages.
 
+### Session of 2026-08-20 (continued) — b7/0002, and finding a root cause three fixes late
+
+`b7/0002` was chosen because it is the neighbour of a lesson just read closely.
+It turned out to be the best-written lesson in the module already — it has a
+"Why this way (and what was rejected)" section, five subsections under "When
+this breaks", and a genuine deny-by-default argument. It simply had nothing
+runnable in it.
+
+`evaluateRuleSet(rules, action, ctx)` is the synchronous core, with the
+database lifted out and the time-window answer passed in (`a5/0004`'s
+`isWithinWindow` computes it). The wrong-cases share a shape worth naming:
+**the mistake is never a wrong answer, it is a missing refusal.** Every one
+falls through to `allowed` on input it did not understand — an unknown rule
+type ignored rather than refused, an array slipping past a `typeof` test
+because `typeof [] === "object"`, an undefined channel flag read as
+permission. The unknown-rule case is the worst because it reads as
+*tolerance*: an older server meets a rule a newer client wrote, shrugs, and
+grants an action the owner had restricted, with every rule it does understand
+passing so nothing looks wrong from inside.
+
+**Then the part that matters more than the exercise.**
+
+Reading `b7/0002`'s query led to `b2/0001`, the canonical schema lesson, which
+said in a bullet: *"max_uses = 0 means unlimited. Otherwise it's a cap."*
+`CLAUDE.md` says the exact opposite, and calls it one of "the two conventions
+that keep being got backwards".
+
+**This project had already fixed that defect three times** — `a5/0003`'s sample
+row, `a5/0003`'s non-nullable `Token` interface, and a dedicated wrong-case in
+`b7/0001`'s `canRedeem`. Each was recorded as a local slip in a lesson. None of
+them went and looked at where `max_uses` is *defined*.
+
+The definition was `INTEGER NOT NULL DEFAULT 0`, which breaks both ends of the
+convention at once: `NOT NULL` makes "unlimited" impossible to express, and
+`DEFAULT 0` makes every token created without an explicit limit permit nothing
+— issued and instantly unusable. And the constraint had inverted with it:
+`CHECK (max_uses = 0 OR use_count <= max_uses)` treats 0 as the exemption, so a
+token capped at zero would have accepted uses forever.
+
+Seventeen replacements across three lessons, plus callouts covering the SQL
+trap (`= 0` where `IS NULL` was meant), the JavaScript trap
+(`if (token.max_uses)`, where only one of the two values is falsy), and the
+identical shape one column over in `expires_at`.
+
+**The rule this produced, and it generalises past this project: when the same
+defect has been fixed three times, stop fixing it and go find where it is
+defined.** Three downstream repairs cost more than the one-line schema change
+would have, and left the source intact to keep producing more. The tell is a
+wrong-case that feels familiar — `b7/0001`'s `max_uses` mistake was written
+that morning as though it were a fresh observation.
+
+One thing deliberately left open: `b7/0002` reads a `uses` column, `b7/0001`
+counts rows in `conversations`, and `b2/0001` has `use_count`. The column names
+are settled by `CLAUDE.md`; **whether the count is stored or computed is a real
+B2 decision** and was flagged rather than quietly picked. A counter is one read
+and one more thing that can drift out of step; counting is always right and
+costs a query.
+
+Status: `b7/0002` `unverifiable → verified`. 52/96.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees

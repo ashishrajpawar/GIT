@@ -12,8 +12,50 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean. **51/96 verified**, audit green, five suites
-pass.
+**Nothing.** Working tree clean. **52/96 verified**, audit green, suites pass.
+
+### b7/0002 and the max_uses root cause (2026-08-20)
+
+`b7/0002` was already the strongest lesson in its module — "Why this way (and
+what was rejected)", five "When this breaks" subsections, a real deny-by-default
+argument. What it lacked was anything runnable. It now has
+`evaluateRuleSet(rules, action, ctx)`.
+
+**The wrong-cases there share a shape worth naming:** the mistake is never a
+wrong *answer*, it is a **missing refusal**. Every one falls through to
+`allowed` on input it did not understand, and the worst of them reads as
+tolerance — an older server meets a rule type a newer client wrote, shrugs, and
+grants an action the owner had restricted.
+
+**Then the thing found by reading rather than grepping.** `b2/0001`, the
+canonical schema lesson, said outright: *"max_uses = 0 means unlimited.
+Otherwise it's a cap."* That is the exact inverse of `CLAUDE.md`, which calls
+this one of "the two conventions that keep being got backwards".
+
+**It was the root of a defect already fixed three times downstream** — a5/0003's
+sample row, a5/0003's non-nullable interface, and a wrong-case in `b7/0001`'s
+`canRedeem`. Each was treated as a local slip. It was the schema.
+
+- The column was `INTEGER NOT NULL DEFAULT 0`, which breaks both ends: `NOT
+  NULL` makes unlimited inexpressible, `DEFAULT 0` makes every token created
+  without an explicit limit permit **nothing**. Now nullable, no default.
+- `CHECK (max_uses = 0 OR use_count <= max_uses)` read 0 as the unlimited case,
+  so a token capped at zero would have accepted uses forever. Now `IS NULL`.
+- Seventeen replacements across `b2/0001`, `b1/0001` and `b1/0003`, including a
+  query using `max_uses > 0` to mean "has a limit".
+
+**The lesson for the next pass: when the same defect has been fixed three
+times, stop fixing it and go find where it is defined.** Three downstream
+repairs cost more than the one-line schema change would have, and left the
+source intact to produce more.
+
+### Open: the `uses` counter question
+
+`b7/0002` reads a `uses` column; `b7/0001` counts rows in `conversations`;
+`b2/0001` has `use_count`. The column-name half is settled (take `0001`'s), but
+**whether the count is a stored counter or a query is a genuine B2 decision**
+and is deliberately not picked. A counter is one number to read and one more
+thing that can drift; counting is always right and costs a query.
 
 ### The three open decisions are settled (2026-08-20)
 
@@ -193,61 +235,16 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
-**Continue M3 with the scattered singles.** No cluster left; one lesson at a
-time, one commit each, so an abrupt stop loses at most one.
+**Continue M3 with the scattered singles.** One lesson at a time, one commit
+each.
 
-**Done:** A3, A4, A5, A6, A8, B5, plus `b3/0002` and `b7/0001`.
-**Remaining:** A11, B2, B10, `b3/0001`, `b3/0003`, `b3/0004`, `b7/0002`,
-`b7/0003`.
+**Done:** A3, A4, A5, A6, A8, B5, plus `b3/0002`, `b7/0001`, `b7/0002`.
+**Remaining:** A11, B2, B10, `b3/0001`, `b3/0003`, `b3/0004`, `b7/0003`.
 
-**Take `b7/0002` (access rules engine) next.** It is the neighbour of a lesson
-just read closely, it evaluates `access_rules` — the table `a5/0004` flagged as
-modelling expiry twice — and its `{ allowed: false, reason: 'Token not found' }`
-shape is worth reading against `canRedeem` now that the oracle rule exists.
-
-**Both queued security passes are done (2026-08-20).** Findings below; the
-next unit is a plain M3 single.
-
-### The two greps, and what they found
-
-**Grep 1 — `code` in list responses and list types.** Mostly clean.
-`a5/0003` is already correct and carries the best statement of the rule in the
-course; no API response body ships codes in a list. Two real finds:
-
-- **`a2/0002` had `TokenListItem` a second time**, in the `Pick<>` teaching
-  section. I fixed the other occurrence *in the same file* earlier the same day
-  and missed this one. **A file is not done because you edited it once.**
-- **`b10/0002` broke two ADRs in one query.** The DPDP export `SELECT`ed
-  `code` (not a column — ADR-0007) *and* `content` from messages (ciphertext
-  under ADR-0002; the server holds no key). It offered a downloadable file
-  containing every code the user had ever issued, plus message bodies the API
-  cannot read.
-
-**Grep 2 — the denial-oracle shape.** `b7/0003` and `b4/0002` are fine:
-authenticated **owner** endpoints, where a 404 to a non-owner is not an oracle.
-
-**`a8/0002` was the same defect I had just fixed in `b7/0001`, rendered as a
-UI** — four distinct screens on the page a stranger opens, including "Token Not
-Found / This token code doesn't exist". Worse than the API version, because a
-screen is plainly readable.
-
-Fixed at the **UI layer only**, mirroring `canRedeem`: `redeemState` still
-tells the outcomes apart and `trackRedeemOutcome` counts them; the difference
-never reaches the screen. **The M3 exercise is untouched.**
-
-**The fix then contradicted the lesson's own prose**, which argued `paused`
-"earns different copy" and should say *try again later*. That is true, more
-helpful, and the one message that must never be written — it confirms the code
-is real, currently inactive, and likely to work again, which is a better answer
-for a guesser than a successful redemption. Rewritten so the instinct is the
-teaching point.
-
-### The rule both greps produced
-
-**Fixing a defect in the API does not fix it in the UI, and vice versa.**
-`b7/0001` and `a8/0002` are the same oracle at two layers, written by
-different passes, each self-consistent. The shape to check for is:
-*internal distinction, external uniformity* — keep the reason, drop the tell.
+**Take `b7/0003` (revocation & pause) next** — it completes B7, it is the
+third side of the state model `canRedeem` and `evaluateRuleSet` now cover, and
+it is where the `status` versus `revoked_at`/`paused_at` question above will
+either be settled or shown to matter.
 
 | Work | Gate |
 |---|---|
@@ -315,7 +312,7 @@ Per-item status only. The plan itself is in `TOKEN-TRACK.md`; the counts are in
 | 4 — the operating track | not started, deliberately |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
-| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus `b3/0002` and `b7/0001`; ~7 left |
+| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus `b3/0002`, `b7/0001` and `b7/0002`; ~6 left |
 
 ### M3 — where it has reached
 
@@ -349,6 +346,7 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `b5/0003` | `canSeePresence` | deny by default; status before role; a granting rule fails closed when absent |
 | `b3/0002` | `matchRoute` | first match wins by *registration order*, never by specificity |
 | `b7/0001` | `canRedeem` | `null` ≠ `0` for `max_uses`; null-check `expires_at` before parsing; every refusal looks identical from outside |
+| `b7/0002` | `evaluateRuleSet` | an unknown rule type is *refused*, not ignored; `typeof [] === "object"`; ALL rules must pass |
 
 **A5 note:** not one of the five had a `createExplain` prompt or loaded
 `explain.js`. All five now do. A5 predates the practice pattern being made
