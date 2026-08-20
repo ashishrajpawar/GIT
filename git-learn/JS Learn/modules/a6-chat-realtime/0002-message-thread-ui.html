@@ -50,6 +50,27 @@ export interface Conversation {
   unreadCount: number;
 }</code></pre>
 
+    <div class="callout danger">
+      <div class="callout-title">That <code>text: string</code> is provisional, and you should know why now</div>
+      <p>Everything in this module sends and stores <code>text</code> in the
+      clear. <strong>The finished product does not.</strong> ADR-0002 commits
+      Token to end-to-end encryption from v1: the server stores ciphertext and
+      cannot read a message, which is also why there is no server-side search
+      and no server-side content moderation anywhere in this architecture.</p>
+      <p>The encryption itself is a later module — key exchange, key backup and
+      multi-device are a substantial topic and doing them badly is worse than
+      doing them late. What matters here is that you build the thread UI knowing
+      which parts are load-bearing and which are placeholders. When encryption
+      lands, <code>text</code> becomes a ciphertext blob decrypted on arrival,
+      and <em>none of the rest of this lesson changes</em> — optimistic sends,
+      deduplication, ordering and status all work on the envelope, not the
+      contents.</p>
+      <p>The thing to avoid in the meantime is writing anything that reads the
+      message body outside the component that displays it. Server-side search,
+      a "message preview" the API generates, an unread count the server derives
+      from content — each of those is cheap now and impossible later.</p>
+    </div>
+
     <h2>The MessageThread screen</h2>
 
     <pre><code>// app/src/screens/MessageThread.tsx
@@ -286,6 +307,43 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
 });</code></pre>
+
+    <h2>Three ways a thread corrupts itself</h2>
+
+    <p>The handlers above are the obvious implementation and each one has a
+    defect that only appears with real timing. They are worth naming before the
+    optimistic-update section, because all three are fixed by the same idea.</p>
+
+    <p><strong>1. Duplicates.</strong> <code>chat:receive</code> does
+    <code>setMessages(prev =&gt; [...prev, incoming])</code> with no check for
+    whether that message is already there. But history was loaded over REST, and
+    a message can arrive over the socket while that request is in flight — so
+    the last few messages get appended a second time. The same happens when the
+    socket reconnects and the server replays anything missed.</p>
+
+    <p><strong>2. Reordering.</strong> When the <code>chat:sent</code>
+    acknowledgment arrives, the optimistic message has to become the real one.
+    If you do that by removing it and pushing the confirmed version onto the
+    end, it jumps position — because while your message was in flight, theirs
+    may have arrived. A thread that reshuffles itself as acknowledgments land is
+    unusable, and it only happens on a slow connection, which is exactly where
+    nobody is testing.</p>
+
+    <p><strong>3. Status going backwards.</strong> Look at the delivery-receipt
+    handler: it sets <code>'delivered'</code> unconditionally. Receipts are
+    separate messages over a network and can arrive out of order, so a delivery
+    receipt landing after a read receipt turns a blue double-tick back into a
+    grey one. Status is a <em>progression</em> — sending, sent, delivered, read
+    — and it must never move backwards.</p>
+
+    <div class="callout">
+      <div class="callout-title">What these have in common</div>
+      <p>Every one is a rule about how a new event merges into a list you
+      already have. Scattered across three handlers, they get applied
+      inconsistently — which is how all three of these got in. Collected into
+      one function, they are ten lines and they are testable without a phone.
+      That function is this lesson's exercise.</p>
+    </div>
 
     <h2>Optimistic updates — the pattern</h2>
 
@@ -526,9 +584,23 @@ export function ConversationListScreen({ navigation }) {
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>Now build it yourself</h2>
+
+    <p>Write <code>applyMessage(list, incoming)</code> — the one merge rule the
+    three broken handlers were each guessing at. Everything that arrives about a
+    message goes through it: the acknowledgment of your own send, a message from
+    the other side, a replayed message after reconnect, a status receipt.</p>
+
+    <div id="exercise-apply"></div>
+    <div id="pg-exercise-apply"></div>
+
+    <h3>And the screen it belongs to</h3>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="explain-a6-0002"></div>
 
     <hr>
 
@@ -544,6 +616,7 @@ export function ConversationListScreen({ navigation }) {
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -579,10 +652,152 @@ function sendMessage(text) {
 sendMessage('Hello!');
 console.log('(status updates happen async — see below)');`);
 
+    createSolution("exercise-apply", {
+      exercise: "Write applyMessage(list, incoming) — merge one incoming message event into the thread and return the new array. Never mutate list.\n\nA message looks like { id, localId?, senderId, text, sentAt, status }. Status is one of 'sending', 'sent', 'delivered', 'read', in that order of progression.\n\nThree rules:\n\n1. ACKNOWLEDGEMENT. If incoming.localId matches the id of a message already in the list, that is the server confirming our optimistic send. Replace it IN PLACE — same position in the array — taking the server's id, sentAt and status. The optimistic message may not be last: theirs can arrive while ours is still in flight, and a thread that reshuffles as acknowledgements land is unusable.\n\n2. DUPLICATE. Otherwise, if incoming.id matches a message already in the list, we already have it — from REST history, or replayed after a reconnect. Do not append it again. Merge the status only, and see rule 3.\n\n3. STATUS NEVER GOES BACKWARDS. Receipts race each other over the network. When merging into an existing message, keep whichever status is FURTHER ALONG the progression. A delivery receipt arriving after a read receipt must not turn a read message back into a delivered one.\n\n4. Otherwise it is new: append it to the end.",
+      hints: [
+        "findIndex, not find — rules 1 and 2 both need the position so you can rebuild the array with the message left where it was.",
+        "An array of the four statuses gives you the ordering for free: indexOf on each, and keep the larger. Decide what you want to happen for a status you do not recognise before you write it.",
+        "Copy with slice() or a spread and assign into the copy at the index. If you reach for filter() followed by push(), stop — that is rule 1's reordering bug in the making."
+      ],
+      solution: `const STATUS_ORDER = ["sending", "sent", "delivered", "read"];
+
+function furthestStatus(a, b) {
+  // An unknown status ranks -1 and therefore never wins, so a malformed
+  // event cannot drag a message backwards.
+  return STATUS_ORDER.indexOf(b) > STATUS_ORDER.indexOf(a) ? b : a;
+}
+
+function applyMessage(list, incoming) {
+  // 1. The server acknowledging our optimistic send.
+  if (incoming.localId != null) {
+    const at = list.findIndex((m) => m.id === incoming.localId);
+    if (at !== -1) {
+      const next = list.slice();
+      next[at] = {
+        ...list[at],
+        id: incoming.id,
+        sentAt: incoming.sentAt,
+        status: furthestStatus(list[at].status, incoming.status),
+      };
+      return next;   // same position, deliberately
+    }
+  }
+
+  // 2. Something we already have — history overlap, or a replay.
+  const existing = list.findIndex((m) => m.id === incoming.id);
+  if (existing !== -1) {
+    const next = list.slice();
+    next[existing] = {
+      ...list[existing],
+      status: furthestStatus(list[existing].status, incoming.status),
+    };
+    return next;
+  }
+
+  // 3. Genuinely new.
+  return [...list, incoming];
+}`
+    });
+
+    createPlayground("pg-exercise-apply", `// Write applyMessage(list, incoming) here.
+// (You will probably want a small helper for comparing statuses.)
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function ids(list) { return list.map(function (m) { return m.id; }).join(","); }
+
+// The optimistic message sits at index 1, NOT last: theirs arrived while
+// ours was in flight. A solution that removes and re-pushes would land it
+// at index 2 and pass any fixture where it was already last.
+function thread() {
+  return [
+    { id: 41, senderId: 9, text: "is this the right code?", sentAt: "10:00", status: "read" },
+    { id: "local-777", senderId: 1, text: "yes, MERC-8GH2-KP4X", sentAt: "10:01", status: "sending" },
+    { id: 42, senderId: 9, text: "got it, thanks", sentAt: "10:02", status: "delivered" },
+  ];
+}
+
+try {
+  if (typeof applyMessage !== "function") throw new Error("not written yet");
+
+  try {
+    const out = applyMessage(thread(), {
+      localId: "local-777", id: 43, senderId: 1, text: "yes, MERC-8GH2-KP4X",
+      sentAt: "10:01", status: "sent",
+    });
+    check("an ack replaces the optimistic message IN PLACE", ids(out) === "41,43,42",
+          "got [" + ids(out) + "] -- expected [41,43,42]; removing and re-appending reorders the thread");
+    check("the ack does not grow the list", out.length === 3, "got length " + out.length);
+    check("the ack carries the server id and status",
+          out[1].id === 43 && out[1].status === "sent", "got " + JSON.stringify(out[1]));
+  } catch (e) { check("an ack replaces the optimistic message IN PLACE", false, "threw " + e.message); }
+
+  try {
+    // Message 42 is already in the thread — REST history and the socket
+    // overlapped. It must not be appended a second time.
+    const out = applyMessage(thread(), {
+      id: 42, senderId: 9, text: "got it, thanks", sentAt: "10:02", status: "delivered",
+    });
+    check("a message we already have is not appended twice", ids(out) === "41,local-777,42",
+          "got [" + ids(out) + "] -- REST history and the socket overlap constantly");
+  } catch (e) { check("a message we already have is not appended twice", false, "threw " + e.message); }
+
+  try {
+    // Message 41 is already 'read'. A late delivery receipt must not
+    // demote it. 'delivered' is deliberately BEHIND 'read', not equal to
+    // it, so a naive overwrite is visible.
+    const out = applyMessage(thread(), { id: 41, status: "delivered" });
+    check("status never goes backwards", out[0].status === "read",
+          "got " + out[0].status + " -- receipts race; a late delivery receipt would un-read the message");
+  } catch (e) { check("status never goes backwards", false, "threw " + e.message); }
+
+  try {
+    const out = applyMessage(thread(), { id: 42, status: "read" });
+    check("status does go forwards", out[2].status === "read",
+          "got " + out[2].status + " -- delivered -> read is a legitimate advance");
+  } catch (e) { check("status does go forwards", false, "threw " + e.message); }
+
+  try {
+    const out = applyMessage(thread(), {
+      id: 44, senderId: 9, text: "one more thing", sentAt: "10:03", status: "delivered",
+    });
+    check("a genuinely new message is appended", ids(out) === "41,local-777,42,44",
+          "got [" + ids(out) + "]");
+  } catch (e) { check("a genuinely new message is appended", false, "threw " + e.message); }
+
+  try {
+    // An ack whose localId matches nothing we hold — the screen was
+    // remounted, or it belongs to another thread. It is still a real
+    // message, so append it; do NOT silently drop it.
+    const out = applyMessage(thread(), {
+      localId: "local-999", id: 45, senderId: 1, text: "sent from elsewhere",
+      sentAt: "10:04", status: "sent",
+    });
+    check("an ack for an unknown localId is still appended", ids(out) === "41,local-777,42,45",
+          "got [" + ids(out) + "] -- dropping it loses a message the server has stored");
+  } catch (e) { check("an ack for an unknown localId is still appended", false, "threw " + e.message); }
+
+  try {
+    const original = thread();
+    applyMessage(original, { id: 41, status: "read" });
+    applyMessage(original, { id: 99, senderId: 9, text: "new", sentAt: "10:05", status: "sent" });
+    check("the original list is never mutated",
+          original.length === 3 && original[0].status === "read",
+          "React compares by reference -- mutating in place means the thread does not re-render");
+  } catch (e) { check("the original list is never mutated", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write applyMessage(list, incoming) above, then press Run. (" + e.message + ")");
+}`);
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is React Native chat screens with FlatList and KeyboardAvoidingView, needing a device and a running server",
       exercise: "Build the complete message thread UI:\n\n1. Create `MessageThreadScreen`: load history via REST, listen for incoming messages via useWsMessage('chat:receive'), send with optimistic updates, handle send failures.\n\n2. Create `MessageBubble` component: own messages on the right (blue), theirs on the left (gray), time display, and status icons (○ → ✓ → ✓✓ → blue ✓✓).\n\n3. Implement optimistic sends: add message with 'sending' status immediately, update to 'sent' on chat:sent acknowledgment, update to 'delivered' on delivery receipt.\n\n4. Add KeyboardAvoidingView with correct platform behavior (padding on iOS, height on Android).\n\n5. Auto-scroll to bottom on new messages, but only when the user is already near the bottom.\n\n6. Create `ConversationListScreen` showing all conversations with last message preview and unread badge.",
       hints: [
-        "Use a temporary localId (e.g. 'local-' + Date.now()) to link the optimistic message with the server acknowledgment.",
+        "Use a temporary localId to link the optimistic message with the server acknowledgment. Date.now() alone is not enough — two sends inside the same millisecond produce the same id, and the ack then updates the wrong bubble. Add a counter or a random suffix.",
         "FlatList's onContentSizeChange fires when messages are added — use it to auto-scroll. But check if the user was near the bottom first.",
         "For status icons: 'sending'=○, 'sent'=✓, 'delivered'=✓✓, 'read'=✓✓(blue), 'failed'=!(red).",
         "The ConversationList re-sorts when a new message arrives — most recent conversation floats to the top."
@@ -612,6 +827,10 @@ console.log('(status updates happen async — see below)');`);
 // - Fetch all conversations on mount
 // - Listen for chat:receive to update lastMessage + unreadCount
 // - Re-sort by lastMessage.sentAt DESC`
+    });
+
+    createExplain("explain-a6-0002", {
+      prompt: "All three thread bugs — duplicated messages, a message jumping position when its acknowledgement lands, and a read receipt being undone by a late delivery receipt — were written by someone who understood each handler perfectly well. Explain what the three have in common, and why collecting them into <code>applyMessage</code> fixes a class of bug rather than three bugs."
     });
 
     createQuiz("lesson-quiz", [
@@ -704,7 +923,7 @@ console.log('(status updates happen async — see below)');`);
           "useWsMessage registers a new listener each render, so each message is processed multiple times"
         ],
         correct: 1,
-        explanation: "The race: history request is in-flight, a new message arrives via WS and is appended, then history finishes and it includes that same message. Fix: after loading history, deduplicate by ID before setting state — or track the latest message ID from history and ignore WS messages already included."
+        explanation: "The race: history request is in-flight, a new message arrives via WS and is appended, then history finishes and it includes that same message. Fix: never append without checking. Route every arriving message through applyMessage(), which looks for the id before it appends — then history landing late is merged rather than doubled, and the same guard covers the replay you get after a reconnect."
       },
       {
         type: "which-breaks",
