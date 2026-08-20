@@ -79,6 +79,10 @@ interface AuthenticatedSocket extends WebSocket {
 interface ChatSendPayload {
   conversationId: number;
   text: string;
+  // The client's temporary id for its optimistic message. The server never
+  // interprets it — it only hands it back in the ack so the client can find
+  // which bubble to update. See a6/0002.
+  localId?: string;
 }
 
 export async function handleChatSend(ws: AuthenticatedSocket, payload: ChatSendPayload) {
@@ -140,8 +144,14 @@ export async function handleChatSend(ws: AuthenticatedSocket, payload: ChatSendP
     }
   }
 
-  // 7. Acknowledge to the sending socket
-  sendTo(ws, 'chat:sent', { id: message.id, sentAt: message.sent_at });
+  // 7. Acknowledge to the sending socket.
+  //    localId is echoed back UNCHANGED — the client is holding an
+  //    optimistic message keyed by it and cannot match this ack without it.
+  sendTo(ws, 'chat:sent', {
+    localId: payload.localId,
+    id: message.id,
+    sentAt: message.sent_at,
+  });
 }
 
 function deliverToUser(userId: number, type: string, payload: unknown) {
@@ -151,9 +161,72 @@ function deliverToUser(userId: number, type: string, payload: unknown) {
       sendTo(sock, type, payload);
     }
   }
-  // If no sockets — user is offline. Message is in the DB.
-  // They'll fetch it via REST when they come back online.
+  // WRONG, and the next section explains why: no sockets HERE does not
+  // mean the user is offline. See deliveryPlan below.
 }</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title"><code>deliverToUser</code> is wrong on one box and broken on two</div>
+      <p>Read that last comment again. <code>getClients()</code> is
+      <em>this process's</em> map. If the user's socket is held by another
+      replica, this function finds nothing, does nothing, and reports success.
+      The message is in the database and the recipient — who is sitting there
+      with the app open — is never told it arrived.</p>
+      <p>It is a perfect bug of its kind. It never throws. It passes every test
+      you can write on one machine. It appears the day you add a second replica
+      for capacity, and it presents as "some messages are slow" because the
+      recipient does eventually see them, when something else makes the app
+      refetch over REST.</p>
+      <p><strong>Two separate questions get conflated here, and they have two
+      different answers.</strong></p>
+      <table>
+        <thead>
+          <tr><th>Question</th><th>Wrong source</th><th>Right source</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Which sockets do I write to?</td>
+            <td rowspan="2"><code>clients.get(userId)</code></td>
+            <td>The local map — but only for sockets <em>this</em> node holds</td>
+          </tr>
+          <tr>
+            <td>Is the user reachable at all?</td>
+            <td>Their Redis presence key (ADR-0003)</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>And a third thing the original does not do at all: <strong>publish</strong>.
+      Reaching a socket you do not hold is not your job to solve directly — you
+      publish to a Redis channel, and whichever node holds that socket is
+      subscribed and writes to it. You never find out which node it was.</p>
+    </div>
+
+    <h2>The shape that actually works</h2>
+
+    <p>Every node runs the same code and subscribes to the same channel, so
+    there are three distinct situations a delivery decision has to tell
+    apart:</p>
+
+    <ul>
+      <li><strong>A client on this node sent it.</strong> Write to any of the
+      recipient's sockets we hold, <em>and</em> publish so other nodes can do
+      the same. If nobody has a presence key, queue a push notification.</li>
+      <li><strong>It arrived over pub/sub from another node.</strong> Write to
+      the sockets we hold, and <strong>do not publish</strong> — republishing
+      what you received from the channel is an infinite loop across the
+      cluster. Do not queue a push either: the originating node already
+      decided that, and two nodes both deciding means two notifications.</li>
+      <li><strong>It is our own publish coming back.</strong> We are subscribed
+      to the channel we published on, so we hear ourselves. We already wrote to
+      our local sockets on the way out — writing again delivers every message
+      twice to everyone on the originating node.</li>
+    </ul>
+
+    <p>That last one is the classic pub/sub own-goal, and it is worth
+    understanding rather than memorising: a subscriber does not get to opt out
+    of its own messages, so <em>you</em> have to recognise them. Tag each
+    published message with the id of the node that sent it and ignore anything
+    carrying your own.</p>
 
     <h2>Registering the handler</h2>
 
@@ -313,9 +386,23 @@ export async function handleChatSend(ws: AuthenticatedSocket, payload: ChatSendP
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>Now build it yourself</h2>
+
+    <p>Write <code>deliveryPlan(ctx)</code> — the decision
+    <code>deliverToUser</code> should have been making. It is pure: it looks at
+    where a message came from and what this node knows, and returns what to do.
+    No sockets, no Redis, no server.</p>
+
+    <div id="exercise-plan"></div>
+    <div id="pg-exercise-plan"></div>
+
+    <h3>And the router it belongs to</h3>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="explain-b5-0002"></div>
 
     <hr>
 
@@ -331,6 +418,7 @@ export async function handleChatSend(ws: AuthenticatedSocket, payload: ChatSendP
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -343,14 +431,24 @@ clients.set(5, new Set(['phone', 'tablet']));
 // User 8 has 1 device
 clients.set(8, new Set(['laptop']));
 
+// Presence is a Redis TTL key, NOT this map. Two different questions.
+const presenceKeys = new Set([5, 8, 3]);   // 3 IS online -- on another node
+
 function deliverToUser(userId, message) {
   const sockets = clients.get(userId);
-  if (!sockets || sockets.size === 0) {
-    console.log('User ' + userId + ' is OFFLINE — message stored in DB');
-    return;
+  if (sockets && sockets.size > 0) {
+    for (const device of sockets) {
+      console.log('  -> written directly to ' + device + ' (this node)');
+    }
+  } else {
+    console.log('  -> no socket on this node');
   }
-  for (const device of sockets) {
-    console.log('  → Delivered to user ' + userId + ' on ' + device);
+
+  // Always publish: another node may hold sockets we know nothing about.
+  console.log('  -> published to redis channel user:' + userId);
+
+  if (!presenceKeys.has(userId)) {
+    console.log('  -> no presence key anywhere: queue a push notification');
   }
 }
 
@@ -361,17 +459,136 @@ deliverToUser(5, 'Hello');
 console.log('\\nUser 5 sends reply to user 8:');
 deliverToUser(8, 'Hi back');
 
-// User 3 is offline
-console.log('\\nUser 5 sends to user 3 (offline):');
-deliverToUser(3, 'Are you there?');`);
+// User 3 has NO socket on this node -- but a live presence key.
+// The naive version called this "offline" and dropped the message.
+console.log('\\nUser 5 sends to user 3 (connected to another replica):');
+deliverToUser(3, 'Are you there?');
+
+// User 9 has no socket here AND no presence key. Genuinely offline.
+console.log('\\nUser 5 sends to user 9 (genuinely offline):');
+deliverToUser(9, 'Are you there?');`);
+
+    createSolution("exercise-plan", {
+      exercise: "Write deliveryPlan(ctx) — decide what this node does with one outgoing message.\n\nctx is { origin, localSockets, presentAnywhere }:\n\n  origin          — 'client'   a client connected to THIS node sent it\n                  — 'pubsub'   it arrived over the Redis channel from another node\n                  — 'echo'     it is our own published message coming back to us\n  localSockets    — how many of the recipient's sockets THIS node holds (0 or more)\n  presentAnywhere — does the recipient have a live Redis presence key\n\nReturn { writeLocal, publish, queuePush } — three booleans.\n\nThe rules:\n\n1. origin 'echo' — do nothing at all. All three false. We are subscribed to the channel we published on, so we hear ourselves; we already wrote to our local sockets on the way out. Acting again delivers every message twice to everyone on this node.\n\n2. origin 'pubsub' — writeLocal if we hold any sockets, and nothing else. Never publish: republishing what you received from the channel is an infinite loop across the cluster. Never queuePush either — the originating node already made that call, and two nodes both deciding means the user gets two notifications.\n\n3. origin 'client' — writeLocal if we hold any sockets, AND publish, always. Publishing is how the recipient's other devices, on nodes we know nothing about, hear about it. Holding a socket ourselves does not mean we hold all of them.\n\n4. queuePush is true only for origin 'client' AND presentAnywhere false. Note what it does NOT depend on: localSockets. A user with no socket on this node may be perfectly connected elsewhere, and pushing to them would be wrong.",
+      hints: [
+        "Handle 'echo' first and return from it. It is the only case where holding sockets is irrelevant, so testing it early keeps the rest simple.",
+        "Write down which of the three booleans each origin is allowed to set before you write any code. 'pubsub' can set exactly one of them.",
+        "queuePush must not mention localSockets. If your expression references it, you have rebuilt the bug this function replaces."
+      ],
+      solution: `function deliveryPlan({ origin, localSockets, presentAnywhere }) {
+  // We hear our own publishes. We already delivered on the way out.
+  if (origin === "echo") {
+    return { writeLocal: false, publish: false, queuePush: false };
+  }
+
+  const holdsSockets = localSockets > 0;
+
+  // Came off the channel: deliver what we hold, and stop. Republishing
+  // loops; re-deciding the push duplicates it.
+  if (origin === "pubsub") {
+    return { writeLocal: holdsSockets, publish: false, queuePush: false };
+  }
+
+  // A client on this node sent it. Publish ALWAYS -- holding one of their
+  // sockets tells us nothing about the others.
+  return {
+    writeLocal: holdsSockets,
+    publish: true,
+    // Presence, never localSockets. "Not here" is not "not anywhere".
+    queuePush: !presentAnywhere,
+  };
+}`
+    });
+
+    createPlayground("pg-exercise-plan", `// Write deliveryPlan(ctx) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function plan(origin, localSockets, presentAnywhere) {
+  return deliveryPlan({ origin: origin, localSockets: localSockets, presentAnywhere: presentAnywhere });
+}
+function show(r) { return JSON.stringify(r); }
+
+try {
+  if (typeof deliveryPlan !== "function") throw new Error("not written yet");
+
+  try {
+    const r = plan("client", 2, true);
+    check("a local send writes locally and publishes",
+          r.writeLocal === true && r.publish === true && r.queuePush === false,
+          "got " + show(r));
+  } catch (e) { check("a local send writes locally and publishes", false, "threw " + e.message); }
+
+  try {
+    // THE bug this exercise exists for. No socket here, but a live presence
+    // key -- they are on another replica. Publishing is the only thing that
+    // reaches them, and calling this "offline" is what drops the message.
+    const r = plan("client", 0, true);
+    check("no socket here but present elsewhere -> still publish, no push",
+          r.publish === true && r.queuePush === false,
+          "got " + show(r) + " -- a local miss is NOT offline; they are on another node");
+    check("nothing is written locally when we hold no sockets",
+          r.writeLocal === false, "got " + show(r));
+  } catch (e) { check("no socket here but present elsewhere -> still publish, no push", false, "threw " + e.message); }
+
+  try {
+    const r = plan("client", 0, false);
+    check("no socket and no presence key anywhere -> queue a push",
+          r.queuePush === true && r.publish === true,
+          "got " + show(r) + " -- absence of a presence key is what 'offline' actually means");
+  } catch (e) { check("no socket and no presence key anywhere -> queue a push", false, "threw " + e.message); }
+
+  try {
+    // We hold a socket, so we can deliver -- but publish anyway, because
+    // their OTHER devices are on nodes we know nothing about.
+    const r = plan("client", 1, true);
+    check("holding one socket does not excuse us from publishing",
+          r.publish === true,
+          "got " + show(r) + " -- their other devices live on nodes you cannot see");
+  } catch (e) { check("holding one socket does not excuse us from publishing", false, "threw " + e.message); }
+
+  try {
+    const r = plan("pubsub", 3, true);
+    check("a pubsub message is delivered locally but never republished",
+          r.writeLocal === true && r.publish === false,
+          "got " + show(r) + " -- republishing what you received loops across the cluster");
+  } catch (e) { check("a pubsub message is delivered locally but never republished", false, "threw " + e.message); }
+
+  try {
+    // Not for us: it arrived on the channel and we hold nothing.
+    const r = plan("pubsub", 0, false);
+    check("a pubsub message for someone we do not hold does nothing",
+          r.writeLocal === false && r.publish === false && r.queuePush === false,
+          "got " + show(r));
+    check("a pubsub message never queues its own push",
+          r.queuePush === false,
+          "got " + show(r) + " -- the originating node already decided; two nodes deciding sends two notifications");
+  } catch (e) { check("a pubsub message for someone we do not hold does nothing", false, "threw " + e.message); }
+
+  try {
+    // Our own publish coming back. Everything false, even though we DO hold
+    // sockets -- we wrote to them on the way out.
+    const r = plan("echo", 2, true);
+    check("our own echo is ignored entirely",
+          r.writeLocal === false && r.publish === false && r.queuePush === false,
+          "got " + show(r) + " -- you are subscribed to your own channel; acting again delivers everything twice");
+  } catch (e) { check("our own echo is ignored entirely", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write deliveryPlan(ctx) above, then press Run. (" + e.message + ")");
+}`);
 
     createSolution("exercise-1", {
-      exercise: "Build the complete message routing system:\n\n1. Create `api/src/ws/handlers/chat.ts` with `handleChatSend`: validate participation, store in DB, route to recipient's devices, sync to sender's other devices, send acknowledgment.\n\n2. Add delivery receipts: when the recipient's client receives a message, it sends `chat:delivered`. The server updates `delivered_at` and notifies the sender.\n\n3. Add authorization: check that the token is active before allowing messages.\n\n4. Add multi-device fan-out: messages reach ALL of a user's connected devices, not just one.\n\n5. Handle the offline case: if the recipient has no active sockets, the message stays in the DB (no error — it's not a failure).\n\n6. Test: open two wscat connections as different users, send a message from one, verify it arrives on the other.",
+      unverifiable: "the deliverable is a Node WebSocket router needing Postgres, Redis and connected clients",
+      exercise: "Build the complete message routing system:\n\n1. Create `api/src/ws/handlers/chat.ts` with `handleChatSend`: validate participation, store in DB, route to recipient's devices, sync to sender's other devices, send acknowledgment.\n\n2. Add delivery receipts: when the recipient's client receives a message, it sends `chat:delivered`. The server updates `delivered_at` and notifies the sender.\n\n3. Add authorization: check that the token is active before allowing messages.\n\n4. Add multi-device fan-out: messages reach ALL of a user's connected devices, not just one.\n\n5. Handle the not-here case correctly: publish to the Redis channel so another replica can deliver, and only queue a push notification when the recipient has no presence key anywhere. A miss in the local map is never on its own a reason to conclude the user is offline.\n\n6. Test: open two wscat connections as different users, send a message from one, verify it arrives on the other.",
       hints: [
         "The clients Map is Map<userId, Set<sockets>>. Iterate the Set to fan out to all devices.",
         "When sending to the sender's other devices, exclude the socket that sent it (ws !== sock).",
         "For delivery receipts: the recipient sends { type: 'chat:delivered', payload: { messageId } } automatically on receive.",
-        "Offline = no entry in the clients Map or empty Set. Not an error — just means REST fetch later."
+        "Offline is the ABSENCE OF A REDIS PRESENCE KEY, never an empty local Set. The local map answers only one question: which sockets do I write to."
       ],
       solution: `// See the full handleChatSend implementation in the lesson above.
 // Key architecture:
@@ -381,7 +598,8 @@ deliverToUser(3, 'Are you there?');`);
 // 3. ROUTE TO RECIPIENT: iterate all their sockets, send chat:receive
 // 4. SYNC SENDER: iterate sender's OTHER sockets, send chat:receive
 // 5. ACKNOWLEDGE: send chat:sent back to the sending socket
-// 6. OFFLINE: if recipient has no sockets, do nothing extra — DB has it
+// 6. PUBLISH: always, so nodes holding their other sockets deliver too
+// 7. PUSH: only when no presence key exists anywhere -- not on a local miss
 
 // deliverToUser helper:
 function deliverToUser(userId, type, payload) {
@@ -407,6 +625,10 @@ registerHandler('chat:delivered', async (ws, payload) => {
     });
   }
 });`
+    });
+
+    createExplain("explain-b5-0002", {
+      prompt: "The original <code>deliverToUser</code> treated an empty <code>clients.get(userId)</code> as proof the user was offline. Explain what that actually proves, what it does not, and why the resulting bug would never show up on a single-server deployment."
     });
 
     createQuiz("lesson-quiz", [
@@ -481,9 +703,9 @@ registerHandler('chat:delivered', async (ws, payload) => {
       {
         type: "predict-output",
         question: "What does the following fan-out loop print?",
-        code: "const clients = new Map();\nclients.set(3, new Set(['phone', 'tablet', 'laptop']));\n\nfunction deliverToUser(userId, msg) {\n  const sockets = clients.get(userId);\n  if (!sockets) {\n    console.log('offline');\n    return;\n  }\n  for (const s of sockets) {\n    console.log('sent to ' + s);\n  }\n}\n\ndeliverToUser(3, 'hello');\ndeliverToUser(9, 'hello');",
-        answer: "sent to phone\nsent to tablet\nsent to laptop\noffline",
-        explanation: "User 3 has three sockets, so the loop fires three times. User 9 has no entry in the Map, so `clients.get(9)` returns undefined, the guard triggers, and 'offline' is printed. Order within a Set reflects insertion order."
+        code: "const clients = new Map();\nclients.set(3, new Set(['phone', 'tablet', 'laptop']));\n\nfunction deliverToUser(userId, msg) {\n  const sockets = clients.get(userId);\n  if (!sockets) {\n    console.log('not on this node');\n    return;\n  }\n  for (const s of sockets) {\n    console.log('sent to ' + s);\n  }\n}\n\ndeliverToUser(3, 'hello');\ndeliverToUser(9, 'hello');",
+        answer: "sent to phone\nsent to tablet\nsent to laptop\nnot on this node",
+        explanation: "User 3 has three sockets, so the loop fires three times. User 9 has no entry in the Map, so `clients.get(9)` returns undefined and the guard triggers. Order within a Set reflects insertion order. Note the wording of that log line: it says 'not on this node', which is the only thing the Map can tell you. User 9 may be connected to another replica right now."
       },
       {
         type: "fill-blank",
@@ -609,10 +831,10 @@ registerHandler('chat:delivered', async (ws, payload) => {
       },
       {
         type: "predict-output",
-        question: "What is logged when the server routes to a user who just went offline during the delivery?",
+        question: "What is logged when the server routes to a user holding no sockets on this node?",
         code: "const clients = new Map();\n// User 4 had two sockets but just disconnected both\n// (cleanup correctly removed the Map entry)\n\nfunction deliverToUser(userId, type, payload) {\n  const sockets = clients.get(userId);\n  if (!sockets || sockets.size === 0) {\n    console.log('no active sockets for user ' + userId);\n    return;\n  }\n  for (const s of sockets) {\n    console.log('sent to socket');\n  }\n}\n\ndeliverToUser(4, 'chat:receive', { text: 'Hi' });",
         answer: "no active sockets for user 4",
-        explanation: "When a user disconnects and cleanup runs correctly, the Map entry is removed. clients.get(4) returns undefined, the guard triggers, and nothing is sent. This is not an error — the message is already in the database and the user will fetch it via REST on reconnect."
+        explanation: "When a user's last socket on this node closes and cleanup runs correctly, the Map entry is removed. clients.get(4) returns undefined, the guard triggers, and nothing is written here. That is not an error and not a conclusion: user 4 may have another device attached to a different replica. This node publishes to Redis regardless, and only the absence of a presence key would justify a push notification."
       },
       {
         type: "fill-blank",
