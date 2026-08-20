@@ -1199,6 +1199,67 @@ self-consistent.
 
 Status: B5 three of three `unverifiable → verified`. 49/96.
 
+### Session of 2026-08-20 (continued) — b3/0002, and closing the URL-path defect
+
+`b3/0002` was taken next because it was both an M3 candidate and the worst
+known offender in the code-in-the-URL-path list — and doing those separately
+would have meant editing the same quiz keys twice.
+
+**M3 gave it `matchRoute(routes, path)`**, a miniature of what Express does per
+request. The rule worth a test is that **first match wins in registration
+order**: Express does not prefer the more specific pattern, so registering
+`/tokens/:id` before `/tokens/active` makes the literal route unreachable with
+`id === 'active'`, and nothing warns you.
+
+The sharpest wrong-case is the one that sorts candidates so literals beat
+parameters. It produces the behaviour everyone assumes they already have, and
+it is wrong *for this purpose* — a model that quietly fixes the bug cannot be
+used to predict what a real route file will do. Worth remembering as a category:
+**a teaching model must reproduce the defect, not improve on it.**
+
+**Then the sweep, and the sweep is the story.**
+
+The list in `SESSION.md` named four lessons. The real number was ten. Two of
+the four suspects turned out to be correct as written — `a8/0002` names the bad
+form in order to reject it, and `a9/0002`'s `/t/CODE` page URL is ADR-0007's
+one documented exception.
+
+**I under-counted twice, and both failures look like success.** The original
+list had been assembled by reading rather than grepping. Then my own first grep
+was piped to `head`, which silently hid two modules — including `b7/0001`.
+
+That one matters. **`b7/0001` is the redemption endpoint**: `POST
+/tokens/:code/redeem`, reading the code from `req.params` and then hashing it.
+The lesson goes to real trouble to store only a hash for lookup and an
+encrypted copy for display, and then hands the plaintext to the reverse proxy's
+access log on the way in. Every protection downstream of that is worth nothing.
+`a9/0002` was second worst — a **GET**, so every redemption wrote a live
+capability to the log rather than merely risking it.
+
+**The general lesson, which is not about URLs:** a truncated search and an
+exhaustive one produce identical-looking output when the truncated one happens
+to be short. `| head` on an audit grep is the same class of mistake as the
+stale-prose failures this project keeps finding — a number nobody re-derived.
+If a search is the evidence for "we fixed them all", it has to be run without a
+limit and the count recorded.
+
+**A second ADR-0007 defect surfaced sideways.** `a2/0002`'s `TokenListItem`
+included `code`, against the rule that `GET /tokens` returns no `code` field at
+all — serving one would mean AES-decrypting every row on every scroll, and
+putting a pile of live capabilities in a response nobody needs them in. That is
+the same defect `a5/0003` had, which makes it the second sighting and therefore
+a pattern rather than a slip. Nobody has grepped for it course-wide; it is now
+the standing item in `SESSION.md`.
+
+**One small process trap, hit and recorded:** a mechanical `:code` → `:id`
+rename across a quiz updates the `code:` field and leaves `answer:` and
+`explanation:` stale, because they are separate fields in the same object.
+`b3/0002` briefly had a question whose sample said `/api/tokens/42` and whose
+key still said `MERC-8GH2 true doctor`.
+
+Status: `b3/0002` `unverifiable → verified` (50/96). Nine further lessons
+edited and all re-verified against their stored reasons and wrong-cases.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees

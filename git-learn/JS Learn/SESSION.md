@@ -12,8 +12,50 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean. **A6, A7 and B5 are done** — 2026-08-20,
-audit green, five suites pass throughout. **49/96 verified.**
+**Nothing.** Working tree clean. **A6, A7, B5, `b3/0002` and the whole
+code-in-URL-path sweep are done** — 2026-08-20, audit green, five suites pass
+throughout. **50/96 verified.**
+
+### The URL-path sweep is closed — and the list here had been wrong
+
+ADR-0007 is now respected everywhere. Ten lessons were fixed, not the four
+this file recorded: `b3/0002`, `b7/0001`, `a9/0002`, `a2/0002`, `a3/0001`,
+`a3/0002`, `a3/0003`, `b3/0003`, `b4/0003`, `b10/0001`, `x2/0002`.
+
+**`b7/0001` was the one that mattered and was not on the list at all.** It is
+the redemption endpoint — `POST /tokens/:code/redeem`, reading the code from
+`req.params` and then hashing it. The lesson took care to store only a hash
+and an encrypted copy, and handed the plaintext to the proxy access log on the
+way in. `a9/0002` was second worst: a **GET**, so every redemption wrote a live
+capability into the log.
+
+**Two counting failures worth remembering**, because both look like "there was
+nothing there":
+
+1. The original list was assembled by reading rather than grepping, and missed
+   six lessons.
+2. My first grep was piped to `head`, which silently hid `b7/0001` and
+   `x2/0002`. **A truncated search and a clean search look identical.**
+
+**Do not "finish the job" on these — they are correct:**
+
+- `a8/0002` and `b7/0001` both name `/api/tokens/:code` **in order to reject
+  it**. That is the corrected lesson doing its job.
+- `a9/0002`'s `/t/MERC-8GH2-KP4X` **page** URL, and the `route.params.code` it
+  produces. ADR-0007 permits exactly this one path — a browser has to reach the
+  redemption page somehow — and defends it with headers instead (`a8/0004`).
+- `02/0009`'s `delete params.code` is a navigation-params object, not a URL.
+
+**A second ADR-0007 defect surfaced during the sweep:** `a2/0002`'s
+`TokenListItem` included `code`, against "GET /tokens returns no `code` field
+at all". That is the same defect `a5/0003` had. **Nobody has grepped for it
+across the course** — worth a pass of its own, looking for list/index types and
+responses that carry `code`.
+
+**The rename trap, now hit once:** a mechanical `:code` → `:id` across a quiz
+updates the `code:` field and leaves `answer:` and `explanation:` stale,
+because they are separate fields. `b3/0002` shipped that inconsistency for
+about a minute. Re-read every question you touch.
 
 ### ⚠ One product call needs your confirmation
 
@@ -145,21 +187,10 @@ prompted the A7 check above. **Both are now closed.**
 
 ### Follow-ups still open
 
-**The code-in-the-URL-path defect is course-wide, not just `a8/0002`.** ADR-0007
-says codes never go in a URL path; `b10/0001` and `01/0012` get it right with
-`POST /api/redeem` and a body. These do not:
-
-| Lesson | Form |
-|---|---|
-| `b3/0002` | `/api/tokens/:code` for GET, PATCH, DELETE — and in ~6 quiz questions |
-| `a9/0002` | `GET /api/tokens/${code}/redeem` |
-| `a2/0002` | `PATCH /tokens/:code` |
-| `a3/0002` | `DELETE /tokens/:code` in a quiz explanation |
-
-`a8/0002` is now internally consistent and correct; the rest is a separate pass,
-and it is bigger than it looks because the path form is baked into quiz keys and
-explanations. **CLAUDE.md also says owner endpoints take `:id`**, so `/tokens/:code`
-is wrong there for a second reason.
+**The code-in-the-URL-path defect is closed** as of 2026-08-20 — ten lessons,
+see *In progress* above. What remains open from the same ADR is the `code`
+field appearing in **list responses and list types**, found in `a2/0002` during
+the sweep and never grepped for course-wide.
 
 Smaller, also not done: the holder JWT carries `tokenCode`. The holder already
 knows the code, so it leaks nothing to them — but JWTs land in logs routinely,
@@ -177,12 +208,18 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 cluster left; these are one lesson at a time. One commit per lesson, so an
 abrupt stop loses at most one.
 
-**B5 is done.** Remaining M3 singles: **A11, B2, B3, B7, B10.**
+**B5 and `b3/0002` are done.** Remaining M3 singles: **A11, B2, B7, B10** —
+plus `b3/0001`, `b3/0003` and `b3/0004`, which are still `unverifiable`.
 
-**Take `b3/0002` next**, because it kills two birds: it is an M3 candidate
-*and* it is the worst offender in the code-in-the-URL-path list below
-(`/api/tokens/:code` across GET, PATCH and DELETE plus ~6 quiz questions).
-Doing it as one pass avoids editing the same quiz keys twice.
+**Take `b7/0001` next.** The sweep has just been through it, so its
+redemption logic is fresh and correct — and it is the densest remaining
+lesson: token generation, the redemption transaction, status/expiry/max_uses
+checks. Its own "When this breaks" section already admits `FOR UPDATE` through
+`pool.query` does nothing, which is a defect sitting in the open waiting for
+an exercise to pin it down.
+
+Also worth doing, and small: grep the course for `code` in list responses and
+list types (the `a2/0002` defect above).
 
 | Work | Gate |
 |---|---|
