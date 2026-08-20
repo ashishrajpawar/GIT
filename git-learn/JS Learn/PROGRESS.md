@@ -14,11 +14,11 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1823 words |
+| Avg teaching prose per track lesson | 1840 words |
 | Lessons with a playground | 73 / 96 |
 | Lessons with an exercise | 96 / 96 |
 | **Deepened** (all 3 spine sections) | 16 / 96 |
-| **Verified** (code executed) | 43 / 96 |
+| **Verified** (code executed) | 46 / 96 |
 | Ran clean but had nothing to run | 0 / 96 |
 | Errors | 0 |
 | Known and blocked | 3 |
@@ -81,7 +81,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a3-api-consumption | 4 | 1190 | 4 | 7 | 111 | 1/4 | 3/4 |
 | a4-auth-client | 3 | 1400 | 3 | 6 | 80 | 1/3 | 3/3 |
 | a5-core-token-features | 5 | 2543 | 10 | 10 | 148 | 2/5 | 5/5 |
-| a6-chat-realtime | 3 | 1387 | 3 | 3 | 78 | 0/3 | 0/3 |
+| a6-chat-realtime | 3 | 1912 | 6 | 6 | 78 | 0/3 | 3/3 |
 | a7-voice-video | 5 | 1279 | 6 | 6 | 138 | 0/5 | 1/5 |
 | a8-redemption-web | 4 | 1584 | 8 | 8 | 115 | 0/4 | 4/4 |
 | a9-deep-linking | 2 | 1159 | 2 | 2 | 53 | 0/2 | 0/2 |
@@ -185,9 +185,9 @@ so they do not hold the audit red. They are **not** resolved.
 | a5-core-token-features/0003-token-list-management.html | 2338 | 16 | 2 | 2 | 30 | — | yes |
 | a5-core-token-features/0004-access-rules-ui.html | 3293 | 12 | 2 | 2 | 29 | yes | yes |
 | a5-core-token-features/0005-share-path-warnings.html | 1710 | 5 | 2 | 2 | 29 | — | yes |
-| a6-chat-realtime/0001-websocket-client.html | 1260 | 10 | 1 | 1 | 26 | — | n/a |
-| a6-chat-realtime/0002-message-thread-ui.html | 1620 | 10 | 1 | 1 | 26 | — | n/a |
-| a6-chat-realtime/0003-typing-presence.html | 1280 | 10 | 1 | 1 | 26 | — | n/a |
+| a6-chat-realtime/0001-websocket-client.html | 1749 | 10 | 2 | 2 | 26 | — | yes |
+| a6-chat-realtime/0002-message-thread-ui.html | 2161 | 10 | 2 | 2 | 26 | — | yes |
+| a6-chat-realtime/0003-typing-presence.html | 1827 | 10 | 2 | 2 | 26 | — | yes |
 | a7-voice-video/0001-webrtc-refresher.html | 1625 | 9 | 1 | 1 | 29 | — | n/a |
 | a7-voice-video/0002-voice-call.html | 758 | 6 | 1 | 1 | 27 | — | n/a |
 | a7-voice-video/0003-video-call.html | 836 | 6 | 1 | 1 | 26 | — | n/a |

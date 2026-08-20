@@ -240,6 +240,48 @@ export function usePresence(userId: number): PresenceState {
   return presence;
 }</code></pre>
 
+    <div class="callout danger">
+      <div class="callout-title">Two bugs in that hook, and the second one is the lesson</div>
+      <p><strong>The clock is the wrong one.</strong>
+      <code>new Date().toISOString()</code> is the moment <em>we received the
+      event</em>, not the moment they went offline. Those differ by however long
+      the message spent in transit — and by a lot more if the app was
+      backgrounded and the server queued it. The server knows when they actually
+      went; take <code>payload.lastSeenAt</code> and do not invent one
+      locally.</p>
+      <p><strong>Nothing ever expires.</strong> Presence only changes here when
+      a <code>presence:update</code> arrives. So ask what happens when
+      <em>your own</em> socket drops: no more events arrive, the last one you
+      received said "online", and the dot stays green — for as long as you are
+      disconnected. <strong>A client with no connection shows the whole world as
+      online.</strong> It is the state you are least able to know anything in,
+      and the UI becomes most confident precisely then.</p>
+    </div>
+
+    <h3>Presence is a claim with an expiry date</h3>
+
+    <p>ADR-0003 stores presence in Redis as <strong>TTL keys</strong>: a client
+    refreshes its key periodically, and the key simply expires if it stops. That
+    design has no "user went offline" event at all — going offline is the
+    <em>absence</em> of a refresh — and the client has to think the same way.</p>
+
+    <p>So treat a presence record as evidence with a timestamp, not a fact.
+    Recent evidence that someone is online means they are online; the same
+    evidence an hour later means nothing. And distinguish two things the naive
+    version merges:</p>
+
+    <ul>
+      <li><strong>Their key went stale</strong> — we are connected, we would
+      have heard, we did not. They are offline.</li>
+      <li><strong>Our socket is down</strong> — we would not have heard
+      anything either way. We do not know, about them or about anyone.</li>
+    </ul>
+
+    <p>Those deserve different pixels. A grey dot meaning "offline" is a claim
+    about them; when the truth is "we cannot tell", showing it is a small lie
+    that the user will catch you in the first time they message someone who
+    replies instantly.</p>
+
     <h3>Displaying presence</h3>
 
     <pre><code>// app/src/components/PresenceDot.tsx
@@ -333,6 +375,25 @@ useEffect(() =&gt; {
 
     <p>This handles edge cases: server crashes mid-typing event, network drops the stop message, or the typing user's app crashes.</p>
 
+    <div class="callout danger">
+      <div class="callout-title">It also has an off-by-one-event bug worth understanding</div>
+      <p>The effect depends on <code>[isOtherTyping]</code>, so it re-runs only
+      when that value <em>changes</em>. Now picture someone writing a long
+      message: <code>typing:update { isTyping: true }</code> arrives every couple
+      of seconds. The first sets the state false → true and starts a 5-second
+      timer. Every one after that sets true → true, which React treats as no
+      change — the effect does not re-run and <strong>the timer is never
+      reset</strong>.</p>
+      <p>Five seconds after they <em>started</em>, the indicator vanishes, while
+      they are still typing. Then it never comes back, because every subsequent
+      event is still true → true.</p>
+      <p>The fix is to make the timer depend on something that changes with
+      every event rather than only with the transition — keep the timestamp of
+      the last typing event in state and depend on that. Which is the same
+      insight as the presence section above: <strong>store when you last heard,
+      not just what you last heard.</strong></p>
+    </div>
+
     <h2>Performance — avoiding unnecessary re-renders</h2>
 
     <p>Typing events fire frequently. Each <code>typing:update</code> message triggers a state change. Make sure only the <code>TypingIndicator</code> component re-renders — not the entire message list:</p>
@@ -404,9 +465,23 @@ export function MessageThreadScreen({ route, navigation }) {
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>Now build it yourself</h2>
+
+    <p>Write <code>presenceFor(state, now)</code> — the rule that turns a
+    presence record into something you are willing to put on screen. It is where
+    "we have not heard in a while" and "we could not have heard" stop being the
+    same thing.</p>
+
+    <div id="exercise-presence"></div>
+    <div id="pg-exercise-presence"></div>
+
+    <h3>And the screens it belongs to</h3>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="explain-a6-0003"></div>
 
     <hr>
 
@@ -422,6 +497,7 @@ export function MessageThreadScreen({ route, navigation }) {
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -474,7 +550,103 @@ console.log('30 seconds:', formatLastSeen(30000));
 console.log('5 minutes:', formatLastSeen(300000));
 console.log('2 hours:', formatLastSeen(7200000));`);
 
+    createSolution("exercise-presence", {
+      exercise: "Write presenceFor(state, now) — decide what the header may honestly claim about the other person.\n\nstate is { socketConnected, status, updatedAt }:\n\n  socketConnected — is OUR websocket up right now\n  status          — 'online' or 'offline', the last thing we were told\n  updatedAt       — epoch ms when we were told it\n\nnow is epoch ms. Treat a presence record as stale once it is STALE_MS = 60000 old or more.\n\nReturn one of three strings:\n\n  'unknown' — we are not in a position to say. Our socket is down, so no update could have reached us whatever happened at their end. This wins over everything else: a fresh 'online' record means nothing if we would not have heard about it changing.\n\n  'offline' — we are connected, and either we were told they are offline, or their record has gone stale. Presence is a Redis TTL key (ADR-0003): nobody sends a 'went offline' event, the key just stops being refreshed. So silence past the TTL IS the offline signal.\n\n  'online'  — we are connected and were told they are online, recently enough to still believe it.\n\nExactly at the boundary — a record precisely STALE_MS old — count it as stale. A TTL that has expired has expired.",
+      hints: [
+        "Check socketConnected first and return from it. Every other branch is a claim about them; this one is a fact about us, and it outranks all of them.",
+        "'stale' and 'offline' produce the same answer, so you can test them in either order — but only after the connection check, never before it.",
+        "now - updatedAt >= STALE_MS, not >. The boundary case is in the self-check, and an expired TTL is expired."
+      ],
+      solution: `const STALE_MS = 60000;
+
+function presenceFor({ socketConnected, status, updatedAt }, now) {
+  // A fact about us, not a claim about them — so it comes first.
+  // Without this the dot stays green for as long as we are offline.
+  if (!socketConnected) return "unknown";
+
+  // No "went offline" event exists: the TTL key simply stops being
+  // refreshed, so silence past the TTL is the signal.
+  if (now - updatedAt >= STALE_MS) return "offline";
+
+  return status === "online" ? "online" : "offline";
+}`
+    });
+
+    createPlayground("pg-exercise-presence", `// Write presenceFor(state, now) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+const NOW = 1_700_000_000_000;
+// 20s is comfortably fresh, 90s is comfortably stale, and neither is the
+// 60s boundary -- which is tested separately and on purpose.
+function state(socketConnected, status, agoMs) {
+  return { socketConnected: socketConnected, status: status, updatedAt: NOW - agoMs };
+}
+
+try {
+  if (typeof presenceFor !== "function") throw new Error("not written yet");
+
+  try {
+    const r = presenceFor(state(true, "online", 20000), NOW);
+    check("connected + told online + recent -> online", r === "online", "got " + r);
+  } catch (e) { check("connected + told online + recent -> online", false, "threw " + e.message); }
+
+  try {
+    const r = presenceFor(state(true, "offline", 20000), NOW);
+    check("connected + told offline -> offline", r === "offline", "got " + r);
+  } catch (e) { check("connected + told offline -> offline", false, "threw " + e.message); }
+
+  try {
+    // THE bug this function exists for. The record says online and is only
+    // 20s old -- but our socket is down, so no change could have reached
+    // us. Anything that answers 'online' here shows a green dot for the
+    // whole time the user is disconnected.
+    const r = presenceFor(state(false, "online", 20000), NOW);
+    check("our socket down -> 'unknown', even with a fresh online record", r === "unknown",
+          "got " + r + " -- we would not have heard if they left; this is a fact about US");
+  } catch (e) { check("our socket down -> 'unknown', even with a fresh online record", false, "threw " + e.message); }
+
+  try {
+    // 'unknown' must stay distinct from 'offline'. Reporting a stranger as
+    // offline when we simply cannot tell is a claim we have no basis for.
+    const r = presenceFor(state(false, "offline", 20000), NOW);
+    check("our socket down -> 'unknown', not 'offline'", r === "unknown",
+          "got " + r + " -- 'we cannot tell' and 'they are away' are different claims");
+  } catch (e) { check("our socket down -> 'unknown', not 'offline'", false, "threw " + e.message); }
+
+  try {
+    const r = presenceFor(state(true, "online", 90000), NOW);
+    check("a stale 'online' record expires to offline", r === "offline",
+          "got " + r + " -- nobody sends a 'went offline' event; the TTL key just stops being refreshed");
+  } catch (e) { check("a stale 'online' record expires to offline", false, "threw " + e.message); }
+
+  try {
+    const r = presenceFor(state(true, "online", 60000), NOW);
+    check("exactly at the 60s boundary counts as stale", r === "offline",
+          "got " + r + " -- an expired TTL has expired; use >= not >");
+  } catch (e) { check("exactly at the 60s boundary counts as stale", false, "threw " + e.message); }
+
+  try {
+    const r = presenceFor(state(true, "online", 59999), NOW);
+    check("one millisecond inside the window is still online", r === "online",
+          "got " + r + " -- do not round the whole last second away");
+  } catch (e) { check("one millisecond inside the window is still online", false, "threw " + e.message); }
+
+  try {
+    const r = presenceFor(state(false, "online", 90000), NOW);
+    check("disconnected AND stale is still 'unknown'", r === "unknown",
+          "got " + r + " -- the connection check outranks staleness, not the other way round");
+  } catch (e) { check("disconnected AND stale is still 'unknown'", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write presenceFor(state, now) above, then press Run. (" + e.message + ")");
+}`);
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is React Native typing and presence components with Animated, needing a device and a running server",
       exercise: "Build the complete typing and presence system (client side):\n\n1. Create `useTypingIndicator(conversationId)` hook: sends typing:start on first keystroke, resets 3-second timer on each keystroke, sends typing:stop when timer expires or when message is sent.\n\n2. Create `TypingIndicator` component: listens for typing:update events, shows animated bouncing dots + 'typing' text, auto-clears after 5 seconds (safety timeout).\n\n3. Create `usePresence(userId)` hook: fetches initial presence via REST, listens for presence:update events, returns { status, lastSeenAt }.\n\n4. Create `PresenceDot` component: green dot for online, gray for offline, with optional label ('Online' / 'Last seen 5m ago').\n\n5. Integrate into MessageThread: typing debounce on the TextInput's onChangeText, TypingIndicator between messages and input, presence in the header.\n\n6. Test: open two clients in the same conversation. Type in one — verify 'typing...' appears in the other. Stop typing — verify it disappears after 3 seconds.",
       hints: [
         "useRef for isTyping and the timeout — they don't need to trigger re-renders, just track state between events.",
@@ -510,6 +682,10 @@ console.log('2 hours:', formatLastSeen(7200000));`);
 // - Each component has its own WS subscription
 // - Typing events don't re-render the message FlatList
 // - Presence changes don't re-render the message FlatList`
+    });
+
+    createExplain("explain-a6-0003", {
+      prompt: "<code>presenceFor</code> returns three values where the original hook had two. Explain what <code>unknown</code> means that <code>offline</code> cannot, why the check that produces it has to come first, and what the user would see if it came last instead."
     });
 
     createQuiz("lesson-quiz", [
