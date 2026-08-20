@@ -1458,6 +1458,67 @@ costs a query.
 
 Status: `b7/0002` `unverifiable → verified`. 52/96.
 
+### Session of 2026-08-20 (continued) — b7/0003 completes B7, and a schema nobody chose
+
+`b7/0003`'s endpoint code turned out to be the best in the module: transition
+rules written as `WHERE` clauses so the database enforces them, idempotency
+handled properly, and a 404 scoped by owner so "not yours" and "does not
+exist" are one answer. It simply had nothing runnable in it.
+
+`planTransition(token, action)` is the state machine on its own, and it was
+built deliberately **storage-agnostic** — see below for why that mattered.
+
+**The distinction it exists for is worth carrying past this lesson:**
+`unchanged` and `refused` are different answers. Both leave the state exactly
+as it was. One is a request that was already satisfied, the other one that can
+never be satisfied, and over HTTP they are a 204 and an error.
+
+Collapsing them has a victim in either direction, which is what makes it worth
+a test rather than a comment. Fold *unchanged* into *refused* and a user
+hammering the revoke button on a bad connection is told their revocation
+failed — so they try again harder, or conclude the token is still live. Fold
+*refused* into *unchanged* and resuming a revoked token reports success.
+
+**Then the thing that stopped this being a normal M3 pass.**
+
+The lesson claimed its timestamp-based state model "matched B7.1 and B7.2". It
+does not. **Five places disagree about how token state is stored**, and the
+disagreement is substantive rather than a typo: `b1/0001` and `b2/0001` have a
+`status` enum *and* a `revoked_at`; `b7/0001` reads `status`; `b7/0002` reads
+`revoked_at`/`paused_at`; and this lesson writes timestamps while arguing
+against the enum in one section and declaring `TokenStatus` with a transitions
+table in another. `CLAUDE.md` says `status`.
+
+**Both designs have a real case**, and `b7/0003` makes the harder one well: a
+timestamp answers *when*, which an audit needs, and transitions become `WHERE`
+clauses the database enforces rather than checks two concurrent requests can
+both pass. That is a better argument than "an enum is simpler", and it is not
+one to overrule while tidying.
+
+So this was **not** resolved. The temptation was strong — this session has
+fixed a dozen contradictions by picking the side that agreed with the ADRs, and
+`CLAUDE.md` does say `status`. But that rule was written without this argument
+in front of it, and the difference between *the docs are right and the code
+drifted* and *the code found something the docs did not consider* is the whole
+distinction between a fix and an overrule. The first is what this session has
+been doing. The second needs the student.
+
+What was done instead: the false claim is corrected, the lesson now describes
+the disagreement accurately, the likely synthesis is named (`status` to read,
+timestamps to write, a `CHECK` keeping them in step — which `b2/0001` already
+half-builds), and it is queued as a B2 decision in `SESSION.md` alongside the
+related `use_count` question. `planTransition` sidesteps it entirely, which is
+why the exercise is about outcomes rather than columns.
+
+**The general form, and it is the counterweight to everything else this
+session found:** a lesson disagreeing with the documents is usually the lesson
+being wrong, and this session has proved that a dozen times. It is not
+*always*. The check is whether the lesson is making an argument the documents
+never answered — and if it is, the answer is a flag, not an edit.
+
+Status: `b7/0003` `unverifiable → verified`. B7 complete, three of three.
+53/96.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees

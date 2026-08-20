@@ -12,50 +12,74 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean. **52/96 verified**, audit green, suites pass.
+**Nothing.** Working tree clean. **53/96 verified**, audit green, suites pass.
+**B7 is complete** — three of three.
 
-### b7/0002 and the max_uses root cause (2026-08-20)
+### ⚠ Open decision for the student: how token state is stored
 
-`b7/0002` was already the strongest lesson in its module — "Why this way (and
-what was rejected)", five "When this breaks" subsections, a real deny-by-default
-argument. What it lacked was anything runnable. It now has
-`evaluateRuleSet(rules, action, ctx)`.
+Found while finishing B7, and **not** settled by me, because both designs have
+a real case and five places currently disagree:
 
-**The wrong-cases there share a shape worth naming:** the mistake is never a
+| Where | Stores state as |
+|---|---|
+| `b1/0001`, `b2/0001` | a `status` enum **and** a `revoked_at` timestamp |
+| `b7/0001` | reads `status` |
+| `b7/0002` | reads `revoked_at` / `paused_at` |
+| `b7/0003` | writes timestamps, and argues against the enum — while declaring `TokenStatus` and a transitions table in an earlier section |
+| `CLAUDE.md` | "The `status` column holds `active | paused | revoked`" |
+
+**The case for the enum:** one value to read, and the thing `displayStatus`
+and `canRedeem` already branch on.
+
+**The case for timestamps** (`b7/0003` makes it well): a timestamp answers
+*when*, which an audit trail needs, and transition rules become `WHERE`
+clauses the **database** enforces — `resume` only applies
+`WHERE revoked_at IS NULL` — rather than checks in application code that two
+concurrent requests can both pass.
+
+**The likely synthesis, already half-built in `b2/0001`:** `status` is the
+value you read, timestamps are the values you write, and a `CHECK` keeps them
+in step (`b2/0001` already has `CHECK ((status != 'revoked') OR (revoked_at IS
+NOT NULL))`). Cost: two things to keep consistent.
+
+**Nothing is blocked by this.** `b7/0003` now describes the disagreement
+instead of asserting a winner, and `planTransition` is deliberately storage-
+agnostic — the state machine is identical either way. It wants a B2 decision,
+not a patch.
+
+**Related and also open:** whether the use count is a stored `use_count`
+column or a query over `conversations`. `b7/0001`, `b7/0002` and `b2/0001`
+disagree three ways. Same B2 decision, same reasoning.
+
+### b7/0003 — the distinction the exercise exists for
+
+**`unchanged` and `refused` are different answers.** Both leave the state
+exactly as it was; one is a request already satisfied and the other can never
+be satisfied, and they become a 204 and an error.
+
+Collapsing them has a victim in either direction. Fold *unchanged* into
+*refused* and a user hammering the revoke button on a bad connection is told
+their revocation failed — so they try harder, or believe the token is still
+live. Fold *refused* into *unchanged* and resuming a revoked token reports
+success.
+
+### b7/0002 and the max_uses root cause
+
+`evaluateRuleSet` — the wrong-cases share a shape: the mistake is never a
 wrong *answer*, it is a **missing refusal**. Every one falls through to
-`allowed` on input it did not understand, and the worst of them reads as
-tolerance — an older server meets a rule type a newer client wrote, shrugs, and
-grants an action the owner had restricted.
+`allowed` on input it did not understand, and the worst reads as tolerance.
 
-**Then the thing found by reading rather than grepping.** `b2/0001`, the
-canonical schema lesson, said outright: *"max_uses = 0 means unlimited.
-Otherwise it's a cap."* That is the exact inverse of `CLAUDE.md`, which calls
-this one of "the two conventions that keep being got backwards".
+**Then the root cause.** `b2/0001` said *"max_uses = 0 means unlimited"* — the
+inverse of `CLAUDE.md`. That defect had already been fixed **three times**
+downstream (a5/0003 twice, and a wrong-case in `b7/0001` written the same
+morning), each recorded as a local slip. The column was
+`INTEGER NOT NULL DEFAULT 0`, making unlimited inexpressible and defaulting
+every token to permitting nothing; the constraint had inverted with it.
+Seventeen replacements across three lessons.
 
-**It was the root of a defect already fixed three times downstream** — a5/0003's
-sample row, a5/0003's non-nullable interface, and a wrong-case in `b7/0001`'s
-`canRedeem`. Each was treated as a local slip. It was the schema.
-
-- The column was `INTEGER NOT NULL DEFAULT 0`, which breaks both ends: `NOT
-  NULL` makes unlimited inexpressible, `DEFAULT 0` makes every token created
-  without an explicit limit permit **nothing**. Now nullable, no default.
-- `CHECK (max_uses = 0 OR use_count <= max_uses)` read 0 as the unlimited case,
-  so a token capped at zero would have accepted uses forever. Now `IS NULL`.
-- Seventeen replacements across `b2/0001`, `b1/0001` and `b1/0003`, including a
-  query using `max_uses > 0` to mean "has a limit".
-
-**The lesson for the next pass: when the same defect has been fixed three
-times, stop fixing it and go find where it is defined.** Three downstream
-repairs cost more than the one-line schema change would have, and left the
-source intact to produce more.
-
-### Open: the `uses` counter question
-
-`b7/0002` reads a `uses` column; `b7/0001` counts rows in `conversations`;
-`b2/0001` has `use_count`. The column-name half is settled (take `0001`'s), but
-**whether the count is a stored counter or a query is a genuine B2 decision**
-and is deliberately not picked. A counter is one number to read and one more
-thing that can drift; counting is always right and costs a query.
+**The rule: when the same defect has been fixed three times, stop fixing it
+and go find where it is defined.** The tell is a wrong-case that feels
+familiar.
 
 ### The three open decisions are settled (2026-08-20)
 
@@ -238,13 +262,13 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 **Continue M3 with the scattered singles.** One lesson at a time, one commit
 each.
 
-**Done:** A3, A4, A5, A6, A8, B5, plus `b3/0002`, `b7/0001`, `b7/0002`.
-**Remaining:** A11, B2, B10, `b3/0001`, `b3/0003`, `b3/0004`, `b7/0003`.
+**Done:** A3, A4, A5, A6, A8, B5, **all of B7**, plus `b3/0002`.
+**Remaining:** A11, B2, B10, `b3/0001`, `b3/0003`, `b3/0004`.
 
-**Take `b7/0003` (revocation & pause) next** — it completes B7, it is the
-third side of the state model `canRedeem` and `evaluateRuleSet` now cover, and
-it is where the `status` versus `revoked_at`/`paused_at` question above will
-either be settled or shown to matter.
+**Take B2 next**, and read it as a *decision* pass rather than an M3 one. Two
+open schema questions are now queued against it — the state model and the use
+count — and B2 is where both belong. Its own M3 function can come out of the
+same reading.
 
 | Work | Gate |
 |---|---|
@@ -312,7 +336,7 @@ Per-item status only. The plan itself is in `TOKEN-TRACK.md`; the counts are in
 | 4 — the operating track | not started, deliberately |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
-| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus `b3/0002`, `b7/0001` and `b7/0002`; ~6 left |
+| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus `b3/0002` and all of B7; ~6 left |
 
 ### M3 — where it has reached
 
@@ -347,6 +371,7 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `b3/0002` | `matchRoute` | first match wins by *registration order*, never by specificity |
 | `b7/0001` | `canRedeem` | `null` ≠ `0` for `max_uses`; null-check `expires_at` before parsing; every refusal looks identical from outside |
 | `b7/0002` | `evaluateRuleSet` | an unknown rule type is *refused*, not ignored; `typeof [] === "object"`; ALL rules must pass |
+| `b7/0003` | `planTransition` | `unchanged` ≠ `refused`; revoked is terminal; revoke is never refused |
 
 **A5 note:** not one of the five had a `createExplain` prompt or loaded
 `explain.js`. All five now do. A5 predates the practice pattern being made
