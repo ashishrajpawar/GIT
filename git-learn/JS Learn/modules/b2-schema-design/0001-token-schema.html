@@ -81,7 +81,7 @@ EXECUTE FUNCTION update_updated_at();</code></pre>
   label       TEXT NOT NULL,
   status      TEXT NOT NULL DEFAULT 'active'
               CHECK (status IN ('active', 'paused', 'revoked')),
-  max_uses    INTEGER NOT NULL DEFAULT 0
+  max_uses    INTEGER            -- NULL = unlimited. 0 = no uses at all.
               CHECK (max_uses >= 0),
   use_count   INTEGER NOT NULL DEFAULT 0
               CHECK (use_count >= 0),
@@ -94,11 +94,43 @@ EXECUTE FUNCTION update_updated_at();</code></pre>
   CHECK (
     (status != 'revoked') OR (revoked_at IS NOT NULL)
   ),
-  -- Business rule: if max_uses > 0, use_count can't exceed it
+  -- Business rule: when a limit is SET, use_count can't exceed it.
+  -- IS NULL, not = 0 -- 0 is a real limit meaning "no uses permitted".
   CHECK (
-    max_uses = 0 OR use_count <= max_uses
+    max_uses IS NULL OR use_count <= max_uses
   )
 );</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">The one column on this table that is easy to get backwards</div>
+      <p><strong><code>NULL</code> means unlimited. <code>0</code> means no
+      uses at all.</strong> Opposite meanings, and the tempting schema —
+      <code>INTEGER NOT NULL DEFAULT 0</code> — breaks both ends of it:
+      <code>NOT NULL</code> makes "unlimited" impossible to write down, and
+      <code>DEFAULT 0</code> makes every token created without an explicit
+      limit permit <em>nothing</em>. Issued and instantly unusable.</p>
+      <p>So the column is nullable and has no default. There is no safe default
+      here, and the database declining to guess is the point: a token's limit
+      is a decision the caller has to make.</p>
+      <p>Notice what this does to the constraint. "Use count cannot exceed the
+      limit" only applies <em>when there is a limit</em>, which is
+      <code>max_uses IS NULL OR use_count &lt;= max_uses</code>. Writing
+      <code>max_uses = 0 OR …</code> instead reads 0 as the unlimited case and
+      quietly inverts the whole rule — a token capped at zero would accept
+      uses forever.</p>
+      <p>The same trap follows the value out of the database. In JavaScript
+      only one of the two is falsy:</p>
+      <pre><code>// WRONG -- 0 is falsy, so "no uses permitted"
+// is read as "no limit set".
+if (token.max_uses) { checkLimit(); }
+
+// RIGHT -- asks the question actually being asked.
+if (token.max_uses != null) { checkLimit(); }</code></pre>
+      <p><code>expires_at</code> one row below behaves the same way: NULL means
+      never expires, and <code>new Date(null)</code> is 1 January 1970 —
+      comfortably in the past — so parsing before checking for null marks every
+      never-expiring token as expired.</p>
+    </div>
 
     <p>Let's unpack the decisions:</p>
 
@@ -106,7 +138,9 @@ EXECUTE FUNCTION update_updated_at();</code></pre>
       <li><strong>code</strong> — the user-visible identifier (e.g. <code>MERC-8GH2-KP4X</code>). UNIQUE enforced by the database.</li>
       <li><strong>label</strong> — who the token is for ("Amazon Delivery", "NoBroker Agent"). The user names them.</li>
       <li><strong>status</strong> — only three valid values, enforced by CHECK. You cannot invent a fourth state by accident.</li>
-      <li><strong>max_uses = 0</strong> means unlimited. Otherwise it's a cap.</li>
+      <li><strong>max_uses NULL</strong> means unlimited; any number is a cap,
+      and <strong>0 is the cap that permits nothing</strong>. See the callout
+      below — this is the single easiest thing on this table to get backwards.</li>
       <li><strong>use_count</strong> — how many times the token has been redeemed. Simpler than counting redemption_events every time.</li>
       <li><strong>expires_at</strong> — nullable. If set, the token auto-expires. Your API checks this on every redemption.</li>
       <li><strong>ON DELETE RESTRICT</strong> — you can't delete a user who has tokens. Explicit cleanup first.</li>
@@ -211,14 +245,14 @@ CREATE TABLE tokens (
   label       TEXT NOT NULL,
   status      TEXT NOT NULL DEFAULT 'active'
               CHECK (status IN ('active', 'paused', 'revoked')),
-  max_uses    INTEGER NOT NULL DEFAULT 0 CHECK (max_uses >= 0),
+  max_uses    INTEGER CHECK (max_uses >= 0),   -- NULL = unlimited
   use_count   INTEGER NOT NULL DEFAULT 0 CHECK (use_count >= 0),
   expires_at  TIMESTAMPTZ,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   revoked_at  TIMESTAMPTZ,
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CHECK ((status != 'revoked') OR (revoked_at IS NOT NULL)),
-  CHECK (max_uses = 0 OR use_count <= max_uses)
+  CHECK (max_uses IS NULL OR use_count <= max_uses)
 );
 
 -- Access rules
@@ -315,14 +349,14 @@ CREATE TABLE tokens (
   label       TEXT NOT NULL,
   status      TEXT NOT NULL DEFAULT 'active'
               CHECK (status IN ('active', 'paused', 'revoked')),
-  max_uses    INTEGER NOT NULL DEFAULT 0 CHECK (max_uses >= 0),
+  max_uses    INTEGER CHECK (max_uses >= 0),   -- NULL = unlimited
   use_count   INTEGER NOT NULL DEFAULT 0 CHECK (use_count >= 0),
   expires_at  TIMESTAMPTZ,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   revoked_at  TIMESTAMPTZ,
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CHECK ((status != 'revoked') OR (revoked_at IS NOT NULL)),
-  CHECK (max_uses = 0 OR use_count <= max_uses)
+  CHECK (max_uses IS NULL OR use_count <= max_uses)
 );
 
 CREATE TABLE access_rules (
@@ -417,7 +451,7 @@ COMMIT;
           "INSERT INTO tokens (code, user_id, label) VALUES ('C', 1, 'Test');"
         ],
         correct: 1,
-        explanation: "The CHECK constraint says: max_uses = 0 OR use_count <= max_uses. With max_uses = 3 and use_count = 5, use_count exceeds max_uses — the database rejects this. It's impossible to have a token used more times than its limit allows."
+        explanation: "The CHECK constraint says: max_uses IS NULL OR use_count <= max_uses. With max_uses = 3 and use_count = 5, a limit IS set and use_count exceeds it — the database rejects the row. It is impossible to store a token used more times than its limit allows. Note the IS NULL rather than = 0: NULL is the unlimited case, and 0 is a genuine limit that happens to permit nothing."
       },
       // --- Questions 6–25 ---
       {
@@ -443,9 +477,9 @@ COMMIT;
       {
         type: "fill-blank",
         question: "Complete the CHECK constraint that ensures max_uses is never negative:",
-        code: "max_uses INTEGER NOT NULL DEFAULT 0\n  CHECK (max_uses ___ 0),",
+        code: "max_uses INTEGER\n  CHECK (max_uses ___ 0),",
         answer: ">=",
-        explanation: "CHECK (max_uses >= 0) ensures you can never insert a negative usage limit. Combined with the default of 0 (meaning unlimited), this constraint guarantees the column always holds a sensible value."
+        explanation: "CHECK (max_uses >= 0) ensures you can never store a negative usage limit. Note what the column does NOT say: no NOT NULL and no DEFAULT. NULL is the unlimited case, so forbidding it would make 'unlimited' inexpressible — and a NULL passes a CHECK constraint, which is exactly what we want. There is no default because there is no safe one: 0 would mean every token created without an explicit limit permits nothing at all."
       },
       {
         question: "Why does the tokens table store use_count as a separate column instead of counting redemption_events each time?",
@@ -545,7 +579,7 @@ COMMIT;
         variants: [
           "SELECT * FROM tokens WHERE user_id = 1 AND status = 'active';",
           "INSERT INTO tokens (code, user_id, label, max_uses) VALUES ('X', 999, 'Test', 0);",
-          "UPDATE tokens SET use_count = use_count + 1 WHERE id = 1 AND (max_uses = 0 OR use_count < max_uses);"
+          "UPDATE tokens SET use_count = use_count + 1 WHERE id = 1 AND (max_uses IS NULL OR use_count < max_uses);"
         ],
         correct: 1,
         explanation: "If user_id = 999 doesn't exist in the users table, the foreign key constraint rejects the INSERT. The REFERENCES users(id) clause means every token must belong to an existing user. This prevents orphaned tokens that reference non-existent users."
@@ -600,7 +634,7 @@ COMMIT;
         question: "What's the result of this UPDATE on a token with max_uses = 5 and use_count = 5?",
         code: "UPDATE tokens SET use_count = use_count + 1 WHERE id = 1;",
         answer: "ERROR: new row violates check constraint — use_count (6) exceeds max_uses (5)",
-        explanation: "The CHECK (max_uses = 0 OR use_count <= max_uses) constraint fires on every UPDATE. With max_uses = 5, use_count cannot exceed 5. The database blocks the increment, ensuring a token can never be used more times than its limit — even if application code forgets to check."
+        explanation: "The CHECK (max_uses IS NULL OR use_count <= max_uses) constraint fires on every UPDATE. With max_uses = 5, use_count cannot exceed 5. The database blocks the increment, so a token can never be used more times than its limit even if application code forgets to check. The IS NULL branch is what exempts unlimited tokens; a token with max_uses = 0 is NOT exempt, because 0 is a limit that permits nothing."
       },
       {
         type: "which-breaks",

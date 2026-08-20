@@ -14,7 +14,7 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1885 words |
+| Avg teaching prose per track lesson | 1891 words |
 | Lessons with a playground | 74 / 96 |
 | Lessons with an exercise | 96 / 96 |
 | **Deepened** (all 3 spine sections) | 16 / 96 |
@@ -85,9 +85,9 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a7-voice-video | 5 | 1279 | 6 | 6 | 138 | 0/5 | 1/5 |
 | a8-redemption-web | 4 | 1722 | 8 | 8 | 115 | 0/4 | 4/4 |
 | a9-deep-linking | 2 | 1167 | 2 | 2 | 53 | 0/2 | 0/2 |
-| b1-sql-fundamentals | 4 | 905 | 0 | 4 | 103 | 0/4 | 0/4 |
+| b1-sql-fundamentals | 4 | 984 | 0 | 4 | 103 | 0/4 | 0/4 |
 | b10-security-compliance | 2 | 2673 | 2 | 2 | 50 | 1/2 | 0/2 |
-| b2-schema-design | 3 | 1032 | 0 | 3 | 81 | 0/3 | 0/3 |
+| b2-schema-design | 3 | 1133 | 0 | 3 | 81 | 0/3 | 0/3 |
 | b3-node-http-server | 4 | 1593 | 2 | 5 | 117 | 2/4 | 1/4 |
 | b4-auth-server | 3 | 1969 | 0 | 3 | 81 | 2/3 | 0/3 |
 | b5-websocket-server | 3 | 1961 | 6 | 6 | 77 | 0/3 | 3/3 |
@@ -199,13 +199,13 @@ so they do not hold the audit red. They are **not** resolved.
 | a8-redemption-web/0004-no-app-experience.html | 1907 | 9 | 2 | 2 | 27 | — | yes |
 | a9-deep-linking/0001-universal-links-app-links.html | 1112 | 7 | 1 | 1 | 28 | — | n/a |
 | a9-deep-linking/0002-in-app-deep-link-handling.html | 1222 | 9 | 1 | 1 | 25 | — | n/a |
-| b1-sql-fundamentals/0001-tables-insert-select.html | 946 | 9 | 0 | 1 | 26 | — | n/a |
+| b1-sql-fundamentals/0001-tables-insert-select.html | 1226 | 10 | 0 | 1 | 26 | — | n/a |
 | b1-sql-fundamentals/0002-joins-relationships.html | 828 | 10 | 0 | 1 | 25 | — | n/a |
-| b1-sql-fundamentals/0003-indexes-transactions-constraints.html | 935 | 11 | 0 | 1 | 26 | — | n/a |
+| b1-sql-fundamentals/0003-indexes-transactions-constraints.html | 972 | 11 | 0 | 1 | 26 | — | n/a |
 | b1-sql-fundamentals/0004-postgres-specifics.html | 910 | 8 | 0 | 1 | 26 | — | n/a |
 | b10-security-compliance/0001-security-hardening.html | 2987 | 20 | 1 | 1 | 25 | yes | n/a |
 | b10-security-compliance/0002-dpdp-act.html | 2359 | 11 | 1 | 1 | 25 | — | n/a |
-| b2-schema-design/0001-token-schema.html | 1090 | 8 | 0 | 1 | 26 | — | n/a |
+| b2-schema-design/0001-token-schema.html | 1393 | 9 | 0 | 1 | 26 | — | n/a |
 | b2-schema-design/0002-messaging-schema.html | 1075 | 8 | 0 | 1 | 26 | — | n/a |
 | b2-schema-design/0003-migrations.html | 932 | 11 | 0 | 1 | 29 | — | n/a |
 | b3-node-http-server/0001-nodejs-fundamentals.html | 806 | 10 | 1 | 1 | 29 | — | n/a |

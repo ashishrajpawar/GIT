@@ -94,7 +94,7 @@ UPDATE tokens
 SET status = 'revoked', revoked_at = NOW()
 WHERE code = 'MERC-8GH2-KP4X'
 AND (SELECT COUNT(*) FROM redemption_events WHERE token_id = 1) >= max_uses
-AND max_uses > 0;
+AND max_uses IS NOT NULL;   -- NULL is unlimited. 0 is a limit, not the absence of one.
 
 COMMIT;  -- all three succeed together</code></pre>
 
@@ -134,7 +134,8 @@ UNIQUE (user_id, issued_to);</code></pre>
     <pre><code>-- Status must be one of three values
 CHECK (status IN ('active', 'paused', 'revoked'))
 
--- max_uses must be non-negative
+-- max_uses must be non-negative when it is set at all.
+-- NULL passes a CHECK constraint, which is what we want here: unlimited.
 CHECK (max_uses >= 0)
 
 -- allowed hours must be valid
@@ -157,7 +158,7 @@ user_id INTEGER REFERENCES users(id) ON DELETE CASCADE</code></pre>
     <h3>DEFAULT — automatic values</h3>
     <pre><code>status TEXT NOT NULL DEFAULT 'active'
 created_at TIMESTAMP NOT NULL DEFAULT NOW()
-max_uses INTEGER NOT NULL DEFAULT 0</code></pre>
+max_uses INTEGER   -- nullable: NULL is unlimited, 0 permits nothing</code></pre>
 
     <h2>Putting it together — Token's safety net</h2>
 
@@ -196,7 +197,7 @@ max_uses INTEGER NOT NULL DEFAULT 0</code></pre>
 
   <script>
     createSolution("exercise-1", {
-      exercise: "Write a complete token redemption transaction. It should: (1) BEGIN the transaction, (2) SELECT the token by code with FOR UPDATE to lock it, (3) Check that the token is active (if not, ROLLBACK), (4) INSERT a redemption_event, (5) If the redemption count now equals max_uses and max_uses > 0, UPDATE the token to 'revoked', (6) COMMIT. Also: create the indexes Token needs for its most common queries.",
+      exercise: "Write a complete token redemption transaction. It should: (1) BEGIN the transaction, (2) SELECT the token by code with FOR UPDATE to lock it, (3) Check that the token is active (if not, ROLLBACK), (4) INSERT a redemption_event, (5) If max_uses IS NOT NULL and the redemption count now equals it, UPDATE the token to 'revoked' -- note IS NOT NULL, not > 0: NULL means unlimited and 0 is a real limit, (6) COMMIT. Also: create the indexes Token needs for its most common queries.",
       hints: [
         "FOR UPDATE goes at the end of the SELECT statement.",
         "In real code (Node.js), you'd check the SELECT result in JavaScript and decide whether to ROLLBACK or continue. In pure SQL, you can use a conditional with DO blocks, but a simple linear script showing the concept is fine.",
@@ -228,11 +229,12 @@ VALUES (
   '103.42.55.12'
 );
 
--- Step 3: Check if max_uses is reached, auto-revoke if so
+-- Step 3: Check if max_uses is reached, auto-revoke if so.
+-- IS NOT NULL, not > 0 -- NULL is unlimited, and 0 is a real limit.
 UPDATE tokens
 SET status = 'revoked', revoked_at = NOW()
 WHERE code = 'MERC-8GH2-KP4X'
-  AND max_uses > 0
+  AND max_uses IS NOT NULL
   AND (
     SELECT COUNT(*)
     FROM redemption_events

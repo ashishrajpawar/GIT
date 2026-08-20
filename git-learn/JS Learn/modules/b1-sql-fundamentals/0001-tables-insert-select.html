@@ -85,7 +85,7 @@ psql token_dev</code></pre>
   user_id     INTEGER NOT NULL REFERENCES users(id),
   issued_to   TEXT NOT NULL,
   status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'revoked')),
-  max_uses    INTEGER NOT NULL DEFAULT 0,
+  max_uses    INTEGER,   -- NULL means unlimited; 0 means no uses at all
   created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
   revoked_at  TIMESTAMP
 );</code></pre>
@@ -95,11 +95,44 @@ psql token_dev</code></pre>
       <li><code>REFERENCES users(id)</code> — a <strong>foreign key</strong>. This token must belong to a real user. Postgres rejects inserts with a non-existent user_id.</li>
       <li><code>CHECK (status IN (...))</code> — a constraint. Only these three values are allowed. The database enforces this, not your app code.</li>
       <li><code>revoked_at TIMESTAMP</code> — no NOT NULL, so it can be null (token not yet revoked)</li>
+      <li><code>max_uses INTEGER</code> — <strong>deliberately nullable, and
+      deliberately without a default.</strong> See the callout below; this is
+      the one column on this table where getting the nullability wrong changes
+      what the product can express.</li>
     </ul>
 
     <div class="callout success">
       <div class="callout-title">Why constraints matter</div>
       <p>A revoked token must <strong>never</strong> be honoured. If that rule lives only in application code, a bug can bypass it. If it's a database constraint, it's physically impossible to violate — the database rejects the invalid state before it's stored. Token's privacy promise depends on this.</p>
+    </div>
+
+    <div class="callout danger">
+      <div class="callout-title">Why <code>max_uses</code> is nullable, and why it has no default</div>
+      <p>The obvious definition is <code>INTEGER NOT NULL DEFAULT 0</code>. It
+      is tidy, it removes a null from the schema, and it is wrong twice over.</p>
+      <p>In Token, <strong><code>NULL</code> means unlimited and <code>0</code>
+      means no uses at all.</strong> Those are opposite meanings. So
+      <code>NOT NULL</code> makes "unlimited" impossible to write down, and
+      <code>DEFAULT 0</code> makes every token that does not name a limit
+      default to <em>permitting nothing</em> — issued and instantly unusable.</p>
+      <p>There is no default because there is no safe one. A token without a
+      stated limit is a decision the caller has to make, and the database
+      declining to guess is the point.</p>
+      <p>It bites in application code too, and the trap is that only one of the
+      two values is falsy:</p>
+      <pre><code>// WRONG -- max_uses of 0 is falsy, so this reads
+// "no uses permitted" as "no limit set".
+if (token.max_uses) { checkLimit(); }
+
+// RIGHT -- asks the question actually being asked.
+if (token.max_uses != null) { checkLimit(); }</code></pre>
+      <p>The same shape appears one column over. <code>expires_at</code> null
+      means never expires — and <code>new Date(null)</code> is 1 January 1970,
+      comfortably in the past, so parsing before checking for null marks every
+      never-expiring token as expired.</p>
+      <p>In SQL the equivalent slip is <code>WHERE max_uses &gt; 0</code> to mean
+      "has a limit". Zero <em>is</em> a limit. The test for whether a limit
+      exists is <code>IS NOT NULL</code>.</p>
     </div>
 
     <h2>INSERT — adding data</h2>
@@ -250,7 +283,7 @@ CREATE TABLE tokens (
   user_id     INTEGER NOT NULL REFERENCES users(id),
   issued_to   TEXT NOT NULL,
   status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'revoked')),
-  max_uses    INTEGER NOT NULL DEFAULT 0,
+  max_uses    INTEGER,   -- NULL means unlimited; 0 means no uses at all
   created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
   revoked_at  TIMESTAMP
 );
