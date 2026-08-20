@@ -79,7 +79,8 @@ export default {
     <h2>RTCPeerConnection lifecycle</h2>
 
     <pre><code>// 1. Create the peer connection
-const pc = new RTCPeerConnection({ iceServers });
+// iceTransportPolicy: 'relay' is NOT optional in Token — see the note below.
+const pc = new RTCPeerConnection({ iceServers, iceTransportPolicy: 'relay' });
 
 // 2. Get local media (microphone, camera)
 const stream = await mediaDevices.getUserMedia({ audio: true, video: false });
@@ -107,6 +108,59 @@ pc.ontrack = (event) =&gt; {
 
 // 7. Hang up
 pc.close();</code></pre>
+
+    <h2>Why every connection above says <code>iceTransportPolicy: 'relay'</code></h2>
+
+    <p>Step 5 above — "exchange ICE candidates" — sounds like plumbing. It is
+    not. <strong>An ICE candidate is an IP address and a port.</strong> Sending
+    candidates to the other side is not a detail of how the connection is made;
+    it <em>is</em> the connection being made, and each side reads the other's
+    addresses in the process.</p>
+
+    <p>There are three kinds. <code>host</code> is the device's own address on
+    its network. <code>srflx</code> ("server reflexive") is the public address a
+    STUN server reports seeing. <code>relay</code> is the TURN server's address,
+    standing in for the device. Only the third one keeps the user's address to
+    itself.</p>
+
+    <p>So think about who is on the other end of a Token call. Someone redeemed
+    a code — a delivery company, an estate agent, whoever scanned a QR label off
+    a parcel. They are a stranger by design: they know a label and nothing else.
+    On a direct or STUN-assisted path they now also know the user's home IP
+    address, which geolocates to a neighbourhood.</p>
+
+    <div class="callout danger">
+      <div class="callout-title">Omitting this one line defeats everything else</div>
+      <p>The codes are hashed so the database cannot reveal them. The messages are
+      ciphertext the server cannot read. The holder's token carries no identity.
+      And then one <code>srflx</code> candidate hands over an address good
+      enough to find the user's street.</p>
+    </div>
+
+    <p>That is why it is not a setting, and why you will not find a toggle for
+    it anywhere in the app. A privacy control the endangered party cannot reach
+    is not a control — and the holder is on a web page with no account and no
+    settings screen. Whatever a toggle said, the product's <em>default</em>
+    behaviour is its real behaviour. See ADR-0008 in the Token repo.</p>
+
+    <p>It is not free, and you should know the price before you write it:</p>
+
+    <ul>
+      <li><strong>Every call is relayed, including two people in the same
+      room.</strong> There is no fast path any more, and the detour costs
+      latency.</li>
+      <li><strong>Relay bandwidth is the likeliest surprise on the bill.</strong>
+      coturn carries the full media stream of every call in both directions, so
+      video is real egress rather than roughly nothing.</li>
+      <li><strong>A coturn outage is a total call outage</strong>, not a
+      degraded one. Under the default policy a broken TURN server breaks the
+      hard cases; here it breaks all of them.</li>
+    </ul>
+
+    <p>Note the consequence for STUN: under this policy it is <em>never</em>
+    used. Its only output is the <code>srflx</code> candidate, which is exactly
+    what we are suppressing — so Token configures no STUN server at all. A STUN
+    entry here would be dead configuration that reads like a fallback.</p>
 
     <h2>The PeerConnection wrapper</h2>
 
@@ -145,7 +199,14 @@ export class TokenPeerConnection {
 
   async initialize() {
     const iceServers = await getIceServers();
-    this.pc = new RTCPeerConnection({ iceServers });
+
+    // Relay-only, always. Not a setting, not a parameter of this class.
+    // ICE candidates ARE IP addresses: any non-relay path hands the other
+    // side the user's home address. See ADR-0008.
+    this.pc = new RTCPeerConnection({
+      iceServers,
+      iceTransportPolicy: 'relay',
+    });
 
     // ICE candidates → send via signalling
     this.pc.onicecandidate = (event) =&gt; {
@@ -733,15 +794,15 @@ console.log('Failure: connecting → failed → closed');`);
       {
         type: "spot-the-bug",
         question: "This TURN configuration doesn't work. What's wrong?",
-        code: "const pc = new RTCPeerConnection({\n  iceServers: [\n    { urls: 'stun:stun.l.google.com:19302' },\n    { urls: 'turn:turn.tokn.app:3478' },\n  ],\n  iceTransportPolicy: 'relay',\n});",
+        code: "const pc = new RTCPeerConnection({\n  iceServers: [\n    { urls: 'turn:turn.tokn.app:3478' },\n  ],\n  iceTransportPolicy: 'relay',\n});",
         options: [
           "TURN servers require username and credential — they're missing",
-          "You can't mix STUN and TURN in the same iceServers array",
+          "iceServers must also list a STUN server, or ICE gathering never starts",
           "Port 3478 is only for STUN, not TURN",
           "iceTransportPolicy should be 'turn' not 'relay'"
         ],
         correct: 0,
-        explanation: "TURN servers require authentication — you must provide username and credential fields. Without them, the TURN allocation request is rejected (401 Unauthorized). STUN doesn't need credentials. Fix: { urls: 'turn:turn.tokn.app:3478', username: 'tokenUser', credential: 'secret' }. In Token, these short-lived credentials come from the API server (TURN REST API)."
+        explanation: "TURN servers require authentication — you must provide username and credential fields. Without them, the TURN allocation request is rejected (401 Unauthorized). Fix: { urls: 'turn:turn.tokn.app:3478', username: 'tokenUser', credential: 'secret' }. In Token, these short-lived credentials come from the API server (TURN REST API). Note what is NOT the bug: there is no STUN server here and there should not be. STUN's only product is a srflx candidate, which is exactly what a relay-only policy discards — configuring one would be dead configuration that reads like a working fallback."
       }
     ]);
   </script>
