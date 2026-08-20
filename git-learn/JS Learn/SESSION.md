@@ -12,74 +12,63 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean. **A6, A7, B5, `b3/0002` and the whole
-code-in-URL-path sweep are done** — 2026-08-20, audit green, five suites pass
-throughout. **50/96 verified.**
+**Nothing.** Working tree clean. **51/96 verified**, audit green, five suites
+pass.
 
-### The URL-path sweep is closed — and the list here had been wrong
+### The three open decisions are settled (2026-08-20)
 
-ADR-0007 is now respected everywhere. Ten lessons were fixed, not the four
-this file recorded: `b3/0002`, `b7/0001`, `a9/0002`, `a2/0002`, `a3/0001`,
-`a3/0002`, `a3/0003`, `b3/0003`, `b4/0003`, `b10/0001`, `x2/0002`.
+The student was asked directly and answered. All three are now implemented and
+committed; none is still waiting.
 
-**`b7/0001` was the one that mattered and was not on the list at all.** It is
-the redemption endpoint — `POST /tokens/:code/redeem`, reading the code from
-`req.params` and then hashing it. The lesson took care to store only a hash
-and an encrypted copy, and handed the plaintext to the proxy access log on the
-way in. `a9/0002` was second worst: a **GET**, so every redemption wrote a live
-capability into the log.
+| Decision | Outcome |
+|---|---|
+| **Presence default** | **Deny-by-default confirmed.** The issuer's presence is not sent to holders. Rule stays `share_presence`, named for what it grants. Already in `b5/0003`; nothing further to do. |
+| **Holder JWT** | **Swap `tokenCode` for the conversation id.** Done — and the server was already correct, see below. |
+| **ADR-0008 relay** | **Keep all three scenarios on the record**, rather than one winner. Mode A in force, Mode B pre-approved with a written trigger, Mode C rejected. |
 
-**Two counting failures worth remembering**, because both look like "there was
-nothing there":
+**ADR-0008 is now shaped around that answer, not just concluded.** The three
+modes are named, costed in a table, and given switch conditions — because the
+choice depends on a number nobody has yet (real relay egress). **Mode B needs
+no new ADR**; moving to it means recording the date and the numbers. What the
+rewrite does *not* do is reopen the default: everything where the issuer's
+address is disclosed to a holder by default now sits under *Rejected outright*,
+separately, so it cannot drift back in as "just another mode".
 
-1. The original list was assembled by reading rather than grepping, and missed
-   six lessons.
-2. My first grep was piped to `head`, which silently hid `b7/0001` and
-   `x2/0002`. **A truncated search and a clean search look identical.**
+The measured figures the trigger depends on: **~29 MB per hour of voice against
+~450 MB for 480p video** — so ~38,000 voice hours per TB against ~2,400. Voice
+is effectively free; video is ~16× worse and is what will run out. A product
+that turns out to be mostly voice can stay in Mode A indefinitely.
 
-**Do not "finish the job" on these — they are correct:**
+### The JWT decision found a worse thing next door
 
-- `a8/0002` and `b7/0001` both name `/api/tokens/:code` **in order to reject
-  it**. That is the corrected lesson doing its job.
-- `a9/0002`'s `/t/MERC-8GH2-KP4X` **page** URL, and the `route.params.code` it
-  produces. ADR-0007 permits exactly this one path — a browser has to reach the
-  redemption page somehow — and defends it with headers instead (`a8/0004`).
-- `02/0009`'s `delete params.code` is a navigation-params object, not a URL.
+The server was **already right** — `b7/0001`'s `HolderPayload` is
+`{ conversationId, tokenId, holderName }`, no code. The defect was that
+`a8/0002` documented a payload the server never mints, in both its copyable
+snippet and a quiz question. Another cross-lesson contradiction.
 
-**A second ADR-0007 defect surfaced during the sweep:** `a2/0002`'s
-`TokenListItem` included `code`, against "GET /tokens returns no `code` field
-at all". That is the same defect `a5/0003` had. **Nobody has grepped for it
-across the course** — worth a pass of its own, looking for list/index types and
-responses that carry `code`.
+Then **`b8/0001` put the token code in a push notification**, twice: in
+`data`, which travels through FCM/APNs and sits on Google's or Apple's servers
+until the device collects it, and in the visible body text — *"Ravi is calling
+via MERC-8GH2-KP4X"* — which renders on a locked screen and enters the OS
+notification history. FCM/APNs is the one third party this architecture
+accepts, and the bargain is that they route bytes. Now sends the **label** the
+issuer chose. **A push payload is a log held by someone else.**
 
-**The rename trap, now hit once:** a mechanical `:code` → `:id` across a quiz
-updates the `code:` field and leaves `answer:` and `explanation:` stale,
-because they are separate fields. `b3/0002` shipped that inconsistency for
-about a minute. Re-read every question you touch.
+### b7/0001 — the bug was not the one I went looking for
 
-### ⚠ One product call needs your confirmation
+`FOR UPDATE` turned out to be **handled**: flagged in a NOTE, explained under
+"When this breaks", and the exercise solution already does
+`pool.connect`/`BEGIN`/`COMMIT` correctly. Left alone.
 
-**Presence is now deny-by-default: the issuer's online status is not sent to
-holders.** `b5/0003` previously decided the opposite — *"By default, presence
-is shown. The issuer can add a rule to hide it."*
+The real defect sat on the screen *next to the keyspace analysis*. That section
+computes ~25,000 years of guessing — then the endpoint answered four
+distinguishable ways, and the **404-vs-403 split told a guesser whether a code
+exists at all**. That converts "guess a code that works" into "guess a code
+that exists", a far cheaper problem, and dead tokens get un-paused.
 
-This was changed rather than flagged-and-left, because it is **applying** an
-existing decision rather than making a new one: `CLAUDE.md`'s governing product
-rule is that nobody gets anything from the user that the user did not issue
-them. Issuing a courier a delivery token grants a way to ask about a parcel; it
-is not consent to a live feed of when the issuer is at home. Presence sampled
-over a fortnight is a behavioural profile, not a single fact.
-
-The rule is renamed `share_presence` — **named for what it grants**, so a
-missing or unreadable rule fails closed. The asymmetry is deliberate and
-argued in the lesson: the issuer *does* see the holder, who entered the
-relationship knowingly.
-
-**If you disagree, this one is cheap to reverse** — it is one lesson, one
-exercise and one quiz question, and no ADR was written for it. Say so and it
-goes back. It is called out here because it is a product decision, not a
-technical one, and the last three of those went the wrong way for months
-before anyone looked.
+**The keyspace figure assumes each guess teaches the attacker nothing.** Two
+sections of one page contradicting each other — the same shape as A6, A7 and
+B5, and the fourth time this session.
 
 ### What B5 cost
 
@@ -208,18 +197,19 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 cluster left; these are one lesson at a time. One commit per lesson, so an
 abrupt stop loses at most one.
 
-**B5 and `b3/0002` are done.** Remaining M3 singles: **A11, B2, B7, B10** —
-plus `b3/0001`, `b3/0003` and `b3/0004`, which are still `unverifiable`.
+**Done so far in M3:** A3, A4, A5, A6, A8, B5, plus `b3/0002` and `b7/0001`.
+**Remaining singles: A11, B2, B10**, plus `b3/0001`, `b3/0003`, `b3/0004` and
+`b7/0002+`.
 
-**Take `b7/0001` next.** The sweep has just been through it, so its
-redemption logic is fresh and correct — and it is the densest remaining
-lesson: token generation, the redemption transaction, status/expiry/max_uses
-checks. Its own "When this breaks" section already admits `FOR UPDATE` through
-`pool.query` does nothing, which is a defect sitting in the open waiting for
-an exercise to pin it down.
+**Two small security passes are queued ahead of them, both cheap:**
 
-Also worth doing, and small: grep the course for `code` in list responses and
-list types (the `a2/0002` defect above).
+1. **Grep for `code` in list responses and list types.** `a2/0002`'s
+   `TokenListItem` carried it and `a5/0003` had the identical defect — second
+   sighting, so it is a pattern. ADR-0007: `GET /tokens` returns no `code`
+   field at all.
+2. **Grep for the denial-oracle shape.** `b7/0001` answered code guesses four
+   different ways; `b10/0001` and `b4/0003` also handle redemption failures and
+   have not been read for this.
 
 | Work | Gate |
 |---|---|
@@ -238,25 +228,37 @@ the course for months. Pitch to the profile in `CLAUDE.md` and let them steer.
 
 ### Open questions for the student
 
-1. **How far ahead of yourself should this build?** M3 is real work that keeps
-   finding real defects, but every lesson it touches is modules ahead of Module
-   01. Raised twice; the answer both times was to continue.
+Both were raised on 2026-08-20 alongside the three that got settled, and
+neither was answered. They are not blocking anything.
+
+1. **How far ahead of yourself should this build?** M3 keeps finding real
+   defects, but every lesson it touches is modules ahead of Module 01. Raised
+   three times now; the answer each time has been to continue.
 2. **Is a TypeScript-aware runner worth building?** Four lessons can never be
-   verified without one. It is the only category that a rewrite cannot fix.
+   verified without one — `a2/*` and `a3/0002`. It is the only category a
+   rewrite cannot fix.
+
+**How to ask, based on what worked.** The three decisions that got answered on
+2026-08-20 were answered only after being restated in **money, minutes and
+concrete failure**, with the options laid out and the cost of each spelled out.
+The first framing named ADR numbers and `iceTransportPolicy` and got nothing
+back. The second said "voice is effectively free, video costs about 450 MB an
+hour, and if the relay server goes down nobody can call" — and got a decision,
+plus a better answer than any option offered ("keep all 3"). **Do not ask an
+architecture question in architecture vocabulary.**
 
 ## Blocked on
 
-**Nothing.** ADR-0008 was the only blocker and it is resolved (accepted
-2026-08-20, delegated by the student — see *In progress*).
+**Nothing.** ADR-0008 was the only blocker and it is settled — see *In
+progress*.
 
-One thing to raise with the student rather than act on: **relay egress is now a
-certainty, not a risk.** ADR-0003 expressed the single-box ceiling in
+**One thing to carry to deployment, not to act on now:** relay egress is a
+certainty rather than a risk. ADR-0003 expressed the single-box ceiling in
 connections and memory; relayed video adds an egress ceiling that will probably
-arrive first — roughly 2,400 hours of relayed video per TB against ~38,000 for
-voice. Nothing to do yet, but TURN bandwidth should be monitored from the first
-deploy so the trend is visible before an invoice is. The response, if it bites,
-is named in ADR-0008: narrow relay-only to `web/` redemption calls, **not**
-weaken it everywhere.
+arrive first — ~2,400 hours of relayed video per TB against ~38,000 for voice.
+**Monitor TURN bandwidth from the first deploy**, so the trend is visible
+before an invoice is. If it bites, ADR-0008's Mode B is pre-approved and needs
+no new decision.
 
 ---
 
@@ -275,7 +277,7 @@ Per-item status only. The plan itself is in `TOKEN-TRACK.md`; the counts are in
 | 4 — the operating track | not started, deliberately |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
-| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`); ~3 left |
+| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus `b3/0002` and `b7/0001`; ~7 left |
 
 ### M3 — where it has reached
 
@@ -307,6 +309,8 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `b5/0001` | `sweepSockets` | the heartbeat is a *two-tick* protocol; `undefined` ≠ `false` |
 | `b5/0002` | `deliveryPlan` | local miss ≠ offline; never republish a pub/sub message; ignore your own echo |
 | `b5/0003` | `canSeePresence` | deny by default; status before role; a granting rule fails closed when absent |
+| `b3/0002` | `matchRoute` | first match wins by *registration order*, never by specificity |
+| `b7/0001` | `canRedeem` | `null` ≠ `0` for `max_uses`; null-check `expires_at` before parsing; every refusal looks identical from outside |
 
 **A5 note:** not one of the five had a `createExplain` prompt or loaded
 `explain.js`. All five now do. A5 predates the practice pattern being made

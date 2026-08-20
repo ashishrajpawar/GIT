@@ -1260,6 +1260,86 @@ key still said `MERC-8GH2 true doctor`.
 Status: `b3/0002` `unverifiable → verified` (50/96). Nine further lessons
 edited and all re-verified against their stored reasons and wrong-cases.
 
+### Session of 2026-08-20 (continued) — the student answers, and b7/0001
+
+The student asked to be given the open decisions with options, then asked for
+the pros and cons in plain terms before answering. Worth recording as a
+working note: **the questions were answered readily once the costs were stated
+in money and minutes rather than in architecture.** The first framing named
+ADR-0008 and `iceTransportPolicy`; the second said "voice is effectively free,
+video costs about 450 MB an hour, and your relay server going down means no
+calls at all". Only the second got an answer.
+
+**Three decisions, all settled.**
+
+*Presence stays deny-by-default.* Confirmed as it stood. Nothing to do.
+
+*The holder JWT swaps `tokenCode` for the conversation id.* Straightforward,
+and it turned up two things on the way. The server was **already correct** —
+`b7/0001`'s `HolderPayload` never carried the code — so the defect was that
+`a8/0002` documented a payload the server does not mint. And then `b8/0001`
+turned out to put the code in a **push notification**, in the `data` payload
+that FCM and APNs store until the device collects it, and in the visible body
+text that renders on a locked screen. That is worse than the JWT case and was
+on no list. A push payload is a log held by someone else.
+
+*ADR-0008: keep all three scenarios.* The answer was not one of the three
+options offered — it was "can u keep all 3". That is a better answer than any
+of them, and it changed the shape of the ADR rather than its conclusion. The
+three modes are now named, costed in a table, and given switch triggers, on the
+grounds that the choice depends on a number nobody has yet. **Mode B is
+pre-approved and needs no new ADR.**
+
+The care taken there: keeping three modes on the record must not become a way
+for the rejected default to creep back. So everything where the issuer's
+address is disclosed to a holder by default — Mode C, per-token opt-outs,
+automatic fallback when TURN is slow — sits under *Rejected outright*, in its
+own section, explicitly not on the same line as A and B.
+
+**Then b7/0001, where the bug was not the one advertised.**
+
+`SESSION.md` had promised a `FOR UPDATE` concurrency bug sitting in the open.
+It was not there: the lesson flags it in a NOTE, explains it under "When this
+breaks", and the exercise solution already does
+`pool.connect`/`BEGIN`/`COMMIT` correctly. A note written from a grep rather
+than from reading the file.
+
+The real defect was on the screen next to the keyspace analysis. That section
+derives 31<sup>12</sup> ≈ 7.9 × 10<sup>17</sup> — about 25,000 years of
+guessing — and then the endpoint replied four distinguishable ways: 404 "Token
+not found" for a code that does not exist, and three different 403s for codes
+that do.
+
+**The 404-vs-403 split is the serious half**, and the framing worth keeping:
+the keyspace figure is only true if each guess teaches the attacker nothing.
+It converts "guess a code that works" into "guess a code that *exists*", which
+is a much cheaper problem — and an inactive code is worth collecting, because
+paused tokens get un-paused.
+
+You cannot spend 25,000 years of keyspace on security and give some of it back
+at the error handler, because the attacker chooses which measurement to use.
+
+**Two sections of one page contradicting each other. That is the fourth time
+this session** — after `a7/0005`, `b5/0002` and `b5/0003` — and the pattern is
+now specific enough to hunt: *find the page's own security claim, then check
+what the code on the same page actually does.*
+
+The cost is stated plainly in the lesson rather than skipped: a holder whose
+token genuinely expired sees "This link is not valid" and cannot tell why. That
+is the right trade, because the issuer sees the true state on a screen that
+required a login. **The person who cannot be told is the person who has not
+proved they should know.**
+
+`canRedeem(token, ctx)` carries it, along with the two null/zero rules that
+CLAUDE.md keeps warning about. Eight wrong-cases; the two best refuse
+*correctly* every time and leak anyway — `allow` and `reason` are right and
+only the response gives it away — including the version with one message but
+two status codes, which feels safe and is not. A ninth over-corrects by
+collapsing the internal reason too, making the response safe and the logs
+useless.
+
+Status: `b7/0001` `unverifiable → verified`. 51/96.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees
