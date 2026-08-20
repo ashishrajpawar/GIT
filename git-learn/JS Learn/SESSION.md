@@ -12,12 +12,46 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean. **A5 and A8 are both complete** — nine lessons
-verified 2026-08-19.
+**Nothing.** Working tree clean. **ADR-0008 is accepted and the A7 pass it
+unblocked is done** — four commits, 2026-08-20, audit green, five suites pass.
+
+**The student delegated the decision** ("u decide"). ADR-0008 records that
+explicitly, because it is the one architecture decision here that is not
+theirs and the cost lands on a bill they pay. It also now carries a *What would
+change our mind* section, so reversing it is an argument against stated
+criteria rather than a fresh fight. **If the student disagrees, overturn the
+ADR — the lessons now follow it and should not be edited first.**
+
+What landed:
+
+| Unit | Repo | Result |
+|---|---|---|
+| Accept ADR-0008; retire "offered" from `ARCHITECTURE.md`, ADR-0003, ADR-0004 | token | `248af2c` |
+| `a7/0001` — the two copyable snippets had no `iceTransportPolicy` | course | `2f081f8` |
+| `a7/0005` — rewritten off the toggle premise, + M3 | course | `57e81de`, now **verified** |
+| `a7/README.html` — "giving users control" | course | in `57e81de` |
+
+**A7 was worse than the missing line predicted.** `a7/0005` was not omitting the
+policy — it was a complete worked implementation of the design ADR-0008
+rejects: an `AsyncStorage` toggle, `iceTransportPolicy: relayOnly ? 'relay' :
+'all'`, **defaulting to off**, and an exercise telling the student to build it.
+Its guidance read *"Tokens for known contacts (friends, family) — relay OFF is
+fine. They already know where you live"*, and **a quiz question keyed that same
+reasoning as correct**, calling it "Token's philosophy of user-controlled
+privacy rules".
+
+That is a **product** error wearing WebRTC clothes. Token's value is with
+entities that do *not* know the user (`CLAUDE.md` § "Where the product is worth
+most"). The exception was being taught as the rule.
+
+`a7/0001` was the ordinary half and the now-familiar shape: four quiz questions
+taught relay-only correctly while both snippets the student actually copies were
+bare `new RTCPeerConnection({ iceServers })`. It also had **no prose section on
+the topic at all** — the policy existed only in answer text.
 
 Next: **A6 (chat/realtime)**, then the scattered singles (A11, B2, B3, B5, B7,
-B10). Also worth doing before more M3: the two follow-ups below, which are both
-security-shaped and both cross-module.
+B10). Also still open: the two follow-ups below, both security-shaped and both
+cross-module.
 
 **`a8/0003` had the worst defect found so far and it was not the function.**
 The browser `RTCPeerConnection` had no `iceTransportPolicy: 'relay'`, TURN was
@@ -85,23 +119,17 @@ the course for months. Pitch to the profile in `CLAUDE.md` and let them steer.
 
 ## Blocked on
 
-**A decision the student owns: ADR-0008, relay-only ICE.** Written 2026-08-19,
-status **proposed**, in the token repo.
+**Nothing.** ADR-0008 was the only blocker and it is resolved (accepted
+2026-08-20, delegated by the student — see *In progress*).
 
-`a8/0003` now teaches `iceTransportPolicy: 'relay'` as mandatory. ADR-0003,
-ADR-0004 and `ARCHITECTURE.md` all describe it as *offered* — a setting. That
-is a real disagreement and it was created by this session, so it is flagged
-rather than absorbed: the lesson outran the documented decision.
-
-The argument for making it mandatory is that ICE candidates are IP addresses,
-the holder is a stranger on a web page with no settings screen, and a default
-that leaks is the behaviour of the product. The argument against is the bill:
-every call relayed, coturn on the critical path with no graceful degradation,
-and egress likely to become the binding ceiling before connection count does.
-
-**Either outcome needs work.** Accepted → `a7-voice-video` needs the same
-treatment. Rejected → `a8/0003` must be reverted to match. Nothing else in M3
-depends on it, so it does not block the remaining lessons.
+One thing to raise with the student rather than act on: **relay egress is now a
+certainty, not a risk.** ADR-0003 expressed the single-box ceiling in
+connections and memory; relayed video adds an egress ceiling that will probably
+arrive first — roughly 2,400 hours of relayed video per TB against ~38,000 for
+voice. Nothing to do yet, but TURN bandwidth should be monitored from the first
+deploy so the trend is visible before an invoice is. The response, if it bites,
+is named in ADR-0008: narrow relay-only to `web/` redemption calls, **not**
+weaken it everywhere.
 
 ---
 
@@ -120,7 +148,7 @@ Per-item status only. The plan itself is in `TOKEN-TRACK.md`; the counts are in
 | 4 — the operating track | not started, deliberately |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
-| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A8 complete; ~10 left |
+| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A8 complete, A7 partly (`0005`); ~9 left |
 
 ### M3 — where it has reached
 
@@ -145,11 +173,29 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `a8/0001` | `checkWebEnv` | the `VITE_` **prefix** is the test, not the name |
 | `a8/0003` | `reconnectPlan` | backoff spaces one client, only jitter spaces the herd |
 | `a8/0004` | `headersFor` | route matching that neither publishes codes nor hides `/terms` |
+| `a7/0005` | `relayAudit` | only the *succeeded* pair counts; only *our* side is ours to judge; no evidence ≠ safe |
 
 **A5 note:** not one of the five had a `createExplain` prompt or loaded
 `explain.js`. All five now do. A5 predates the practice pattern being made
 universal, so **check the other pre-pattern modules for the same gap** — A6–A11
-and B5–B10 are the likely ones.
+and B5–B10 are the likely ones. **Confirmed in A7:** `0005` had neither, which
+makes this a reliable prediction rather than a guess. Assume the gap is present
+in every pre-pattern module until checked.
+
+**A7 note — check the lesson's *premise*, not only its snippets.** Every earlier
+M3 pass looked for wrong code inside a lesson whose framing was sound. `a7/0005`
+was the opposite: the code correctly implemented a design that was itself
+rejected, so nothing in the file looked wrong on its own terms. A quiz question
+even keyed the rejected reasoning as *correct*. **A lesson can be internally
+consistent and still teach the wrong thing** — the check that catches it is
+reading the lesson against the ADRs, not against itself.
+
+**A7's other three lessons are clean and do not need re-checking.** `0002`,
+`0003` and `0004` never construct an `RTCPeerConnection` — they use the wrapper
+from `0001`, whose single construction site is now correct. `0002`'s one
+`RTCPeerConnection` hit is the word inside a cleanup description. They remain
+`unverifiable` (device + TURN) and are M3 candidates only if a plain function
+turns up in them; nobody has looked yet.
 
 **Every A5 lesson contained a defect in its own prose or snippets, not just a
 missing exercise.** Read what a lesson already ships before writing the

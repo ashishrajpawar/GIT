@@ -926,10 +926,101 @@ wrong and they will be got wrong again.
 Both are in `SESSION.md` with detail. Both are security-shaped, which is why
 they were not folded quietly into an unrelated commit:
 
-1. **`a7-voice-video` is the mobile half of the ICE decision** and was written
+1. ~~**`a7-voice-video` is the mobile half of the ICE decision** and was written
    by the same pass as `a8/0003`. If it is missing `iceTransportPolicy`, calls
-   from the app leak the same addresses.
-2. **The code-in-the-URL-path form survives in four other lessons.**
+   from the app leak the same addresses.~~ **Done 2026-08-20** — and the guess
+   was half right in the worst way: `0001` was missing the line, while `0005`
+   had built a toggle for turning it off. See the session below.
+2. **The code-in-the-URL-path form survives in four other lessons.** Still open.
+
+### Session of 2026-08-20 — ADR-0008 accepted, and a lesson that was consistently wrong
+
+Asked where things stood and what to do next, the student answered **"u decide"**.
+So the blocked decision was taken rather than parked again, and A7 — the work it
+gated — was done in the same session. Four commits, audit green throughout.
+
+**The decision, and why it was made this way.** ADR-0008 proposed
+`iceTransportPolicy: 'relay'` as mandatory rather than offered. It sat at
+*proposed* because the cost lands on a bandwidth bill the student pays. Accepted,
+on the grounds that the rejection branch was worse in kind, not merely in degree:
+rejecting meant reverting `a8/0003` to teach a redemption page that hands a
+stranger the issuer's home IP, defeating the hashed codes and the E2EE in one
+hop, for a person who has no settings screen to defend themselves with. The
+bandwidth cost is visible and can be responded to; a disclosed address cannot be
+withdrawn.
+
+**What was done to keep that from being a quiet power grab.** The ADR records
+that the student delegated it, names the reversal path, and says plainly that
+if they disagree the thing to overturn is the ADR and not the lessons. A *What
+would change our mind* section was added with criteria stated in advance —
+relay egress becoming the binding ceiling points at narrowing relay-only to
+`web/` redemption calls, which is the first thing to reconsider and is
+explicitly **not** "make it a user setting". Reversal is now an argument
+against written criteria rather than a fresh fight, which is the only version
+of this that survives a future session.
+
+`ARCHITECTURE.md`, ADR-0003 and ADR-0004 all said *offered*; that word is gone,
+and ADR-0004's "STUN: Google's public servers" line is struck through as
+superseded. Under a relay-only policy STUN's only output is the `srflx`
+candidate being suppressed, so a configured STUN server is dead configuration
+that reads like a fallback.
+
+**Then A7 turned out to be a different kind of defect from anything M3 had hit.**
+The prediction was a missing line. `a7/0001` was indeed that — four quiz
+questions teaching relay-only correctly while both copyable snippets constructed
+a bare `new RTCPeerConnection({ iceServers })`, and no prose section on the
+subject at all. Familiar shape; the documents were right and the code was wrong,
+for the third time in this project.
+
+`a7/0005` was not that. It was a **complete, careful, internally consistent
+implementation of the design ADR-0008 rejects** — an `AsyncStorage`-backed
+"Hide IP Address" toggle defaulting to off, `iceTransportPolicy: relayOnly ?
+'relay' : 'all'`, a Settings UI, and an exercise instructing the student to
+build the whole thing. Its guidance said *"Tokens for known contacts (friends,
+family) — relay OFF is fine. They already know where you live"*, and **a quiz
+question keyed that reasoning as the correct answer**, describing it as "Token's
+philosophy of user-controlled privacy rules".
+
+That is the lesson worth carrying forward. **Nothing in the file was wrong on
+its own terms.** The code matched the prose, the quiz matched the code, the
+explanation was coherent. Every check this project has — the audit, the
+verifier, the pre-block scanner, reading the lesson carefully — passes a
+document that is wrong only in its premise. The thing that caught it was
+reading the lesson *against the ADRs*, and the only reason anyone did that was
+that ADR-0008 explicitly asked for A7 to be checked.
+
+It is also a **product** error rather than a WebRTC one, which is why it went
+unnoticed by people thinking about WebRTC. Token's value is with entities that
+do not know the user; the lesson took the one case where the product matters
+least and taught it as the general rule.
+
+**M3 got its function anyway, and it is a good one.** `relayAudit(reports)` asks
+whether the policy actually took effect on a live call — a leak that produces no
+symptom, since the call connects and sounds fine. It pins down three things a
+first attempt gets wrong: only the `succeeded` candidate pair counts (a *failed*
+relay pair sitting beside a succeeded `host` pair is exactly what a real leak
+looks like in the stats); only `localCandidateType` is ours to judge, because
+the remote peer runs its own policy and "check both ends" reports a problem that
+is not ours; and finding nothing must fail closed, because an audit that
+reassures you when it learned nothing is worse than no audit.
+
+Eight wrong-cases, and the thing that makes them a set rather than a list:
+**every one fails in the safe-looking direction.** There is no mistake here that
+over-reports a leak. That asymmetry was deliberate — a false "leaking" costs an
+afternoon, a false "protected" is the guarantee silently not holding.
+
+**One arithmetic correction worth naming**, because it had been sitting in the
+cost section unchallenged: the lesson claimed ~2,200 hours of relayed *voice*
+per TB. Voice is ~38,000 hours; it is **video** that is ~2,400. The 16× gap
+between them is the entire point of the paragraph, and the wrong figure had
+flattened it. The same section also reasoned that "only some users enable
+relay" — which the toggle made true and ADR-0008 makes false. 100% of calls are
+relayed now, so that is the real bill rather than a worst case.
+
+Status: `a7/0005` moved `unverifiable` → `verified` (43/96). It also had no
+`createExplain` prompt and did not load `explain.js` — the same gap found in all
+five A5 lessons, which makes it a reliable prediction for the pre-pattern
+modules rather than a coincidence.
 
 ### Watch out when editing this file from a shell
 
