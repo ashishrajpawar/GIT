@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Relay-Only Mode &amp; IP Privacy — A7.5</title>
+  <title>Relay-Only Calls &amp; IP Privacy — A7.5</title>
   <link rel="stylesheet" href="../../assets/styles.css" />
 </head>
 <body>
@@ -14,10 +14,10 @@
       <span class="sep">›</span>
       <a href="./README.html">A7 — Voice &amp; Video</a>
       <span class="sep">›</span>
-      <span class="current">Relay-Only Mode &amp; IP Privacy</span>
+      <span class="current">Relay-Only Calls &amp; IP Privacy</span>
     </nav>
 
-    <h1>Relay-Only Mode &amp; IP Privacy</h1>
+    <h1>Relay-Only Calls &amp; IP Privacy</h1>
     <div class="lesson-meta">
       <span>A7 — Lesson 5 of 5</span>
       <span>~40 min</span>
@@ -25,7 +25,8 @@
 
     <div class="callout">
       <div class="callout-title">Why this matters for Token</div>
-      <p>In a normal WebRTC call, both peers exchange their IP addresses during ICE negotiation. An IP address can reveal your approximate location and ISP. For a privacy app where the whole point is that holders DON'T know who you are, leaking your IP is a problem. Relay-only mode forces all traffic through your TURN server — neither peer ever learns the other's IP. It's the final layer of Token's privacy promise.</p>
+      <p>In a normal WebRTC call, both peers exchange their IP addresses during ICE negotiation — that exchange <em>is</em> how the connection gets made. An IP address gives away your approximate location and your ISP. For a product whose entire promise is that the holder learns a label and nothing else, that is not a rough edge, it is the promise failing. Routing every call through your own TURN server closes it: the only address either side sees is the relay's.</p>
+      <p>This lesson is also the one where you decide something harder than a config value — whether a privacy control with a real cost should be a choice you offer the user, or a property of the product they cannot switch off. Token answers that differently from most apps, and the reasoning matters more than the line of code.</p>
     </div>
 
     <h2>The IP exposure problem</h2>
@@ -48,16 +49,20 @@ candidate: "candidate:2 1 udp 1686052607 103.45.67.89 12345 typ srflx"
       <li>Target you for network-level attacks</li>
     </ul>
 
-    <h2>The solution: iceTransportPolicy: 'relay'</h2>
+    <h2>The fix: iceTransportPolicy: 'relay'</h2>
 
-    <pre><code>// Normal mode (default):
+    <p>One line, and it is worth seeing both values side by side once — but read
+    the first as <em>what every other calling app does</em>, not as a mode Token
+    can be put into:</p>
+
+    <pre><code>// The WebRTC default — what a normal video app ships:
 const pc = new RTCPeerConnection({
   iceServers,
   iceTransportPolicy: 'all',  // try host, srflx, then relay
 });
 // Both peers learn each other's IPs during ICE
 
-// Relay-only mode:
+// Token, on every call, in app/ and web/ alike:
 const pc = new RTCPeerConnection({
   iceServers,
   iceTransportPolicy: 'relay',  // ONLY use TURN relay
@@ -68,7 +73,7 @@ const pc = new RTCPeerConnection({
 
     <table>
       <thead>
-        <tr><th></th><th>Normal (all)</th><th>Relay-only</th></tr>
+        <tr><th></th><th>WebRTC default (<code>all</code>)</th><th>Token (<code>relay</code>)</th></tr>
       </thead>
       <tbody>
         <tr><td>IP privacy</td><td>Both IPs exposed</td><td>Both IPs hidden</td></tr>
@@ -79,99 +84,110 @@ const pc = new RTCPeerConnection({
       </tbody>
     </table>
 
-    <h2>Implementing the user setting</h2>
+    <h2>Why there is no toggle</h2>
 
-    <pre><code>// app/src/settings/privacy.ts
-import AsyncStorage from '@react-native-async-storage/async-storage';
+    <p>Your instinct here — it was this lesson's instinct too, for a while — is
+    to make it a setting. A switch in Settings called "Hide IP Address",
+    persisted, honest about the trade-off, letting the user choose. That is what
+    a normal video-calling app does, and it is wrong for Token in a way worth
+    slowing down over.</p>
 
-const RELAY_ONLY_KEY = 'settings:relay_only';
+    <p><strong>Ask who the setting would protect, and then ask whether that
+    person can reach it.</strong></p>
 
-export async function getRelayOnlyMode(): Promise&lt;boolean&gt; {
-  const value = await AsyncStorage.getItem(RELAY_ONLY_KEY);
-  return value === 'true';
-}
+    <p>A Token call has two ends. One is the user, who has the app, an account
+    and a Settings screen. The other is the <em>holder</em> — someone who
+    scanned a QR code off a parcel and opened a web page. They have no account,
+    no app and no settings. They cannot turn anything on.</p>
 
-export async function setRelayOnlyMode(enabled: boolean): Promise&lt;void&gt; {
-  await AsyncStorage.setItem(RELAY_ONLY_KEY, String(enabled));
-}</code></pre>
+    <p>So a toggle can only ever be the issuer's. And the address that leaks is
+    also the issuer's. Which means the control and the risk sit with the same
+    person — the one who has to have understood ICE candidates well enough to go
+    looking for a switch, before their first call with a stranger.</p>
 
-    <h3>Integrating into PeerConnection</h3>
+    <div class="callout danger">
+      <div class="callout-title">A default that leaks is the behaviour of the product</div>
+      <p>Whatever the toggle says, most people never open Settings. If the
+      default is <code>'all'</code>, then "Token discloses your home IP address
+      to whoever redeems your token" is a true sentence about the product —
+      the toggle does not make it false, it just means you wrote down that you
+      knew.</p>
+    </div>
+
+    <p>There is a second, quieter problem with the version of this lesson that
+    shipped a toggle. Its guidance said: <em>tokens for known contacts — friends,
+    family — relay off is fine, they already know where you live.</em> Read that
+    against what Token is for. The product's value is with the delivery company,
+    the estate agent, the job application: <strong>people who do not know the
+    user and never should.</strong> The exception was being offered as the rule.</p>
+
+    <p>And the system cannot check the claim anyway. "These two already know each
+    other" is not something the API can verify — it is something the user
+    asserts, once, in a settings screen, about every call they will ever make.</p>
+
+    <h3>What the code looks like instead</h3>
+
+    <p>Simpler than the toggle version, which is usually the sign you have got
+    it right:</p>
 
     <pre><code>// app/src/webrtc/PeerConnection.ts — in initialize():
-import { getRelayOnlyMode } from '../settings/privacy';
 
 async initialize() {
   const iceServers = await getIceServers();
-  const relayOnly = await getRelayOnlyMode();
 
   this.pc = new RTCPeerConnection({
     iceServers,
-    iceTransportPolicy: relayOnly ? 'relay' : 'all',
+    iceTransportPolicy: 'relay',   // never 'all', never a variable
   });
 
   // ... rest of initialization
 }</code></pre>
 
-    <h2>Settings UI</h2>
+    <p>No import, no read, no ternary. The one thing to notice is that
+    <code>'relay'</code> is a <em>literal</em>. The moment it becomes a variable,
+    something somewhere can set it to <code>'all'</code>, and the leak is one
+    stale config value away.</p>
+
+    <h2>What the user sees instead of a switch</h2>
+
+    <p>Removing the toggle does not mean saying nothing. It means the Settings
+    screen states a property of the product rather than offering a decision:</p>
 
     <pre><code>// app/src/screens/Settings.tsx — privacy section
-import { View, Text, Switch, StyleSheet } from 'react-native';
-import { useState, useEffect } from 'react';
-import { getRelayOnlyMode, setRelayOnlyMode } from '../settings/privacy';
+import { View, Text, StyleSheet } from 'react-native';
 
 function PrivacySection() {
-  const [relayOnly, setRelayOnly] = useState(false);
-
-  useEffect(() =&gt; {
-    getRelayOnlyMode().then(setRelayOnly);
-  }, []);
-
-  async function handleToggle(value: boolean) {
-    setRelayOnly(value);
-    await setRelayOnlyMode(value);
-  }
-
   return (
     &lt;View style={styles.section}&gt;
       &lt;Text style={styles.sectionTitle}&gt;Call Privacy&lt;/Text&gt;
 
       &lt;View style={styles.settingRow}&gt;
-        &lt;View style={styles.settingInfo}&gt;
-          &lt;Text style={styles.settingLabel}&gt;Hide IP Address&lt;/Text&gt;
-          &lt;Text style={styles.settingDesc}&gt;
-            Route all calls through the relay server. The other party
-            never sees your IP address. May add slight latency.
-          &lt;/Text&gt;
-        &lt;/View&gt;
-        &lt;Switch value={relayOnly} onValueChange={handleToggle} /&gt;
+        &lt;Text style={styles.settingLabel}&gt;Your IP address is never shared&lt;/Text&gt;
+        &lt;Text style={styles.settingDesc}&gt;
+          Every Token call is routed through our relay server, so the person
+          you are talking to never learns your network address or approximate
+          location. This cannot be turned off. Calls may take a moment longer
+          to connect than a direct connection would.
+        &lt;/Text&gt;
       &lt;/View&gt;
     &lt;/View&gt;
   );
 }</code></pre>
 
-    <h2>The trade-off explained to users</h2>
+    <p>Note the last sentence. Not mentioning the latency cost would be the
+    lazy version of this — the user notices it anyway, and a product that only
+    tells you the good half of a trade-off teaches you not to believe the good
+    half either.</p>
 
-    <p>The settings screen should be honest about the trade-off. Token is for privacy-conscious users — they can make an informed choice:</p>
-
-    <pre><code>// When relay mode is OFF:
-"Direct connection — lowest latency, best call quality.
- The other party can see your IP address (approximate location)."
-
-// When relay mode is ON:
-"Relay mode — your IP address is hidden from the other party.
- Calls route through our server, which may add slight delay."</code></pre>
-
-    <h2>When to recommend relay mode</h2>
-
-    <p>Not all users need relay mode. Recommendations:</p>
-
-    <ul>
-      <li><strong>Tokens for strangers</strong> (delivery, service providers) — recommend relay ON. You don't want a random delivery person knowing your IP.</li>
-      <li><strong>Tokens for known contacts</strong> (friends, family) — relay OFF is fine. They already know where you live.</li>
-      <li><strong>High-threat users</strong> (journalists, activists, domestic abuse survivors) — relay ON is critical.</li>
-    </ul>
-
-    <p>Future enhancement: per-token relay setting. "This token always uses relay" vs "This token allows direct connection." For now, it's a global setting.</p>
+    <div class="callout">
+      <div class="callout-title">The general shape of this decision</div>
+      <p>You will hit it again, well beyond WebRTC. When a security control has
+      a cost, the tempting move is to make it optional and let the user decide.
+      That is right when the person choosing is the person at risk, and they
+      can tell which setting they need. It is wrong when the risk lands on
+      someone who never sees the screen — and then "optional" is just a way of
+      writing down that you chose the cheaper default on their behalf.</p>
+    </div>
 
     <h2>Server-side: can the TURN server see the call content?</h2>
 
@@ -185,22 +201,57 @@ function PrivacySection() {
 
 // This is inherent to WebRTC's design — not something you configure</code></pre>
 
-    <h2>Testing relay mode</h2>
+    <h2>Checking that it actually worked</h2>
 
-    <pre><code>// To verify relay mode is working:
-// 1. Enable relay mode in settings
-// 2. Start a call
-// 3. Check the ICE connection type:
+    <p>Setting the policy and <em>having</em> the policy are different claims. A
+    typo, a merge that reintroduced a variable, a browser that ignores the
+    option — the call still connects, sounds fine, and leaks. Nothing visible
+    goes wrong, which is the whole difficulty with this class of bug.</p>
 
-pc.getStats().then(stats =&gt; {
-  stats.forEach(report =&gt; {
-    if (report.type === 'candidate-pair' && report.state === 'succeeded') {
-      console.log('Local candidate type:', report.localCandidateType);
-      console.log('Remote candidate type:', report.remoteCandidateType);
-      // Both should be 'relay' when relay mode is ON
-    }
-  });
-});</code></pre>
+    <p><code>pc.getStats()</code> is how you find out. It returns a pile of
+    report objects; the interesting one is the <strong>candidate pair that
+    actually got used</strong>:</p>
+
+    <pre><code>const reports = [];
+(await pc.getStats()).forEach(r =&gt; reports.push(r));
+
+const pair = reports.find(
+  r =&gt; r.type === 'candidate-pair' &amp;&amp; r.state === 'succeeded'
+);
+console.log(pair.localCandidateType, pair.remoteCandidateType);</code></pre>
+
+    <h3>Three things about that check are easy to get wrong</h3>
+
+    <p><strong>1. Only <code>localCandidateType</code> tells you whether
+    <em>you</em> are protected.</strong> Your policy governs the candidates your
+    ICE agent gathers and sends. The other side runs its own agent under its own
+    policy, and you have no say in it. So a pair reading local
+    <code>relay</code> / remote <code>srflx</code> is <strong>not</strong> a leak
+    of your address — it means you are covered and they are not. Checking "are
+    both relay?" reports a problem that isn't yours and would send you looking
+    in the wrong file.</p>
+
+    <p><strong>2. The <code>state === 'succeeded'</code> filter is load-bearing.</strong>
+    ICE tries many pairs. Failed and in-flight ones are still in the stats, and a
+    failed <code>relay</code> pair sitting next to a succeeded <code>host</code>
+    pair is exactly the shape of a real leak. Take the first pair you find and
+    you will read the reassuring one.</p>
+
+    <p><strong>3. Finding nothing is not the same as finding relay.</strong> If
+    the call is still connecting, or the platform returns no stats, there is no
+    succeeded pair — and an audit that returns "fine" when it learned nothing is
+    worse than no audit, because now something is reassuring you. It has to fail
+    closed.</p>
+
+    <div class="callout">
+      <div class="callout-title">Where this ends up in the real app</div>
+      <p>In development, a warning in the console. In production, a counter: if
+      any non-relay pair is ever observed, that is a bug worth an alert, because
+      it means the guarantee this whole lesson is about is not holding for
+      somebody. What you must <em>not</em> do is report the candidate types to
+      the server — those are IP-derived, and shipping them to fix a privacy leak
+      would be its own privacy leak.</p>
+    </div>
 
     <h2>Cost implications</h2>
 
@@ -215,18 +266,49 @@ pc.getStats().then(stats =&gt; {
 // 1 hour = ~450 MB through your server
 
 // With a 1TB/month VPS transfer limit:
-// ~2200 hours of relay voice OR ~2200 hours of relay video
-// In practice: most calls are short (1-5 min), and only some users enable relay</code></pre>
+// ~38,000 hours of relay voice, but only ~2,400 hours of relay video
+// Every call counts — there is no direct path to fall back to</code></pre>
 
-    <p>For Token v1 with a small user base, this is fine. At scale, you'd monitor TURN bandwidth and potentially charge for relay mode or optimize with bandwidth-adaptive bitrate.</p>
+    <p>That last line is the part the toggle version of this lesson got wrong.
+    It reasoned that "only some users enable relay", which made the bandwidth
+    look optional. It isn't: <strong>100% of calls are relayed, so this is the
+    real bill, not a worst case.</strong></p>
+
+    <p>Notice the gap between the two figures. Voice is cheap enough that you
+    would have to be doing well to notice it. Video is roughly sixteen times
+    worse, and it is what will actually decide when this box stops being
+    enough — ADR-0003 put the single-server ceiling in terms of connections and
+    memory, and relayed video adds a second ceiling in egress that will
+    probably arrive first.</p>
+
+    <p>Two things follow, and neither is "make it optional again". Monitor TURN
+    egress from day one, so the trend is visible before the invoice is. And when
+    it does bite, the first thing to reconsider is narrowing relay-only to
+    redemption calls on the web page — where the other party is genuinely a
+    stranger — rather than weakening it everywhere. That trade is written up in
+    ADR-0008 as the named escape hatch.</p>
 
     <div id="playground-1"></div>
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>Now build it yourself</h2>
+
+    <p>Write <code>relayAudit(reports)</code> — the check that tells you whether
+    the policy actually took effect on a live call. It is a plain function over
+    an array of stats objects, so you can write and test it right here, without
+    a phone or a TURN server.</p>
+
+    <div id="exercise-audit"></div>
+    <div id="pg-exercise-audit"></div>
+
+    <h3>And the feature it belongs to</h3>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="explain-a7-0005"></div>
 
     <hr>
 
@@ -242,11 +324,12 @@ pc.getStats().then(stats =&gt; {
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
-    createPlayground("playground-1", `// Calculate bandwidth cost of relay mode
+    createPlayground("playground-1", `// Calculate the bandwidth cost of relaying every call
 function calcRelayBandwidth(callType, durationMinutes) {
   const bitrates = { voice: 32, video_480p: 500, video_720p: 1500 }; // kbps
   const bps = bitrates[callType] * 1000;  // bits per second
@@ -274,35 +357,168 @@ console.log('With 1TB/month server:');
 const voiceHours = (1024 * 1024 * 1024 * 1024) / calcRelayBandwidth('voice', 60);
 console.log('Max voice hours/month:', Math.floor(voiceHours));`);
 
-    createSolution("exercise-1", {
-      exercise: "Implement the relay-only privacy feature:\n\n1. Create settings persistence: getRelayOnlyMode() / setRelayOnlyMode() using AsyncStorage.\n\n2. Integrate into TokenPeerConnection: read the setting during initialize(), pass iceTransportPolicy: 'relay' or 'all' to RTCPeerConnection.\n\n3. Create the Settings UI: a toggle switch with clear explanation of the trade-off (privacy vs latency).\n\n4. Add a way to verify it's working: use pc.getStats() to check that connected candidates are type 'relay'.\n\n5. Test: enable relay mode, start a call. Use getStats() to confirm both local and remote candidates are 'relay' type. Disable relay mode, start another call, verify candidates are 'srflx' or 'host'.\n\n6. Consider future enhancement: document how per-token relay settings would work (stored in access_rules as a new rule type).",
+    createSolution("exercise-audit", {
+      exercise: "Write relayAudit(reports) — given the array of stats objects from pc.getStats(), decide whether OUR IP address is hidden on this call.\n\nReturn an object { verdict, ipHidden }:\n\n  verdict 'protected' — the connection in use has a relay candidate on our side. ipHidden: true.\n  verdict 'leaking'   — the connection in use has a host or srflx candidate on our side. ipHidden: false.\n  verdict 'unknown'   — there is no succeeded candidate pair to judge. ipHidden: false.\n\nThree things decide whether this is right:\n\n1. Only the pair with state === 'succeeded' counts. ICE tries many pairs and the failures stay in the stats.\n\n2. localCandidateType is what tells you about YOUR exposure. The remote side runs its own policy and you cannot control it — a remote 'srflx' is their business, not your leak.\n\n3. Learning nothing is not the same as being safe. 'unknown' must never report ipHidden: true.",
       hints: [
-        "AsyncStorage is simple key-value. Store 'true'/'false' as strings.",
-        "The setting must be read BEFORE creating the RTCPeerConnection — it can't be changed mid-call.",
-        "pc.getStats() returns a Map of RTCStatsReport objects. Filter for type === 'candidate-pair' with state === 'succeeded'.",
-        "The setting description should be honest about the trade-off — Token users are privacy-conscious and appreciate transparency."
+        "Find the one report where type === 'candidate-pair' AND state === 'succeeded'. Array.prototype.find does this in one line.",
+        "Do not look at remoteCandidateType at all. If your function reads it, ask yourself what you would do differently based on it.",
+        "Handle the no-pair case first and return early. It is the case that must fail closed, so it is the one to get out of the way before the interesting logic."
       ],
-      solution: `// See the lesson code above for full implementations.
-// Key decisions:
+      solution: `function relayAudit(reports) {
+  const pair = (reports || []).find(
+    (r) => r.type === "candidate-pair" && r.state === "succeeded"
+  );
 
-// 1. Global setting (v1) — stored in AsyncStorage
-//    Future: per-token setting in access_rules table
+  // Fail closed. No evidence is not the same as good evidence.
+  if (!pair) return { verdict: "unknown", ipHidden: false };
 
-// 2. Read at PC creation time — can't change mid-call
-//    User must end and restart the call if they toggle the setting
+  // Our policy governs OUR candidates. The remote side's type is not ours
+  // to fix and is deliberately not consulted here.
+  if (pair.localCandidateType === "relay") {
+    return { verdict: "protected", ipHidden: true };
+  }
 
-// 3. Settings UI:
-//    - Clear label: "Hide IP Address"
-//    - Honest description of trade-off (latency, quality)
-//    - Toggle (Switch component)
+  return { verdict: "leaking", ipHidden: false };
+}`
+    });
 
-// 4. Verification:
-//    pc.getStats() → find succeeded candidate-pair → check types
-//    relay mode: both should be 'relay'
-//    normal mode: typically 'srflx' or 'host'
+    createPlayground("pg-exercise-audit", `// Write relayAudit(reports) here.
 
-// 5. TURN server can't decrypt media (DTLS-SRTP)
-//    Even in relay mode, calls are end-to-end encrypted`
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+
+try {
+  if (typeof relayAudit !== "function") throw new Error("not written yet");
+
+  try {
+    // Remote is srflx ON PURPOSE, and must not change the verdict. If this
+    // fixture were relay/relay, a function that wrongly checks both ends
+    // would pass by coincidence.
+    const r = relayAudit([
+      { type: "candidate-pair", state: "succeeded",
+        localCandidateType: "relay", remoteCandidateType: "srflx" },
+    ]);
+    check("a relay candidate on OUR side means we are protected",
+          r.verdict === "protected" && r.ipHidden === true,
+          "got " + JSON.stringify(r) + " -- the remote side runs its own policy; their srflx is not our leak");
+  } catch (e) { check("a relay candidate on OUR side means we are protected", false, "threw " + e.message); }
+
+  try {
+    const r = relayAudit([
+      { type: "candidate-pair", state: "succeeded",
+        localCandidateType: "srflx", remoteCandidateType: "relay" },
+    ]);
+    check("an srflx candidate on our side is a leak",
+          r.verdict === "leaking" && r.ipHidden === false,
+          "got " + JSON.stringify(r) + " -- srflx IS the public IP; the policy did not take effect");
+  } catch (e) { check("an srflx candidate on our side is a leak", false, "threw " + e.message); }
+
+  try {
+    // The succeeded pair is deliberately NOT first, and the pair that comes
+    // first is a relay one that FAILED. Taking reports[0], or ignoring
+    // state, reads the reassuring row and reports safety on a leaking call.
+    const r = relayAudit([
+      { type: "candidate-pair", state: "failed",
+        localCandidateType: "relay", remoteCandidateType: "relay" },
+      { type: "candidate-pair", state: "in-progress",
+        localCandidateType: "relay", remoteCandidateType: "relay" },
+      { type: "candidate-pair", state: "succeeded",
+        localCandidateType: "host", remoteCandidateType: "host" },
+    ]);
+    check("only the SUCCEEDED pair counts",
+          r.verdict === "leaking" && r.ipHidden === false,
+          "got " + JSON.stringify(r) + " -- a failed relay pair next to a succeeded host pair is exactly what a real leak looks like");
+  } catch (e) { check("only the SUCCEEDED pair counts", false, "threw " + e.message); }
+
+  try {
+    const r = relayAudit([]);
+    check("no stats at all is 'unknown', never 'protected'",
+          r.verdict === "unknown" && r.ipHidden === false,
+          "got " + JSON.stringify(r) + " -- an audit that reassures you when it learned nothing is worse than no audit");
+  } catch (e) { check("no stats at all is 'unknown', never 'protected'", false, "threw " + e.message); }
+
+  try {
+    // Plenty of reports, none of them a candidate-pair. Still unknown.
+    const r = relayAudit([
+      { type: "transport", bytesSent: 4096 },
+      { type: "local-candidate", candidateType: "relay" },
+      { type: "inbound-rtp", kind: "audio" },
+    ]);
+    check("a relay entry that is not a candidate-pair proves nothing",
+          r.verdict === "unknown" && r.ipHidden === false,
+          "got " + JSON.stringify(r) + " -- a gathered candidate is not a candidate that got USED");
+  } catch (e) { check("a relay entry that is not a candidate-pair proves nothing", false, "threw " + e.message); }
+
+  try {
+    const r = relayAudit([
+      { type: "candidate-pair", state: "succeeded",
+        localCandidateType: "relay", remoteCandidateType: "relay" },
+    ]);
+    check("the ordinary good case still passes",
+          r.verdict === "protected" && r.ipHidden === true,
+          "got " + JSON.stringify(r));
+  } catch (e) { check("the ordinary good case still passes", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write relayAudit(reports) above, then press Run. (" + e.message + ")");
+}`);
+
+    createSolution("exercise-1", {
+      unverifiable: "the deliverable is a React Native settings screen plus a live RTCPeerConnection, needing a device and a running TURN server",
+      exercise: "Wire the audit into the app.\n\n1. In TokenPeerConnection.initialize(), pass iceTransportPolicy: 'relay' as a literal. No setting, no variable, no ternary.\n\n2. Once the connection state reaches 'connected', call pc.getStats(), collect the reports into an array, and run them through relayAudit().\n\n3. On a 'leaking' verdict: warn loudly in development. In production, increment a counter — it means the guarantee is broken for a real user. Do NOT send the candidate types to your server; they are IP-derived, and reporting a privacy leak must not become one.\n\n4. Replace the old 'Hide IP Address' toggle in Settings with a statement: this is how the product behaves, it cannot be turned off, and calls may take a moment longer to connect.\n\n5. Delete app/src/settings/privacy.ts and its AsyncStorage key. A dead setting that some old install still has stored is a config value that can still turn the policy off.",
+      hints: [
+        "pc.getStats() resolves to a Map-like object, not an array. It has .forEach but not .find — push the reports into an array first, which is also why relayAudit takes an array.",
+        "Run the audit on the 'connected' state change, not immediately after createOffer. Before ICE settles there is no succeeded pair, and your own 'unknown' verdict is what you would get.",
+        "Step 5 matters more than it looks. Removing a toggle from the UI while leaving the stored key and the read behind means the leak is still reachable — it just no longer has a switch you can see."
+      ],
+      solution: `// app/src/webrtc/PeerConnection.ts
+
+async initialize() {
+  const iceServers = await getIceServers();
+
+  this.pc = new RTCPeerConnection({
+    iceServers,
+    iceTransportPolicy: 'relay',   // literal, always — see ADR-0008
+  });
+
+  this.pc.onconnectionstatechange = () => {
+    if (this.pc?.connectionState === 'connected') {
+      this.auditTransport();
+    }
+    this.options.onConnectionStateChange(this.pc?.connectionState ?? 'closed');
+  };
+
+  // ... rest of initialization
+}
+
+private async auditTransport() {
+  if (!this.pc) return;
+
+  const reports: any[] = [];
+  (await this.pc.getStats()).forEach((r) => reports.push(r));
+
+  const { verdict, ipHidden } = relayAudit(reports);
+
+  if (verdict === 'leaking') {
+    // The guarantee is broken for a real user on a real call.
+    if (__DEV__) {
+      console.error('[privacy] non-relay path in use — iceTransportPolicy did not take effect');
+    }
+    // A count, not the candidate types. Those are IP-derived.
+    metrics.increment('call.transport.leaking');
+  } else if (verdict === 'unknown' && __DEV__) {
+    console.warn('[privacy] no succeeded candidate pair yet — audited too early?');
+  }
+
+  return ipHidden;
+}`
+    });
+
+    createExplain("explain-a7-0005", {
+      prompt: "This lesson used to ship a Settings toggle called <code>Hide IP Address</code>, defaulting to off, and advised leaving it off for calls with people you already know. Explain why that is the wrong design <em>for Token specifically</em> — and in doing so, say who the toggle would have protected and who actually needed protecting."
     });
 
     createQuiz("lesson-quiz", [
@@ -319,16 +535,16 @@ console.log('Max voice hours/month:', Math.floor(voiceHours));`);
       },
       {
         type: "spot-the-bug",
-        question: "What's wrong with this relay mode implementation?",
-        code: "// In a settings change handler:\nasync function handleRelayToggle(enabled) {\n  await setRelayOnlyMode(enabled);\n  // Update the existing peer connection\n  if (currentPC) {\n    currentPC.iceTransportPolicy = enabled ? 'relay' : 'all';\n  }\n}",
+        question: "A developer notices mid-call that relayAudit() returned 'leaking' and tries to correct it live. What's wrong?",
+        code: "function enforceRelay(pc) {\n  // The audit says we are on a host candidate — fix it now.\n  pc.iceTransportPolicy = 'relay';\n}",
         options: [
-          "iceTransportPolicy can't be changed on an existing RTCPeerConnection — it's set at creation time and is immutable. Must create a new PC (end and restart the call).",
+          "iceTransportPolicy can't be changed on an existing RTCPeerConnection — it's set at creation time and is immutable. The assignment silently does nothing.",
           "The property name is wrong",
           "It should use setConfiguration() instead",
-          "AsyncStorage doesn't support boolean values"
+          "It needs to be awaited before the ICE agent picks it up"
         ],
         correct: 0,
-        explanation: "iceTransportPolicy is a construction-time parameter. You cannot change it on a live connection. The ICE agent has already gathered candidates with the original policy. To switch, you must close the current PC and create a new one — which means ending the call. That's why it's a setting you configure BEFORE calling, not during."
+        explanation: "iceTransportPolicy is a construction-time parameter. The assignment does not throw — it just has no effect, which is the dangerous part: the code reads as if it fixed something. By the time a call is connected the ICE agent has already gathered candidates under the original policy and the other side already has them. An address that has been sent cannot be recalled. The only real remedy is to end the call and build a new RTCPeerConnection, which is exactly why the policy is a literal at construction rather than something any later code can influence."
       },
       {
         type: "which-breaks",
@@ -351,16 +567,16 @@ console.log('Max voice hours/month:', Math.floor(voiceHours));`);
       },
       {
         type: "order-steps",
-        question: "Put the privacy decision flow in order:",
+        question: "Put the privacy flow in order:",
         steps: [
-          "User enables 'Hide IP Address' in Settings (stored in AsyncStorage)",
-          "User initiates a call — app reads the relay setting",
-          "RTCPeerConnection created with iceTransportPolicy: 'relay'",
-          "ICE only generates relay candidates (TURN server IP)",
-          "Call connects through TURN — neither peer sees the other's real IP"
+          "A call starts — RTCPeerConnection is constructed with iceTransportPolicy: 'relay' as a literal",
+          "ICE gathers relay candidates only — no host, no srflx",
+          "Only TURN server addresses are sent to the other side as candidates",
+          "The call connects through TURN — neither peer has received the other's real IP",
+          "On 'connected', relayAudit(getStats()) confirms the succeeded pair is relay on our side"
         ],
         correctOrder: [0, 1, 2, 3, 4],
-        explanation: "The setting is configured ahead of time. When a call starts, the setting is read and baked into the PC configuration. ICE respects the policy and only gathers relay candidates. The call connects entirely through TURN. Privacy is enforced at the protocol level — not by trusting the other peer to not look at candidates."
+        explanation: "There is no step where anything is read from settings — the policy is fixed at construction and cannot be varied. Notice where the guarantee is actually delivered: at the point candidates are sent. Once an address has been handed to the other side it cannot be withdrawn, so everything protective has to happen before that. The audit at the end does not create the guarantee, it only detects that the guarantee failed — which is why it is last and why it can never be the only measure."
       },
       // --- Questions 6–25 ---
       {
@@ -394,19 +610,19 @@ console.log('Max voice hours/month:', Math.floor(voiceHours));`);
       },
       {
         type: "spot-the-bug",
-        question: "Why won't relay mode work with this iceServers configuration?",
+        question: "Why won't a relay-only policy work with this iceServers configuration?",
         code: "const pc = new RTCPeerConnection({\n  iceServers: [\n    { urls: 'stun:stun.l.google.com:19302' }\n  ],\n  iceTransportPolicy: 'relay'\n});",
         options: [
           "No TURN server is configured — relay candidates require a TURN server, so ICE will find zero candidates and the connection will fail.",
           "The STUN server URL is wrong",
           "iceTransportPolicy should be uppercase 'RELAY'",
-          "You need at least two STUN servers for relay mode"
+          "You need at least two STUN servers for a relay-only policy"
         ],
         correct: 0,
-        explanation: "Relay candidates can ONLY be obtained from a TURN server. STUN servers only help discover srflx candidates. If you set iceTransportPolicy: 'relay' but provide no TURN server, the ICE agent gathers zero usable candidates and the connection fails. Always ensure TURN credentials are configured when relay mode is enabled."
+        explanation: "Relay candidates can ONLY be obtained from a TURN server. STUN servers only help discover srflx candidates. If you set iceTransportPolicy: 'relay' but provide no TURN server, the ICE agent gathers zero usable candidates and the connection fails. Because Token sets this policy on every call, a missing or misconfigured TURN server is not a degraded call — it is no call at all."
       },
       {
-        question: "Why does relay mode actually INCREASE connection reliability from ~85% to ~99%?",
+        question: "Why does relaying every call actually INCREASE connection reliability from ~85% to ~99%?",
         options: [
           "The TURN server has better internet connectivity",
           "TURN bypasses NAT traversal issues — symmetric NATs that block P2P still allow outbound connections to the TURN server",
@@ -418,14 +634,14 @@ console.log('Max voice hours/month:', Math.floor(voiceHours));`);
       },
       {
         type: "fill-blank",
-        question: "Verify that relay mode is active by checking getStats():",
+        question: "Verify the relay policy took effect by checking getStats():",
         code: "pc.getStats().then(stats => {\n  stats.forEach(report => {\n    if (report.type === '___' && report.state === 'succeeded') {\n      console.log(report.localCandidateType);\n    }\n  });\n});",
         answer: "candidate-pair",
-        explanation: "The 'candidate-pair' report type in WebRTC statistics contains information about the selected ICE candidate pair including localCandidateType and remoteCandidateType. When relay mode is active, both should be 'relay'. The state 'succeeded' indicates this is the pair currently carrying media."
+        explanation: "The 'candidate-pair' report describes a pairing of one local and one remote candidate, and 'succeeded' marks the one currently carrying media. Note which field the code logs: localCandidateType is the side governed by OUR policy, and therefore the side that tells us whether our address stayed hidden. remoteCandidateType reflects the other peer's own configuration, which we neither control nor need to fix — expecting both to be 'relay' reports a problem that is not ours."
       },
       {
         type: "which-breaks",
-        question: "Which scenario would still leak the user's IP even with relay mode enabled?",
+        question: "Which scenario would still leak the user's IP despite the relay-only policy?",
         variants: [
           "A malicious remote peer inspects the SDP offer",
           "The app falls back to iceTransportPolicy: 'all' when TURN fails to connect within 5 seconds",
@@ -433,7 +649,7 @@ console.log('Max voice hours/month:', Math.floor(voiceHours));`);
           "The call lasts longer than 30 minutes"
         ],
         correct: 1,
-        explanation: "If the app has a 'fallback' mechanism that switches from relay to 'all' when TURN is slow, it would generate host and srflx candidates containing the real IP. This defeats the entire privacy guarantee. Token should NEVER fall back from relay mode — if TURN fails, the call simply fails. The TURN server's own logs do know your IP, but that is your infrastructure, not the peer's."
+        explanation: "If the app has a 'fallback' mechanism that switches from relay to 'all' when TURN is slow, it would generate host and srflx candidates containing the real IP. This defeats the entire privacy guarantee. Token must NEVER fall back to a wider policy — if TURN fails, the call simply fails. The TURN server's own logs do know your IP, but that is your infrastructure, not the peer's."
       },
       {
         question: "How much bandwidth does a 1-hour relay voice call consume on your TURN server?",
@@ -479,34 +695,34 @@ console.log('Max voice hours/month:', Math.floor(voiceHours));`);
       },
       {
         type: "fill-blank",
-        question: "Store the relay preference using AsyncStorage:",
-        code: "import AsyncStorage from '@react-native-async-storage/async-storage';\n\nexport async function setRelayOnlyMode(enabled: boolean): Promise<void> {\n  await AsyncStorage.___(RELAY_ONLY_KEY, String(enabled));\n}",
-        answer: "setItem",
-        explanation: "AsyncStorage.setItem(key, value) stores a string value. Since AsyncStorage only supports strings, we convert the boolean to 'true'/'false' with String(enabled). When reading it back, we compare with === 'true' to get a boolean."
+        question: "Complete the audit so it only judges the connection ICE actually chose:",
+        code: "const pair = reports.find(\n  (r) => r.type === 'candidate-pair' && r.state === '___'\n);",
+        answer: "succeeded",
+        explanation: "ICE tries many candidate pairs and leaves the failures in the stats alongside the winner. Without this filter you may read a failed relay pair and conclude you are protected while the connection actually in use is a host pair — the exact shape of a real leak. 'succeeded' identifies the pair carrying media right now, which is the only one whose candidate types say anything about what the other side received."
       },
       {
         type: "spot-the-bug",
-        question: "What's wrong with this approach to changing relay mode mid-call?",
-        code: "async function toggleRelayDuringCall(pc, enabled) {\n  await setRelayOnlyMode(enabled);\n  const config = pc.getConfiguration();\n  config.iceTransportPolicy = enabled ? 'relay' : 'all';\n  pc.setConfiguration(config);\n  pc.restartIce();\n}",
+        question: "A ticket asks for a fallback: if TURN is slow, widen the policy so the call still connects. What is wrong with this implementation?",
+        code: "async function widenIfSlow(pc) {\n  const config = pc.getConfiguration();\n  config.iceTransportPolicy = 'all';\n  pc.setConfiguration(config);\n  pc.restartIce();\n}",
         options: [
-          "setConfiguration() cannot change iceTransportPolicy — it's fixed at construction time. An ICE restart with new config requires a completely new RTCPeerConnection.",
+          "Both the mechanism and the requirement are wrong — setConfiguration() cannot change iceTransportPolicy, and a fallback to 'all' would leak the IP addresses the policy exists to protect",
           "restartIce() is not a valid method",
           "getConfiguration() returns a copy so modifying it does nothing",
-          "You need to await restartIce()"
+          "It needs to await restartIce() before the new policy applies"
         ],
         correct: 0,
-        explanation: "While setConfiguration() exists in the spec, it cannot change iceTransportPolicy on most implementations — this property is fixed when the PC is constructed. Even if an ICE restart occurs, the transport policy remains the same. To truly switch modes, you must create a new RTCPeerConnection with the desired policy, which means renegotiating the entire call (or ending it and reconnecting)."
+        explanation: "Two separate problems, and the second matters more. Mechanically, iceTransportPolicy is fixed at construction — setConfiguration() will not change it, so this code does not do what it claims. But suppose it worked: the feature itself is the bug. A fallback that widens the policy when TURN struggles is a leak that triggers exactly when the network is worst, and it converts a failed call into a silent disclosure. When TURN is unavailable the correct behaviour is that the call fails, visibly. A call that does not happen is recoverable; an address that has been sent is not."
       },
       {
-        question: "In Token v1, the relay setting is global. What would per-token relay settings enable?",
+        question: "Suppose relay bandwidth becomes the binding cost on the VPS. Which change does ADR-0008 name as the first one to reconsider?",
         options: [
-          "Different video quality for different tokens",
-          "Relay ON for tokens issued to strangers (delivery, services) while allowing direct connections for trusted contacts — optimizing latency where privacy risk is low",
-          "Charging different prices for different tokens",
-          "Allowing some tokens to bypass encryption"
+          "Narrow relay-only to redemption calls on the web page, where the other party is genuinely a stranger, and permit direct paths app-to-app",
+          "Add a per-token setting so the issuer can allow direct connections for people they already know",
+          "Fall back to iceTransportPolicy: 'all' automatically when TURN is under load",
+          "Keep relay-only but lower video bitrate until the egress fits the budget"
         ],
-        correct: 1,
-        explanation: "Per-token relay settings let users make granular privacy decisions. A token issued to a delivery driver should always use relay (you don't want them knowing your IP). But a token shared with a close friend could allow direct connections for better call quality — they already know where you live. This matches Token's philosophy of user-controlled privacy rules."
+        correct: 0,
+        explanation: "The distinction is who the other party is, not how the user feels about them. On a redemption call the other end is by construction a stranger with no account, so the guarantee has to hold; between two app installs the system at least knows both ends. That is a boundary the code can actually evaluate, and it costs a second call-setup path. The per-token option fails on a subtler point: 'we already know each other' is not something the API can verify — it is an assertion the user makes once about every future call, and the person it exposes is themselves. An automatic fallback is worse still, since it would disengage the protection precisely when the network is worst. Reducing bitrate is a reasonable thing to do about a bandwidth bill, but it is not the trade-off this ADR flags."
       },
       {
         question: "Which iceServers configuration is correct for Token's TURN setup?",
@@ -542,15 +758,15 @@ console.log('Max voice hours/month:', Math.floor(voiceHours));`);
         explanation: "A public IP reveals: approximate location (city-level, sometimes district), ISP identity (Jio, Airtel, etc.), and for static IPs, it can be used to correlate activity across websites and services. It does NOT reveal exact addresses (only ISPs have that mapping) or personal details directly. However, for privacy-sensitive users, even city + ISP is too much information to give a stranger."
       },
       {
-        question: "When would you recommend a Token user keep relay mode OFF?",
+        question: "A user asks why they cannot turn relay off for calls with their own family, where the latency annoys them and the privacy gain is nil. What is the most accurate answer?",
         options: [
-          "When calling delivery drivers or service providers",
-          "When the user is a journalist protecting sources",
-          "When calling close friends or family who already know their location — better call quality with no privacy cost",
-          "Never — relay mode should always be on"
+          "The app cannot verify who is really on the other end, so a switch set once would have to be trusted for every later call — including the ones with strangers",
+          "Relay adds no measurable latency, so there is nothing to be gained by turning it off",
+          "Calls between family members already take a direct path automatically, so the switch would change nothing",
+          "It is planned for a later release, once the Settings screen has been redesigned"
         ],
-        correct: 2,
-        explanation: "Relay mode adds 50-100ms latency and consumes server bandwidth. For calls with people who already know where you live (close friends, family), hiding your IP provides no practical privacy benefit but does reduce call quality. Token should guide users to enable relay for strangers and high-risk situations, but allow direct connections where privacy risk is minimal."
+        correct: 0,
+        explanation: "Take the user's premise seriously: they are right that relay costs latency, and right that a family member already knows where they live. The cost is real and pretending otherwise would be dishonest. The answer is about scope, not about that one call. A global switch is set once and then applies to calls the user has not made yet, with people the app cannot identify — so its worst case is not the family call it was set for. And note who carries the consequence of getting it wrong: the person who set the switch is the person whose address is disclosed, having made the decision before knowing who would be on the other end."
       },
       {
         type: "fill-blank",
@@ -581,7 +797,7 @@ console.log('Max voice hours/month:', Math.floor(voiceHours));`);
           "Attacker combines IP with other data points to narrow location further"
         ],
         correctOrder: [0, 1, 2, 3, 4],
-        explanation: "The threat escalates: first the attacker learns basic info (ISP, city), then correlates across services if the IP is static, then can actively probe the network, and finally combine everything to refine location. For most users the practical risk is low, but for high-threat users (activists, journalists, abuse survivors), even step 1 is unacceptable — which is exactly why Token offers relay mode."
+        explanation: "The threat escalates: first the attacker learns basic info (ISP, city), then correlates across services if the IP is static, then can actively probe the network, and finally combine everything to refine location. For most users the practical risk is low, but for high-threat users (activists, journalists, abuse survivors), even step 1 is unacceptable — which is exactly why Token relays every call rather than offering it as an option."
       },
       {
         type: "spot-the-bug",

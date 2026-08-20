@@ -4,7 +4,7 @@
      Regenerate with: node scripts/audit.mjs
      Hand-written session state lives in SESSION.md, never here. -->
 
-Generated 2026-08-19 from the files on disk. Where any other document disagrees
+Generated 2026-08-20 from the files on disk. Where any other document disagrees
 with this one, this one is right — everything below is measured, not asserted.
 
 ## Summary
@@ -14,11 +14,11 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1808 words |
+| Avg teaching prose per track lesson | 1823 words |
 | Lessons with a playground | 73 / 96 |
 | Lessons with an exercise | 96 / 96 |
 | **Deepened** (all 3 spine sections) | 16 / 96 |
-| **Verified** (code executed) | 42 / 96 |
+| **Verified** (code executed) | 43 / 96 |
 | Ran clean but had nothing to run | 0 / 96 |
 | Errors | 0 |
 | Known and blocked | 3 |
@@ -53,9 +53,9 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Position | Count | Share |
 |---|---|---|
-| index 0 | 136 | 9.9% |
-| index 1 | 839 | 61.3% |
-| index 2 | 353 | 25.8% |
+| index 0 | 138 | 10.1% |
+| index 1 | 838 | 61.3% |
+| index 2 | 352 | 25.7% |
 | index 3 | 40 | 2.9% |
 
 ## Question types
@@ -82,7 +82,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a4-auth-client | 3 | 1400 | 3 | 6 | 80 | 1/3 | 3/3 |
 | a5-core-token-features | 5 | 2543 | 10 | 10 | 148 | 2/5 | 5/5 |
 | a6-chat-realtime | 3 | 1387 | 3 | 3 | 78 | 0/3 | 0/3 |
-| a7-voice-video | 5 | 980 | 5 | 5 | 138 | 0/5 | 0/5 |
+| a7-voice-video | 5 | 1279 | 6 | 6 | 138 | 0/5 | 1/5 |
 | a8-redemption-web | 4 | 1584 | 8 | 8 | 115 | 0/4 | 4/4 |
 | a9-deep-linking | 2 | 1159 | 2 | 2 | 53 | 0/2 | 0/2 |
 | b1-sql-fundamentals | 4 | 905 | 0 | 4 | 103 | 0/4 | 0/4 |
@@ -188,11 +188,11 @@ so they do not hold the audit red. They are **not** resolved.
 | a6-chat-realtime/0001-websocket-client.html | 1260 | 10 | 1 | 1 | 26 | — | n/a |
 | a6-chat-realtime/0002-message-thread-ui.html | 1620 | 10 | 1 | 1 | 26 | — | n/a |
 | a6-chat-realtime/0003-typing-presence.html | 1280 | 10 | 1 | 1 | 26 | — | n/a |
-| a7-voice-video/0001-webrtc-refresher.html | 1141 | 9 | 1 | 1 | 29 | — | n/a |
+| a7-voice-video/0001-webrtc-refresher.html | 1625 | 9 | 1 | 1 | 29 | — | n/a |
 | a7-voice-video/0002-voice-call.html | 758 | 6 | 1 | 1 | 27 | — | n/a |
 | a7-voice-video/0003-video-call.html | 836 | 6 | 1 | 1 | 26 | — | n/a |
 | a7-voice-video/0004-incoming-calls.html | 1217 | 9 | 1 | 1 | 29 | — | n/a |
-| a7-voice-video/0005-relay-only-privacy.html | 950 | 9 | 1 | 1 | 27 | — | n/a |
+| a7-voice-video/0005-relay-only-privacy.html | 1957 | 7 | 2 | 2 | 27 | — | yes |
 | a8-redemption-web/0001-vite-react-setup.html | 991 | 12 | 2 | 2 | 29 | — | yes |
 | a8-redemption-web/0002-token-redemption-flow.html | 1670 | 6 | 2 | 2 | 30 | — | yes |
 | a8-redemption-web/0003-browser-webrtc-ws.html | 1768 | 8 | 2 | 2 | 29 | — | yes |
