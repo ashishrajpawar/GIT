@@ -165,21 +165,50 @@ export function getConnectionState(): 'connected' | 'connecting' | 'disconnected
       </tbody>
     </table>
 
-    <p><strong>Why backoff?</strong> If the server is down and 10,000 clients all try to reconnect every second, the server gets hammered the moment it comes back up. Backoff spreads out reconnection attempts and gives the server time to recover.</p>
+    <p><strong>Why backoff?</strong> If the server is down and 10,000 clients
+    retry every second, it gets hammered the instant it comes back up. Backoff
+    widens the gap between <em>one client's</em> attempts, so a client that has
+    been failing for a while stops asking so often.</p>
 
-    <h3>Adding jitter</h3>
+    <h3>Adding jitter — and what backoff does not fix</h3>
 
-    <p>Even with backoff, if all clients disconnect at the same time (server restart), they all reconnect at the same intervals. Add random jitter to desynchronize:</p>
+    <div class="callout">
+      <div class="callout-title">The distinction that matters here</div>
+      <p><strong>Backoff spaces out one client. Only jitter spaces out the
+      herd.</strong> It is tempting to say backoff "spreads out reconnection
+      attempts", but look at the table again: every client dropped by the same
+      server restart computes the <em>same</em> delays from the <em>same</em>
+      starting instant. They wait 1s together, then 2s together, then 4s
+      together. The gaps get wider and the crowd stays exactly as tightly packed
+      — arriving in synchronised waves rather than a steady stream.</p>
+    </div>
+
+    <p>Randomness is what breaks the lockstep. The useful form is <strong>full
+    jitter</strong>: treat the backoff value as a <em>window</em> and pick a
+    random point anywhere inside it, rather than nudging the delay slightly
+    either side of a shared value.</p>
 
     <pre><code>function scheduleReconnect() {
-  const baseDelay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
-  // Add ±25% random jitter
-  const jitter = baseDelay * 0.25 * (Math.random() * 2 - 1);
-  const delay = Math.round(baseDelay + jitter);
+  // The window doubles each attempt, capped at 30s...
+  const window = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+  // ...and the actual delay is a random point INSIDE it.
+  const delay = Math.floor(Math.random() * window);
 
   reconnectAttempts++;
   reconnectTimer = setTimeout(() =&gt; connect(), delay);
 }</code></pre>
+
+    <p>Compare that with a common alternative — adding ±25% wobble around the
+    backoff value. On attempt 5 that scatters clients across 12s–20s; full
+    jitter scatters them across 0s–16s. The second is a far wider spread, and
+    the difference grows with every attempt. Partial jitter keeps the crowd
+    recognisably a crowd.</p>
+
+    <p>You will meet this again in <code>a8/0003</code>, where the redemption
+    page builds the complete version as a testable function — the same jitter,
+    plus the close codes that mean "do not retry at all" and a give-up limit.
+    The reconnection rules are the same on both clients; only the auth failure
+    mode differs.</p>
 
     <h2>React hook for WebSocket</h2>
 
@@ -241,13 +270,41 @@ export function useWsMessage(type: string, handler: (payload: any) =&gt; void) {
 AppState.addEventListener('change', (state) =&gt; {
   if (state === 'active') {
     // App is back in foreground — ensure WS is connected
-    connect();
+    connect();   // ← read the warning below before you copy this
   }
 });</code></pre>
 
     <p><strong>iOS behaviour:</strong> WebSocket connections are suspended when the app goes to background. After ~30 seconds, iOS may close the TCP connection entirely. On return to foreground, the onclose event fires and reconnection triggers.</p>
 
     <p><strong>Android behaviour:</strong> More lenient — connections can survive background for minutes. But battery optimization (Doze mode) will eventually kill them.</p>
+
+    <div class="callout danger">
+      <div class="callout-title">That handler has a bug, and it is the exercise</div>
+      <p>It calls <code>connect()</code> whenever the app comes forward — <em>without
+      asking whether anyone is logged in.</em> Read it together with the logout
+      code in the next section, which disconnects the socket when
+      <code>user</code> becomes null. Log out, switch to another app, switch
+      back, and the socket is open again on behalf of a user who is no longer
+      signed in.</p>
+      <p>The two handlers are individually reasonable and are written in
+      different files, which is exactly why this survives review. Neither is
+      wrong on its own.</p>
+    </div>
+
+    <h3>Three states, not two</h3>
+
+    <p>The other thing the snippet glosses over: <code>AppState</code> reports
+    <code>'active'</code>, <code>'background'</code> <em>and</em>
+    <code>'inactive'</code>. That third one is transient and iOS-flavoured — it
+    fires when the notification shade comes down, when a call banner appears,
+    during the app switcher. It does <strong>not</strong> mean the user has
+    left.</p>
+
+    <p>So do not treat "not active" as "tear the socket down". A user glancing
+    at a notification would drop and rebuild their connection for nothing, and
+    on a flaky mobile network rebuilding is the expensive part. Leave the socket
+    alone while the app is away, and let the OS close it if it wants to — the
+    <code>onclose</code> handler already knows what to do.</p>
 
     <h2>Connecting on login, disconnecting on logout</h2>
 
@@ -339,9 +396,24 @@ const styles = StyleSheet.create({
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>Now build it yourself</h2>
+
+    <p>Write <code>connectionIntent(context)</code> — the single place that
+    decides whether the socket should be connecting, disconnecting, or left
+    alone. Pulling this decision out of the event handlers is what stops the
+    foreground bug above: two handlers cannot disagree if there is only one
+    rule.</p>
+
+    <div id="exercise-intent"></div>
+    <div id="pg-exercise-intent"></div>
+
+    <h3>And the layer it belongs to</h3>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="explain-a6-0001"></div>
 
     <hr>
 
@@ -357,34 +429,166 @@ const styles = StyleSheet.create({
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
-    createPlayground("playground-1", `// Simulate exponential backoff with jitter
-function calculateDelay(attempt) {
-  const baseDelay = Math.min(1000 * Math.pow(2, attempt), 30000);
-  const jitter = baseDelay * 0.25 * (Math.random() * 2 - 1);
-  return Math.round(baseDelay + jitter);
+    createPlayground("playground-1", `// 500 clients are all dropped by the same server restart.
+// Each retries on attempt 5, where the backoff window is 16s.
+// Question: how bunched up are they when they come back?
+
+const CLIENTS = 500;
+const window = Math.min(1000 * Math.pow(2, 4), 30000);  // 16000ms
+
+function noJitter()      { return window; }
+function partialJitter() { return window + window * 0.25 * (Math.random() * 2 - 1); }
+function fullJitter()    { return Math.random() * window; }
+
+// Count how many clients land in each 2-second bucket.
+function histogram(strategy) {
+  const buckets = new Array(11).fill(0);
+  for (let i = 0; i < CLIENTS; i++) {
+    const delay = strategy();
+    buckets[Math.min(10, Math.floor(delay / 2000))]++;
+  }
+  return buckets;
 }
 
-console.log('Reconnection delays (with jitter):');
-console.log('─────────────────────────────────');
-
-let totalWait = 0;
-for (let i = 0; i < 8; i++) {
-  const delay = calculateDelay(i);
-  totalWait += delay;
-  console.log(
-    'Attempt ' + (i + 1) + ': ~' + delay + 'ms ' +
-    '(total: ' + (totalWait / 1000).toFixed(1) + 's)'
-  );
+function show(name, strategy) {
+  console.log(name);
+  const buckets = histogram(strategy);
+  buckets.forEach((count, i) => {
+    if (count === 0) return;
+    const bar = '#'.repeat(Math.ceil(count / 8));
+    console.log('  ' + String(i * 2).padStart(2) + '-' + (i * 2 + 2) + 's  ' + bar + ' ' + count);
+  });
+  console.log('  busiest 2s bucket: ' + Math.max.apply(null, buckets) + ' of ' + CLIENTS);
+  console.log('');
 }
 
-console.log('\\nAfter attempt 5, delay caps at ~30s');
-console.log('Jitter prevents thundering herd on server restart');`);
+show('Backoff alone (no jitter):', noJitter);
+show('Backoff + or-25% jitter:', partialJitter);
+show('Backoff + FULL jitter:', fullJitter);
+
+console.log('Backoff alone puts every client in ONE bucket - the wait got');
+console.log('longer, the crowd did not get thinner. Partial jitter smears it');
+console.log('across a few. Full jitter is the only one that flattens it.');`);
+
+    createSolution("exercise-intent", {
+      exercise: "Write connectionIntent(context) — the one rule that decides what the socket should be doing.\n\ncontext is { appState, hasSession, socketState }:\n\n  appState    — 'active' | 'inactive' | 'background'\n  hasSession  — true if a user is signed in\n  socketState — 'open' | 'connecting' | 'closed'\n\nReturn exactly one of the strings 'connect', 'disconnect' or 'idle'.\n\nThe rules, in this order of precedence:\n\n1. No session? The socket must not be open. Return 'disconnect' if it is open or connecting, and 'idle' if it is already closed — there is nothing to do, and re-issuing a disconnect on every event is noise. This rule wins REGARDLESS of app state: signing out while the app sits in the background must still close the socket.\n\n2. App is not 'active'? Return 'idle'. Do not connect, and — importantly — do not disconnect either. 'inactive' fires for a notification shade or a call banner and does not mean the user has left. The OS will close the socket if it wants to.\n\n3. Otherwise the user is signed in and looking at the app: return 'connect' if the socket is 'closed', and 'idle' if it is already 'open' or 'connecting'. A second connect while one is in flight gives you two sockets and duplicate messages.",
+      hints: [
+        "Handle the no-session case first and return from it. If you check appState before hasSession, logging out in the background leaves the socket open — that is rule 1's whole point.",
+        "'connecting' is not 'closed'. The tempting test socketState !== 'open' treats an in-flight connection as an absent one and opens a second socket.",
+        "There are only three appState values and only one of them means 'the user is here'. Test for 'active' rather than testing against 'background'."
+      ],
+      solution: `function connectionIntent({ appState, hasSession, socketState }) {
+  // 1. Signed out beats everything, including being backgrounded.
+  if (!hasSession) {
+    return socketState === "closed" ? "idle" : "disconnect";
+  }
+
+  // 2. Away, but signed in: leave it exactly as it is. 'inactive' is a
+  //    notification shade, not a departure.
+  if (appState !== "active") return "idle";
+
+  // 3. Here and signed in: connect only if nothing is already in flight.
+  return socketState === "closed" ? "connect" : "idle";
+}`
+    });
+
+    createPlayground("pg-exercise-intent", `// Write connectionIntent(context) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function intent(appState, hasSession, socketState) {
+  return connectionIntent({ appState: appState, hasSession: hasSession, socketState: socketState });
+}
+
+try {
+  if (typeof connectionIntent !== "function") throw new Error("not written yet");
+
+  try {
+    const r = intent("active", true, "closed");
+    check("signed in, app in front, socket closed -> connect", r === "connect", "got " + r);
+  } catch (e) { check("signed in, app in front, socket closed -> connect", false, "threw " + e.message); }
+
+  try {
+    const r = intent("active", false, "open");
+    check("signed out with an open socket -> disconnect", r === "disconnect", "got " + r);
+  } catch (e) { check("signed out with an open socket -> disconnect", false, "threw " + e.message); }
+
+  try {
+    // Signing out DURING a reconnect attempt. The socket is not open yet,
+    // so a check written as socketState === 'open' walks straight past it
+    // and lets the handshake complete for a signed-out user.
+    const r = intent("active", false, "connecting");
+    check("signed out mid-handshake -> disconnect", r === "disconnect",
+          "got " + r + " -- a connect in flight still becomes an open socket a moment later");
+  } catch (e) { check("signed out mid-handshake -> disconnect", false, "threw " + e.message); }
+
+  try {
+    // The precedence case. Signed out while backgrounded: an implementation
+    // that checks appState first returns 'idle' and leaves the socket open
+    // on behalf of someone who has signed out.
+    const r = intent("background", false, "open");
+    check("signing out in the BACKGROUND still disconnects", r === "disconnect",
+          "got " + r + " -- the no-session rule outranks app state, or logout is undone by being away");
+  } catch (e) { check("signing out in the BACKGROUND still disconnects", false, "threw " + e.message); }
+
+  try {
+    const r = intent("active", false, "closed");
+    check("signed out and already closed -> idle", r === "idle",
+          "got " + r + " -- nothing to disconnect; re-issuing it on every event is noise");
+  } catch (e) { check("signed out and already closed -> idle", false, "threw " + e.message); }
+
+  try {
+    // 'connecting' is deliberately NOT 'open' here. If the fixture used
+    // 'open', the common mistake socketState !== 'open' would pass by luck.
+    const r = intent("active", true, "connecting");
+    check("a connect already in flight -> idle", r === "idle",
+          "got " + r + " -- connecting twice gives you two sockets and every message duplicated");
+  } catch (e) { check("a connect already in flight -> idle", false, "threw " + e.message); }
+
+  try {
+    const r = intent("active", true, "open");
+    check("already open -> idle", r === "idle", "got " + r);
+  } catch (e) { check("already open -> idle", false, "threw " + e.message); }
+
+  try {
+    // 'inactive', not 'background' -- the transient state. Must not tear
+    // the socket down for a notification shade.
+    const r = intent("inactive", true, "open");
+    check("'inactive' does NOT disconnect", r === "idle",
+          "got " + r + " -- a notification banner is not the user leaving");
+  } catch (e) { check("'inactive' does NOT disconnect", false, "threw " + e.message); }
+
+  try {
+    const r = intent("inactive", true, "closed");
+    check("'inactive' does not connect either", r === "idle",
+          "got " + r + " -- the app is not in front; wait until it is");
+  } catch (e) { check("'inactive' does not connect either", false, "threw " + e.message); }
+
+  try {
+    const r = intent("background", true, "open");
+    check("backgrounded with a live socket -> leave it alone", r === "idle",
+          "got " + r + " -- rebuilding a socket is the expensive part on a mobile network");
+  } catch (e) { check("backgrounded with a live socket -> leave it alone", false, "threw " + e.message); }
+
+  try {
+    const r = intent("background", true, "closed");
+    check("backgrounded and closed -> do not reconnect in the background", r === "idle", "got " + r);
+  } catch (e) { check("backgrounded and closed -> do not reconnect in the background", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write connectionIntent(context) above, then press Run. (" + e.message + ")");
+}`);
 
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is a React Native WebSocket layer with hooks and AppState wiring, needing a device and a running server",
       exercise: "Build the complete WebSocket client layer:\n\n1. Create `app/src/ws/connection.ts`: a singleton that connects, reconnects with exponential backoff + jitter, sends messages, and dispatches incoming messages to subscribers.\n\n2. Create `app/src/ws/useWebSocket.ts`: a React hook that returns connection state and triggers reconnect on AppState change (foreground).\n\n3. Create `useWsMessage(type, handler)` hook: subscribes to a specific message type and cleans up on unmount.\n\n4. Integrate with AuthContext: connect on login, disconnect on logout.\n\n5. Create `ConnectionBanner` component that shows 'Connecting...' or 'Offline' when disconnected.\n\n6. Test: start the server, open the app, verify connection. Kill the server, verify reconnection attempts with increasing delays. Restart the server, verify auto-reconnect succeeds.",
       hints: [
         "Use a Set<MessageHandler> for listeners — easy add/delete, and iterating to dispatch is fast.",
@@ -406,8 +610,25 @@ console.log('Jitter prevents thundering herd on server restart');`);
 // useWebSocket.ts (hook):
 // - Calls connect() on mount
 // - Subscribes for connection state updates
-// - Listens to AppState changes — reconnects on 'active'
+// - Listens to AppState changes
 // - Returns { connectionState, send }
+
+// IMPORTANT: neither the AppState listener nor the AuthContext effect
+// decides anything itself. Both collect the current context and call the
+// same function:
+//
+//   function reconcile() {
+//     switch (connectionIntent({ appState, hasSession, socketState })) {
+//       case 'connect':    connect();    break;
+//       case 'disconnect': disconnect(); break;
+//       case 'idle':                     break;
+//     }
+//   }
+//
+// Call reconcile() on every AppState change, on login, on logout, and on
+// socket close. Two handlers cannot contradict each other if neither one
+// holds a rule — which is precisely how the foreground-after-logout bug
+// got in.
 
 // useWsMessage(type, handler) (hook):
 // - Subscribes with a filter on message type
@@ -419,13 +640,17 @@ console.log('Jitter prevents thundering herd on server restart');`);
 // ConnectionBanner: renders when state !== 'connected'`
     });
 
+    createExplain("explain-a6-0001", {
+      prompt: "The foreground handler and the logout effect were each written correctly, in different files, and together they left a socket open for a signed-out user. Explain why moving the decision into <code>connectionIntent</code> fixes that — and what it is about a rule living in two event handlers that made the bug so easy to miss."
+    });
+
     createQuiz("lesson-quiz", [
       {
         type: "predict-output",
         question: "What are the first 4 reconnection delays (no jitter)?",
         code: "for (let i = 0; i < 4; i++) {\n  const delay = Math.min(1000 * Math.pow(2, i), 30000);\n  console.log(delay + 'ms');\n}",
         answer: "1000ms\n2000ms\n4000ms\n8000ms",
-        explanation: "2^0=1, 2^1=2, 2^2=4, 2^3=8 — each attempt doubles the delay. The cap (30000ms) kicks in at attempt 5 (2^5=32 > 30). This prevents the client from waiting forever while still spreading out reconnection attempts."
+        explanation: "2^0=1, 2^1=2, 2^2=4, 2^3=8 — each attempt doubles the delay. The cap (30000ms) kicks in at attempt 5 (2^5=32 > 30). This stops one client from waiting forever between attempts. Note what the cap does NOT do: every client dropped by the same restart still computes these identical delays from the same instant, so backoff alone leaves them in lockstep. Jitter is the part that spreads the crowd."
       },
       {
         type: "spot-the-bug",
@@ -457,7 +682,7 @@ console.log('Jitter prevents thundering herd on server restart');`);
         question: "Reconnect when the app returns to foreground:",
         code: "import { AppState } from 'react-native';\n\nAppState.addEventListener('change', (state) => {\n  if (state === '___') {\n    connect();\n  }\n});",
         answer: "active",
-        explanation: "AppState has three values: 'active' (foreground), 'background', and 'inactive' (iOS transitioning). When state becomes 'active', the app is visible and interactive — the right time to ensure the WebSocket is connected. iOS likely killed the connection during background."
+        explanation: "AppState has three values: 'active' (foreground), 'background', and 'inactive' (iOS transitioning through the app switcher, a call banner or the notification shade). 'active' is the one that means the user is actually here. But note what this snippet omits: it calls connect() without checking whether anyone is signed in, so foregrounding the app after logout reopens the socket. That is why the decision belongs in connectionIntent rather than in the listener."
       },
       {
         type: "order-steps",
@@ -552,7 +777,7 @@ console.log('Jitter prevents thundering herd on server restart');`);
         steps: [
           "onclose fires — intentionalClose is false",
           "scheduleReconnect() is called",
-          "delay = Math.min(1000 * 2^attempt, 30000) + jitter is calculated",
+          "window = Math.min(1000 * 2^attempt, 30000); delay = a random point inside it",
           "reconnectAttempts is incremented",
           "setTimeout fires → connect() is called → new WebSocket created"
         ],
@@ -705,7 +930,7 @@ console.log('Jitter prevents thundering herd on server restart');`);
           "To reduce battery usage on Android"
         ],
         correct: 1,
-        explanation: "Without jitter, all clients that disconnected at the same time (e.g. server restart) would reconnect at identical intervals: 1s, 2s, 4s, 8s... This 'thundering herd' floods the server the moment it comes back up. Adding ±25% random jitter spreads the reconnection wave over time, giving the server a gradual ramp-up rather than an instant spike."
+        explanation: "Without jitter, all clients that disconnected at the same time (e.g. server restart) would reconnect at identical intervals: 1s, 2s, 4s, 8s... This 'thundering herd' floods the server the moment it comes back up. Full jitter — a random point anywhere inside the backoff window rather than a small wobble around it — turns that wave into a gradual ramp-up. Note that backoff on its own does not achieve this: it widens the gap between one client's attempts while leaving every client perfectly synchronised with every other."
       }
     ]);
   </script>
