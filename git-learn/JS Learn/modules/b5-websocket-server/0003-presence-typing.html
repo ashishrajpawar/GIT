@@ -37,9 +37,9 @@
       <tbody>
         <tr><td>Messages</td><td>Durable</td><td>PostgreSQL</td><td>Yes</td></tr>
         <tr><td>Delivery receipts</td><td>Durable</td><td>PostgreSQL</td><td>Yes</td></tr>
-        <tr><td>Online/offline</td><td>Ephemeral</td><td>In-memory (or Redis)</td><td>No</td></tr>
+        <tr><td>Online/offline</td><td>Ephemeral</td><td>Redis key with a TTL</td><td>No — and that is the design</td></tr>
         <tr><td>Typing indicator</td><td>Ephemeral</td><td>Not stored anywhere</td><td>No</td></tr>
-        <tr><td>"Last seen" time</td><td>Semi-durable</td><td>PostgreSQL (update on disconnect)</td><td>Yes</td></tr>
+        <tr><td>"Last seen" time</td><td>Semi-durable</td><td>PostgreSQL, written when the presence key lapses</td><td>Yes</td></tr>
       </tbody>
     </table>
 
@@ -49,15 +49,37 @@
 
     <h3>When is a user "online"?</h3>
 
-    <p>A user is online if they have at least one active WebSocket connection. Simple rule:</p>
+    <p>A user is online if they have at least one active WebSocket connection
+    <em>anywhere in the cluster</em>. That last part is what makes the obvious
+    implementation wrong:</p>
 
-    <pre><code>// User comes online: when their FIRST socket connects
-// User goes offline: when their LAST socket disconnects
-
+    <pre><code>// WRONG -- this answers a different question than the one asked.
 function isOnline(userId: number): boolean {
   const sockets = clients.get(userId);
-  return sockets !== undefined && sockets.size > 0;
+  return sockets !== undefined &amp;&amp; sockets.size > 0;   // ...on THIS node
 }</code></pre>
+
+    <p>As <code>0002</code> laboured, the local map knows only about this
+    process. Presence is a claim about the user, not about this server, so it
+    lives in Redis as a key with a TTL:</p>
+
+    <pre><code>// api/src/ws/presence.ts
+const PRESENCE_TTL_SECONDS = 60;
+
+// Called when a socket connects, and again on every heartbeat tick.
+export async function markPresent(userId: number) {
+  await redis.set(`presence:${userId}`, '1', 'EX', PRESENCE_TTL_SECONDS);
+}
+
+export async function isOnline(userId: number): Promise&lt;boolean&gt; {
+  return (await redis.exists(`presence:${userId}`)) === 1;
+}</code></pre>
+
+    <p>Notice there is no <code>markOffline</code>. Going offline is the
+    <em>absence</em> of a refresh, so the key expires on its own. That is not a
+    shortcut — it is the only version that survives a server being killed
+    rather than shut down, and it means no node ever has to decide on another
+    node's behalf that a user has gone.</p>
 
     <h3>Broadcasting presence changes</h3>
 
@@ -264,13 +286,30 @@ export async function handleTypingStop(ws: AuthenticatedSocket, payload: TypingP
   await forwardTypingEvent(ws, payload.conversationId, false);
 }</code></pre>
 
-    <h2>Redis pub/sub — scaling beyond one server (optional for v1)</h2>
+    <h2>Redis pub/sub — required, not optional</h2>
 
-    <p>Right now, presence and typing work because all connections live on one server process. The <code>clients</code> Map is in-memory. If you had two server instances behind a load balancer, a user connected to server A wouldn't receive typing events from a user connected to server B.</p>
+    <div class="callout danger">
+      <div class="callout-title">This section used to say Redis was a "when you grow" problem</div>
+      <p>It said: for Token v1 on a single VPS, in-memory is correct, add Redis
+      when you need more than one machine. That is the ordinary advice and it is
+      <strong>wrong for this project</strong> — ADR-0003 is titled "scale out
+      ready, deploy on one box", and the entire point of it is that you build for
+      N replicas and then run one.</p>
+      <p>The reason is asymmetric cost. Running Redis when you have one node buys
+      nothing today and costs a container. Retrofitting it later means rewriting
+      every place that reasoned from a local Map — which by then is the routing,
+      the presence, the typing indicators and the rate limiting. And the failure
+      it prevents is silent: add a second replica to an in-memory design and
+      messages between users on different nodes are simply dropped, with nothing
+      logged and no error raised.</p>
+      <p>So <strong>Redis is a required dependency from the first commit</strong>,
+      alongside Postgres. Not a scaling milestone.</p>
+    </div>
 
-    <p>The solution: Redis pub/sub. Each server publishes events to Redis; all servers subscribe and forward to their local clients.</p>
+    <p>Each server publishes events to Redis; every server subscribes and
+    forwards to whichever sockets it happens to hold.</p>
 
-    <pre><code>// Conceptual — NOT needed for v1 (single server)
+    <pre><code>// api/src/ws/fanout.ts
 import Redis from 'ioredis';
 
 const pub = new Redis();
@@ -286,24 +325,63 @@ sub.on('message', (channel, message) =&gt; {
   // Forward to local sockets for users in this conversation
 });</code></pre>
 
-    <p><strong>When to add Redis:</strong> When you need multiple server instances (load > 1 machine can handle, or zero-downtime deploys). For Token v1 on a single VPS, in-memory is correct.</p>
+    <p>Two details this snippet is too short to show, both covered by
+    <code>deliveryPlan</code> in <code>0002</code>: a subscriber hears its
+    <em>own</em> publishes and must ignore them, and a message that arrived on
+    the channel must never be republished. Neither can happen with one node
+    running, which is exactly why they are worth getting right before there
+    are two.</p>
+
+    <p>One thing genuinely does wait: <strong>zero-downtime deploys.</strong>
+    Those need a second replica actually running, and that is a deployment
+    change rather than a code change — which is the whole dividend of having
+    built this way.</p>
 
     <h2>Privacy considerations for presence</h2>
 
-    <p>Token is a privacy app. Should the holder see when the issuer is online? Arguments both ways:</p>
+    <p>Should the holder see when the issuer is online? The usual framing puts
+    convenience against privacy — the holder knows when to expect a reply,
+    against the issuer not wanting their schedule known. Framed that way it
+    looks like a close call.</p>
 
-    <ul>
-      <li><strong>Show presence:</strong> Holder knows when to expect a reply. Better UX.</li>
-      <li><strong>Hide presence:</strong> Issuer might not want holders knowing their schedule.</li>
-    </ul>
+    <p>It is not close, because of who these two people are. The holder is a
+    delivery company, an estate agent, a shop that wanted a phone number. The
+    issuer is a person who declined to give them one. Presence is not a single
+    fact — sampled over a fortnight it is a <strong>behavioural profile</strong>:
+    when they wake, when they commute, which evenings they are out, when they
+    are away for a week.</p>
 
-    <p><strong>Decision:</strong> Make it a per-token access rule. By default, presence is shown. The issuer can add a rule to hide it.</p>
+    <div class="callout danger">
+      <div class="callout-title">Deny by default, because that is what the product is</div>
+      <p><code>CLAUDE.md</code> states Token's governing rule: <em>nobody contacts
+      the user unless the user issued them a token.</em> Issuing a token to a
+      courier grants one thing — a way to reach you about a parcel. It is not
+      consent to a live feed of when you are at home.</p>
+      <p>So: <strong>the issuer's presence is not sent to holders.</strong> Not
+      shown-by-default with a switch to turn it off. A privacy default that leaks
+      is the behaviour of the product, whatever the settings screen offers — the
+      same argument as ADR-0008, and it lands the same way here.</p>
+    </div>
 
-    <pre><code>// Potential future rule type:
-{ "rule_type": "hide_presence", "payload": { "hide": true } }
+    <p>The asymmetry is deliberate and runs the other way: the issuer <em>does</em>
+    see the holder's presence. The holder redeemed a code to transact with a
+    business relationship they entered knowingly; the issuer is the party the
+    product exists to protect. If that ever feels unfair, notice that the holder
+    can close the page and be gone, while the issuer cannot un-disclose a
+    fortnight of their movements.</p>
 
-// In broadcastPresence, check if the token has this rule before sending
-// This is a B7 (Token Engine) concern — for now, always show</code></pre>
+    <pre><code>// A per-token rule can OPEN this up, never close it -- the closed
+// state is the default and needs no rule.
+{ "rule_type": "share_presence", "payload": { "share": true } }
+
+// Useful for the case that motivates it: a token issued to a friend
+// or a family member, where presence is genuinely wanted.
+// Rule storage is a B7 (Token Engine) concern.</code></pre>
+
+    <p>Note the rule is named for what it <em>grants</em>. A
+    <code>hide_presence</code> flag would mean the safe state is "no rule
+    present", and a bug that loses the rules row would fail open. Naming the
+    rule for the permission it adds makes a missing rule the safe answer.</p>
 
     <h2>Complete presence + typing integration</h2>
 
@@ -369,9 +447,23 @@ export function getClients() { return clients; }</code></pre>
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>Now build it yourself</h2>
+
+    <p>Write <code>canSeePresence(ctx)</code> — the gate every presence
+    broadcast passes through. It is where "deny by default" stops being a
+    principle and becomes a line of code that either has an <code>else</code>
+    returning false, or does not.</p>
+
+    <div id="exercise-presence"></div>
+    <div id="pg-exercise-presence"></div>
+
+    <h3>And the server it belongs to</h3>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="explain-b5-0003"></div>
 
     <hr>
 
@@ -387,6 +479,7 @@ export function getClients() { return clients; }</code></pre>
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -430,7 +523,112 @@ console.log('Typing events sent to server:');
 events.forEach(e => console.log('  ' + e));
 console.log('\\nOnly 2 WS messages for 2 keystrokes — debounce works.');`);
 
+    createSolution("exercise-presence", {
+      exercise: "Write canSeePresence(ctx) — may we tell the viewer whether the subject is online?\n\nctx is { viewerId, subjectId, viewerRole, tokenStatus, sharePresence }:\n\n  viewerId, subjectId — the two user ids\n  viewerRole          — 'issuer' or 'holder': who the VIEWER is on this token\n  tokenStatus         — 'active', 'paused' or 'revoked'\n  sharePresence       — the token's share_presence rule, if one exists. true if\n                        the issuer opted in. May be false, or missing entirely.\n\nReturn true or false.\n\nThe rules, in order:\n\n1. viewerId === subjectId — always true. This is your own presence arriving on your own second device, and it is not a disclosure to anyone.\n\n2. tokenStatus is not 'active' — false. A paused or revoked token is not a channel any more. Presence leaking through a token the issuer has switched off is worse than through a live one, because they believe they closed it.\n\n3. viewerRole 'issuer' — true. The issuer sees the holder's presence. The holder redeemed a code to enter this relationship knowingly; the issuer is the party the product protects.\n\n4. viewerRole 'holder' — the holder is asking to see the ISSUER's presence. Only if sharePresence is exactly true. Missing, null and false all mean no. This is the whole exercise: the default is the absent case, and it must be a refusal.",
+      hints: [
+        "Write the four rules as four early returns in the order given. If you find yourself needing an && across two rules, re-read which one is supposed to win.",
+        "Rule 2 has to come before rule 3, or a revoked token still tells the issuer about the holder. Order is behaviour here, not tidiness.",
+        "sharePresence === true, not a truthiness test. The value arrives from a JSON rules payload, so it can be null, absent, the string 'false', or anything else a client sent."
+      ],
+      solution: `function canSeePresence({
+  viewerId,
+  subjectId,
+  viewerRole,
+  tokenStatus,
+  sharePresence,
+}) {
+  // Your own presence on your own other device. Not a disclosure.
+  if (viewerId === subjectId) return true;
+
+  // A paused or revoked token is not a channel. Checked BEFORE role, so a
+  // dead token cannot leak in either direction.
+  if (tokenStatus !== "active") return false;
+
+  // The issuer sees the holder. The holder entered this knowingly.
+  if (viewerRole === "issuer") return true;
+
+  // The holder wants the issuer's presence. Only an explicit opt-in.
+  // === true, so that missing/null/undefined all refuse.
+  return sharePresence === true;
+}`
+    });
+
+    createPlayground("pg-exercise-presence", `// Write canSeePresence(ctx) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+// Distinct ids so a viewer/subject mix-up cannot pass by coincidence.
+const ISSUER = 41;
+const HOLDER = 77;
+
+function ask(over) {
+  const base = {
+    viewerId: HOLDER, subjectId: ISSUER, viewerRole: "holder",
+    tokenStatus: "active", sharePresence: undefined,
+  };
+  return canSeePresence(Object.assign(base, over || {}));
+}
+
+try {
+  if (typeof canSeePresence !== "function") throw new Error("not written yet");
+
+  try {
+    // THE case. No rule exists, so the property is absent entirely --
+    // which is what a real token without the rule looks like.
+    const r = ask({});
+    check("a holder cannot see the issuer's presence by default", r === false,
+          "got " + r + " -- an absent rule must be a refusal, or issuing a token leaks a schedule");
+  } catch (e) { check("a holder cannot see the issuer's presence by default", false, "threw " + e.message); }
+
+  try {
+    check("sharePresence null is still a refusal", ask({ sharePresence: null }) === false,
+          "got true -- null is how a missing DB column arrives");
+    check("sharePresence false is a refusal", ask({ sharePresence: false }) === false, "got true");
+    check("a truthy non-true value is still a refusal", ask({ sharePresence: "yes" }) === false,
+          "got true -- use === true; a stray string from a JSON payload must not grant access");
+  } catch (e) { check("sharePresence null is still a refusal", false, "threw " + e.message); }
+
+  try {
+    check("an explicit opt-in does grant it", ask({ sharePresence: true }) === true,
+          "got false -- the issuer must be able to share with a friend");
+  } catch (e) { check("an explicit opt-in does grant it", false, "threw " + e.message); }
+
+  try {
+    const r = ask({ viewerId: ISSUER, subjectId: HOLDER, viewerRole: "issuer" });
+    check("the issuer sees the holder's presence", r === true, "got " + r);
+  } catch (e) { check("the issuer sees the holder's presence", false, "threw " + e.message); }
+
+  try {
+    // A revoked token must not leak in EITHER direction -- so this is the
+    // issuer, who would otherwise be allowed.
+    const r = ask({ viewerId: ISSUER, subjectId: HOLDER, viewerRole: "issuer", tokenStatus: "revoked" });
+    check("a revoked token leaks nothing, even to the issuer", r === false,
+          "got " + r + " -- check the status BEFORE the role, or a dead token still talks");
+  } catch (e) { check("a revoked token leaks nothing, even to the issuer", false, "threw " + e.message); }
+
+  try {
+    const r = ask({ tokenStatus: "paused", sharePresence: true });
+    check("pausing a token suspends a granted opt-in too", r === false,
+          "got " + r + " -- the issuer paused it; that has to mean something");
+  } catch (e) { check("pausing a token suspends a granted opt-in too", false, "threw " + e.message); }
+
+  try {
+    // Your own presence on your own other device, and the token is revoked.
+    // Rule 1 outranks everything: this is not a disclosure to anyone.
+    const r = ask({ viewerId: ISSUER, subjectId: ISSUER, viewerRole: "issuer", tokenStatus: "revoked" });
+    check("your own presence reaches your own devices regardless", r === true,
+          "got " + r + " -- multi-device sync is not a disclosure; check identity first");
+  } catch (e) { check("your own presence reaches your own devices regardless", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write canSeePresence(ctx) above, then press Run. (" + e.message + ")");
+}`);
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is a Node WebSocket server with Redis presence and typing fan-out, needing Redis and connected clients",
       exercise: "Build the complete presence and typing system:\n\n1. Create `api/src/ws/presence.ts`: track online/offline, broadcast to conversation partners only, update last_seen_at in the DB on disconnect.\n\n2. Create `api/src/ws/handlers/typing.ts`: forward typing:start and typing:stop to the other participant in the conversation. Add a server-side 5-second timeout safety net.\n\n3. Wire presence into the connection lifecycle: call handleUserConnected on connect, handleUserDisconnected on close.\n\n4. Only broadcast 'went online' when the FIRST socket connects, and 'went offline' when the LAST socket disconnects (multi-device aware).\n\n5. Only send presence updates to users who have an active conversation with this user (privacy — strangers don't see your status).\n\n6. Test: connect two users via wscat, verify one sees the other's presence change. Send typing:start and verify it arrives on the other side.",
       hints: [
         "A user is online if clients.get(userId)?.size > 0. Check BEFORE and AFTER modifying the Set to detect transitions.",
@@ -459,6 +657,10 @@ console.log('\\nOnly 2 WS messages for 2 keystrokes — debounce works.');`);
 
 // === Database migration ===
 // ALTER TABLE users ADD COLUMN last_seen_at TIMESTAMPTZ;`
+    });
+
+    createExplain("explain-b5-0003", {
+      prompt: "The rule is called <code>share_presence</code> and grants access, rather than <code>hide_presence</code> which would remove it. Explain what happens to each version if the rules row is lost or fails to load — and why that makes the naming a safety property rather than a style preference."
     });
 
     createQuiz("lesson-quiz", [
@@ -758,29 +960,29 @@ await pub.___('presence', event);`,
 
       {
         type: "spot-the-bug",
-        question: "This code tries to hide presence based on a token access rule. What's the bug?",
+        question: "This code checks the share_presence rule before broadcasting. What's the bug?",
         code: `async function broadcastPresence(userId: number, status: string) {
   const partners = await getConversationPartners(userId);
 
   for (const partnerId of partners) {
-    const hasHideRule = await db.query(
+    const shared = await db.query(
       'SELECT 1 FROM token_rules WHERE rule_type = $1',
-      ['hide_presence']
+      ['share_presence']
     );
 
-    if (!hasHideRule.rows.length) {
+    if (shared.rows.length) {
       sendPresenceTo(partnerId, userId, status);
     }
   }
 }`,
         options: [
-          "The query doesn't filter by userId — it checks if ANY token in the DB has a hide_presence rule, not this user's token",
+          "The query doesn't filter by user or token — it asks whether ANY row in the table has a share_presence rule, so one unrelated user's opt-in discloses everybody's presence",
           "SELECT 1 is not valid PostgreSQL syntax",
           "The loop should use Promise.all for parallel execution",
           "sendPresenceTo should be awaited"
         ],
         correct: 0,
-        explanation: "The query checks for any hide_presence rule in the whole table, not specifically for the token between userId and partnerId. It needs a WHERE clause: `WHERE rule_type = 'hide_presence' AND (issuer_id = $1 OR holder_id = $1)` and ideally also filter by the specific conversation/token. Otherwise, one user's privacy setting accidentally silences everyone's presence."
+        explanation: "The query asks 'does a share_presence rule exist anywhere in this table', which becomes true the moment any single user anywhere opts in — and from then on every user's presence is broadcast to every one of their holders. It needs to be scoped to this pair: `WHERE rule_type = 'share_presence' AND (issuer_id = $1 OR holder_id = $1)`, and better still to the specific token. Notice which way this fails: because the rule GRANTS access, an unscoped query fails open, and it does so silently and globally. The same missing WHERE on a hide_presence rule would merely have silenced presence for everyone — annoying, visible, and harmless. That asymmetry is the argument for naming rules after what they permit."
       },
 
       {

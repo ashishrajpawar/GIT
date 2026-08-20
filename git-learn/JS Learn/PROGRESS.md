@@ -14,11 +14,11 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1840 words |
+| Avg teaching prose per track lesson | 1857 words |
 | Lessons with a playground | 73 / 96 |
 | Lessons with an exercise | 96 / 96 |
 | **Deepened** (all 3 spine sections) | 16 / 96 |
-| **Verified** (code executed) | 46 / 96 |
+| **Verified** (code executed) | 49 / 96 |
 | Ran clean but had nothing to run | 0 / 96 |
 | Errors | 0 |
 | Known and blocked | 3 |
@@ -90,7 +90,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b2-schema-design | 3 | 1032 | 0 | 3 | 81 | 0/3 | 0/3 |
 | b3-node-http-server | 4 | 1500 | 1 | 4 | 117 | 2/4 | 0/4 |
 | b4-auth-server | 3 | 1969 | 0 | 3 | 81 | 2/3 | 0/3 |
-| b5-websocket-server | 3 | 1427 | 3 | 3 | 77 | 0/3 | 0/3 |
+| b5-websocket-server | 3 | 1961 | 6 | 6 | 77 | 0/3 | 3/3 |
 | b6-webrtc-signalling | 2 | 2009 | 2 | 2 | 52 | 1/2 | 0/2 |
 | b7-token-engine | 3 | 2737 | 4 | 3 | 77 | 3/3 | 0/3 |
 | b8-push-notifications | 1 | 1206 | 1 | 1 | 25 | 0/1 | 0/1 |
@@ -215,9 +215,9 @@ so they do not hold the audit red. They are **not** resolved.
 | b4-auth-server/0001-password-hashing-registration.html | 905 | 8 | 0 | 1 | 25 | — | n/a |
 | b4-auth-server/0002-jwt-refresh-rotation.html | 2688 | 9 | 0 | 1 | 26 | yes | n/a |
 | b4-auth-server/0003-rate-limiting.html | 2314 | 7 | 0 | 1 | 30 | yes | n/a |
-| b5-websocket-server/0001-ws-connection-lifecycle.html | 1548 | 11 | 1 | 1 | 25 | — | n/a |
-| b5-websocket-server/0002-message-routing.html | 1309 | 10 | 1 | 1 | 26 | — | n/a |
-| b5-websocket-server/0003-presence-typing.html | 1424 | 9 | 1 | 1 | 26 | — | n/a |
+| b5-websocket-server/0001-ws-connection-lifecycle.html | 1928 | 11 | 2 | 2 | 25 | — | yes |
+| b5-websocket-server/0002-message-routing.html | 1850 | 10 | 2 | 2 | 26 | — | yes |
+| b5-websocket-server/0003-presence-typing.html | 2105 | 10 | 2 | 2 | 26 | — | yes |
 | b6-webrtc-signalling/0001-signalling-server.html | 2873 | 9 | 1 | 1 | 26 | yes | n/a |
 | b6-webrtc-signalling/0002-coturn-setup.html | 1145 | 9 | 1 | 1 | 26 | — | n/a |
 | b7-token-engine/0001-token-generation-redemption.html | 3021 | 12 | 2 | 1 | 25 | yes | n/a |
