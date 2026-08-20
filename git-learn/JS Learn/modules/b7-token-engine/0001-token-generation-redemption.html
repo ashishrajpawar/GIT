@@ -180,15 +180,38 @@ router.post('/tokens', authenticate, async (req, res) => {
 
 export default router;</code></pre>
 
-  <h2>POST /tokens/:code/redeem — The Redemption Endpoint</h2>
+  <h2>POST /api/redeem — The Redemption Endpoint</h2>
   <p>
     A holder visits <code>tokn.app/t/CODE</code>, enters a display name, and
     redeems the token. The server must validate status, expiry, and use count
     before creating a conversation.
   </p>
-  <pre><code>router.post('/tokens/:code/redeem', async (req, res) => {
-  const { code } = req.params;
-  const { holder_name } = req.body;
+
+  <div class="callout danger">
+    <div class="callout-title">The code is in the body, and the URL says nothing</div>
+    <p>The natural REST shape is <code>POST /tokens/:code/redeem</code> — the
+    resource, then the action. It is what this lesson used to teach and it is
+    wrong, because a path is not private. It is written to the reverse proxy's
+    access log, kept in browser history, sent onward in <code>Referer</code>,
+    and attached to crash reports by most error trackers.</p>
+    <p>A token code is a <strong>capability</strong>: whoever reads it can
+    redeem it. So each of those is a place one can be picked up, and the last
+    of them ships it to a third party. Notice how little the rest of this file
+    would have been worth if the URL leaked — the code is stored as a hash so
+    the database cannot give it up, and encrypted separately so a backup cannot
+    either.</p>
+    <p>Hence <code>POST /api/redeem</code> with <code>{ code, holder_name }</code>
+    in the body, and <code>POST /api/redeem/check</code> beside it. That second
+    one only reads, so it deserves to be a GET, and it does not get to be one.
+    That is the cost, and it is worth paying.</p>
+    <p>The <code>tokn.app/t/CODE</code> page URL above is the one exception —
+    a browser has to reach the page somehow. It is defended with
+    <code>Referrer-Policy: no-referrer</code>, <code>Cache-Control: no-store</code>
+    and a per-path <code>X-Robots-Tag</code> instead. See <code>a8/0004</code>.</p>
+  </div>
+  <pre><code>router.post('/api/redeem', async (req, res) => {
+  // Body, not params. The URL carries nothing identifying.
+  const { code, holder_name } = req.body;
 
   if (!holder_name || holder_name.trim().length === 0) {
     return res.status(400).json({ error: 'holder_name is required' });
@@ -640,7 +663,7 @@ console.log('256 / 31 = ' + Math.floor(256 / 31) + ' remainder ' + (256 % 31));
 // keyspace is simply smaller than the number above claims.`);
 
     createSolution("exercise-1", {
-      exercise: "Build the full POST /tokens/:code/redeem endpoint as an Express route. It must: (1) validate holder_name is present, (2) fetch the token by code with a row lock, (3) check status is 'active', (4) check expiry, (5) check max_uses against conversation count, (6) create a conversation row, (7) return a holder JWT. Use the pg pool pattern from the lesson.",
+      exercise: "Build the full POST /api/redeem endpoint as an Express route. Take BOTH the code and holder_name from the request body — the code must never appear in the URL, because a path reaches the access log, browser history and Referer. It must: (1) validate holder_name is present, (2) fetch the token by code hash with a row lock, (3) check status is 'active', (4) check expiry, (5) check max_uses against conversation count, (6) create a conversation row, (7) return a holder JWT. Use the pg pool pattern from the lesson.",
       hints: [
         "Use SELECT ... FOR UPDATE to prevent race conditions when two people redeem simultaneously.",
         "Check max_uses by counting existing conversations for that token_id.",
@@ -653,9 +676,8 @@ import { signHolderToken } from '../engine/holderJwt';
 
 const router = Router();
 
-router.post('/tokens/:code/redeem', async (req, res) => {
-  const { code } = req.params;
-  const { holder_name } = req.body;
+router.post('/api/redeem', async (req, res) => {
+  const { code, holder_name } = req.body;
 
   // 1. Validate input
   if (!holder_name || holder_name.trim().length === 0) {
@@ -849,7 +871,7 @@ export default router;`
       },
       {
         type: "spot-the-bug",
-        code: "router.post('/tokens/:code/redeem', async (req, res) => {\n  const { code } = req.params;\n  const { rows } = await pool.query(\n    'SELECT * FROM tokens WHERE code_hash = $1',\n    [hashCode(code)]\n  );\n  if (rows.length === 0) return res.status(404).json({ error: 'Not found' });\n  const token = rows[0];\n  // ... check status, expiry, max_uses ...\n  await createConversation(token.id);\n});",
+        code: "router.post('/api/redeem', async (req, res) => {\n  const { code } = req.body;\n  const { rows } = await pool.query(\n    'SELECT * FROM tokens WHERE code_hash = $1',\n    [hashCode(code)]\n  );\n  if (rows.length === 0) return res.status(404).json({ error: 'Not found' });\n  const token = rows[0];\n  // ... check status, expiry, max_uses ...\n  await createConversation(token.id);\n});",
         options: ["Line 3: Missing FOR UPDATE — race condition with concurrent redemptions", "Line 4: Should use $2 instead of $1", "Line 7: Should return 403 instead of 404 for missing tokens"],
         correct: 0,
         explanation: "Without FOR UPDATE, two simultaneous redemption requests could both pass the max_uses check before either creates a conversation. The row lock prevents this race condition."

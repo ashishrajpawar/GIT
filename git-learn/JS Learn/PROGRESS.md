@@ -14,7 +14,7 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1860 words |
+| Avg teaching prose per track lesson | 1863 words |
 | Lessons with a playground | 74 / 96 |
 | Lessons with an exercise | 96 / 96 |
 | **Deepened** (all 3 spine sections) | 16 / 96 |
@@ -84,7 +84,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a6-chat-realtime | 3 | 1912 | 6 | 6 | 78 | 0/3 | 3/3 |
 | a7-voice-video | 5 | 1279 | 6 | 6 | 138 | 0/5 | 1/5 |
 | a8-redemption-web | 4 | 1584 | 8 | 8 | 115 | 0/4 | 4/4 |
-| a9-deep-linking | 2 | 1159 | 2 | 2 | 53 | 0/2 | 0/2 |
+| a9-deep-linking | 2 | 1167 | 2 | 2 | 53 | 0/2 | 0/2 |
 | b1-sql-fundamentals | 4 | 905 | 0 | 4 | 103 | 0/4 | 0/4 |
 | b10-security-compliance | 2 | 2470 | 2 | 2 | 50 | 1/2 | 0/2 |
 | b2-schema-design | 3 | 1032 | 0 | 3 | 81 | 0/3 | 0/3 |
@@ -92,7 +92,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b4-auth-server | 3 | 1969 | 0 | 3 | 81 | 2/3 | 0/3 |
 | b5-websocket-server | 3 | 1961 | 6 | 6 | 77 | 0/3 | 3/3 |
 | b6-webrtc-signalling | 2 | 2009 | 2 | 2 | 52 | 1/2 | 0/2 |
-| b7-token-engine | 3 | 2737 | 4 | 3 | 77 | 3/3 | 0/3 |
+| b7-token-engine | 3 | 2813 | 4 | 3 | 77 | 3/3 | 0/3 |
 | b8-push-notifications | 1 | 1206 | 1 | 1 | 25 | 0/1 | 0/1 |
 | b9-docker-deployment | 3 | 2298 | 3 | 3 | 77 | 2/3 | 0/3 |
 | x1-git-dev-environment | 3 | 698 | 1 | 3 | 76 | 0/3 | 0/3 |
@@ -198,7 +198,7 @@ so they do not hold the audit red. They are **not** resolved.
 | a8-redemption-web/0003-browser-webrtc-ws.html | 1768 | 8 | 2 | 2 | 29 | — | yes |
 | a8-redemption-web/0004-no-app-experience.html | 1907 | 9 | 2 | 2 | 27 | — | yes |
 | a9-deep-linking/0001-universal-links-app-links.html | 1112 | 7 | 1 | 1 | 28 | — | n/a |
-| a9-deep-linking/0002-in-app-deep-link-handling.html | 1206 | 9 | 1 | 1 | 25 | — | n/a |
+| a9-deep-linking/0002-in-app-deep-link-handling.html | 1222 | 9 | 1 | 1 | 25 | — | n/a |
 | b1-sql-fundamentals/0001-tables-insert-select.html | 946 | 9 | 0 | 1 | 26 | — | n/a |
 | b1-sql-fundamentals/0002-joins-relationships.html | 828 | 10 | 0 | 1 | 25 | — | n/a |
 | b1-sql-fundamentals/0003-indexes-transactions-constraints.html | 935 | 11 | 0 | 1 | 26 | — | n/a |
@@ -220,7 +220,7 @@ so they do not hold the audit red. They are **not** resolved.
 | b5-websocket-server/0003-presence-typing.html | 2105 | 10 | 2 | 2 | 26 | — | yes |
 | b6-webrtc-signalling/0001-signalling-server.html | 2873 | 9 | 1 | 1 | 26 | yes | n/a |
 | b6-webrtc-signalling/0002-coturn-setup.html | 1145 | 9 | 1 | 1 | 26 | — | n/a |
-| b7-token-engine/0001-token-generation-redemption.html | 3021 | 12 | 2 | 1 | 25 | yes | n/a |
+| b7-token-engine/0001-token-generation-redemption.html | 3249 | 12 | 2 | 1 | 25 | yes | n/a |
 | b7-token-engine/0002-access-rules-engine.html | 2621 | 7 | 1 | 1 | 26 | yes | n/a |
 | b7-token-engine/0003-revocation-pause.html | 2569 | 9 | 1 | 1 | 26 | yes | n/a |
 | b8-push-notifications/0001-fcm-apns-expo.html | 1206 | 11 | 1 | 1 | 25 | — | n/a |
