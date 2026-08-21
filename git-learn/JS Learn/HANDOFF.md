@@ -1585,6 +1585,66 @@ the canonical code.
 
 Status: `b2/0001` `unverifiable → verified`. 54/96. Warnings back to 1.
 
+### Session of 2026-08-20 (continued) — the schema decisions, taken and implemented
+
+Both questions flagged from `b7/0003` were put to the student with the costs
+spelled out, and both were answered the same way they were recommended. Worth
+noting *why* the recommendations were what they were, because the reasoning is
+the durable part.
+
+**State: both, with the database enforcing the agreement.**
+
+The instinct is that storing a fact twice is a smell, and normally it is. What
+makes it acceptable here is that the duplication is **checkable**, and the
+check is a biconditional rather than the one-way implication that was there
+before:
+
+```sql
+CHECK ((status = 'revoked') = (revoked_at IS NOT NULL))
+```
+
+The old constraint was `(status != 'revoked') OR (revoked_at IS NOT NULL)`,
+which catches a revoked status with no timestamp and happily accepts a
+`revoked_at` on an active row. **A one-way constraint on a two-way invariant
+is half a constraint**, and it is the half that fails in the direction nobody
+tests.
+
+The consequence that makes this more than bookkeeping: revoke must now also set
+`paused_at = NULL`, because a revoked token is not a paused one and the second
+biconditional would reject the row. So **the state machine's exclusivity — the
+thing `planTransition` encodes in JavaScript — is now also a database fact.**
+Two independent enforcements of one rule, which is the right number for an
+authorisation-adjacent invariant.
+
+**Use count: counted, not stored.**
+
+The argument that decided it is that a counter is a second copy of a fact
+whose *ways of drifting are all silent*: a transaction that fails after
+incrementing, a manual fix, an ordinary bug. Every one ends with a token
+permitting more or fewer uses than its owner set, and nothing in the database
+notices.
+
+What matters more than the decision is that **the cost was written into the
+lesson rather than glossed**: the limit can no longer be a `CHECK` constraint,
+because there is no column to constrain. Enforcement moves out of the database
+and into the redemption transaction, which is a real responsibility handed to
+application code — and it is precisely why `b7/0001` spells that transaction
+out with `FOR UPDATE` instead of sketching it. `idx_conversations_token_id`
+stops being an optimisation and becomes load-bearing.
+
+A course that says "count it, it's cleaner" without saying "and here is the
+constraint you just gave up" has taught half of it.
+
+**The audit caught my own slip mid-pass**, which is worth recording because it
+is the first time this session the audit found something before a suite did: an
+`order-steps` question gained a fifth step while `correctOrder` still listed
+four. That check exists because a question with a mismatched key is unanswerable
+and looks fine in source. It went red, said exactly which question, and it took
+a minute to fix.
+
+Status: no verification state changed — this was a correctness pass across
+`b2/0001`, `b7/0002`, `b7/0003` and `CLAUDE.md`. 54/96. **Nothing is blocked.**
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees

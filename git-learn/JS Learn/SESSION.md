@@ -12,44 +12,42 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean. **53/96 verified**, audit green, suites pass.
-**B7 is complete** — three of three.
+**Nothing.** Working tree clean. **54/96 verified**, audit green, five suites
+pass.
 
-### ⚠ Open decision for the student: how token state is stored
+### Both schema decisions are settled (2026-08-20) and implemented
 
-Found while finishing B7, and **not** settled by me, because both designs have
-a real case and five places currently disagree:
-
-| Where | Stores state as |
+| Question | Answer |
 |---|---|
-| `b1/0001`, `b2/0001` | a `status` enum **and** a `revoked_at` timestamp |
-| `b7/0001` | reads `status` |
-| `b7/0002` | reads `revoked_at` / `paused_at` |
-| `b7/0003` | writes timestamps, and argues against the enum — while declaring `TokenStatus` and a transitions table in an earlier section |
-| `CLAUDE.md` | "The `status` column holds `active | paused | revoked`" |
+| How is token state stored? | **Both** — `status` to read, `paused_at`/`revoked_at` to write, two `CHECK` biconditionals stopping them disagree |
+| How is the use count known? | **Counted from `conversations`.** No `use_count` column |
 
-**The case for the enum:** one value to read, and the thing `displayStatus`
-and `canRedeem` already branch on.
+**The duplication is made safe rather than tolerated.** The constraints are
+biconditionals, so a `revoked_at` on an `'active'` row is refused just as
+firmly as a `'revoked'` status with no timestamp:
 
-**The case for timestamps** (`b7/0003` makes it well): a timestamp answers
-*when*, which an audit trail needs, and transition rules become `WHERE`
-clauses the **database** enforces — `resume` only applies
-`WHERE revoked_at IS NULL` — rather than checks in application code that two
-concurrent requests can both pass.
+```sql
+CHECK ((status = 'revoked') = (revoked_at IS NOT NULL)),
+CHECK ((status = 'paused')  = (paused_at  IS NOT NULL))
+```
 
-**The likely synthesis, already half-built in `b2/0001`:** `status` is the
-value you read, timestamps are the values you write, and a `CHECK` keeps them
-in step (`b2/0001` already has `CHECK ((status != 'revoked') OR (revoked_at IS
-NOT NULL))`). Cost: two things to keep consistent.
+Consequence worth knowing before you write an UPDATE: **revoke must also clear
+`paused_at`**, or the second constraint rejects the row. That is the
+constraint working — the state machine's exclusivity is now a database fact
+rather than a convention.
 
-**Nothing is blocked by this.** `b7/0003` now describes the disagreement
-instead of asserting a winner, and `planTransition` is deliberately storage-
-agnostic — the state machine is identical either way. It wants a B2 decision,
-not a patch.
+**The cost of the second decision is real and is written into the lesson:**
+the use limit can no longer be a `CHECK` constraint, because there is no column
+to constrain. Enforcement lives in the redemption transaction — `FOR UPDATE`
+on the token row, count, insert — which is why `b7/0001` writes that
+transaction out in full. `idx_conversations_token_id` is **load-bearing, not an
+optimisation**. The API may still *return* a computed count; `a5/0003`'s
+`displayStatus` takes one.
 
-**Related and also open:** whether the use count is a stored `use_count`
-column or a query over `conversations`. `b7/0001`, `b7/0002` and `b2/0001`
-disagree three ways. Same B2 decision, same reasoning.
+Applied across `b2/0001`, `b7/0002`, `b7/0003` and `CLAUDE.md` — which had
+recorded only half of it and still said `use_count`.
+
+**Nothing about this is open any more.** Both were the last blocked items.
 
 ### b2/0001 — the schema lesson had no ADR-0007 in it
 
@@ -285,17 +283,19 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 ## Next action
 
 **Continue M3 with the scattered singles.** One lesson at a time, one commit
-each.
+each. **Nothing is blocked.**
 
 **Done:** A3, A4, A5, A6, A8, B5, all of B7, plus `b3/0002` and `b2/0001`.
 **Remaining:** A11, B10, `b2/0002`, `b2/0003`, `b3/0001`, `b3/0003`,
 `b3/0004`.
 
-**Take `b2/0002` (messaging schema) next.** It is the neighbour of a lesson
-just rewritten, and it is where ADR-0002 lands in the schema — a `messages`
-table storing ciphertext, partitioned by time from the first migration. Both
-are things `a6/0002` had to write around and neither has been read against the
-schema. Expect the same class of finding.
+**Take `b2/0002` (messaging schema) next.** Neighbour of a lesson just
+rewritten, and where ADR-0002 lands in the schema: a `messages` table holding
+**ciphertext**, partitioned by time from the first migration. Both are things
+`a6/0002` had to write around, and neither has been read against the schema.
+Expect the same class of finding. It is also where two of the three
+known-and-blocked orphan tables (`participants`, `deletion_queue`) live, so
+check whether the gate has actually moved.
 
 | Work | Gate |
 |---|---|
