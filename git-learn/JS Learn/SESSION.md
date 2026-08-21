@@ -12,8 +12,67 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean. **57/96 verified**, audit green, five suites
-pass. **B2 and B7 are complete.**
+**Nothing.** Working tree clean. **59/96 verified**, audit green, five suites
+pass. **B2, B3 and B7 are complete.**
+
+### B3 finished — and the worst find of the module was in `0001` (2026-08-21)
+
+**`b3/0001` taught a token generator that emits codes its own validator
+rejects.**
+
+```js
+randomBytes(9).toString('base64url').slice(0, 12).toUpperCase()
+```
+
+It looks careful — a CSPRNG, the right length, no `Math.random()` anywhere —
+and it is broken twice.
+
+- **Wrong alphabet.** base64url upper-cased is `A–Z 0–9 - _`. Token's is 31
+  characters with `0 O 1 I L` excluded and no punctuation. So it emits `0`,
+  `1`, `-` and `_`, all of which `codeHashInput` refuses. `CLAUDE.md` records
+  this exact failure happening once before, and calls a wrong alphabet **an
+  unlimited supply of bad codes**.
+- **`.toUpperCase()` destroys half the entropy.** 9 bytes is 72 bits;
+  case-folding collapses 64 symbols to 38 *non-uniformly*, so letters arrive
+  twice as often as digits. **You cannot fix biased output by generating more
+  of it.**
+
+The audit's alphabet check could not see this — it looks for a 20+ character
+`A-Z0-9` string literal, and this is a *method chain*. Worth knowing the check
+has that shape.
+
+Also replaced a bare `sha256(phone)`. A hash is one-way only if the input is
+unguessable, and an Indian mobile is ten digits with a known prefix. **Token's
+answer to a phone number is not to hash it, it is not to have it.**
+
+### `b3/0004` — the format oracle, third layer
+
+The error handler returned Zod's field details on every route including
+`/api/redeem`, so a malformed code answered 400-with-details and a well-formed
+unknown one answered 404. **A script learns whether its generator produces
+well-formed codes without ever holding one.**
+
+Third layer the same rule has needed applying at, after `b7/0001`'s endpoint
+and `a8/0002`'s page: *you may explain yourself to someone who has proved who
+they are.*
+
+Its redeem schema also demanded the **dashed** form, which the product's own
+QR does not produce — `tokn.app/t/MERC8GH2KP4X` is undashed. The validator
+rejected the exact input the QR generates.
+
+### Wrong-cases found three holes in their own self-checks this pass
+
+`b3/0004` had no assertion that a *public* unknown error is still a 500 — so
+an implementation checking auth first returned the 404 denial for a crash,
+hiding an outage inside ordinary 404 traffic on the redemption endpoint.
+
+`b3/0001` had two, **and one of my own mistake implementations was wrong**:
+`"0"` is a *truthy* string, so the falsy bug I wrote never rejected it. The
+`'0'` case stays as a guard rather than a trap, with a note saying so, because
+the thing it now protects against is someone "fixing" it with `Number()`.
+
+**That is five times this session a wrong-case has caught a gap in the
+self-check written beside it.** It remains the only mechanism that does.
 
 ### b3/0003 — and the drift `SELECT *` guarantees (2026-08-21)
 
@@ -429,18 +488,18 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
-**Continue M3 with the scattered singles.** One lesson at a time, one commit
-each. **Nothing is blocked.**
+**Two M3 lessons left.** One commit each. **Nothing is blocked.**
 
-**Done:** A3, A4, A5, A6, A8, B5, all of B7, all of B2, plus `b3/0002` and
-`b3/0003`.
-**Remaining:** A11, B10, `b3/0001`, `b3/0004`.
+**Done:** A3, A4, A5, A6, A8, B5, **all of B2, B3 and B7**.
+**Remaining: A11 and B10.**
 
-**Take `b3/0004` (input validation and error handling) next** and finish B3.
-It is the natural pair to `b3/0003`, and it is where the denial-oracle rule
-from `b7/0001` will want re-stating for validation errors — a 400 that names
-the field is helpful, and a 404 that distinguishes 'no such token' from 'not
-yours' is not.
+**Take `b10/0001` (security hardening) next.** It is the natural close: this
+session has produced a security rule per module — the denial oracle at three
+layers, `SELECT *` as a standing promise, a wrong alphabet as an unlimited
+supply — and `b10/0001` is where they should already be stated. Check whether
+it agrees with what the rest of the course now teaches.
+
+After that A11, and M3 is done.
 
 | Work | Gate |
 |---|---|
@@ -508,7 +567,7 @@ Per-item status only. The plan itself is in `TOKEN-TRACK.md`; the counts are in
 | 4 — the operating track | not started, deliberately |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
-| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus all of B7, all of B2, and `b3/0002`+`b3/0003`; ~4 left |
+| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus all of B2, all of B3 and all of B7; **2 left** |
 
 ### M3 — where it has reached
 
@@ -548,6 +607,8 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `b2/0002` | `partitionsToCreate` | no default partition means every bug is a time bomb; pad the month; December rolls the year |
 | `b2/0003` | `planMigrations` | an applied migration is immutable; refuse rather than half-apply; history outranks the plan |
 | `b3/0003` | `buildPage` | the `limit + 1` probe is not content; the cursor comes from *items*, never from `rows` |
+| `b3/0004` | `toErrorResponse` | helpfulness is scoped to who is asking; never `err.message`; validate `err.status` |
+| `b3/0001` | `checkEnv` | report *all* problems; `'undefined'` is a string; the result is going into a log |
 
 **A5 note:** not one of the five had a `createExplain` prompt or loaded
 `explain.js`. All five now do. A5 predates the practice pattern being made

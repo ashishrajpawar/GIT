@@ -1868,6 +1868,67 @@ later one replaces — which in this course is most of Track B.
 
 Status: `b3/0003` `unverifiable → verified`. 57/96.
 
+### Session of 2026-08-21 — B3 completed, and a generator that could not work
+
+`b3/0004` and `b3/0001` finish B3. Both had real defects and the one in
+`0001` is the most serious single thing found in this whole pass.
+
+**The generator emitted codes the product's own validator rejects.**
+`randomBytes(9).toString('base64url').slice(0, 12).toUpperCase()` — a CSPRNG,
+the right length, an explicit warning underneath it never to use
+`Math.random()`. Everything about it signals care, and it cannot work.
+
+base64url upper-cased is `A–Z 0–9 - _`. Token's alphabet is 31 characters
+with `0 O 1 I L` excluded and no punctuation at all, so the output contains
+characters `codeHashInput` refuses. `CLAUDE.md` already records this exact
+class of failure happening once — the server emitting codes the client
+rejects — and describes a wrong alphabet as *an unlimited supply of bad
+codes*, which is why it is an audit **error** rather than a warning.
+
+The audit could not catch this one, and the reason is worth writing down:
+the alphabet check looks for a **string literal** of 20+ `A-Z0-9`
+characters. This defect is a *method chain* — the alphabet is implied by
+`base64url`, never written down. **A check that looks for a shape only finds
+the shape**, and the same wrongness expressed differently walks past it.
+
+The second half is subtler and I nearly missed it. `.toUpperCase()` collapses
+64 symbols into 38, and *non-uniformly* — every letter now has two preimages
+and every digit one, so letters arrive twice as often. That is the same
+modulo-bias failure `01/0013` spends a section deriving, arrived at by a
+different route. **You cannot fix biased output by generating more of it**,
+and the fact that the input was a CSPRNG makes no difference at all.
+
+Also replaced a bare `sha256(phone)` presented as privacy. A hash is one-way
+only if the input is unguessable; an Indian mobile number is ten digits with
+a known prefix, which is minutes of work. The line the lesson now carries:
+**if a column makes you reach for a hash to feel comfortable, ask first
+whether the column should exist.**
+
+**`b3/0004` was the format oracle at a third layer.** The error handler
+returned Zod's field details on every route including `/api/redeem`, so a
+malformed code answered 400-with-details and a well-formed unknown one
+answered 404. A script learns whether its code generator is correct without
+ever obtaining a token — and length, alphabet and grouping fall out of a few
+hundred requests.
+
+Being helpful in an error is normally the mark of a good API, which is why
+this layer is the hardest of the three to see. The rule that survives all
+three: *you may explain yourself to someone who has proved who they are.*
+
+**Wrong-cases found three holes in their own self-checks in this pass**, and
+one of my own mistake implementations was itself wrong: I wrote a falsy-bug
+impl to prove `'0'` is not rejected, and `"0"` is a **truthy** string, so it
+never rejected anything. Replaced with a real mistake, and the `'0'` case
+kept as a guard with a comment explaining that no mistake trips it — it is
+there to stop a later `Number()` conversion.
+
+That makes five occasions this session where a wrong-case caught a gap in the
+self-check written alongside it. It is still the only mechanism that does,
+and the argument for writing them has never been about the student.
+
+Status: `b3/0001` and `b3/0004` `unverifiable → verified`. **B3 four of
+four.** 59/96. Two M3 lessons remain: A11 and B10.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees
