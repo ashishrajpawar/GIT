@@ -168,7 +168,11 @@ router.get('/', async (req, res, next) =&gt; {
       ? JSON.parse(Buffer.from(req.query.cursor, 'base64url').toString())
       : null;
 
-    let query = 'SELECT * FROM tokens WHERE user_id = $1';
+    // Never SELECT * on a list. This table holds code_hash and code_enc,
+    // and both would go straight into the JSON below. ADR-0007: a list
+    // returns no code field at all, in any form.
+    let query = `SELECT id, label, status, max_uses, expires_at, created_at
+                   FROM tokens WHERE user_id = $1`;
     const params = [req.user.id];
 
     if (cursor) {
@@ -192,6 +196,28 @@ router.get('/', async (req, res, next) =&gt; {
     });
   } catch (err) { next(err); }
 });</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title"><code>SELECT *</code> is a list endpoint's most common leak</div>
+      <p>The version of this query that shipped said
+      <code>SELECT * FROM tokens</code>, and it was fine right up until
+      <code>b2/0001</code> added <code>code_hash</code> and
+      <code>code_enc</code> to that table. From that moment the list endpoint
+      was returning both to the client, in every page, forever — and nothing
+      would have failed.</p>
+      <p>That is what makes <code>SELECT *</code> different from ordinary
+      laziness: <strong>it is a promise to return whatever a future migration
+      adds.</strong> The person who adds a column is not looking at this file,
+      and the person who wrote this file is not there when they do.</p>
+      <p>Naming the columns turns a schema change into a compile-or-review
+      question rather than a silent one. It costs a line and it is the only
+      version that is safe to leave alone for a year.</p>
+      <p><code>code_enc</code> being encrypted is not a defence worth leaning
+      on either. It is a ciphertext of a live capability, sent to a client that
+      never needs it, over and over — and its safety then depends entirely on a
+      key that has to stay secret for as long as any of those responses might
+      still exist in a log or a cache.</p>
+    </div>
 
     <h2>Consistent error responses</h2>
 
@@ -445,9 +471,26 @@ if (!rows[0]) throw ApiError.notFound('Token not found');</code></pre>
 
     <hr>
 
+    <h2>Now build it yourself</h2>
+
+    <p>
+      Write <code>buildPage(rows, limit)</code> — the four lines in the middle
+      of that handler, on their own. It is the part with no database in it, and
+      the part where cursor pagination usually goes wrong.
+    </p>
+
+    <div id="exercise-page"></div>
+    <div id="pg-exercise-page"></div>
+
+    <h3>And the API it belongs to</h3>
+
     <h2>Exercise</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="explain-b3-0003"></div>
 
     <hr>
 
@@ -462,11 +505,131 @@ if (!rows[0]) throw ApiError.notFound('Token not found');</code></pre>
 
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
+    createSolution("exercise-page", {
+      exercise: "Write buildPage(rows, limit) — turn a database result into one page of a cursor-paginated response.\n\nrows is what came back from a query with LIMIT limit + 1. That extra row is the whole trick: it is how you know whether another page exists without running a second COUNT query.\n\nEach row is at least { id, created_at }.\n\nReturn { items, cursor, hasMore }:\n\n  items   — the rows the client should actually see, at most `limit` of them\n  hasMore — true if there is at least one more row beyond this page\n  cursor  — { id, createdAt } identifying the LAST item of this page, or null\n\nThe rules:\n\n1. hasMore is rows.length > limit. Work it out BEFORE you trim, because after trimming the answer is always false.\n\n2. items is the first `limit` rows when there are more, and all of them when there are not. The extra row is a probe, never content — returning it means the client sees limit + 1 items on some pages and the next page starts one row late.\n\n3. cursor points at the last row of ITEMS, not the last row of `rows`. Those differ by exactly one row whenever hasMore is true, and using the wrong one silently skips a row on every page boundary.\n\n4. cursor is null when hasMore is false. There is no next page to point at, and a non-null cursor is what a client loops on.\n\n5. An empty result is { items: [], cursor: null, hasMore: false }.\n\nThe cursor is returned as an object. Encoding it to base64url happens at the edge of the handler; keeping it structured here is what makes this function testable without Buffer.",
+      hints: [
+        "Compute hasMore first, from the untrimmed array. Every other value depends on it, and after trimming the information is gone.",
+        "slice(0, limit) says what you mean. slice(0, -1) happens to agree when exactly one extra row came back, and stops agreeing the moment anything else does.",
+        "Take the cursor from items, never from rows. Write that line last, after items exists, and the mistake is hard to make."
+      ],
+      solution: `function buildPage(rows, limit) {
+  const all = rows || [];
+
+  // Before trimming. After it, this is always false.
+  const hasMore = all.length > limit;
+
+  // The extra row is a probe, not content.
+  const items = hasMore ? all.slice(0, limit) : all;
+
+  const last = items[items.length - 1];
+
+  return {
+    items: items,
+    // Last of ITEMS, not last of rows -- they differ by one whenever
+    // hasMore is true, and the wrong one skips a row per page.
+    cursor: hasMore && last ? { id: last.id, createdAt: last.created_at } : null,
+    hasMore: hasMore,
+  };
+}`
+    });
+
+    createPlayground("pg-exercise-page", `// Write buildPage(rows, limit) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function rows(n, from) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const id = (from || 100) - i;
+    out.push({ id: id, created_at: "t-" + id });
+  }
+  return out;
+}
+function ids(list) { return (list || []).map(function (r) { return r.id; }).join(","); }
+
+try {
+  if (typeof buildPage !== "function") throw new Error("not written yet");
+
+  try {
+    // 4 rows back for a limit of 3: the 4th is the probe.
+    const r = buildPage(rows(4), 3);
+    check("the extra row is not returned to the client",
+          r.items.length === 3 && ids(r.items) === "100,99,98",
+          "got [" + ids(r.items) + "] -- LIMIT was limit + 1; that last row is a probe");
+  } catch (e) { check("the extra row is not returned to the client", false, "threw " + e.message); }
+
+  try {
+    const r = buildPage(rows(4), 3);
+    check("the extra row means hasMore", r.hasMore === true, "got " + r.hasMore);
+  } catch (e) { check("the extra row means hasMore", false, "threw " + e.message); }
+
+  try {
+    // THE off-by-one. rows[3] is id 97; items ends at id 98. A cursor of
+    // 97 makes the next page start at 96 and row 97 is never shown.
+    const r = buildPage(rows(4), 3);
+    check("the cursor points at the last ITEM, not the extra row",
+          r.cursor && r.cursor.id === 98,
+          "got " + JSON.stringify(r.cursor) + " -- id 97 was the probe; using it skips a row every page");
+  } catch (e) { check("the cursor points at the last ITEM, not the extra row", false, "threw " + e.message); }
+
+  try {
+    // Exactly limit rows: no probe came back, so this is the last page.
+    const r = buildPage(rows(3), 3);
+    check("exactly limit rows is the last page",
+          r.hasMore === false && r.items.length === 3,
+          "got hasMore=" + r.hasMore + " items=" + r.items.length + " -- limit rows means the probe found nothing");
+  } catch (e) { check("exactly limit rows is the last page", false, "threw " + e.message); }
+
+  try {
+    const r = buildPage(rows(3), 3);
+    check("the last page has no cursor", r.cursor === null,
+          "got " + JSON.stringify(r.cursor) + " -- a client loops while cursor is non-null");
+  } catch (e) { check("the last page has no cursor", false, "threw " + e.message); }
+
+  try {
+    const r = buildPage(rows(2), 3);
+    check("a short page is the last page",
+          r.hasMore === false && r.items.length === 2 && r.cursor === null,
+          "got " + JSON.stringify({ n: r.items.length, hasMore: r.hasMore, cursor: r.cursor }));
+  } catch (e) { check("a short page is the last page", false, "threw " + e.message); }
+
+  try {
+    const r = buildPage([], 3);
+    check("no rows is an empty page, not a crash",
+          r.items.length === 0 && r.cursor === null && r.hasMore === false,
+          "got " + JSON.stringify(r));
+  } catch (e) { check("no rows is an empty page, not a crash", false, "threw " + e.message); }
+
+  try {
+    const r = buildPage(rows(4), 3);
+    check("the cursor carries created_at as well as id",
+          r.cursor !== null && r.cursor.createdAt === "t-98",
+          "got " + JSON.stringify(r.cursor) + " -- id alone is not a stable position when rows share a timestamp");
+  } catch (e) { check("the cursor carries created_at as well as id", false, "threw " + e.message); }
+
+  try {
+    // A limit of 1 is the smallest real page and where slice(0, -1) and
+    // slice(0, limit) stop agreeing for anyone who guessed.
+    const r = buildPage(rows(2), 1);
+    check("a limit of 1 still works",
+          r.items.length === 1 && r.hasMore === true && r.cursor.id === 100,
+          "got " + JSON.stringify({ n: r.items.length, hasMore: r.hasMore, cursor: r.cursor }));
+  } catch (e) { check("a limit of 1 still works", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write buildPage(rows, limit) above, then press Run. (" + e.message + ")");
+}`);
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is an Express API needing a running Postgres and curl",
       exercise: "Implement the full tokens router with real database queries: (1) GET /api/tokens — list the user's tokens with cursor pagination, (2) GET /api/tokens/:id — get one token, (3) POST /api/tokens — create a token, (4) PATCH /api/tokens/:id — update label or maxUses, (5) POST /api/tokens/:id/revoke — revoke it. Use the ApiError class for all error responses.<br><br>Three rules that are easy to get wrong:<br>&bull; Address tokens by id, never by code — a code in a URL ends up in the access log.<br>&bull; Scope every query by user_id and return 404 for someone else's token; a 403 confirms it exists.<br>&bull; Import generateTokenCode from the engine rather than writing a fourth generator.",
       hints: [
         "Do not write a generator here at all — import generateTokenCode and hashCode from B7's engine. A code built from base64url contains 0, O, 1, I and L, which the rest of the system rejects.",
@@ -589,6 +752,10 @@ router.post('/:id/revoke', async (req, res, next) => {
 });
 
 export default router;`
+    });
+
+    createExplain("explain-b3-0003", {
+      prompt: "The query asks for <code>limit + 1</code> rows and the handler throws one away. Explain what that extra row is for, and what the alternative would cost — then say what goes wrong if the cursor is taken from it rather than from the last row the client actually receives."
     });
 
     createQuiz("lesson-quiz", [
@@ -714,7 +881,7 @@ export default router;`
       {
         type: "spot-the-bug",
         question: "This cursor pagination has a subtle bug. Where is it?",
-        code: "app.get('/api/tokens', async (req, res) => {\n  const limit = req.query.limit || 20;\n  const cursor = req.query.cursor\n    ? JSON.parse(Buffer.from(req.query.cursor, 'base64url'))\n    : null;\n\n  let query = 'SELECT * FROM tokens WHERE owner_id = $1';\n  const params = [req.user.id];\n\n  if (cursor) {\n    query += ' AND created_at < $2';\n    params.push(cursor.created_at);\n  }\n\n  query += ' ORDER BY created_at DESC LIMIT $' + (params.length + 1);\n  params.push(limit);\n\n  const result = await db.query(query, params);\n  res.json({ success: true, data: result.rows });\n});",
+        code: "app.get('/api/tokens', async (req, res) => {\n  const limit = req.query.limit || 20;\n  const cursor = req.query.cursor\n    ? JSON.parse(Buffer.from(req.query.cursor, 'base64url'))\n    : null;\n\n  let query = 'SELECT id, label, status, created_at FROM tokens WHERE owner_id = $1';\n  const params = [req.user.id];\n\n  if (cursor) {\n    query += ' AND created_at < $2';\n    params.push(cursor.created_at);\n  }\n\n  query += ' ORDER BY created_at DESC LIMIT $' + (params.length + 1);\n  params.push(limit);\n\n  const result = await db.query(query, params);\n  res.json({ success: true, data: result.rows });\n});",
         options: [
           "ORDER BY should be ASC not DESC",
           "The limit value from query string is a string, not a number — SQL will receive '20' instead of 20",
