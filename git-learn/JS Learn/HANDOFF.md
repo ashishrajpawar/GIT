@@ -1929,6 +1929,80 @@ and the argument for writing them has never been about the student.
 Status: `b3/0001` and `b3/0004` `unverifiable → verified`. **B3 four of
 four.** 59/96. Two M3 lessons remain: A11 and B10.
 
+### Session of 2026-08-21 — b10/0001 and a11/0004, and a secret that could not be one
+
+Two lessons, and both were the same shape: a page giving correct general
+advice while missing the specific thing that matters here.
+
+**`b10/0001` is the security hardening lesson and it never named this
+product's security model.** Zero mentions of the pepper, of `code_hash`, or of
+the denial oracle. Parameterised queries, CORS, headers, ownership checks —
+all correct, all true of any API, and none of them the reason Token is safe.
+
+A security lesson that teaches only the generic list is not wrong, it is
+*incomplete in the way that matters*: a student who follows it exactly will
+build a hardened API around a design they were never told about, and the
+first change they make to that design will be the one that breaks it.
+
+Setting the oracle out as a table across `b7/0001`, `a8/0002` and `b3/0004`
+was worth more than restating it a fourth time. Each of those looked like a
+different problem when it was found — an endpoint, a screen, an error handler
+— and seeing them in one place is what makes it a rule rather than three
+coincidences.
+
+Its own access-control example had `SELECT *` followed by `res.json(row)`,
+which since `b2/0001` ships `code_hash` and `code_enc`. **The lesson
+demonstrating the safe pattern was demonstrating the leak** — the second time
+today `SELECT *` has been a defect created by an edit five modules away.
+
+The 404-not-403 in that same example was already right, and the note now says
+why, which is the more useful half: the query is scoped by `user_id`, so the
+handler **cannot** distinguish "not yours" from "does not exist". **The safe
+answer falls out of the query shape rather than having to be remembered.**
+That is the version to aim for everywhere — not a rule you apply, a structure
+in which the rule cannot be broken.
+
+**`a11/0004` put a TURN password in the app bundle**, and stated it as the
+rule: *if it's a credential, it goes in EAS Secrets.*
+
+What makes this one genuinely hard to see is that **EAS Secrets works**. The
+value is encrypted at rest on Expo's servers, never enters git, and is
+injected only during the build. Every one of those claims is true, and none
+of them helps, because anything the running app reads was baked into the
+bundle to get there. The artefact is an `.apk` on a stranger's phone.
+
+The distinction the lesson now turns on: **the pipeline and the artefact are
+different places.** A sourcemap upload token and a TURN password are both
+credentials, and one belongs in EAS Secrets while the other cannot be in the
+app at all. "Is it sensitive" cannot tell them apart. "Who needs it, and
+when" can.
+
+And `a7/0001` already said the right answer — short-lived TURN credentials
+minted by the API — so this was a direct contradiction in which the a11 side
+was the actual vulnerability. Under ADR-0008 every call is relayed, so that
+password is the key to metered bandwidth billed to the user, extractable by
+anyone who installs the app, revocable only by shipping a new build.
+
+**A process trap worth recording, because it produced two bad edits.**
+
+`git checkout --` on this repo restores CRLF. Every **multi-line** anchor in
+an edit script then fails silently, while **single-line** ones keep matching.
+The script cheerfully reports "applied 1 across 1/3" and leaves a
+half-transformed file — and because the missed anchors were the important
+ones, the file looked plausible.
+
+Re-running it made things worse: several of these scripts replace an anchor
+with text that *contains* that anchor, so they are not idempotent, and the
+second run duplicated everything that had succeeded the first time. Caught by
+grepping for duplicate ids rather than by any check.
+
+Two habits from it. **Normalise to LF before editing a reverted file.** And
+**after any re-run, grep for duplicated markers** — `id="…"`, script tags, a
+heading — because a duplicated block parses fine and verifies fine.
+
+Status: `b10/0001` and `a11/0004` `unverifiable → verified`. 61/96. Five M3
+lessons remain: `b10/0002` and four in A11.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees

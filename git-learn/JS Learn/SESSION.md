@@ -12,8 +12,64 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean. **59/96 verified**, audit green, five suites
-pass. **B2, B3 and B7 are complete.**
+**Nothing.** Working tree clean. **61/96 verified**, audit green, five suites
+pass. **B2, B3 and B7 complete.**
+
+### b10/0001 — the security lesson did not name its own security model
+
+Zero mentions of the pepper, `code_hash`, or the denial oracle. Everything in
+it was correct and **general** — parameterised queries, CORS, headers,
+ownership checks — and none of the decisions that make *this* product's
+security specific was on the list.
+
+Both are now stated, the oracle as a table across the three layers it has had
+to be applied at (`b7/0001`, `a8/0002`, `b3/0004`), because each looked like a
+different problem at the time and they are one rule.
+
+Its own access-control example had `SELECT *` then `res.json(row)` — so since
+`b2/0001` it shipped `code_hash` and `code_enc`. **The lesson demonstrating
+the fix was demonstrating the bug.**
+
+Its 404-not-403 was already right, and the note now says *why*: the query is
+scoped by `user_id`, so the handler **cannot** tell "not yours" from "does
+not exist". **The safe answer falls out of the query shape rather than having
+to be remembered** — that is the version to aim for.
+
+### a11/0004 — a TURN password in the app bundle
+
+The lesson said *"if it's a credential, it goes in EAS Secrets"* and
+demonstrated it with `eas secret:create --name TURN_PASSWORD`.
+
+**EAS Secrets genuinely works** — encrypted at rest, never in git, injected
+only at build time. None of it helps. Anything the running app reads was
+baked into the bundle to get there, and the bundle is an `.apk` on a
+stranger's phone. **If the app can read it, so can whoever holds the app.**
+
+TURN is the relay *every* call goes through under ADR-0008, so that password
+is metered bandwidth billed to the user, with no revocation short of shipping
+a new build. And `a7/0001` already said the right answer — short-lived
+credentials from the API — so this was a **direct contradiction where the a11
+side was the vulnerability**.
+
+The corrected rule replaces *"is it sensitive"* with **"who needs it, and
+when"**. A sourcemap upload token and a TURN password are both credentials
+and belong in completely different places.
+
+### ⚠ A process trap that cost two bad edits
+
+**`git checkout --` on this repo restores CRLF.** Every multi-line anchor in
+an edit script then fails silently while single-line ones keep matching — so
+a script reports "applied 1 of 3" and leaves a half-edited file. Re-running
+it duplicated the parts that *had* applied.
+
+**Normalise to LF before editing a file you have just reverted:**
+
+```bash
+node -e "const f='path';require('fs').writeFileSync(f,require('fs').readFileSync(f,'utf8').replace(/\r\n/g,'\n'))"
+```
+
+And check for duplicates after any re-run — an edit script whose replacement
+*contains* its own anchor is not idempotent.
 
 ### B3 finished — and the worst find of the module was in `0001` (2026-08-21)
 
@@ -488,18 +544,24 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
-**Two M3 lessons left.** One commit each. **Nothing is blocked.**
+**Five M3 lessons left**, all in two modules. One commit each. **Nothing is
+blocked.**
 
-**Done:** A3, A4, A5, A6, A8, B5, **all of B2, B3 and B7**.
-**Remaining: A11 and B10.**
+**Done:** A3, A4, A5, A6, A8, B5, **all of B2, B3 and B7**, plus `b10/0001`
+and `a11/0004`.
+**Remaining:** `b10/0002` (DPDP), and A11's `0001`, `0002`, `0003`, `0005`.
 
-**Take `b10/0001` (security hardening) next.** It is the natural close: this
-session has produced a security rule per module — the denial oracle at three
-layers, `SELECT *` as a standing promise, a wrong alphabet as an unlimited
-supply — and `b10/0001` is where they should already be stated. Check whether
-it agrees with what the rest of the course now teaches.
+**Take `b10/0002` next** and finish B10. It was edited earlier in this session
+— the DPDP export was selecting a `code` column that does not exist and
+`content` that is ciphertext — but it never got an exercise, and the
+per-user-erasure question parked in `known-issues.json` points straight at it.
 
-After that A11, and M3 is done.
+**A11's remaining four are the weakest M3 candidates left in the course**:
+animations, theming, forms and store submission. `0003` (forms) is the most
+likely to hold a real function; `0005` (store submission) may genuinely be
+checklist-shaped and is the best candidate in the course for an honest
+`--unverifiable`. Look for the plain function before reaching for it —
+**that reflex has been wrong every time it has been tested.**
 
 | Work | Gate |
 |---|---|
@@ -567,7 +629,7 @@ Per-item status only. The plan itself is in `TOKEN-TRACK.md`; the counts are in
 | 4 — the operating track | not started, deliberately |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
-| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus all of B2, all of B3 and all of B7; **2 left** |
+| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus all of B2, B3 and B7, and `b10/0001`+`a11/0004`; **5 left** |
 
 ### M3 — where it has reached
 
@@ -609,6 +671,8 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `b3/0003` | `buildPage` | the `limit + 1` probe is not content; the cursor comes from *items*, never from `rows` |
 | `b3/0004` | `toErrorResponse` | helpfulness is scoped to who is asking; never `err.message`; validate `err.status` |
 | `b3/0001` | `checkEnv` | report *all* problems; `'undefined'` is a string; the result is going into a log |
+| `b10/0001` | `pickForLog` | allow-list, not deny-list; a value not a subtree; absent ≠ `undefined` |
+| `a11/0004` | `placeConfig` | *who needs it, and when* — not *is it sensitive*; unclassifiable ⇒ do not ship |
 
 **A5 note:** not one of the five had a `createExplain` prompt or loaded
 `explain.js`. All five now do. A5 predates the practice pattern being made
