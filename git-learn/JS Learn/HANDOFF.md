@@ -1721,6 +1721,58 @@ skip.
 
 Status: `b2/0002` `unverifiable → verified`. 55/96.
 
+### Session of 2026-08-21 — b2/0003 finishes B2, and a defect class worth naming
+
+`b2/0003` was taken to finish B2 and on the expectation that it would be a
+cleanup job — a migrations lesson has to absorb whatever the schema lessons
+changed, and `b2/0001` and `b2/0002` had just changed a lot. It was not that
+at all. The lesson had almost no drift: its single `max_uses` reference was
+already nullable, and it names no columns.
+
+The defects were in the **migration runner**, and they belong to a class this
+session has met repeatedly without naming: **code that is correct about the
+common case and silent about the rare one.**
+
+The four-line runner — list files, skip applied, run the rest — is right every
+single day. What it lacks is any refusal, and refusals only matter on the day
+something has already gone wrong somewhere else: a file edited after it ran, a
+branch merged in an order nobody chose, a migration deleted from the repo.
+
+**The checksum omission is the worst and the quietest.** Edit a migration after
+it has been applied, and the runner sees the filename in
+`schema_migrations` and skips it forever. Staging keeps the old shape; a fresh
+database gets the new one. Nothing errors, nothing logs, nothing is out of
+place — the two schemas simply are not the same any more, and the divergence
+grows quietly for as long as nobody creates a fresh database. Storing a hash
+converts that into a loud failure on the very next deploy.
+
+**The transaction gap is the one that bites during an incident.** The runner
+ran the SQL and then inserted the tracking row as a separate statement. A crash
+between them leaves a migration that *ran* and is not *recorded*, so the next
+deploy runs it again — and `CREATE TABLE` the second time fails, stopping the
+deploy with the database half-migrated. Both are now in one transaction.
+
+That change earned a caveat rather than a flat rule, which is worth doing more
+often: **DDL inside a transaction is a Postgres luxury.** MySQL commits
+implicitly on `CREATE TABLE`, so the same pattern there really does leave you
+half-applied. And even in Postgres, `CREATE INDEX CONCURRENTLY` and
+`ALTER TYPE ... ADD VALUE` cannot run in a transaction block — which is why
+every real migration tool has a no-transaction escape hatch. A course that
+teaches the wrapper without the exceptions has taught something that breaks the
+first time someone adds an index to a live table.
+
+`planMigrations` is the M3 function and it lifts all three checks out of the
+database. The wrong-cases share the defining property: **every one is a runner
+that works.** Each loses exactly one refusal and is otherwise indistinguishable
+from the correct version on any ordinary deploy. One fails in the opposite
+direction — demanding consecutive numbering — because over-refusing is the
+plausible over-correction once out-of-order has bitten someone, and a runner
+that rejects legitimate migrations gets disabled, which is worse than the bug
+it was added for.
+
+Status: `b2/0003` `unverifiable → verified`. **B2 complete, three of three.**
+56/96.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees

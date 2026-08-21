@@ -12,8 +12,42 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean. **55/96 verified**, audit green, five suites
-pass.
+**Nothing.** Working tree clean. **56/96 verified**, audit green, five suites
+pass. **B2 is complete** — three of three.
+
+### b2/0003 — the runner, not the schema (2026-08-21)
+
+Almost no drift from the two schema rewrites; its one `max_uses` reference was
+already nullable. The defects were in the **migration runner**, and all three
+are the same kind: **the four-line version works perfectly, and has nothing to
+say when something has already gone wrong somewhere else.**
+
+- **No checksum.** Edit a migration after it has run and the runner sees the
+  filename in `schema_migrations` and skips it *forever*. This environment
+  keeps the old shape, a fresh database gets the new one, and **nothing reports
+  anything.** Now stored and compared, which turns silence into a loud failure
+  and enforces the rule migration systems live by: an applied migration is
+  immutable, fix forward.
+- **No out-of-order check.** Two branches both add a migration; one merges
+  first. A file numbered below the high-water mark is applied happily, and the
+  schema ends up depending on **merge order** — the one thing migrations exist
+  to prevent.
+- **The migration and its bookkeeping were separate statements.** A crash in
+  the gap leaves a migration that *ran* and is not *recorded*, so the next
+  deploy runs it again and `CREATE TABLE` fails with the database
+  half-migrated.
+
+Also added `pg_advisory_lock`, so two servers in a rolling deploy do not both
+read the same pending list.
+
+**Stated rather than assumed:** DDL inside a transaction is a Postgres luxury.
+MySQL commits implicitly on `CREATE TABLE`, and even in Postgres
+`CREATE INDEX CONCURRENTLY` cannot be wrapped — which is why real tools have a
+no-transaction flag.
+
+M3: `planMigrations`, which the runner now calls. **Every wrong-case is a
+runner that works and loses only a refusal**, which is exactly why the naive
+version survives for months.
 
 ### b2/0002 — two hard constraints were simply absent (2026-08-21)
 
@@ -332,14 +366,15 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 **Continue M3 with the scattered singles.** One lesson at a time, one commit
 each. **Nothing is blocked.**
 
-**Done:** A3, A4, A5, A6, A8, B5, all of B7, `b3/0002`, `b2/0001`, `b2/0002`.
-**Remaining:** A11, B10, `b2/0003`, `b3/0001`, `b3/0003`, `b3/0004`.
+**Done:** A3, A4, A5, A6, A8, B5, **all of B7**, **all of B2**, plus
+`b3/0002`.
+**Remaining:** A11, B10, `b3/0001`, `b3/0003`, `b3/0004`.
 
-**Take `b2/0003` (migrations) next** and finish B2. It is the lesson that has
-to absorb everything the other two just changed — the columns that moved, the
-partition parent, and the fact that partitions are created by a job rather than
-a migration. A migrations lesson whose example migrations do not match the
-schema two files over is the exact drift this session keeps finding.
+**Take the three `b3` lessons next and finish B3.** `b3/0002` is already done,
+so the module is three lessons from complete, and they are adjacent to work
+that is fresh: `b3/0003` (REST API design) was touched by the URL-path sweep
+and is where the `GET /tokens` response shape lives, which `a5/0003` and
+`b2/0001` both now constrain.
 
 | Work | Gate |
 |---|---|
@@ -407,7 +442,7 @@ Per-item status only. The plan itself is in `TOKEN-TRACK.md`; the counts are in
 | 4 — the operating track | not started, deliberately |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
-| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus `b3/0002`, all of B7, `b2/0001` and `b2/0002`; ~4 left |
+| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus `b3/0002`, all of B7 and all of B2; ~3 left |
 
 ### M3 — where it has reached
 
@@ -445,6 +480,7 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `b7/0003` | `planTransition` | `unchanged` ≠ `refused`; revoked is terminal; revoke is never refused |
 | `b2/0001` | `codeHashInput` | normalisation is part of the *stored format*; do not "helpfully" map excluded letters |
 | `b2/0002` | `partitionsToCreate` | no default partition means every bug is a time bomb; pad the month; December rolls the year |
+| `b2/0003` | `planMigrations` | an applied migration is immutable; refuse rather than half-apply; history outranks the plan |
 
 **A5 note:** not one of the five had a `createExplain` prompt or loaded
 `explain.js`. All five now do. A5 predates the practice pattern being made
