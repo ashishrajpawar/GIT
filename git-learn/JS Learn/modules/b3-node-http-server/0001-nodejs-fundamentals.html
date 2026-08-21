@@ -103,6 +103,35 @@ JWT_SECRET=dev-secret-change-in-production</code></pre>
     <pre><code>// api/src/server.ts — first line
 import 'dotenv/config';</code></pre>
 
+    <div class="callout">
+      <div class="callout-title">Check them all at startup, and check them properly</div>
+      <p>The snippet above checks one variable and exits. Real startup checks
+      look at every required variable at once, for a reason worth knowing:
+      <strong>a deploy that fails on <code>JWT_SECRET</code>, gets fixed, and
+      then fails on <code>DATABASE_URL</code> is two outages instead of
+      one.</strong> Report all of them together.</p>
+      <p>And <code>if (!process.env.X)</code> is not enough on its own. Three
+      things that are all "set" and all useless:</p>
+      <ul>
+        <li><code>JWT_SECRET=</code> — present in the file, empty string.
+        Common when someone comments out a value by deleting it.</li>
+        <li><code>JWT_SECRET=undefined</code> — a template or a shell
+        interpolated a missing value and wrote the word.
+        <code>process.env</code> holds strings, so this is a perfectly good
+        seven-character secret as far as any truthiness test is
+        concerned.</li>
+        <li><code>JWT_SECRET=dev-secret-change-in-production</code> — the value
+        from the example <code>.env</code> three code blocks above, which is
+        exactly how it reaches production.</li>
+      </ul>
+      <p>ADR-0007 adds two more that must be checked here:
+      <code>TOKEN_CODE_PEPPER</code> and <code>TOKEN_CODE_KEY</code>. Losing
+      them makes every token ever issued permanently unusable, so a server that
+      starts without them is a server quietly issuing codes it will never be
+      able to verify.</p>
+      <p>Writing that check is the exercise at the bottom of this lesson.</p>
+    </div>
+
     <h2>The built-in http module</h2>
 
     <p>Node can create an HTTP server with zero dependencies:</p>
@@ -171,20 +200,67 @@ process.on('SIGTERM', () =&gt; {
 
     <pre><code>import { randomBytes, createHash } from 'crypto';
 
-// Generate a secure random token code
-function generateSecureCode(): string {
-  return randomBytes(9)
-    .toString('base64url')
-    .slice(0, 12)
-    .toUpperCase();
-}
+// Random bytes, and nothing clever done to them.
+const sessionId = randomBytes(32).toString('hex');
 
-// Hash a phone number (one-way — can't reverse)
-function hashPhone(phone: string): string {
-  return createHash('sha256').update(phone).digest('hex');
+// Hashing a code for lookup needs a server-side pepper -- see ADR-0007
+// and b2/0001. A bare sha256 of a low-entropy input is not a one-way
+// function in any useful sense; see the callout below.
+function hashCode(code: string): string {
+  return createHash('sha256')
+    .update(code + process.env.TOKEN_CODE_PEPPER)
+    .digest('hex');
 }</code></pre>
 
-    <p>Always use <code>crypto.randomBytes</code> for security-sensitive values (token codes, session IDs). Never use <code>Math.random()</code> — it's predictable.</p>
+    <p>Always use <code>crypto.randomBytes</code> for security-sensitive values (session IDs, nonces). Never use <code>Math.random()</code> — it's predictable.</p>
+
+    <div class="callout danger">
+      <div class="callout-title">Two things this section used to do, and why both were wrong</div>
+
+      <h4>It generated token codes with base64url</h4>
+      <p>The old version was
+      <code>randomBytes(9).toString('base64url').slice(0, 12).toUpperCase()</code>,
+      which looks careful — a CSPRNG, the right length, no
+      <code>Math.random()</code> anywhere. It is broken twice.</p>
+      <p><strong>It emits characters that are not in the alphabet.</strong>
+      base64url is <code>A–Z a–z 0–9 - _</code>; upper-casing it leaves
+      <code>A–Z 0–9 - _</code>. Token's alphabet is thirty-one characters —
+      <code>23456789ABCDEFGHJKMNPQRSTUVWXYZ</code> — with
+      <code>0 O 1 I L</code> excluded because they are unreadable off a label,
+      and no punctuation at all. So this generator produces codes containing
+      <code>0</code>, <code>1</code>, <code>-</code> and <code>_</code>, every
+      one of which <code>b2/0001</code>'s <code>codeHashInput</code>
+      <em>rejects</em>. <strong>The server would be issuing codes its own
+      validator refuses.</strong></p>
+      <p><strong>And <code>.toUpperCase()</code> throws away half the
+      randomness.</strong> Nine random bytes are 72 bits. Case-folding maps
+      <code>a</code> and <code>A</code> to the same character, so the output
+      space collapses from 64 symbols to 38 — and the collapse is not uniform,
+      because letters now arrive twice as often as digits. You cannot fix
+      biased output by generating more of it.</p>
+      <p>The right generator is in <code>01/0013</code>: draw a byte, discard it
+      if it is 248 or higher, take the remainder mod 31. That is rejection
+      sampling, and the discarding is what keeps every character equally
+      likely. It is not in this lesson because this lesson is about Node's
+      standard library, and the interesting part of code generation is not
+      <code>randomBytes</code>.</p>
+
+      <h4>It hashed a phone number with a bare sha256</h4>
+      <p>A plain <code>createHash('sha256').update(phone)</code> reads like
+      privacy and is not. A hash is only one-way if the input is unguessable,
+      and an Indian mobile number is ten digits with a known prefix — a few
+      billion candidates, which is minutes of work. Given the hash, you get the
+      number back.</p>
+      <p>The same reasoning applies to token codes and is why
+      <code>hashCode</code> above takes a pepper: 31<sup>12</sup> is genuinely
+      unguessable, but a pepper means an attacker who steals the database
+      cannot even begin without also stealing an environment variable stored
+      somewhere else.</p>
+      <p>The wider point for this product: <strong>Token's answer to a phone
+      number is not to hash it, it is not to have it.</strong> If a column
+      makes you reach for a hash to feel comfortable, ask first whether the
+      column should exist.</p>
+    </div>
 
     <h2>Node's package.json for Token's API</h2>
 
@@ -214,9 +290,27 @@ function hashPhone(phone: string): string {
 
     <hr>
 
+    <h2>Now build it yourself</h2>
+
+    <p>
+      Write <code>checkEnv(env, required)</code> — the startup check that
+      decides whether this process is safe to run. It is eight lines, it runs
+      once, and it is the difference between a deploy that fails loudly and one
+      that comes up issuing token codes it will never be able to verify.
+    </p>
+
+    <div id="exercise-env"></div>
+    <div id="pg-exercise-env"></div>
+
+    <h3>And the server it belongs to</h3>
+
     <h2>Exercise</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="explain-b3-0001"></div>
 
     <hr>
 
@@ -232,6 +326,7 @@ function hashPhone(phone: string): string {
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -252,7 +347,157 @@ console.log("2. End");
 // This is why Node can handle thousands of requests: while waiting for a DB query,
 // it serves other requests. The callback runs when the query completes.`);
 
+    createSolution("exercise-env", {
+      exercise: "Write checkEnv(env, required) — find every required environment variable that is not usable.\n\nenv is an object of strings, like process.env.\nrequired is an array of names, in the order you want them reported.\n\nReturn an array of { name, reason }, one per problem, in the order of `required`. Empty array if everything is fine.\n\nThe reasons, checked in this order per variable:\n\n  'missing'     — the key is not in env at all\n  'empty'       — present but empty, or only whitespace\n  'placeholder' — present but still the value from the example .env: anything containing 'change-in-production', or exactly 'undefined' or 'null'\n\nThe rules:\n\n1. Report EVERY problem, not just the first. A deploy that fails on JWT_SECRET, gets fixed, then fails on DATABASE_URL is two outages instead of one.\n\n2. A value of 'undefined' or 'null' is a placeholder, not a real value. process.env holds strings, so a template that interpolated a missing variable writes the literal word — and every truthiness test in the world says it is set.\n\n3. Whitespace only is empty. '   ' passes `if (!value)` and is not a secret.\n\n4. The result must NEVER contain the value — only the name and the reason. You are going to log this, and the whole point is that these are secrets.\n\n5. A value of '0' is a perfectly good value. It is falsy, and it is not your business to decide otherwise.",
+      hints: [
+        "Test for absence explicitly rather than with truthiness, or an empty string gets reported as 'missing' and sends someone looking in the wrong file.",
+        "Trim once, into a local, and do every subsequent test on that. It is the only way whitespace-only and the placeholder checks stay consistent with each other.",
+        "When you build each result object, look at what you are putting in it. The array is going into a startup log, and the values are the things you are protecting."
+      ],
+      solution: `const PLACEHOLDERS = ["undefined", "null"];
+
+function checkEnv(env, required) {
+  const source = env || {};
+  const problems = [];
+
+  for (const name of required || []) {
+    const raw = source[name];
+
+    // Not present at all. Note !(name in source) rather than a truthiness
+    // test, so an empty string is reported as 'empty' and not 'missing'.
+    if (raw === undefined || raw === null) {
+      problems.push({ name: name, reason: "missing" });
+      continue;
+    }
+
+    const value = String(raw).trim();
+
+    if (value === "") {
+      problems.push({ name: name, reason: "empty" });
+      continue;
+    }
+
+    // The literal word, written by a template that had nothing to put there.
+    if (PLACEHOLDERS.includes(value) || value.includes("change-in-production")) {
+      problems.push({ name: name, reason: "placeholder" });
+      continue;
+    }
+  }
+
+  // Note what is NOT here: the values. This gets logged.
+  return problems;
+}`
+    });
+
+    createPlayground("pg-exercise-env", `// Write checkEnv(env, required) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(r) { return JSON.stringify(r); }
+const NEEDED = ["PORT", "DATABASE_URL", "JWT_SECRET", "TOKEN_CODE_PEPPER"];
+// A real-looking secret, so a leak of it is unmistakable in the output.
+const REAL_SECRET = "s3cr3t-6f2a91bb";
+
+try {
+  if (typeof checkEnv !== "function") throw new Error("not written yet");
+
+  try {
+    const r = checkEnv({
+      PORT: "3000", DATABASE_URL: "postgres://x", JWT_SECRET: REAL_SECRET,
+      TOKEN_CODE_PEPPER: "pep",
+    }, NEEDED);
+    check("a fully configured environment reports nothing",
+          Array.isArray(r) && r.length === 0, "got " + show(r));
+  } catch (e) { check("a fully configured environment reports nothing", false, "threw " + e.message); }
+
+  try {
+    // THE one. Three problems at once -- reporting only the first turns one
+    // deploy into three.
+    const r = checkEnv({ PORT: "3000" }, NEEDED);
+    check("every problem is reported, not just the first",
+          r.length === 3 && r.map(function (x) { return x.name; }).join(",") ===
+            "DATABASE_URL,JWT_SECRET,TOKEN_CODE_PEPPER",
+          "got " + show(r) + " -- fixing them one deploy at a time is three outages");
+  } catch (e) { check("every problem is reported, not just the first", false, "threw " + e.message); }
+
+  try {
+    const r = checkEnv({ JWT_SECRET: "" }, ["JWT_SECRET"]);
+    check("an empty string is 'empty', not 'missing'",
+          r.length === 1 && r[0].reason === "empty",
+          "got " + show(r) + " -- the key IS there; saying 'missing' sends someone looking in the wrong place");
+  } catch (e) { check("an empty string is 'empty', not 'missing'", false, "threw " + e.message); }
+
+  try {
+    const r = checkEnv({ JWT_SECRET: "   " }, ["JWT_SECRET"]);
+    check("whitespace only is empty",
+          r.length === 1 && r[0].reason === "empty",
+          "got " + show(r) + " -- '   ' passes any truthiness test and is not a secret");
+  } catch (e) { check("whitespace only is empty", false, "threw " + e.message); }
+
+  try {
+    // A template interpolated a missing value and wrote the word.
+    const r = checkEnv({ JWT_SECRET: "undefined" }, ["JWT_SECRET"]);
+    check("the literal string 'undefined' is a placeholder",
+          r.length === 1 && r[0].reason === "placeholder",
+          "got " + show(r) + " -- process.env holds strings; this is a 9-character secret to any truthiness test");
+  } catch (e) { check("the literal string 'undefined' is a placeholder", false, "threw " + e.message); }
+
+  try {
+    const r = checkEnv({ JWT_SECRET: "dev-secret-change-in-production" }, ["JWT_SECRET"]);
+    check("the example .env value is a placeholder",
+          r.length === 1 && r[0].reason === "placeholder",
+          "got " + show(r) + " -- this is the value three code blocks up, and this is how it reaches production");
+  } catch (e) { check("the example .env value is a placeholder", false, "threw " + e.message); }
+
+  try {
+    // Falsy and completely valid. Not the check's business.
+    const r = checkEnv({ PORT: "0" }, ["PORT"]);
+    check("a value of '0' is fine", r.length === 0,
+          "got " + show(r) + " -- '0' is falsy and is still a value someone meant to set");
+  } catch (e) { check("a value of '0' is fine", false, "threw " + e.message); }
+
+  try {
+    // Every reported problem must carry the NAME and the REASON and nothing
+    // else. Checking the keys rather than hunting for one string catches a
+    // leak whatever the value happens to be.
+    const r = checkEnv(
+      { JWT_SECRET: "dev-secret-change-in-production", DATABASE_URL: "", PORT: REAL_SECRET },
+      ["JWT_SECRET", "DATABASE_URL"]
+    );
+    const extra = [];
+    r.forEach(function (p) {
+      Object.keys(p).forEach(function (k) {
+        if (k !== "name" && k !== "reason" && extra.indexOf(k) === -1) extra.push(k);
+      });
+    });
+    check("a reported problem carries only name and reason",
+          extra.length === 0,
+          "found extra key(s): " + extra.join(",") + " -- this array goes straight into a startup log, " +
+          "and the values are the things it exists to protect");
+  } catch (e) { check("a reported problem carries only name and reason", false, "threw " + e.message); }
+
+  try {
+    const r = checkEnv({}, []);
+    check("nothing required is nothing to report",
+          Array.isArray(r) && r.length === 0, "got " + show(r));
+  } catch (e) { check("nothing required is nothing to report", false, "threw " + e.message); }
+
+  try {
+    const r = checkEnv({ DATABASE_URL: "postgres://x" }, NEEDED);
+    check("problems come back in the order they were asked for",
+          r.map(function (x) { return x.name; }).join(",") === "PORT,JWT_SECRET,TOKEN_CODE_PEPPER",
+          "got " + show(r) + " -- a stable order makes the log diffable between deploys");
+  } catch (e) { check("problems come back in the order they were asked for", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write checkEnv(env, required) above, then press Run. (" + e.message + ")");
+}`);
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is a Node HTTP server needing a runtime and a port to bind",
       exercise: "Set up Token's API project from scratch: (1) Initialize the api/ folder with package.json (type: module), (2) Install dependencies (dotenv, pg, tsx, typescript, @types/node, @types/pg), (3) Create a .env file with PORT and DATABASE_URL, (4) Write a basic server (api/src/server.ts) using the raw http module that responds to GET /health with {status: 'ok'} and 404 for everything else, (5) Add graceful shutdown handling, (6) Run it with tsx and test with curl.",
       hints: [
         "Don't forget 'type': 'module' in package.json for ES module imports.",
@@ -316,6 +561,10 @@ curl http://localhost:3000/health
 
 curl http://localhost:3000/nonexistent
 # {"error":"Not found"}`
+    });
+
+    createExplain("explain-b3-0001", {
+      prompt: "<code>JWT_SECRET=undefined</code> passes <code>if (!process.env.JWT_SECRET)</code> without complaint. Explain how a variable ends up holding that exact string, why no truthiness test can catch it, and what the server does for the rest of its life if it starts anyway."
     });
 
     createQuiz("lesson-quiz", [
