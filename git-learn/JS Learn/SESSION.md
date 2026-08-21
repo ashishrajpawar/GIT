@@ -12,8 +12,47 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean. **56/96 verified**, audit green, five suites
+**Nothing.** Working tree clean. **57/96 verified**, audit green, five suites
 pass. **B2 and B7 are complete.**
+
+### b3/0003 — and the drift `SELECT *` guarantees (2026-08-21)
+
+The list query said `SELECT * FROM tokens`. That was correct until
+`b2/0001` added `code_hash` and `code_enc` **the same morning** — from that
+moment the list endpoint returned both to the client, in every page, and
+nothing would have failed.
+
+**That is what makes `SELECT *` different from ordinary laziness: it is a
+promise to return whatever a future migration adds.** The person adding the
+column is not looking at the handler, and the person who wrote the handler is
+not there when they do. This is the cleanest example the course has of a
+defect created by an edit somewhere else.
+
+The callout also refuses the obvious defence — `code_enc` being encrypted is
+not much comfort when it is a ciphertext of a live capability, sent to a
+client that never needs it, repeatedly, its safety resting on a key that has
+to hold for as long as any of those responses survive in a log or a cache.
+
+M3: `buildPage(rows, limit)`. The lesson's implementation was **already
+correct**, which made it a good candidate — the exercise is about *why* each
+line is that way, and the wrong-cases are the ways it usually is not.
+
+### The `SELECT *` sweep, and a distinction worth keeping
+
+~20 more, **all in B1, and all fine.** `SELECT *` at a `psql` prompt, where
+you read the output yourself, is not the same act as `SELECT *` in a handler.
+The rule is about endpoints, not about learning SQL.
+
+What the sweep did surface: **B1 still teaches a plaintext `code` column**,
+which `b2/0001` removed. That is a defensible pedagogic choice —
+`WHERE code = 'MERC-8GH2-KP4X'` is a far better first query than
+`WHERE code_hash = '9f2a...'` — but nothing said so, leaving two lessons
+flatly contradicting each other. B1 now says it is a simplification and names
+the two habits that do not survive the move.
+
+**The general form: a simplification is fine; an unlabelled one is a
+contradiction.** Worth checking wherever an early module models something a
+later one replaces.
 
 ### Seven broken quiz options, found by reading rather than by the audit
 
@@ -393,15 +432,15 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 **Continue M3 with the scattered singles.** One lesson at a time, one commit
 each. **Nothing is blocked.**
 
-**Done:** A3, A4, A5, A6, A8, B5, **all of B7**, **all of B2**, plus
-`b3/0002`.
-**Remaining:** A11, B10, `b3/0001`, `b3/0003`, `b3/0004`.
+**Done:** A3, A4, A5, A6, A8, B5, all of B7, all of B2, plus `b3/0002` and
+`b3/0003`.
+**Remaining:** A11, B10, `b3/0001`, `b3/0004`.
 
-**Take the three `b3` lessons next and finish B3.** `b3/0002` is already done,
-so the module is three lessons from complete, and they are adjacent to work
-that is fresh: `b3/0003` (REST API design) was touched by the URL-path sweep
-and is where the `GET /tokens` response shape lives, which `a5/0003` and
-`b2/0001` both now constrain.
+**Take `b3/0004` (input validation and error handling) next** and finish B3.
+It is the natural pair to `b3/0003`, and it is where the denial-oracle rule
+from `b7/0001` will want re-stating for validation errors — a 400 that names
+the field is helpful, and a 404 that distinguishes 'no such token' from 'not
+yours' is not.
 
 | Work | Gate |
 |---|---|
@@ -469,7 +508,7 @@ Per-item status only. The plan itself is in `TOKEN-TRACK.md`; the counts are in
 | 4 — the operating track | not started, deliberately |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
-| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus `b3/0002`, all of B7 and all of B2; ~3 left |
+| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus all of B7, all of B2, and `b3/0002`+`b3/0003`; ~4 left |
 
 ### M3 — where it has reached
 
@@ -508,6 +547,7 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `b2/0001` | `codeHashInput` | normalisation is part of the *stored format*; do not "helpfully" map excluded letters |
 | `b2/0002` | `partitionsToCreate` | no default partition means every bug is a time bomb; pad the month; December rolls the year |
 | `b2/0003` | `planMigrations` | an applied migration is immutable; refuse rather than half-apply; history outranks the plan |
+| `b3/0003` | `buildPage` | the `limit + 1` probe is not content; the cursor comes from *items*, never from `rows` |
 
 **A5 note:** not one of the five had a `createExplain` prompt or loaded
 `explain.js`. All five now do. A5 predates the practice pattern being made

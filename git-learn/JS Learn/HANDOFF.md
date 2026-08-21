@@ -1809,6 +1809,65 @@ position reference in an explanation, which pins the question to authored
 order — and `render-as-authored` went 0 → 1 on the very next audit run. Fixed
 inside a minute, and back to 0.
 
+### Session of 2026-08-21 — b3/0003, and a defect created by an edit somewhere else
+
+`b3/0003`'s endpoint design was already correct — the URL-path sweep had been
+through it and it is ADR-0007 clean. Its list query said
+`SELECT * FROM tokens`, which was also correct until `b2/0001` added
+`code_hash` and `code_enc` **earlier the same day**.
+
+From that moment the list endpoint returned both to every client on every
+page, and nothing anywhere would have failed. No test, no type error, no
+log line. This is the clearest example the course has of a defect that was
+not written by anyone: two correct edits, five modules apart, and the second
+one silently changed what the first one meant.
+
+**Which is the argument against `SELECT *` in a handler, stated properly:**
+it is not laziness, it is a promise to return whatever a future migration
+adds. The person adding the column is not looking at the handler, and the
+person who wrote the handler is not there when they do. Naming the columns
+converts a schema change from a silent event into a reviewable one.
+
+The callout also declines the defence that reached for itself while writing
+it — that `code_enc` is encrypted, so who cares. It is a ciphertext of a
+live capability, sent repeatedly to a client with no use for it, and its
+safety then rests entirely on a key that must hold for as long as any of
+those responses might still exist in a log or a CDN cache. That is a much
+longer commitment than it looks.
+
+**`buildPage` was chosen because the lesson's implementation was already
+right.** That is a different kind of M3 candidate from the usual one: there
+was no bug to fix, so the exercise is about why each line is the way it is,
+and the wrong-cases carry the whole teaching load. The two that matter are
+`hasMore` computed after trimming (always false, so every list in the product
+silently stops at one page and looks perfect until someone owns 21 of
+something) and the cursor taken from `rows` rather than `items` (one
+invisible row per page boundary, no error anywhere).
+
+`slice(0, -1)` is in there deliberately as a near-miss: it is correct
+whenever exactly one extra row came back, which is every time the query is
+written properly. **A wrong-case that is right for the wrong reason is worth
+including**, because the student who wrote it has not learned anything from
+it passing.
+
+**The sweep afterwards produced a distinction worth keeping.** ~20 more
+`SELECT *` in B1, all fine — at a `psql` prompt, where you read the output
+yourself, it is not the same act as in a handler. The rule is about
+endpoints.
+
+But B1 still teaches a plaintext `code` column that `b2/0001` removed, and
+that is a defensible pedagogic choice with nothing saying so.
+`WHERE code = 'MERC-8GH2-KP4X'` really is a better first query than
+`WHERE code_hash = '9f2a...'`. B1 now says it is a simplification and names
+the two habits that do not survive the move, so they are unlearned there
+rather than in production.
+
+**General form: a simplification is fine; an unlabelled one is a
+contradiction.** Worth checking wherever an early module models something a
+later one replaces — which in this course is most of Track B.
+
+Status: `b3/0003` `unverifiable → verified`. 57/96.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees
