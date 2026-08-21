@@ -14,11 +14,11 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1957 words |
-| Lessons with a playground | 79 / 96 |
+| Avg teaching prose per track lesson | 1962 words |
+| Lessons with a playground | 80 / 96 |
 | Lessons with an exercise | 96 / 96 |
 | **Deepened** (all 3 spine sections) | 16 / 96 |
-| **Verified** (code executed) | 60 / 96 |
+| **Verified** (code executed) | 61 / 96 |
 | Ran clean but had nothing to run | 0 / 96 |
 | Errors | 0 |
 | Known and blocked | 3 |
@@ -76,7 +76,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | 01-javascript-fundamentals | 13 | 2556 | 85 | 15 | 380 | 0/13 | 13/13 |
 | 02-react-native | 14 | 2641 | 39 | 14 | 355 | 0/14 | 14/14 |
 | a10-device-security | 2 | 1908 | 2 | 2 | 50 | 1/2 | 0/2 |
-| a11-polish-publish | 5 | 1229 | 0 | 5 | 125 | 0/5 | 0/5 |
+| a11-polish-publish | 5 | 1341 | 1 | 6 | 125 | 0/5 | 1/5 |
 | a2-typescript | 3 | 781 | 2 | 3 | 76 | 0/3 | 0/3 |
 | a3-api-consumption | 4 | 1190 | 4 | 7 | 111 | 1/4 | 3/4 |
 | a4-auth-client | 3 | 1400 | 3 | 6 | 80 | 1/3 | 3/3 |
@@ -168,7 +168,7 @@ so they do not hold the audit red. They are **not** resolved.
 | a11-polish-publish/0001-animations-gestures.html | 1501 | 12 | 0 | 1 | 25 | — | n/a |
 | a11-polish-publish/0002-theming-dark-mode.html | 1171 | 9 | 0 | 1 | 25 | — | n/a |
 | a11-polish-publish/0003-forms-validation.html | 1340 | 9 | 0 | 1 | 25 | — | n/a |
-| a11-polish-publish/0004-environment-config.html | 904 | 13 | 0 | 1 | 25 | — | n/a |
+| a11-polish-publish/0004-environment-config.html | 1467 | 13 | 1 | 2 | 25 | — | yes |
 | a11-polish-publish/0005-store-submission.html | 1227 | 9 | 0 | 1 | 25 | — | n/a |
 | a2-typescript/0001-types-and-interfaces.html | 733 | 9 | 1 | 1 | 26 | — | n/a |
 | a2-typescript/0002-generics-utility-types.html | 864 | 11 | 1 | 1 | 25 | — | n/a |

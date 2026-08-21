@@ -209,17 +209,69 @@ eas build --profile production --platform all</code></pre>
 
     <p>EAS Secrets stores these encrypted on Expo's servers and injects them as environment variables during builds:</p>
 
-    <pre><code># Set a secret (stored encrypted, never in git)
-eas secret:create --name TURN_PASSWORD --value "s3cret-turn-pw" --scope project
+    <pre><code># Set a secret (stored encrypted, never in git).
+# NOTE the example: a SOURCEMAP UPLOAD TOKEN, used by the build itself and
+# never written into the app. Read the callout below before you put
+# anything here that the running app needs.
+eas secret:create --name SENTRY_AUTH_TOKEN --value "sntrys_..." --scope project
 
 # List secrets
 eas secret:list
 
 # Use in app.config.js
-turnPassword: process.env.TURN_PASSWORD,</code></pre>
+// NOT turnPassword. The app asks the API for a short-lived one when it
+// starts a call -- see the callout above.
+turnCredentialUrl: process.env.TURN_CREDENTIAL_URL,</code></pre>
 
-    <p><strong>Rule:</strong> If it's a credential, it goes in EAS Secrets. If it's a URL or flag, it goes in
-    <code>eas.json</code> env. If it's structural config (bundle ID, version), it goes in <code>app.config.js</code> directly.</p>
+    <div class="callout danger">
+      <div class="callout-title">There are no secrets in a client app. EAS Secrets does not change that.</div>
+      <p>The rule this section used to end with was: <em>if it's a credential,
+      it goes in EAS Secrets.</em> That is wrong in a way that is easy to miss,
+      because EAS Secrets really does protect the value — it is encrypted at
+      rest on Expo's servers and never enters git.</p>
+      <p><strong>What it protects is the pipeline, not the artefact.</strong>
+      The value is injected as an environment variable <em>during the build</em>,
+      and anything the app reads at runtime was baked into the bundle to get
+      there. That bundle is an <code>.apk</code> or an <code>.ipa</code> sitting
+      on a stranger's phone. Unzipping it and grepping the JavaScript is a
+      two-minute job, and no obfuscation changes the arithmetic: <strong>if the
+      running app can read it, so can whoever holds the app.</strong></p>
+      <p>So the real question is not "is this sensitive" but <strong>who needs
+      it, and when</strong>:</p>
+      <ul>
+        <li><strong>The build needs it, the app does not</strong> — a sourcemap
+        upload token, a signing credential. EAS Secrets is exactly right. The
+        value does its job and never reaches the artefact.</li>
+        <li><strong>The app needs it at runtime</strong> — then it cannot be a
+        secret, and the design has to change rather than the storage. The app
+        authenticates, and asks your API for a short-lived credential when it
+        needs one.</li>
+      </ul>
+
+      <h4>The example that was here is the one that matters</h4>
+      <p>This section used to create <code>TURN_PASSWORD</code> as an EAS
+      secret. TURN is the relay every Token call goes through — under ADR-0008,
+      <em>every</em> call, with no direct path — so that password is the key to
+      your relay bandwidth. Shipped in the bundle, it is extractable by anyone
+      who installs the app, and relay bandwidth is metered and billed to you.
+      There is no revocation story either: rotating it means shipping a new
+      build and waiting for people to update.</p>
+      <p><code>a7/0001</code> already says what to do instead, and this lesson
+      contradicted it: <strong>short-lived TURN credentials from the API</strong>.
+      The coturn REST convention is that a credential is
+      <code>HMAC-SHA1(shared_secret, "expiry:username")</code>, so your server
+      mints one valid for a few hours from a secret that never leaves it, and
+      the app asks for a fresh one when it starts a call. An extracted
+      credential is then worth hours rather than for ever, and revoking it is a
+      server-side change.</p>
+
+      <p><strong>The corrected rule:</strong> structural config
+      (bundle ID, version) goes in <code>app.config.js</code>; URLs and feature
+      flags go in <code>eas.json</code> env; build-time-only credentials go in
+      EAS Secrets; and <strong>anything the running app needs and must not
+      reveal does not go in the app at all</strong> — it is fetched, briefly,
+      from something that can say no.</p>
+    </div>
 
     <!-- ───────────────────────────────────────────── -->
     <h2>Local Development: .env Files</h2>
@@ -228,7 +280,7 @@ turnPassword: process.env.TURN_PASSWORD,</code></pre>
 
     <pre><code># app/.env (git-ignored)
 APP_ENV=development
-TURN_PASSWORD=local-dev-password</code></pre>
+TURN_CREDENTIAL_URL=http://localhost:3000/api/turn-credential</code></pre>
 
     <p>Expo reads <code>.env</code> automatically in SDK 49+. Earlier versions need <code>dotenv</code>:</p>
 
@@ -286,16 +338,36 @@ configSchema.parse(config);</code></pre>
         <thead><tr><th>What</th><th>Where</th><th>Accessible</th></tr></thead>
         <tbody>
             <tr><td>API URLs, log level, feature toggles</td><td><code>eas.json</code> → env → <code>app.config.js</code> → extra</td><td>Runtime via expo-constants</td></tr>
-            <tr><td>Secrets (API keys, passwords)</td><td>EAS Secrets (<code>eas secret:create</code>)</td><td>Build time only (injected into env)</td></tr>
+            <tr><td>Build-time credentials (sourcemap upload, signing)</td><td>EAS Secrets (<code>eas secret:create</code>)</td><td>Build time only — never reaches the bundle</td></tr>
+            <tr><td>Credentials the running app needs (TURN, API keys)</td><td><strong>Nowhere in the app.</strong> Minted short-lived by your API, on request</td><td>Runtime, and expiring</td></tr>
             <tr><td>Bundle ID, version, name</td><td><code>app.config.js</code> directly</td><td>Build time + runtime</td></tr>
             <tr><td>Local dev overrides</td><td><code>.env</code> (git-ignored)</td><td>Local <code>expo start</code> only</td></tr>
         </tbody>
     </table>
 
     <!-- ───────────────────────────────────────────── -->
+    <h2>Now build it yourself</h2>
+
+    <p>
+      Write <code>placeConfig(entry)</code> — decide where a single
+      configuration value belongs. It is the rule from the callout above,
+      written down, and it is the one decision in this lesson that cannot be
+      undone by shipping a fix: a credential that has been in a released bundle
+      is disclosed, whatever you do next.
+    </p>
+
+    <div id="exercise-place"></div>
+    <div id="pg-exercise-place"></div>
+
+    <h3>And the project it belongs to</h3>
+
     <h2>Exercise</h2>
 
     <div id="exercise-1"></div>
+
+    <div id="explain-a11-0004"></div>
+
+    <hr>
 
     <h2>Quiz</h2>
     <div id="lesson-quiz"></div>
@@ -309,11 +381,121 @@ configSchema.parse(config);</code></pre>
     <script src="../../assets/quiz.js"></script>
     <script src="../../assets/playground.js"></script>
     <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
     <script src="../../assets/progress.js"></script>
     <script src="../../assets/copy-code.js"></script>
 
     <script>
+    createSolution("exercise-place", {
+      exercise: "Write placeConfig(entry) — say where one configuration value should live.\n\nentry is { name, kind, neededAt }:\n\n  kind      — 'structural' (bundle id, version, app name)\n            | 'url' | 'flag'\n            | 'credential' (anything that grants access)\n  neededAt  — 'build' or 'runtime'\n\nReturn one of these strings:\n\n  'app.config.js'  — structural config, read at build and runtime\n  'eas-env'        — eas.json env: URLs and feature flags, per profile\n  'eas-secret'     — EAS Secrets: a credential the BUILD uses and the app never sees\n  'server-only'    — it does not go in the app at all; the app asks the API for a short-lived one\n\nThe rules:\n\n1. A credential needed at RUNTIME is 'server-only'. Always. It cannot be a secret once it is in the bundle, and the bundle is on a stranger's phone — so the design changes, not the storage. This is the rule the lesson used to get wrong.\n\n2. A credential needed at BUILD time is 'eas-secret'. It does its job in the pipeline and never reaches the artefact. That is what EAS Secrets is actually for.\n\n3. 'structural' is 'app.config.js', whenever it is needed.\n\n4. 'url' and 'flag' are 'eas-env'.\n\n5. Anything you cannot classify — an unknown kind, a missing field — is 'server-only'. Not 'eas-env'. If you do not know what a value is, the safe answer is the one that does not ship it, and the cost of being wrong that way is an extra API call.",
+      hints: [
+        "Handle 'credential' as its own branch, and let neededAt decide inside it. If neededAt is being consulted anywhere else, the shape is wrong — it only changes the answer for credentials.",
+        "Write the fallthrough return before you write the branches. Making 'server-only' the default means every case you forget fails towards not shipping it.",
+        "Read rule 5 again after you think you are done. An unknown kind arriving as 'eas-env' is the same bug as the TURN password, reached by a different route."
+      ],
+      solution: `function placeConfig(entry) {
+  const kind = entry && entry.kind;
+  const neededAt = entry && entry.neededAt;
+
+  if (kind === "structural") return "app.config.js";
+
+  if (kind === "credential") {
+    // The whole lesson, in two lines. If the running app needs it, it
+    // cannot be in the running app.
+    return neededAt === "build" ? "eas-secret" : "server-only";
+  }
+
+  if (kind === "url" || kind === "flag") return "eas-env";
+
+  // Unclassifiable. Fail towards not shipping it.
+  return "server-only";
+}`
+    });
+
+    createPlayground("pg-exercise-place", `// Write placeConfig(entry) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function place(kind, neededAt, name) {
+  return placeConfig({ name: name || "X", kind: kind, neededAt: neededAt });
+}
+
+try {
+  if (typeof placeConfig !== "function") throw new Error("not written yet");
+
+  try {
+    // THE one the lesson used to get wrong. TURN is needed by the running
+    // app, so no amount of encryption at rest keeps it out of the bundle.
+    const r = place("credential", "runtime", "TURN_PASSWORD");
+    check("a credential the running app needs is server-only",
+          r === "server-only",
+          "got '" + r + "' -- if the app can read it, so can anyone holding the app");
+  } catch (e) { check("a credential the running app needs is server-only", false, "threw " + e.message); }
+
+  try {
+    // The legitimate use of EAS Secrets: the build uses it, the app never
+    // sees it. Same kind, different neededAt, different answer.
+    const r = place("credential", "build", "SENTRY_AUTH_TOKEN");
+    check("a credential only the build uses is an EAS secret",
+          r === "eas-secret",
+          "got '" + r + "' -- this one never reaches the artefact, which is the point");
+  } catch (e) { check("a credential only the build uses is an EAS secret", false, "threw " + e.message); }
+
+  try {
+    const build = place("credential", "build");
+    const runtime = place("credential", "runtime");
+    check("neededAt is what separates the two credential cases",
+          build !== runtime,
+          "both came back as '" + build + "' -- 'is it sensitive' is not the question; 'who needs it' is");
+  } catch (e) { check("neededAt is what separates the two credential cases", false, "threw " + e.message); }
+
+  try {
+    const a = place("structural", "build", "bundleIdentifier");
+    const b = place("structural", "runtime", "version");
+    check("structural config is app.config.js whenever it is needed",
+          a === "app.config.js" && b === "app.config.js",
+          "got '" + a + "' and '" + b + "'");
+  } catch (e) { check("structural config is app.config.js whenever it is needed", false, "threw " + e.message); }
+
+  try {
+    const a = place("url", "runtime", "API_URL");
+    const b = place("flag", "runtime", "ENABLE_CALLS");
+    check("urls and flags go in eas.json env",
+          a === "eas-env" && b === "eas-env", "got '" + a + "' and '" + b + "'");
+  } catch (e) { check("urls and flags go in eas.json env", false, "threw " + e.message); }
+
+  try {
+    // Deny by default. An unknown kind is not a flag.
+    const r = place("analytics-key", "runtime", "MYSTERY");
+    check("an unknown kind is server-only, not eas-env",
+          r === "server-only",
+          "got '" + r + "' -- if you cannot classify it, the safe answer is the one that does not ship it");
+  } catch (e) { check("an unknown kind is server-only, not eas-env", false, "threw " + e.message); }
+
+  try {
+    const r = placeConfig({ name: "HALF_FILLED" });
+    check("a missing kind is server-only, not a crash",
+          r === "server-only", "got '" + r + "'");
+  } catch (e) { check("a missing kind is server-only, not a crash", false, "threw " + e.message); }
+
+  try {
+    // A credential with no neededAt is not a build credential. The absent
+    // case must fall to the safe side, not the convenient one.
+    const r = placeConfig({ name: "SOME_KEY", kind: "credential" });
+    check("a credential with no neededAt is server-only",
+          r === "server-only",
+          "got '" + r + "' -- defaulting an unknown to 'build' puts it in the bundle");
+  } catch (e) { check("a credential with no neededAt is server-only", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write placeConfig(entry) above, then press Run. (" + e.message + ")");
+}`);
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is an Expo app config plus eas.json profiles, needing a build",
       exercise: `Set up environment config for Token's WebSocket connections.\n\nRequirements:\n1. Add a wsUrl to each environment config in app.config.js (ws://localhost:3001 for dev, wss://staging-ws.tokn.app for staging, wss://ws.tokn.app for production)\n2. Add the wsUrl to the config/env.ts type and export\n3. Add it to the zod validation schema\n4. Create a useWebSocketUrl() hook that returns the correct URL for the current environment\n5. Handle the case where development uses ws:// (insecure) and production uses wss:// (TLS)`,
       hints: [
         "ws:// and wss:// are like http:// and https:// — the zod schema should accept both with z.string().url() or a custom regex.",
@@ -392,6 +574,10 @@ export function useWebSocketUrl(): string {
 // const socket = new WebSocket(wsUrl);`
     });
 
+    createExplain("explain-a11-0004", {
+      prompt: "EAS Secrets genuinely encrypts a value at rest and keeps it out of git, and it is still the wrong place for a TURN password. Explain what it actually protects, what it does not, and why the fix is to change the design rather than to find better storage."
+    });
+
     createQuiz("lesson-quiz", [
       {
         type: "predict-output",
@@ -445,7 +631,7 @@ export function useWebSocketUrl(): string {
       },
       {
         type: "fill-blank",
-        code: `// Store a secret encrypted on Expo servers\neas ___:create --name TURN_PASSWORD --value "s3cret" --scope project`,
+        code: `// Store a BUILD-TIME credential encrypted on Expo servers\neas ___:create --name SENTRY_AUTH_TOKEN --value "sntrys_..." --scope project`,
         answer: "secret",
         explanation: "The eas secret:create command stores sensitive values encrypted on Expo's servers. They are injected as environment variables during EAS Build — never stored in git."
       },
@@ -462,11 +648,11 @@ export function useWebSocketUrl(): string {
       },
       {
         type: "spot-the-bug",
-        code: `// app/.env\nAPP_ENV=development\nTURN_PASSWORD=local-dev-password\n\n// app/.gitignore\nnode_modules/\ndist/\n# .env is NOT listed here`,
+        code: `// app/.env\nAPP_ENV=development\nDATABASE_URL=postgres://localhost:5432/token_dev\n\n// app/.gitignore\nnode_modules/\ndist/\n# .env is NOT listed here`,
         bugLine: 6,
         options: ["The .env file uses wrong syntax", "The .gitignore does not include .env — secrets will be committed", "APP_ENV should not be in .env"],
         correct: 1,
-        explanation: "Without .env in .gitignore, the file (containing TURN_PASSWORD) will be committed to git. Always add .env, .env.local, and .env.*.local to .gitignore."
+        explanation: "Without .env in .gitignore, the file is committed to git — and a .env is where local credentials live, so it is almost always the wrong file to publish. Always add .env, .env.local and .env.*.local. Note the second lesson hiding in this example: git remembers. Adding the line after the file has been committed once removes it from future commits and leaves it in the history, so anything already pushed has to be treated as disclosed and rotated, not just deleted."
       },
       {
         type: "which-breaks",
