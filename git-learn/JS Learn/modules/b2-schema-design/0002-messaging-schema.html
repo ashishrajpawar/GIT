@@ -49,6 +49,9 @@
   holder_name   TEXT,
   status        TEXT NOT NULL DEFAULT 'open'
                 CHECK (status IN ('open', 'closed', 'blocked')),
+  -- WHY it closed. The client renders its own sentence from this, because
+  -- the server cannot write one into messages -- it holds no key.
+  closed_reason TEXT CHECK (closed_reason IN ('revoked', 'expired', 'exhausted', 'blocked')),
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   last_message_at TIMESTAMPTZ
@@ -65,34 +68,148 @@
     <h2>The messages table</h2>
 
     <pre><code>CREATE TABLE messages (
-  id              SERIAL PRIMARY KEY,
+  id              BIGSERIAL,
   conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   sender_type     TEXT NOT NULL CHECK (sender_type IN ('owner', 'holder')),
-  content         TEXT NOT NULL,
-  content_type    TEXT NOT NULL DEFAULT 'text'
-                  CHECK (content_type IN ('text', 'image', 'file', 'system')),
-  metadata        JSONB,
+
+  -- The body, sealed on the sender's device. The server stores these
+  -- bytes and holds no key for them. Everything ABOUT the message --
+  -- its text, its type, an image's dimensions -- is inside here.
+  ciphertext      BYTEA NOT NULL,
+  nonce           BYTEA NOT NULL,          -- unique per message, never reused
+  key_version     SMALLINT NOT NULL,       -- which key sealed it
+
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   delivered_at    TIMESTAMPTZ,
-  read_at         TIMESTAMPTZ
-);</code></pre>
+  read_at         TIMESTAMPTZ,
+
+  -- Postgres requires the partition key in the primary key.
+  PRIMARY KEY (id, created_at)
+) PARTITION BY RANGE (created_at);
+
+-- One partition per month, created ahead of time by a job.
+CREATE TABLE messages_2026_08 PARTITION OF messages
+  FOR VALUES FROM ('2026-08-01') TO ('2026-09-01');
+CREATE TABLE messages_2026_09 PARTITION OF messages
+  FOR VALUES FROM ('2026-09-01') TO ('2026-10-01');</code></pre>
 
     <p>Design notes:</p>
     <ul>
       <li><strong>sender_type</strong> — 'owner' or 'holder'. Not a user ID for the holder, because holders aren't users in the system.</li>
-      <li><strong>content_type</strong> — supports future expansion (images, files) without schema changes.</li>
-      <li><strong>metadata</strong> — JSONB for type-specific data (image dimensions, file size, etc.).</li>
-      <li><strong>delivered_at / read_at</strong> — timestamps for delivery and read receipts. NULL = not yet delivered/read.</li>
+      <li><strong>ciphertext / nonce / key_version</strong> — the envelope. See the callout below; this is the shape of the whole table's argument.</li>
+      <li><strong>delivered_at / read_at</strong> — timestamps for delivery and read receipts. NULL = not yet delivered/read. These are outside the envelope because the <em>server</em> sets them.</li>
       <li><strong>ON DELETE CASCADE</strong> — if a conversation is removed, its messages go with it.</li>
+      <li><strong>No <code>content_type</code>, no <code>metadata</code></strong> — both used to be columns, and both describe the content. See below.</li>
     </ul>
 
-    <h3>System messages</h3>
+    <div class="callout danger">
+      <div class="callout-title">What is outside the envelope is exactly what the server needs, and nothing else</div>
+      <p>ADR-0002 commits Token to end-to-end encryption from v1: <strong>the
+      server stores ciphertext and has no key.</strong> This table is where that
+      stops being a policy and becomes a set of columns.</p>
+      <p>The useful way to design it is to ask, of every column,
+      <em>does the server need this to do its job?</em> Its job is narrow —
+      route a message to a conversation, order it, and record delivery. So:</p>
+      <table>
+        <thead><tr><th>Outside</th><th>Why the server needs it</th></tr></thead>
+        <tbody>
+          <tr><td><code>conversation_id</code></td><td>to route it</td></tr>
+          <tr><td><code>sender_type</code></td><td>to route it to the other party</td></tr>
+          <tr><td><code>created_at</code></td><td>to order it, and to partition</td></tr>
+          <tr><td><code>delivered_at</code>, <code>read_at</code></td><td>the server sets these itself</td></tr>
+          <tr><td><code>nonce</code>, <code>key_version</code></td><td>the recipient needs them to decrypt, and neither reveals anything</td></tr>
+        </tbody>
+      </table>
+      <p>Everything else went inside. <strong><code>content_type</code> and
+      <code>metadata</code> were columns and are now fields in the plaintext</strong>,
+      because both describe the content. "This message is an image, 1920×1080,
+      2.3 MB" is not routing information — it is a description of what was sent,
+      and a server that can read it can tell a delivery company's message from a
+      doctor's.</p>
+      <p>Nothing is lost: the client seals a small JSON object rather than a
+      string, and unseals it to render. The cost is that you cannot add a
+      content type without a client release, because the server no longer knows
+      what a message is.</p>
 
-    <p>The <code>system</code> content_type handles automated messages:</p>
+      <h4>The nonce is not optional and must never repeat</h4>
+      <p>AES-GCM catastrophically fails on nonce reuse: encrypt two different
+      messages under the same key and nonce, and anyone holding both ciphertexts
+      recovers the XOR of the plaintexts without touching the key. So the nonce
+      is stored per message and generated randomly per message — never a counter
+      that resets, never derived from the message id.</p>
 
-    <pre><code>-- When a token is revoked, insert a system message:
-INSERT INTO messages (conversation_id, sender_type, content, content_type) VALUES
-(42, 'owner', 'This token has been revoked. The conversation is now closed.', 'system');</code></pre>
+      <h4>Why <code>key_version</code> exists before it is needed</h4>
+      <p>Keys get rotated — after a device is lost, or on a schedule. Without a
+      version, a rotation makes every older message undecryptable, and there is
+      no migration you can run because the server cannot read them to re-encrypt.
+      A <code>SMALLINT</code> costs two bytes now and is impossible to add
+      later.</p>
+    </div>
+
+    <div class="callout danger">
+      <div class="callout-title">Partitioned from the first migration, not when it hurts</div>
+      <p><code>PARTITION BY RANGE (created_at)</code> is in the original
+      <code>CREATE TABLE</code> deliberately. ADR-0003's rule is that anything
+      you cannot retrofit goes in from day one, and partitioning is the clearest
+      example: converting a large live <code>messages</code> table into a
+      partitioned one means copying every row, and you do it under exactly the
+      load that made you want it.</p>
+      <p>Two things it buys, and the second is the one people forget:</p>
+      <ul>
+        <li><strong>Retention is a <code>DROP TABLE</code>.</strong> Deleting a
+        year of old messages with <code>DELETE</code> writes every row to the
+        WAL, bloats the table and leaves the space to <code>VACUUM</code>.
+        Dropping a partition is instant and returns the disk immediately.</li>
+        <li><strong>Queries touch one partition.</strong> A chat view asks for
+        recent messages, and Postgres skips the months it can prove are
+        irrelevant.</li>
+      </ul>
+      <p>Notice what partitioning forces: <strong><code>PRIMARY KEY (id,
+      created_at)</code></strong>, because Postgres requires the partition key
+      to be part of every unique constraint. A plain <code>SERIAL PRIMARY
+      KEY</code> is rejected outright on a partitioned table — which is a good
+      thing, since it means you cannot half-adopt this.</p>
+      <p>The partitions themselves are created ahead of time by a scheduled
+      job. <strong>A month with no partition takes inserts and fails them</strong>,
+      so that job failing silently is a total outage on the first of the month —
+      it belongs in monitoring, not in a cron nobody watches.</p>
+    </div>
+
+    <h3>System messages — the thing E2EE quietly takes away</h3>
+
+    <p>The obvious way to tell a holder that a token was revoked is to insert a
+    message saying so. Look at what that requires: the server writing readable
+    text into a table whose entire design is that the server cannot write
+    readable text. <strong>It has no key. It could not encrypt that row if it
+    wanted to.</strong></p>
+
+    <p>So a system message is not a message. It is an <em>event</em>, and each
+    client renders its own text from it:</p>
+
+    <pre><code>-- Not a row in messages. The conversation's own state is the event.
+UPDATE conversations
+   SET status = 'closed', closed_reason = 'revoked', updated_at = NOW()
+ WHERE token_id = $1;</code></pre>
+
+    <p>The client sees <code>status: 'closed'</code> with a reason and draws the
+    grey "This token has been revoked" line itself. Three things fall out of
+    that, and they are all improvements:</p>
+
+    <ul>
+      <li>It is translated, because the client knows the user's language and the
+      server does not.</li>
+      <li>It cannot desynchronise from the truth. A stored system message is a
+      claim about state that was true when it was written; a rendered one is
+      read from the state itself.</li>
+      <li>It does not consume a message id or a partition row for something
+      nobody sent.</li>
+    </ul>
+
+    <p><strong>The general rule, and it will come up again:</strong> under
+    end-to-end encryption, anything the <em>server</em> wants to say has to be
+    said in structured state rather than in prose. Every "just insert a system
+    message" instinct needs converting into "record the event, let the client
+    write the sentence".</p>
 
     <h2>Read receipts</h2>
 
@@ -126,8 +243,9 @@ WHERE t.user_id = 1
   AND c.status = 'open'
 ORDER BY c.last_message_at DESC NULLS LAST;
 
--- Get messages for a conversation (paginated)
-SELECT id, sender_type, content, content_type, created_at, read_at
+-- Get messages for a conversation (paginated).
+-- The server hands back the envelope; the client decrypts it.
+SELECT id, sender_type, ciphertext, nonce, key_version, created_at, read_at
 FROM messages
 WHERE conversation_id = 42
 ORDER BY created_at ASC
@@ -156,11 +274,9 @@ BEGIN
     SET status = 'closed', updated_at = NOW()
     WHERE token_id = NEW.id AND status = 'open';
 
-    -- Insert a system message in each closed conversation
-    INSERT INTO messages (conversation_id, sender_type, content, content_type)
-    SELECT id, 'owner', 'This token has been revoked. The conversation is closed.', 'system'
-    FROM conversations
-    WHERE token_id = NEW.id AND status = 'closed';
+    -- NO system message is inserted. The server has no key, so it could
+    -- not encrypt one -- and it does not need to. The status change above
+    -- IS the event; each client renders its own sentence from it.
   END IF;
   RETURN NEW;
 END;
@@ -176,10 +292,13 @@ EXECUTE FUNCTION close_conversations_on_revoke();</code></pre>
     <pre><code>-- Conversation list for a token
 CREATE INDEX idx_conversations_token_id ON conversations(token_id);
 
--- Messages by conversation (the chat view)
-CREATE INDEX idx_messages_conversation_id ON messages(conversation_id);
+-- Messages by conversation, newest first -- this is the chat view's query.
+-- Declared on the parent; Postgres creates it on every partition, and on
+-- each new one automatically.
+CREATE INDEX idx_messages_conversation_id
+  ON messages(conversation_id, created_at DESC);
 
--- Unread messages (for badge counts)
+-- Unread messages (for badge counts). A partial index, so it stays small.
 CREATE INDEX idx_messages_unread ON messages(conversation_id)
 WHERE sender_type = 'holder' AND read_at IS NULL;
 
@@ -199,23 +318,37 @@ CREATE TABLE conversations (
   holder_name     TEXT,
   status          TEXT NOT NULL DEFAULT 'open'
                   CHECK (status IN ('open', 'closed', 'blocked')),
+  closed_reason   TEXT CHECK (closed_reason IN ('revoked', 'expired', 'exhausted', 'blocked')),
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   last_message_at TIMESTAMPTZ
 );
 
 CREATE TABLE messages (
-  id              SERIAL PRIMARY KEY,
+  id              BIGSERIAL,
   conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   sender_type     TEXT NOT NULL CHECK (sender_type IN ('owner', 'holder')),
-  content         TEXT NOT NULL,
-  content_type    TEXT NOT NULL DEFAULT 'text'
-                  CHECK (content_type IN ('text', 'image', 'file', 'system')),
-  metadata        JSONB,
+
+  -- The body, sealed on the sender's device. The server stores these
+  -- bytes and holds no key for them. Everything ABOUT the message --
+  -- its text, its type, an image's dimensions -- is inside here.
+  ciphertext      BYTEA NOT NULL,
+  nonce           BYTEA NOT NULL,          -- unique per message, never reused
+  key_version     SMALLINT NOT NULL,       -- which key sealed it
+
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   delivered_at    TIMESTAMPTZ,
-  read_at         TIMESTAMPTZ
-);
+  read_at         TIMESTAMPTZ,
+
+  -- Postgres requires the partition key in the primary key.
+  PRIMARY KEY (id, created_at)
+) PARTITION BY RANGE (created_at);
+
+-- One partition per month, created ahead of time by a job.
+CREATE TABLE messages_2026_08 PARTITION OF messages
+  FOR VALUES FROM ('2026-08-01') TO ('2026-09-01');
+CREATE TABLE messages_2026_09 PARTITION OF messages
+  FOR VALUES FROM ('2026-09-01') TO ('2026-10-01');
 
 CREATE INDEX idx_conversations_token_id ON conversations(token_id);
 CREATE INDEX idx_messages_conversation_id ON messages(conversation_id);
@@ -231,11 +364,11 @@ CREATE OR REPLACE FUNCTION close_conversations_on_revoke()
 RETURNS TRIGGER AS $$
 BEGIN
   IF NEW.status = 'revoked' AND OLD.status != 'revoked' THEN
-    UPDATE conversations SET status = 'closed', updated_at = NOW()
-    WHERE token_id = NEW.id AND status = 'open';
-    INSERT INTO messages (conversation_id, sender_type, content, content_type)
-    SELECT id, 'owner', 'This token has been revoked.', 'system'
-    FROM conversations WHERE token_id = NEW.id AND status = 'closed';
+    UPDATE conversations
+       SET status = 'closed', closed_reason = 'revoked', updated_at = NOW()
+     WHERE token_id = NEW.id AND status = 'open';
+    -- No system message. The server holds no key, so it could not write a
+    -- readable row into this table. The status change IS the event.
   END IF;
   RETURN NEW;
 END;
@@ -249,9 +382,25 @@ COMMIT;</code></pre>
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>Now build it yourself</h2>
+
+    <p>
+      Write <code>partitionsToCreate(existing, now, monthsAhead)</code> — the
+      decision the scheduled job makes every time it runs. It is the function
+      whose silent failure is a total outage at midnight on the first of the
+      month, and it is pure arithmetic, so you can hold it to account here.
+    </p>
+
+    <div id="exercise-partitions"></div>
+    <div id="pg-exercise-partitions"></div>
+
+    <h3>And the schema it belongs to</h3>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="explain-b2-0002"></div>
 
     <hr>
 
@@ -266,11 +415,137 @@ COMMIT;</code></pre>
 
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
+    createSolution("exercise-partitions", {
+      exercise: "Write partitionsToCreate(existing, now, monthsAhead) — work out which monthly partitions are missing.\n\nexisting is an array of partition names already in the database, like ['messages_2026_08', 'messages_2026_09']. It may be empty, and it may contain months in any order.\nnow is a Date.\nmonthsAhead is how many months of runway to keep BEYOND the current month.\n\nReturn an array of { name, from, to } for every month from the current one through current + monthsAhead that is not already in existing, in chronological order. Return an empty array if nothing is missing.\n\n  name  — 'messages_YYYY_MM', with the month ZERO-PADDED\n  from  — 'YYYY-MM-01', the first day of that month\n  to    — 'YYYY-MM-01' of the FOLLOWING month, because Postgres range bounds are [from, to)\n\nThe rules:\n\n1. Always consider the current month. A fresh database has no partitions at all, and the first insert is today.\n\n2. monthsAhead = 3 means four months in total: this one plus the next three.\n\n3. Zero-pad the month. 'messages_2026_9' and 'messages_2026_09' are different strings, and a job that produces the first will re-create September every night while the real September partition already exists.\n\n4. December rolls over to January of the next year. Month 12 + 1 is not month 13.\n\n5. Skip months already present, but keep the rest in order.",
+      hints: [
+        "Do the month arithmetic with Date.UTC(year, month + i, 1) and let it handle the rollover. Adding 1 to a month number yourself is where December goes wrong.",
+        "Build the name from the same formatted string you use for 'from', so the padding cannot disagree between the two.",
+        "Loop from 0 to monthsAhead inclusive. Off by one here means the runway is one month shorter than you think, which you find out on the first of a month."
+      ],
+      solution: `function partitionsToCreate(existing, now, monthsAhead) {
+  const have = new Set(existing || []);
+  const out = [];
+
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth(); // 0-11
+
+  // The current month PLUS monthsAhead more, so <= not <.
+  for (let i = 0; i <= monthsAhead; i++) {
+    // Date handles the rollover: month 11 + 1 gives January of year+1,
+    // which is why the arithmetic is done here and not on the numbers.
+    const start = new Date(Date.UTC(year, month + i, 1));
+    const end = new Date(Date.UTC(year, month + i + 1, 1));
+
+    const name = "messages_" + stamp(start).slice(0, 7).replace("-", "_");
+    if (have.has(name)) continue;
+
+    out.push({ name: name, from: stamp(start), to: stamp(end) });
+  }
+
+  return out;
+}
+
+// 'YYYY-MM-01'. padStart is what stops messages_2026_9 existing.
+function stamp(d) {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  return y + "-" + m + "-01";
+}`
+    });
+
+    createPlayground("pg-exercise-partitions", `// Write partitionsToCreate(existing, now, monthsAhead) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function names(list) { return list.map(function (p) { return p.name; }).join(","); }
+// August is deliberately NOT a single-digit month, so a padding bug is
+// invisible here and shows up in the December test below.
+const AUG = new Date(Date.UTC(2026, 7, 15));
+
+try {
+  if (typeof partitionsToCreate !== "function") throw new Error("not written yet");
+
+  try {
+    const r = partitionsToCreate([], AUG, 2);
+    check("an empty database gets the current month plus the runway",
+          names(r) === "messages_2026_08,messages_2026_09,messages_2026_10",
+          "got [" + names(r) + "] -- monthsAhead 2 means THREE months: this one and two more");
+  } catch (e) { check("an empty database gets the current month plus the runway", false, "threw " + e.message); }
+
+  try {
+    const r = partitionsToCreate([], AUG, 0);
+    check("monthsAhead 0 still creates the current month",
+          names(r) === "messages_2026_08",
+          "got [" + names(r) + "] -- today's inserts have to land somewhere");
+  } catch (e) { check("monthsAhead 0 still creates the current month", false, "threw " + e.message); }
+
+  try {
+    const r = partitionsToCreate([], AUG, 0);
+    check("bounds are the first of this month to the first of the next",
+          r[0] && r[0].from === "2026-08-01" && r[0].to === "2026-09-01",
+          "got " + JSON.stringify(r[0]) + " -- Postgres ranges are [from, to), so 'to' is the NEXT month");
+  } catch (e) { check("bounds are the first of this month to the first of the next", false, "threw " + e.message); }
+
+  try {
+    const r = partitionsToCreate(["messages_2026_08", "messages_2026_09"], AUG, 2);
+    check("months already present are skipped",
+          names(r) === "messages_2026_10",
+          "got [" + names(r) + "]");
+  } catch (e) { check("months already present are skipped", false, "threw " + e.message); }
+
+  try {
+    const r = partitionsToCreate(["messages_2026_08", "messages_2026_09", "messages_2026_10"], AUG, 2);
+    check("nothing missing returns an empty array",
+          Array.isArray(r) && r.length === 0,
+          "got [" + names(r) + "] -- the job runs nightly and must be a no-op most nights");
+  } catch (e) { check("nothing missing returns an empty array", false, "threw " + e.message); }
+
+  try {
+    // THE rollover. December + 1 is January of the NEXT year, and the
+    // months either side are single digits, so a padding bug shows here.
+    const dec = new Date(Date.UTC(2026, 11, 20));
+    const r = partitionsToCreate([], dec, 2);
+    check("December rolls into the next year",
+          names(r) === "messages_2026_12,messages_2027_01,messages_2027_02",
+          "got [" + names(r) + "] -- month 12 + 1 is not month 13");
+  } catch (e) { check("December rolls into the next year", false, "threw " + e.message); }
+
+  try {
+    const dec = new Date(Date.UTC(2026, 11, 20));
+    const r = partitionsToCreate([], dec, 1);
+    check("single-digit months are zero-padded",
+          r[1] && r[1].name === "messages_2027_01" && r[1].from === "2027-01-01",
+          "got " + JSON.stringify(r[1]) + " -- messages_2027_1 is a different string, so the job recreates it forever");
+  } catch (e) { check("single-digit months are zero-padded", false, "threw " + e.message); }
+
+  try {
+    const r = partitionsToCreate(["messages_2026_09"], AUG, 2);
+    check("a gap in the middle is filled, in order",
+          names(r) === "messages_2026_08,messages_2026_10",
+          "got [" + names(r) + "] -- existing is not necessarily contiguous");
+  } catch (e) { check("a gap in the middle is filled, in order", false, "threw " + e.message); }
+
+  try {
+    const r = partitionsToCreate(["messages_2025_01", "messages_2026_08"], AUG, 1);
+    check("old partitions do not confuse the calculation",
+          names(r) === "messages_2026_09",
+          "got [" + names(r) + "] -- last year's partitions are still in the list and are irrelevant");
+  } catch (e) { check("old partitions do not confuse the calculation", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write partitionsToCreate(existing, now, monthsAhead) above, then press Run. (" + e.message + ")");
+}`);
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is a Postgres migration needing a running database",
       exercise: "Write the messaging migration (002_messaging.sql) and test it: (1) Create the conversations and messages tables, (2) Insert a test conversation (holder redeems token MERC-8GH2-KP4X), (3) Insert 3 messages alternating between owner and holder, (4) Write the query for the inbox view (all open conversations for user 1 with unread counts), (5) Mark all holder messages as read.",
       hints: [
         "The conversation needs a holder_session_id — generate any unique string for testing.",
@@ -287,11 +562,12 @@ VALUES (
   'Delivery Agent'
 );
 
--- 3. Three messages
-INSERT INTO messages (conversation_id, sender_type, content) VALUES
-(1, 'holder', 'Hi, I have a delivery for you'),
-(1, 'owner', 'Please leave it at the door'),
-(1, 'holder', 'Done! Left it by the entrance');
+-- 3. Three messages. Sealed on the sender's device -- what the plaintext
+--    said is not knowable from here, which is the entire point.
+INSERT INTO messages (conversation_id, sender_type, ciphertext, nonce, key_version) VALUES
+(1, 'holder', decode('8f3ad2e1', 'hex'), decode('1a2b3c4d5e6f7081', 'hex'), 1),
+(1, 'owner',  decode('41c9b07e', 'hex'), decode('2b3c4d5e6f708192', 'hex'), 1),
+(1, 'holder', decode('d0e2b7a4', 'hex'), decode('3c4d5e6f708192a3', 'hex'), 1);
 
 -- Update last_message_at
 UPDATE conversations SET last_message_at = NOW() WHERE id = 1;
@@ -317,6 +593,10 @@ SET read_at = NOW()
 WHERE conversation_id = 1
   AND sender_type = 'holder'
   AND read_at IS NULL;`
+    });
+
+    createExplain("explain-b2-0002", {
+      prompt: "A range-partitioned table refuses any row that falls outside every partition, and there is no default. Explain what that means for the nightly job that creates them — specifically, why a failure in September produces an outage in October rather than in September, and what you would monitor so the alarm goes off while there is still time to act."
     });
 
     createQuiz("lesson-quiz", [
@@ -369,7 +649,7 @@ WHERE conversation_id = 1
       {
         type: "predict-output",
         question: "What happens when you INSERT a message into a conversation that doesn't exist?",
-        code: "INSERT INTO messages (conversation_id, sender_type, content)\nVALUES (9999, 'holder', 'Hello!');",
+        code: "INSERT INTO messages (conversation_id, sender_type, ciphertext, nonce, key_version)\nVALUES (9999, 'holder', decode('8f3a', 'hex'), decode('1a2b3c4d', 'hex'), 1);",
         answer: "ERROR: insert or update on table \"messages\" violates foreign key constraint — conversation_id 9999 does not exist in conversations",
         explanation: "The REFERENCES conversations(id) foreign key prevents orphaned messages. Every message must belong to an existing conversation. This ensures data integrity — you can never have messages floating without context."
       },
@@ -408,12 +688,12 @@ WHERE conversation_id = 1
         type: "which-breaks",
         question: "Which INSERT into the messages table will the database reject?",
         variants: [
-          "INSERT INTO messages (conversation_id, sender_type, content) VALUES (1, 'owner', 'Hello');",
-          "INSERT INTO messages (conversation_id, sender_type, content, content_type) VALUES (1, 'admin', 'Alert', 'system');",
-          "INSERT INTO messages (conversation_id, sender_type, content, content_type) VALUES (1, 'holder', 'Photo', 'image');"
+          "INSERT INTO messages (conversation_id, sender_type, ciphertext, nonce, key_version) VALUES (1, 'owner', decode('8f3a','hex'), decode('1a2b','hex'), 1);",
+          "INSERT INTO messages (conversation_id, sender_type, ciphertext, nonce, key_version) VALUES (1, 'admin', decode('8f3a','hex'), decode('1a2b','hex'), 1);",
+          "INSERT INTO messages (conversation_id, sender_type, ciphertext, nonce, key_version) VALUES (1, 'holder', decode('41c9','hex'), decode('2b3c','hex'), 1);"
         ],
         correct: 1,
-        explanation: "The CHECK constraint on sender_type only allows 'owner' or 'holder'. There is no 'admin' sender type in Token's schema. System messages still use sender_type = 'owner' with content_type = 'system' — the system speaks on behalf of the owner."
+        explanation: "The CHECK constraint on sender_type only allows 'owner' or 'holder'. There is no 'admin' sender type, and there is nothing for one to do: the system never writes messages at all, because it has no key to encrypt them with. What used to be a system message is now a status change on the conversation, which each client renders in its own words."
       },
       {
         type: "predict-output",
@@ -486,12 +766,12 @@ WHERE conversation_id = 1
         explanation: "OLD.status != 'revoked' ensures the trigger only fires on the transition to revoked — not on every update to an already-revoked token. Without this check, updating any other field on a revoked token would re-close conversations and insert duplicate system messages."
       },
       {
-        question: "What does content_type = 'system' represent in the messages table?",
+        question: "The messages table has no content_type column, and no way to store a 'token revoked' notice. Why not, and what happens instead?",
         options: [
-          "Messages from the system administrator",
-          "Automated messages (like 'token revoked' notifications) that appear in the chat but weren't typed by either party",
-          "Error messages from the database",
-          "Messages that are encrypted"
+          "Storage cost — notices are redundant when the client already knows",
+          "The server has no key, so it could not encrypt such a row. The revocation is recorded as a status change on the conversation, and each client renders its own sentence from it",
+          "Postgres cannot store system-generated rows in a partitioned table",
+          "Notices are written to the audit log instead, and the chat reads from there"
         ],
         correct: 1,
         explanation: "System messages are automated notices inserted by triggers or application logic — like 'This token has been revoked. The conversation is closed.' They appear in the chat thread as informational messages. The sender_type is 'owner' because the system acts on behalf of the token owner."
@@ -511,10 +791,10 @@ WHERE conversation_id = 1
       },
       {
         type: "predict-output",
-        question: "What happens if you try to insert a message with content_type = 'video'?",
-        code: "INSERT INTO messages (conversation_id, sender_type, content, content_type)\nVALUES (1, 'holder', 'video_url_here', 'video');",
-        answer: "ERROR: new row violates check constraint — content_type must be one of 'text', 'image', 'file', 'system'",
-        explanation: "The CHECK constraint on content_type only allows four values: text, image, file, system. To add video support later, you'd write a migration: ALTER TABLE messages DROP CONSTRAINT messages_content_type_check; then ADD CONSTRAINT with the expanded list including 'video'."
+        question: "It is 1 October 2026. The job that pre-creates monthly partitions failed silently in September. What happens to the first message sent today?",
+        code: "INSERT INTO messages (conversation_id, sender_type, ciphertext, nonce, key_version)\nVALUES (1, 'holder', decode('8f3a','hex'), decode('1a2b3c4d','hex'), 1);",
+        answer: "ERROR: no partition of relation messages found for row",
+        explanation: "A range-partitioned table has no default destination unless you declare one, so a row whose created_at falls outside every partition is refused. Nobody can send a message. That is why the partition-creation job belongs in monitoring rather than in a cron nobody watches: it fails in September, and the outage starts at midnight on the 1st, total and instant. Two defences, and you want both — create partitions several months ahead rather than one, and alert on 'the newest partition ends in under 60 days', which fires while there is still time to act."
       },
       {
         type: "fill-blank",
