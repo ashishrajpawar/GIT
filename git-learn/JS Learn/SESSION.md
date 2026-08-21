@@ -13,7 +13,34 @@ how far it got.
 ## In progress
 
 **Nothing.** Working tree clean. **56/96 verified**, audit green, five suites
-pass. **B2 is complete** — three of three.
+pass. **B2 and B7 are complete.**
+
+### Seven broken quiz options, found by reading rather than by the audit
+
+`CLAUDE.md` says an option must never reference the others. The audit **errors**
+on "All of the above" and **cannot see** "Both B and C" — and `quiz.js` shuffles
+options at render, so an option naming letters is meaningless by the time a
+student reads it.
+
+**Six were the keyed CORRECT answer**, which makes them worse than distractors:
+`a3/0001`, `a8/0003`, `b5/0002`, `b3/0003`, and two in `x1/0003`. Every one is
+unanswerable as rendered. `a11/0003` was the weaker version — an option
+restating the two before it rather than naming them.
+
+**The lesson: this is the 01/0006 q27 defect, six more times, and the audit was
+never going to find it.** The check is deliberately narrow (widening it gave
+two false positives out of three hits) and `test-quiz-shuffle.mjs` asserts that
+narrowness stays visible. So the gap is known and permanent — **it closes by
+someone grepping for it**, which is now worth doing after any batch of quiz
+edits:
+
+```bash
+grep -rnE '"(Both|All) [A-D] (and|,)' modules/ --include=*.html
+```
+
+**I introduced a `render-as-authored` while fixing them** — one new explanation
+said "the last option has it backwards". The audit caught it on the next run
+and it is back to 0. That check earns its place.
 
 ### b2/0003 — the runner, not the schema (2026-08-21)
 

@@ -1773,6 +1773,42 @@ it was added for.
 Status: `b2/0003` `unverifiable → verified`. **B2 complete, three of three.**
 56/96.
 
+### Session of 2026-08-21 — seven quiz options the audit could never have found
+
+Found while opening `b3/0003` to start its M3 pass, and worth its own entry
+because of what it says about the checks rather than about the questions.
+
+`CLAUDE.md` forbids an option that references the other options. The audit
+**errors** on "All of the above" and **cannot see** "Both B and C" — and that
+gap is deliberate: widening the check gave two false positives out of three
+hits, so it was left narrow, and `test-quiz-shuffle.mjs` asserts the narrowness
+stays visible rather than being quietly forgotten.
+
+The gap had seven questions sitting in it. **Six were the keyed correct
+answer.** Since `quiz.js` shuffles options at render, a student meets three
+shuffled statements and a fourth reading "Both B and C are correct" — which
+refers to nothing. Those questions have been unanswerable for as long as the
+shuffle has existed.
+
+**The useful conclusion is not "fix the audit".** The narrowness is the right
+call and the false-positive experiment already proved it. What was missing is
+that a known, permanent gap needs a *habit* attached to it, not just a note.
+So `SESSION.md` now carries the grep, to be run after any batch of quiz edits.
+
+Restructuring them meant writing real distractors rather than filler, and
+several questions got better for it. `b3/0003`'s token-creation question now
+names the rule it is actually about — a request body is a suggestion, not a
+source of truth — and says explicitly that returning the code in a 201 is
+**not** the bug, since ADR-0007 returns it exactly once and that is the once.
+A distractor that plausibly contradicts a rule the student half-remembers is
+worth more than one that is obviously silly.
+
+**And a small demonstration of the checks working the other way:** one of my
+replacement explanations said "the last option has it backwards". That is a
+position reference in an explanation, which pins the question to authored
+order — and `render-as-authored` went 0 → 1 on the very next audit run. Fixed
+inside a minute, and back to 0.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees
