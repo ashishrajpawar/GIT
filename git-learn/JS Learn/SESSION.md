@@ -12,8 +12,55 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean. **54/96 verified**, audit green, five suites
+**Nothing.** Working tree clean. **55/96 verified**, audit green, five suites
 pass.
+
+### b2/0002 — two hard constraints were simply absent (2026-08-21)
+
+The messages table stored `content TEXT NOT NULL` in the clear (against
+ADR-0002) and had **no partitioning at all** (against ADR-0003's "partitioned
+by time from the first migration"). It also had a plain `SERIAL PRIMARY KEY`,
+which Postgres **rejects outright** on a partitioned table — so the schema
+could not have been created as written once partitioning was added.
+
+**The E2EE rewrite is shaped by one question asked of every column:** does the
+server need this to do its job? Its job is to route, order and record delivery.
+So `conversation_id`, `sender_type`, `created_at`, the receipt timestamps and
+the crypto envelope stay outside; everything else moved inside the ciphertext.
+
+That removed `content_type` and `metadata` as columns. Both describe the
+content — *"an image, 1920×1080, 2.3 MB"* is not routing information, and a
+server that can read it can tell a delivery company's message from a doctor's.
+
+**The finding I did not expect: E2EE takes system messages away.** The lesson
+had a trigger inserting "This token has been revoked" into `messages`. The
+server has no key — it could not encrypt that row if it wanted to. So a system
+message becomes an **event**: `conversations` gains `closed_reason`, and each
+client renders its own sentence. Better anyway — translated, and it cannot
+desynchronise from the state it describes, because it *is* the state.
+
+**The general rule, which will come up again: under E2EE, anything the SERVER
+wants to say must be said in structured state, never in prose.**
+
+M3: `partitionsToCreate`. Chosen because a range-partitioned table has no
+default partition, so **every mistake here is a time bomb rather than a bug** —
+it works for months, then at midnight on the first of some month nobody can
+send a message at all.
+
+### The orphan-table gates, re-read (2026-08-21)
+
+All three were parked behind "the B2 schema rewrite". Having done part of it:
+
+- **`participants`** — still blocked. Its real gate is C5 (E2EE key
+  distribution), which has not happened.
+- **`calls`** — still blocked. Its real gate is B6 (signalling).
+- **`deletion_queue`** — **gate narrowed, not lifted.** `b2/0002` settled the
+  *bulk* half: messages are partitioned by month, so time-based retention is
+  `DROP TABLE` on an old partition and needs no queue. What remains is
+  **per-user erasure on request**, which partitioning cannot serve — you cannot
+  drop a partition for one person. Its gate is now "a per-user erasure policy,
+  informed by `b10/0002`" rather than the vaguer B2 one, and `known-issues.json`
+  records the distinction so nobody re-derives it.
 
 ### Both schema decisions are settled (2026-08-20) and implemented
 
@@ -285,17 +332,14 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 **Continue M3 with the scattered singles.** One lesson at a time, one commit
 each. **Nothing is blocked.**
 
-**Done:** A3, A4, A5, A6, A8, B5, all of B7, plus `b3/0002` and `b2/0001`.
-**Remaining:** A11, B10, `b2/0002`, `b2/0003`, `b3/0001`, `b3/0003`,
-`b3/0004`.
+**Done:** A3, A4, A5, A6, A8, B5, all of B7, `b3/0002`, `b2/0001`, `b2/0002`.
+**Remaining:** A11, B10, `b2/0003`, `b3/0001`, `b3/0003`, `b3/0004`.
 
-**Take `b2/0002` (messaging schema) next.** Neighbour of a lesson just
-rewritten, and where ADR-0002 lands in the schema: a `messages` table holding
-**ciphertext**, partitioned by time from the first migration. Both are things
-`a6/0002` had to write around, and neither has been read against the schema.
-Expect the same class of finding. It is also where two of the three
-known-and-blocked orphan tables (`participants`, `deletion_queue`) live, so
-check whether the gate has actually moved.
+**Take `b2/0003` (migrations) next** and finish B2. It is the lesson that has
+to absorb everything the other two just changed — the columns that moved, the
+partition parent, and the fact that partitions are created by a job rather than
+a migration. A migrations lesson whose example migrations do not match the
+schema two files over is the exact drift this session keeps finding.
 
 | Work | Gate |
 |---|---|
@@ -363,7 +407,7 @@ Per-item status only. The plan itself is in `TOKEN-TRACK.md`; the counts are in
 | 4 — the operating track | not started, deliberately |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
-| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus `b3/0002`, all of B7, and `b2/0001`; ~5 left |
+| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus `b3/0002`, all of B7, `b2/0001` and `b2/0002`; ~4 left |
 
 ### M3 — where it has reached
 
@@ -400,6 +444,7 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `b7/0002` | `evaluateRuleSet` | an unknown rule type is *refused*, not ignored; `typeof [] === "object"`; ALL rules must pass |
 | `b7/0003` | `planTransition` | `unchanged` ≠ `refused`; revoked is terminal; revoke is never refused |
 | `b2/0001` | `codeHashInput` | normalisation is part of the *stored format*; do not "helpfully" map excluded letters |
+| `b2/0002` | `partitionsToCreate` | no default partition means every bug is a time bomb; pad the month; December rolls the year |
 
 **A5 note:** not one of the five had a `createExplain` prompt or loaded
 `explain.js`. All five now do. A5 predates the practice pattern being made

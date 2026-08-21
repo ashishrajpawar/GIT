@@ -122,8 +122,8 @@ so they do not hold the audit red. They are **not** resolved.
   - **why:** Group/thread membership has no schema yet. Writing one now would bake in a shape that E2EE key distribution is about to change.
   - **gate:** B2 schema rewrite, itself behind C5 (E2EE) _(since 2026-08-18)_
 - schema: table "deletion_queue" is queried in 1 lesson(s) but never created
-  - **why:** DPDP erasure needs a retention policy decided first; the queue's columns follow from that, not the other way round.
-  - **gate:** B2 schema rewrite _(since 2026-08-18)_
+  - **why:** DPDP erasure needs a retention policy decided first; the queue's columns follow from that, not the other way round. NARROWED 2026-08-21: b2/0002 settled the BULK half — messages are partitioned by month, so time-based retention is DROP TABLE on an old partition and needs no queue at all. What is still open is PER-USER erasure on request, which partitioning cannot serve because you cannot drop a partition for one person. That is the case the queue exists for, and it is the one still waiting on a policy: what must be erased, what may be kept as ciphertext nobody can read, and how long the queue is allowed to take.
+  - **gate:** a per-user erasure policy, informed by b10/0002 (DPDP) _(since 2026-08-18)_
 - schema: table "calls" is queried in 2 lesson(s) but never created
   - **why:** Call records depend on what WebRTC signalling actually needs to persist, which B6 has not settled.
   - **gate:** B2 schema rewrite, informed by B6 (signalling) _(since 2026-08-18)_

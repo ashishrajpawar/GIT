@@ -1645,6 +1645,82 @@ a minute to fix.
 Status: no verification state changed — this was a correctness pass across
 `b2/0001`, `b7/0002`, `b7/0003` and `CLAUDE.md`. 54/96. **Nothing is blocked.**
 
+### Session of 2026-08-21 — b2/0002, and what E2EE quietly takes away
+
+Two hard constraints were absent from the messaging schema rather than merely
+wrong in it: the body was `content TEXT NOT NULL` in the clear, and there was
+no partitioning at all. Both are named in `CLAUDE.md` as things that cannot be
+retrofitted.
+
+A detail that makes the point sharper than the ADRs do: the table also had a
+plain `SERIAL PRIMARY KEY`, and **Postgres rejects that outright on a
+partitioned table** — the partition key must be part of every unique
+constraint. So the two defects were not independent. The schema as written
+could not have had partitioning added to it without also changing its primary
+key, which is exactly the "retrofitting is a rewrite" claim, demonstrated
+rather than asserted.
+
+**The E2EE rewrite came out of one question**, asked of every column: does the
+server need this to do its job? Its job is narrow — route, order, record
+delivery. Everything that survived that test stayed outside the envelope, and
+everything else went in.
+
+`content_type` and `metadata` failed it, and they are the interesting pair.
+Both look like structural metadata rather than content, which is why they were
+columns in the first place. But "this message is an image, 1920×1080, 2.3 MB"
+is a description of what somebody sent, and a server that can read it can tell
+a delivery company's traffic from a doctor's. **The test is not "is this
+content", it is "does the server need it".**
+
+**The finding worth carrying: E2EE takes system messages away, and nothing in
+the ADRs says so.** The lesson had a database trigger inserting "This token has
+been revoked" into `messages`. Read against ADR-0002 that is impossible — the
+server holds no key and could not encrypt the row. It had been sitting there
+because a trigger writing a row looks like schema design, not like a policy
+violation.
+
+The replacement is better than the original, which is usually the sign the
+constraint was doing real work: `conversations` gains a `closed_reason`, and
+each client renders its own sentence from it. That version is translated,
+because the client knows the user's language and the server does not; and it
+cannot desynchronise from the truth, because a stored system message is a claim
+about state that was true when written, while a rendered one reads the state
+itself.
+
+**General rule, now recorded: under end-to-end encryption, anything the
+*server* wants to say has to be said in structured state rather than in prose.**
+Every "just insert a system message" instinct needs converting into "record the
+event, let the client write the sentence". That will come up again in B8
+(push) and anywhere a notification has text in it.
+
+**`partitionsToCreate` was chosen for the shape of its failure**, not its
+difficulty. A range-partitioned table has no default partition unless you
+declare one, so a row outside every range is refused — which means every
+mistake in that function is a time bomb rather than a bug. It runs correctly
+for months and then, at midnight on the first of some month, nobody can send a
+message at all. The wrong-cases are all of that kind: an off-by-one runway,
+skipping the current month, unpadded months (`messages_2026_9` is a different
+string, so the job re-creates September nightly and fails), naive December
+arithmetic, and a `to` bound on the last day of the month rather than the first
+of the next — Postgres ranges are `[from, to)`, so that one loses one day in
+thirty.
+
+**The orphan-table gates were re-read rather than assumed**, since all three
+were parked behind "the B2 schema rewrite" and part of that has now happened.
+`participants` and `calls` are still genuinely blocked (C5 and B6). But
+`deletion_queue`'s gate was too coarse: partitioning settles the **bulk**
+half of retention, because dropping an old partition needs no queue at all.
+What is still open is **per-user erasure**, which partitioning cannot serve —
+you cannot drop a partition for one person. Its entry now says that, and its
+gate names the real dependency.
+
+That is the discipline `known-issues.json` exists for working as intended:
+**a gate that is never re-read becomes a permanent excuse.** This one narrowed
+without lifting, which is the honest outcome and the one that is easiest to
+skip.
+
+Status: `b2/0002` `unverifiable → verified`. 55/96.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees
