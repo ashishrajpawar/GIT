@@ -14,11 +14,11 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
 | Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1948 words |
+| Avg teaching prose per track lesson | 1957 words |
 | Lessons with a playground | 79 / 96 |
 | Lessons with an exercise | 96 / 96 |
 | **Deepened** (all 3 spine sections) | 16 / 96 |
-| **Verified** (code executed) | 59 / 96 |
+| **Verified** (code executed) | 60 / 96 |
 | Ran clean but had nothing to run | 0 / 96 |
 | Errors | 0 |
 | Known and blocked | 3 |
@@ -86,7 +86,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a8-redemption-web | 4 | 1722 | 8 | 8 | 115 | 0/4 | 4/4 |
 | a9-deep-linking | 2 | 1167 | 2 | 2 | 53 | 0/2 | 0/2 |
 | b1-sql-fundamentals | 4 | 1038 | 0 | 4 | 103 | 0/4 | 0/4 |
-| b10-security-compliance | 2 | 2673 | 2 | 2 | 50 | 1/2 | 0/2 |
+| b10-security-compliance | 2 | 3099 | 3 | 3 | 50 | 1/2 | 1/2 |
 | b2-schema-design | 3 | 2185 | 3 | 6 | 81 | 0/3 | 3/3 |
 | b3-node-http-server | 4 | 1998 | 5 | 8 | 117 | 2/4 | 4/4 |
 | b4-auth-server | 3 | 1969 | 0 | 3 | 81 | 2/3 | 0/3 |
@@ -203,7 +203,7 @@ so they do not hold the audit red. They are **not** resolved.
 | b1-sql-fundamentals/0002-joins-relationships.html | 828 | 10 | 0 | 1 | 25 | — | n/a |
 | b1-sql-fundamentals/0003-indexes-transactions-constraints.html | 972 | 11 | 0 | 1 | 26 | — | n/a |
 | b1-sql-fundamentals/0004-postgres-specifics.html | 910 | 8 | 0 | 1 | 26 | — | n/a |
-| b10-security-compliance/0001-security-hardening.html | 2987 | 20 | 1 | 1 | 25 | yes | n/a |
+| b10-security-compliance/0001-security-hardening.html | 3838 | 20 | 2 | 2 | 25 | yes | yes |
 | b10-security-compliance/0002-dpdp-act.html | 2359 | 11 | 1 | 1 | 25 | — | n/a |
 | b2-schema-design/0001-token-schema.html | 2721 | 10 | 1 | 2 | 26 | — | yes |
 | b2-schema-design/0002-messaging-schema.html | 2245 | 8 | 1 | 2 | 26 | — | yes |

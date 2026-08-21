@@ -286,19 +286,42 @@ router.get('/tokens/:id', async (req, res) => {
   res.json(token.rows[0]); // Any logged-in user can read ANY token
 });
 
-// ✓ SAFE — ownership enforced
+// ✓ SAFE — ownership enforced, and only the columns the client needs
 router.get('/tokens/:id', authenticateJWT, async (req, res) => {
   const token = await db.query(
-    'SELECT * FROM tokens WHERE id = $1 AND user_id = $2',
+    `SELECT id, label, status, max_uses, expires_at, created_at
+       FROM tokens WHERE id = $1 AND user_id = $2`,
     [req.params.id, req.user.id]  // Only returns if user owns it
   );
 
   if (!token.rows[0]) {
+    // 404, not 403. See below: "not yours" and "does not exist" must be
+    // one answer, or this endpoint enumerates other people's token ids.
     return res.status(404).json({ error: 'not found' });
   }
 
   res.json(token.rows[0]);
 });</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">Two things that example does deliberately</div>
+      <p><strong>It names its columns.</strong> The version above it says
+      <code>SELECT *</code> and then <code>res.json(row)</code>, which was
+      harmless until <code>b2/0001</code> added <code>code_hash</code> and
+      <code>code_enc</code> to that table. From that moment the endpoint
+      returned both, to every caller, and nothing failed. <code>SELECT *</code>
+      in a handler is <strong>a standing promise to return whatever a future
+      migration adds</strong>, made by someone who will not be there when it is
+      added.</p>
+      <p><strong>It answers 404 and not 403.</strong> A 403 says "this exists
+      and it is not yours", which turns the endpoint into an id enumerator:
+      walk the integers, and 403s map out other people's tokens while 404s map
+      the gaps. Because the query is scoped by <code>user_id</code>, the handler
+      genuinely cannot tell the two apart — <strong>the safe answer falls out of
+      the query shape rather than having to be remembered.</strong> That is the
+      version to aim for: not a rule you apply, a structure in which the rule
+      cannot be broken.</p>
+    </div>
 
     <h3>The Pattern: Always Include user_id in Queries</h3>
     <pre><code>// Every query that reads or modifies user data should include the ownership clause:
@@ -353,6 +376,108 @@ npm audit --audit-level=high
 
 # Keep dependencies updated (check monthly)
 npm outdated</code></pre>
+
+    <h2>The two decisions this product's security actually rests on</h2>
+
+    <p>
+      Everything above is general — parameterised queries, CORS, headers,
+      ownership checks. They apply to any API and you should do all of them.
+      <strong>Neither of the two decisions that make Token's security specific
+      is on that list</strong>, and both are the kind that cannot be added
+      later.
+    </p>
+
+    <h3>1. The token code is never stored, and never explained</h3>
+
+    <p>
+      A token code is a <em>capability</em>: whoever reads it can use it. That
+      makes it unlike a password, which identifies someone who then has to
+      prove other things too. There is no second factor behind a code — the
+      code <em>is</em> the access.
+    </p>
+
+    <p>Two consequences run through the whole codebase (ADR-0007):</p>
+
+    <ul>
+      <li><strong>It is not in the database.</strong> <code>tokens</code> holds
+      <code>code_hash</code> — SHA-256 of the normalised code plus a
+      server-side pepper, which is the only way a token is ever looked up — and
+      <code>code_enc</code>, decrypted for one token at a time when the owner
+      asks to see it, and logged when that happens. A dump of this database is
+      not a pile of working tokens.</li>
+      <li><strong>It is never in a URL, a log line, a JWT or a push
+      payload.</strong> Each of those is a place a capability gets copied to
+      somewhere you did not choose — a proxy access log, browser history, a
+      <code>Referer</code> header, an error tracker's breadcrumbs, Google's
+      servers.</li>
+    </ul>
+
+    <p>
+      The pepper is the part people leave out. A hash of a low-entropy input
+      is not one-way in any useful sense — a phone number is ten digits and a
+      few minutes of work. A token code is <em>not</em> low-entropy
+      (31<sup>12</sup> is about 7.9 &times; 10<sup>17</sup>), so the pepper is
+      not protecting against brute force. It protects against a stolen database
+      being useful <em>on its own</em>: without the environment variable, the
+      hashes match nothing.
+    </p>
+
+    <h3>2. A refusal never explains itself to a stranger</h3>
+
+    <p>
+      This one has had to be applied at three separate layers, and it is worth
+      seeing all three together because each looked like a different problem at
+      the time:
+    </p>
+
+    <table>
+      <thead>
+        <tr><th>Layer</th><th>The tempting version</th><th>What it gives away</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>b7/0001</code> — the redemption endpoint</td>
+          <td>404 "not found" vs 403 "revoked"</td>
+          <td>whether a code <strong>exists</strong></td>
+        </tr>
+        <tr>
+          <td><code>a8/0002</code> — the redemption page</td>
+          <td>separate screens for expired, revoked, exhausted</td>
+          <td>the same thing, in plain English</td>
+        </tr>
+        <tr>
+          <td><code>b3/0004</code> — the error handler</td>
+          <td>400 with field details vs 404 without</td>
+          <td>whether the code was <strong>well-formed</strong></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>
+      <code>b7/0001</code> derives that guessing a code would take about 25,000
+      years. <strong>That figure holds only while each guess teaches the
+      attacker nothing.</strong> Every distinguishable response is roughly a bit
+      per attempt handed to whoever is asking, and you do not get to choose
+      which measurement they use — they will use the cheapest one.
+    </p>
+
+    <p>
+      So: one status, one message, for every refusal on a public endpoint. The
+      real reason goes in the log, where it is useful to you and invisible to
+      them. And the rule that makes this tractable rather than paranoid —
+      <strong>you may explain yourself to someone who has proved who they
+      are.</strong> An authenticated owner gets field-level validation errors
+      and a precise 403; a stranger with a code gets one sentence.
+    </p>
+
+    <div class="callout warning">
+      <div class="callout-title">It costs real usability, and that is not a reason to skip it</div>
+      <p>A holder whose token genuinely expired is told only that the link is
+      unavailable. That is annoying and it is the correct trade, because the
+      page cannot tell them apart from someone typing codes in a loop. The
+      person who <em>can</em> be told is the issuer, on a screen that required a
+      login.</p>
+    </div>
 
     <h2>The secret this system leaks most easily: its own logs</h2>
 
@@ -595,10 +720,28 @@ npm ci --ignore-scripts
     <h2>Playground: Spot the Vulnerability</h2>
     <div id="playground-1"></div>
 
+    <h2>Now build it yourself</h2>
+
+    <p>
+      Write <code>pickForLog(source, allowed)</code> — the allow-list the
+      logging middleware above should have been built on. It is the difference
+      between a log line that helps you debug and one that publishes the thing
+      every other decision in this lesson exists to protect.
+    </p>
+
+    <div id="exercise-log"></div>
+    <div id="pg-exercise-log"></div>
+
+    <h3>And the hardening it belongs to</h3>
+
     <h2>Exercise: Harden the Token API</h2>
     <div id="exercise-1"></div>
 
     <h2>Quiz</h2>
+    <div id="explain-b10-0001"></div>
+
+    <hr>
+
     <div id="lesson-quiz"></div>
 
     <div class="lesson-nav">
@@ -609,6 +752,7 @@ npm ci --ignore-scripts
     <script src="../../assets/quiz.js"></script>
     <script src="../../assets/playground.js"></script>
     <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
     <script src="../../assets/progress.js"></script>
     <script src="../../assets/copy-code.js"></script>
     <script>
@@ -658,7 +802,153 @@ console.log("3. Never expose internals: { error: 'internal error' }");
 console.log("4. Restrict CORS: cors({ origin: ['https://tokn.app'] })");
 console.log("5. Use textContent or React JSX (auto-escapes)");`);
 
+        createSolution("exercise-log", {
+      exercise: "Write pickForLog(source, allowed) — build a log-safe object from a request.\n\nsource is an arbitrary object, like { method, path, body: { code, label }, user: { id, email } }.\nallowed is an array of DOTTED PATHS you have decided are safe to log, e.g. ['method', 'path', 'user.id'].\n\nReturn a flat object keyed by the dotted path, containing only the allowed values.\n\n  pickForLog({ method: 'POST', body: { code: 'MERC8GH2KP4X' } }, ['method'])\n    -> { method: 'POST' }\n\nThe rules:\n\n1. ALLOW-LIST, not deny-list. Anything not named is absent. That is the whole design: a deny-list has to be updated every time someone adds a field, and the day it is not, the new field is logged.\n\n2. A path that is not present in source is OMITTED — the key does not appear at all, rather than appearing with undefined. A log line that says code: undefined has still told a reader that a code field exists.\n\n3. A missing intermediate must not throw. 'user.id' on an object with no user is just an absent path.\n\n4. If the value at an allowed path is an OBJECT or an ARRAY, omit it. You may log a value, not a subtree — allowing 'user' would quietly admit user.email, user.passwordHash and anything added to that object next year.\n\n5. null is a value, and so are false and 0. Include them.\n\n6. Never mutate source.\n\nThe shape of the whole thing: you are deciding what leaves the building. Everything not on the list stays inside.",
+      hints: [
+        "Write the path reader first and make it return a distinct marker for 'not there', rather than undefined. Otherwise a value that IS undefined and a path that does not exist become the same case, and rule 2 cannot be satisfied.",
+        "typeof null is 'object', so the subtree check needs the null test alongside it — and null is a value you want to keep.",
+        "Build a new object and only ever write to it. If you find yourself deleting keys from a copy of source, you have written a deny-list wearing an allow-list's name."
+      ],
+      solution: `function pickForLog(source, allowed) {
+  const out = {};
+
+  for (const path of allowed || []) {
+    const value = readPath(source, path);
+
+    // Absent stays absent -- not present-with-undefined, which still
+    // tells a reader the field exists.
+    if (value === MISSING) continue;
+
+    // A value, not a subtree. Allowing 'user' would admit whatever gets
+    // added to that object next year.
+    if (typeof value === "object" && value !== null) continue;
+
+    out[path] = value;
+  }
+
+  return out;
+}
+
+// A unique marker, so that a stored value of undefined is still
+// distinguishable from a path that is not there.
+const MISSING = Symbol("missing");
+
+function readPath(obj, path) {
+  let current = obj;
+  for (const key of String(path).split(".")) {
+    if (current === null || typeof current !== "object") return MISSING;
+    if (!Object.prototype.hasOwnProperty.call(current, key)) return MISSING;
+    current = current[key];
+  }
+  return current === undefined ? MISSING : current;
+}`
+    });
+
+    createPlayground("pg-exercise-log", `// Write pickForLog(source, allowed) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(v) { return JSON.stringify(v); }
+
+// A realistic request: the code is nested, which is exactly where a shallow
+// copy leaves it.
+function req() {
+  return {
+    method: "POST",
+    path: "/api/redeem",
+    body: { code: "MERC8GH2KP4X", holderName: "Ravi" },
+    user: { id: 42, email: "someone@example.com" },
+    retries: 0,
+    trace: null,
+  };
+}
+
+try {
+  if (typeof pickForLog !== "function") throw new Error("not written yet");
+
+  try {
+    const r = pickForLog(req(), ["method", "path"]);
+    check("allowed paths are kept",
+          show(r) === show({ method: "POST", path: "/api/redeem" }), "got " + show(r));
+  } catch (e) { check("allowed paths are kept", false, "threw " + e.message); }
+
+  try {
+    // THE point. The code is nested one level down and was never allowed.
+    const r = pickForLog(req(), ["method", "path"]);
+    check("nothing outside the allow-list survives, at any depth",
+          show(r).indexOf("MERC8GH2KP4X") === -1 && show(r).indexOf("example.com") === -1,
+          "got " + show(r) + " -- a shallow copy leaves body.code exactly where it was");
+  } catch (e) { check("nothing outside the allow-list survives, at any depth", false, "threw " + e.message); }
+
+  try {
+    const r = pickForLog(req(), ["user.id"]);
+    check("a dotted path reaches a nested value",
+          show(r) === show({ "user.id": 42 }), "got " + show(r));
+  } catch (e) { check("a dotted path reaches a nested value", false, "threw " + e.message); }
+
+  try {
+    // Allowing a whole object is the quiet version of the same mistake:
+    // it admits user.email today and whatever is added to user tomorrow.
+    const r = pickForLog(req(), ["user"]);
+    check("an allowed path pointing at an OBJECT is omitted",
+          show(r) === show({}),
+          "got " + show(r) + " -- you may log a value, not a subtree");
+  } catch (e) { check("an allowed path pointing at an OBJECT is omitted", false, "threw " + e.message); }
+
+  try {
+    const r = pickForLog(req(), ["method", "nope", "body.missing"]);
+    check("an absent path is omitted, not set to undefined",
+          Object.prototype.hasOwnProperty.call(r, "nope") === false &&
+          Object.prototype.hasOwnProperty.call(r, "body.missing") === false,
+          "got " + show(Object.keys(r)) + " -- 'code: undefined' still tells a reader a code field exists");
+  } catch (e) { check("an absent path is omitted, not set to undefined", false, "threw " + e.message); }
+
+  try {
+    const r = pickForLog({ method: "GET" }, ["user.id.deep"]);
+    check("a missing intermediate does not throw",
+          show(r) === show({}), "got " + show(r));
+  } catch (e) { check("a missing intermediate does not throw", false, "threw " + e.message); }
+
+  try {
+    // Falsy values are values. Dropping them makes the log lie about what
+    // happened, and 0 retries is a fact worth having.
+    const r = pickForLog(req(), ["retries", "trace"]);
+    check("null and 0 are values and are kept",
+          Object.prototype.hasOwnProperty.call(r, "retries") && r.retries === 0 &&
+          Object.prototype.hasOwnProperty.call(r, "trace") && r.trace === null,
+          "got " + show(r) + " -- a truthiness filter drops the facts you most want at 3am");
+  } catch (e) { check("null and 0 are values and are kept", false, "threw " + e.message); }
+
+  try {
+    const original = req();
+    pickForLog(original, ["method", "user.id"]);
+    check("source is not mutated",
+          original.body.code === "MERC8GH2KP4X" && original.user.email === "someone@example.com",
+          "the request object was modified -- it is about to be handled by the rest of the app");
+  } catch (e) { check("source is not mutated", false, "threw " + e.message); }
+
+  try {
+    const r = pickForLog(req(), []);
+    check("an empty allow-list logs nothing", show(r) === show({}), "got " + show(r));
+  } catch (e) { check("an empty allow-list logs nothing", false, "threw " + e.message); }
+
+  try {
+    // Case matters: an allow-list is exact. 'Method' is not 'method'.
+    const r = pickForLog(req(), ["Method"]);
+    check("the allow-list is exact, not case-insensitive",
+          show(r) === show({}),
+          "got " + show(r) + " -- loosening the match is how a near-miss key gets admitted");
+  } catch (e) { check("the allow-list is exact, not case-insensitive", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write pickForLog(source, allowed) above, then press Run. (" + e.message + ")");
+}`);
+
         createSolution("exercise-1", {
+      unverifiable: "the deliverable is Express middleware, headers and a deployment checklist needing a running server",
             exercise: "Perform a security hardening pass on the Token API:\n\n1. Write a CORS middleware that allows only your known origins (production web, local dev) and mobile apps (no origin).\n2. Configure helmet with appropriate CSP directives for the Token API (API only serves JSON, no HTML pages).\n3. Write a middleware that sanitises all string fields in request bodies (trim whitespace, limit length).\n4. Write an ownership-checking helper function that you can reuse across all route handlers.\n5. Add a pre-commit hook script that checks for potential secrets in staged files.",
             hints: [
                 "For the API's CSP, you can use a restrictive policy since it only serves JSON — no scripts, no styles, no images needed.",
@@ -783,6 +1073,10 @@ export async function findOwned<T>(
 //   fi
 // done`
         });
+
+    createExplain("explain-b10-0001", {
+      prompt: "This function is an allow-list. The obvious alternative is a deny-list — strip <code>code</code>, <code>password</code> and <code>token</code> from whatever arrives. Explain what happens to each design on the day a developer adds a new field to a request body, and why that difference matters more than how much code either one takes to write."
+    });
 
         createQuiz("lesson-quiz", [
             {
