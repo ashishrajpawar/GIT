@@ -727,15 +727,15 @@ export default router;`
       {
         type: "spot-the-bug",
         question: "This token creation endpoint has a security issue. Where?",
-        code: "app.post('/api/tokens', async (req, res) => {\n  const { code, label, owner_id } = req.body;\n  await db.query(\n    'INSERT INTO tokens (code, label, owner_id) VALUES ($1, $2, $3)',\n    [code, label, owner_id]\n  );\n  res.status(201).json({ success: true, data: { code, label } });\n});",
+        code: "app.post('/api/tokens', async (req, res) => {\n  const { code, label, owner_id } = req.body;\n  await db.query(\n    'INSERT INTO tokens (code_hash, code_enc, label, owner_id) VALUES ($1, $2, $3, $4)',\n    [hashCode(code), encryptCode(code), label, owner_id]\n  );\n  res.status(201).json({ success: true, data: { code, label } });\n});",
         options: [
-          "Should return 200 not 201",
-          "The client supplies owner_id in the body — they could set it to any user's ID",
-          "The code should be auto-generated, not client-supplied",
-          "Both B and C are bugs"
+          "Returning 201 is wrong for a creation that has a response body",
+          "Everything the server should decide is being taken from the request body — owner_id lets a client create tokens owned by anyone, and a client-chosen code can be predictable or collide",
+          "hashCode and encryptCode should be applied in the database, not in application code",
+          "Returning the code in the response is the leak; it should never be sent to the client"
         ],
-        correct: 3,
-        explanation: "Both are bugs but the security issue is trusting owner_id from the body. A malicious client could send someone else's ID and create tokens owned by them. owner_id must come from the authenticated session (req.user.id). Additionally, letting clients choose the token code invites collisions and predictable codes — the server should generate it."
+        correct: 1,
+        explanation: "The rule this breaks is that a request body is a suggestion, not a source of truth. owner_id must come from the authenticated session — req.user.id — because a client that supplies it can create tokens owned by anyone. And the code must be generated server-side with a CSPRNG; a client-chosen code can be guessable, can collide, and can be chosen to match a token that already exists. Note what is NOT wrong: 201 is correct for a creation, and returning the code in that response is the one time it is ever sent — ADR-0007 returns it exactly once, here, and never again."
       },
       {
         type: "fill-blank",

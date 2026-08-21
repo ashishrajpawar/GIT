@@ -54,9 +54,9 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Position | Count | Share |
 |---|---|---|
 | index 0 | 138 | 10.1% |
-| index 1 | 838 | 61.3% |
-| index 2 | 352 | 25.7% |
-| index 3 | 40 | 2.9% |
+| index 1 | 845 | 61.8% |
+| index 2 | 351 | 25.7% |
+| index 3 | 34 | 2.5% |
 
 ## Question types
 
