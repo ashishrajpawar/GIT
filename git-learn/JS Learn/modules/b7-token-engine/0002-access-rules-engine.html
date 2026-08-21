@@ -102,7 +102,7 @@ export async function evaluateRules(
     // checking whether the token is still alive is how a revoked token keeps
     // working on a conversation that already exists.
     const { rows } = await pool.query(
-      `SELECT rules, revoked_at, paused_at, expires_at, max_uses, uses
+      `SELECT rules, status, expires_at, max_uses
          FROM tokens WHERE id = $1`,
       [tokenId]
     );
@@ -115,11 +115,16 @@ export async function evaluateRules(
 
     // 1. Is this token usable at all? Checked first, and independently of
     //    any rule the owner did or did not set.
-    if (token.revoked_at !== null) return { allowed: false, reason: 'revoked' };
-    if (token.paused_at !== null) return { allowed: false, reason: 'paused' };
+    //    status answers "whether"; paused_at and revoked_at answer "when",
+    //    and this function does not need to know when.
+    if (token.status === 'revoked') return { allowed: false, reason: 'revoked' };
+    if (token.status === 'paused') return { allowed: false, reason: 'paused' };
     if (token.expires_at !== null &amp;&amp; new Date(token.expires_at) &lt;= new Date()) {
       return { allowed: false, reason: 'expired' };
     }
+    // NOTE: max_uses is NOT checked here. Exhaustion is counted from
+    // conversations, and only a contact_limit rule needs a count at all --
+    // so the query above deliberately does not pay for one.
 
     const rules = token.rules;
 
@@ -164,27 +169,29 @@ export async function evaluateRules(
   }
 }</code></pre>
 
-  <div class="callout warning">
-    <div class="callout-title">This query and <code>0001</code>'s disagree about the schema</div>
-    <p>The <code>SELECT</code> above reads <code>revoked_at</code>,
-    <code>paused_at</code> and <code>uses</code>. <code>0001</code>'s
-    redemption check reads a <code>status</code> column and counts rows in
-    <code>conversations</code>. Both cannot be the schema.</p>
-    <p><code>CLAUDE.md</code> and <code>b1/0001</code> settle the first half:
-    there is a <code>status</code> column holding
-    <code>active | paused | revoked</code>. There is a <code>revoked_at</code>
-    timestamp beside it — useful for <em>when</em>, not for <em>whether</em> —
-    and no <code>paused_at</code> at all. So this query is reaching for columns
-    that do not exist, and the version in <code>0001</code> is the one to
-    copy.</p>
-    <p>The second half is genuinely undecided. A <code>uses</code> counter on
-    the row is one number to read and one more thing that can drift out of step
-    with reality; counting <code>conversations</code> is always right and costs
-    a query. <strong>That is a B2 decision, not one to settle here</strong>, and
-    it is noted in <code>SESSION.md</code> rather than quietly picked.</p>
-    <p>Read the logic below for what it teaches — the ordering, the
-    deny-by-default, the rule evaluation — and take the column names from
-    <code>0001</code>.</p>
+  <div class="callout">
+    <div class="callout-title">Why this reads <code>status</code> and not the timestamps</div>
+    <p>Until 2026-08-20 this query read <code>revoked_at</code>,
+    <code>paused_at</code> and a <code>uses</code> column, while
+    <code>0001</code> read <code>status</code> and counted
+    <code>conversations</code>. Five lessons disagreed, and the disagreement was
+    real rather than a typo — both designs had a case.</p>
+    <p><strong>Both halves were settled on 2026-08-20</strong> and
+    <code>b2/0001</code> now records the answer:</p>
+    <ul>
+      <li><strong>Status and timestamps, both.</strong> <code>status</code> is
+      what you read; <code>paused_at</code> and <code>revoked_at</code> are what
+      you write, and two <code>CHECK</code> biconditionals stop them
+      disagreeing. The timestamps still exist — they answer <em>when</em>, which
+      an audit needs and this function does not.</li>
+      <li><strong>There is no <code>uses</code> column.</strong> The count comes
+      from <code>conversations</code>, so a stored counter cannot drift out of
+      step with the conversations it is supposed to describe.</li>
+    </ul>
+    <p>Notice what the query does <em>not</em> select as a result: any kind of
+    use count. Exhaustion is counted from <code>conversations</code>, and only a
+    <code>contact_limit</code> rule needs a count at all — so this function
+    fetches one when a rule asks for it, and most calls never pay for it.</p>
   </div>
 
   <h2>Channel Restriction Evaluation</h2>

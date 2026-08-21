@@ -537,11 +537,48 @@ summarised here rather than left in the ADR:
   parsing.
 - **Stored status is not displayed status.** The `status` column holds
   `active | paused | revoked`, but a token also dies when `expires_at` passes
-  or `use_count` reaches `max_uses`, and nothing writes to the row when a clock
-  ticks over. The badge derives five states from three, in a fixed precedence:
-  **revoked → expired → exhausted → paused → active**. Paused comes last of the
-  four deliberately — a paused-and-expired token reading "paused" offers a
-  Resume button that would achieve nothing. See `a5/0003`.
+  or its use count reaches `max_uses`, and nothing writes to the row when a
+  clock ticks over. The badge derives five states from three, in a fixed
+  precedence: **revoked → expired → exhausted → paused → active**. Paused comes
+  last of the four deliberately — a paused-and-expired token reading "paused"
+  offers a Resume button that would achieve nothing. See `a5/0003`.
+
+- **State is stored twice on purpose, and the database enforces the
+  agreement** (decided 2026-08-20, after five lessons disagreed). `status` is
+  what you **read** — one field, what the badge renders and what `canRedeem`
+  branches on. `paused_at` and `revoked_at` are what you **write**, so a
+  transition is a `WHERE` clause Postgres enforces rather than a check two
+  simultaneous requests can both pass:
+
+  ```sql
+  UPDATE tokens SET status = 'revoked', revoked_at = NOW(), paused_at = NULL
+   WHERE id = $1 AND revoked_at IS NULL;
+  ```
+
+  The duplication is made safe rather than tolerated, by two **biconditional**
+  constraints that refuse disagreement in either direction:
+
+  ```sql
+  CHECK ((status = 'revoked') = (revoked_at IS NOT NULL)),
+  CHECK ((status = 'paused')  = (paused_at  IS NOT NULL))
+  ```
+
+  Note `paused_at = NULL` in the revoke — a revoked token is not a paused one,
+  and the second constraint would reject the row otherwise. **The state
+  machine's exclusivity is a database fact, not a convention.** See `b2/0001`.
+
+- **There is no `use_count` column** (decided the same day). The number of uses
+  is counted from `conversations`. A stored counter is a second copy of a fact
+  and every way it drifts — a transaction that fails after incrementing, a
+  manual fix, an ordinary bug — ends with a token permitting the wrong number
+  of uses, silently.
+
+  The cost is real and is not hidden: **the limit can no longer be a `CHECK`
+  constraint**, because there is no column to constrain. Enforcement lives in
+  the redemption transaction, which takes `FOR UPDATE` on the token row, counts,
+  then inserts — see `b7/0001`. `idx_conversations_token_id` is load-bearing
+  rather than an optimisation. The API may still *return* a computed count;
+  `a5/0003`'s `displayStatus` takes one.
 
 ### Communication
 - Chat: WebSocket on own server, routed across nodes through Redis pub/sub

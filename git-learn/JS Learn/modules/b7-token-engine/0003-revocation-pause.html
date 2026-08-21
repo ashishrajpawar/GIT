@@ -65,11 +65,11 @@ const VALID_TRANSITIONS: Record&lt;TokenStatus, TokenStatus[]&gt; = {
     argument in one statement.
   </p>
 
-  <div class="callout warning">
-    <div class="callout-title">The course does not yet agree with itself here</div>
-    <p>That paragraph used to claim it matched B7.1 and B7.2. It does not.
-    <strong>Five places disagree about how token state is stored</strong>, and
-    the disagreement is real rather than a typo:</p>
+  <div class="callout">
+    <div class="callout-title">Settled 2026-08-20: both, and the database keeps them honest</div>
+    <p>This lesson used to claim its timestamp model matched B7.1 and B7.2. It
+    did not — <strong>five places disagreed</strong>, and the disagreement was
+    real rather than a typo:</p>
     <ul>
       <li><code>b1/0001</code> and <code>b2/0001</code> — a <code>status</code>
       enum <em>and</em> a <code>revoked_at</code> timestamp</li>
@@ -80,14 +80,30 @@ const VALID_TRANSITIONS: Record&lt;TokenStatus, TokenStatus[]&gt; = {
       declaring <code>TokenStatus</code> and a transitions table just
       above</li>
     </ul>
-    <p><strong>Both designs have a real case.</strong> An enum is one value to
-    read and the thing a badge renders from; timestamps carry the audit and
-    make transitions atomic. The synthesis most likely to win is what
-    <code>b2/0001</code> half-builds already — <code>status</code> as the value
-    you read, timestamps as the values you write, and a <code>CHECK</code>
-    keeping them in step — but that is a <strong>B2 schema decision and it has
-    not been taken</strong>. It is recorded in <code>SESSION.md</code> rather
-    than settled here by whichever lesson was edited last.</p>
+    <p><strong>Both designs had a real case</strong>, which is why this was
+    put to a decision rather than resolved by whichever lesson was edited last.
+    An enum is one value to read and the thing a badge renders from; timestamps
+    carry the audit and make transitions atomic. <strong>The answer was
+    both</strong>, with the duplication made safe rather than tolerated:</p>
+    <ul>
+      <li><code>status</code> is what you <strong>read</strong> — one field,
+      what <code>canRedeem</code> branches on and what the badge renders.</li>
+      <li><code>paused_at</code> and <code>revoked_at</code> are what you
+      <strong>write</strong>, so a transition is a <code>WHERE</code> clause the
+      database enforces rather than a check two simultaneous requests can both
+      pass.</li>
+      <li>Two <code>CHECK</code> <em>biconditionals</em> refuse any row where
+      the two disagree, in either direction. The duplication cannot silently
+      rot, because Postgres will not accept it.</li>
+    </ul>
+    <p>So the <code>UPDATE</code> below sets <strong>all three</strong> —
+    <code>status</code>, <code>revoked_at</code>, and <code>paused_at = NULL</code>,
+    because a revoked token is no longer a paused one and the second constraint
+    would otherwise reject the row. That is the constraint doing its job: the
+    state machine's exclusivity is now a database fact.</p>
+    <p>See <code>b2/0001</code> for the schema and the reasoning, including the
+    second decision taken at the same time — there is no <code>use_count</code>
+    column, and the count comes from <code>conversations</code>.</p>
     <p>What is <em>not</em> in dispute, and what this lesson is really about, is
     the state machine: which transitions are legal, which are terminal, and
     which repeated calls must succeed rather than error. That part is identical
@@ -105,9 +121,10 @@ router.post('/tokens/:id/revoke', authenticate, async (req, res, next) =&gt; {
     // button on a bad connection must not get a failure for an action that
     // already succeeded.
     const { rows } = await client.query(
-      `UPDATE tokens SET revoked_at = NOW()
+      `UPDATE tokens
+          SET status = 'revoked', revoked_at = NOW(), paused_at = NULL
         WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
-        RETURNING id, paused_at`,
+        RETURNING id`,
       [req.params.id, req.user.id]
     );
 
