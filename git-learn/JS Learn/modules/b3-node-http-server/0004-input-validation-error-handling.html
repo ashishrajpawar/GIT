@@ -156,9 +156,13 @@ export const updateTokenSchema = z.object({
 // The alphabet lives in one constant; this is where it is enforced.
 export const redeemSchema = z.object({
   code: z.string()
-    .transform(v =&gt; v.trim().toUpperCase())
+    // Normalise FIRST, exactly as b2/0001's codeHashInput does: strip the
+    // display formatting, then case-fold. The QR encodes the UNDASHED form
+    // (a5/0002), a holder reading a card aloud types spaces, and all of
+    // them must reach the same row.
+    .transform(v =&gt; v.replace(/[- ]/g, '').toUpperCase())
     .pipe(z.string().regex(
-      /^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}(-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}){2}$/,
+      /^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{12}$/,
       'That code cannot be used.'          // same wording as every other denial
     )),
   holderName: z.string().min(1).max(80),
@@ -190,6 +194,40 @@ export const createRuleSchema = z.discriminatedUnion('ruleType', [
   z.object({ ruleType: z.literal('cooldown'),    payload: cooldownPayload }),
 ]);</code></pre>
 
+    <div class="callout">
+      <div class="callout-title">Two details in those schemas that are easy to read past</div>
+
+      <h4><code>maxUses</code> is <code>min(1)</code>, and downstream code still handles 0</h4>
+      <p>That looks like a contradiction with <code>a5/0003</code> and
+      <code>b7/0001</code>, which both go out of their way to treat
+      <code>max_uses: 0</code> as "no uses permitted" rather than "unlimited".
+      It is not. <strong>These are two different jobs.</strong></p>
+      <p>The schema is a gate on what a client may <em>ask for</em>, and nobody
+      has a use for issuing a token that permits nothing — <code>pause</code>
+      already covers that, reversibly. So the API refuses it, and 0 can only
+      arrive by a direct database write or a bug.</p>
+      <p><code>canRedeem</code> and <code>displayStatus</code> handle 0 anyway,
+      and that is <em>because</em> it should be impossible. Code that reads a
+      value handles every value the column can hold; code that writes one may be
+      stricter. Validating tightly at the edge and reading defensively behind it
+      is the correct asymmetry — the mistake would be to let the strict edge
+      convince you the loose reader is dead code, and delete it.</p>
+
+      <h4>The redemption code is normalised before it is matched</h4>
+      <p>The transform strips spaces and hyphens and upper-cases, and only then
+      does the regex ask for twelve characters. It has to: the QR encodes
+      <code>tokn.app/t/MERC8GH2KP4X</code> <strong>undashed</strong>, a holder
+      reading a card aloud types spaces, and someone pasting from a message may
+      bring either. All of them are the same code.</p>
+      <p>Note that this transform must agree with <code>codeHashInput</code> in
+      <code>b2/0001</code> <em>exactly</em>. They are two implementations of one
+      rule — if the validator accepts a form the hasher normalises differently,
+      the code passes validation and then matches nothing. In real code this is
+      one function imported twice, and the fact that it appears here as a
+      <code>.transform()</code> is a reason to be careful rather than a licence
+      to write it again.</p>
+    </div>
+
     <h2>Error handling strategy</h2>
 
     <p>Token's error handling has three layers:</p>
@@ -205,32 +243,53 @@ import { ZodError } from 'zod';
 import { ApiError } from '../utils/api-error.js';
 
 export function errorHandler(err, req, res, next) {
-  // Known validation errors
-  if (err instanceof ZodError) {
-    return res.status(400).json({
-      error: 'Validation failed',
-      details: err.errors.map(e =&gt; ({ field: e.path.join('.'), message: e.message })),
-      success: false,
-    });
-  }
+  // Is the caller someone who has proved who they are?
+  const authenticated = Boolean(req.user);
 
-  // Known business errors
-  if (err instanceof ApiError) {
-    return res.status(err.status).json({
-      error: err.message,
-      success: false,
-    });
-  }
+  const { status, body } = toErrorResponse(err, { authenticated });
 
-  // Unknown errors — log but don't expose internals
-  console.error('Unhandled error:', err);
-  res.status(500).json({
-    error: process.env.NODE_ENV === 'development'
-      ? err.message
-      : 'Internal server error',
-    success: false,
-  });
+  if (status >= 500) console.error('Unhandled error:', err);
+  res.status(status).json(body);
 }</code></pre>
+
+    <p>
+      The interesting half is <code>toErrorResponse</code>, and it is the
+      exercise at the bottom of this lesson. The reason it is not four
+      <code>if</code> statements inline is the callout below.
+    </p>
+
+    <div class="callout danger">
+      <div class="callout-title">A helpful validation error is a leak on a public endpoint</div>
+      <p>The obvious error handler returns Zod's field details on every route,
+      and on an authenticated route that is exactly right — the caller owns the
+      resource, they made a mistake, and telling them <em>which field</em> saves
+      them a support ticket.</p>
+      <p><code>POST /api/redeem</code> is not that route. It faces strangers,
+      and it is the one endpoint in the product that a script can call in a
+      loop. Watch what the obvious handler tells that script:</p>
+      <table>
+        <thead><tr><th>Input</th><th>Obvious handler</th><th>What it reveals</th></tr></thead>
+        <tbody>
+          <tr><td><code>NOPE</code></td><td>400, "code: That code cannot be used"</td><td>wrong shape</td></tr>
+          <tr><td><code>MERC8GH2KP4X</code></td><td>404, generic</td><td><strong>right shape, no such token</strong></td></tr>
+        </tbody>
+      </table>
+      <p>That is a free format oracle. A guesser can now tell whether their
+      generator is producing well-formed codes without owning a single one —
+      and the alphabet, the length and the grouping all fall out of a few
+      hundred requests. <code>b7/0001</code> spends a section deriving that
+      guessing a code takes ~25,000 years; that figure assumes each attempt
+      teaches nothing.</p>
+      <p>So on a public endpoint, <strong>every refusal is the same refusal</strong>:
+      the same status, the same body, whether the code was malformed, unknown,
+      revoked or exhausted. The real reason is logged. On an authenticated
+      endpoint, be as helpful as you like.</p>
+      <p>This is the same rule as <code>a8/0002</code>'s single "Link
+      Unavailable" screen and <code>b7/0001</code>'s single denial — and it is
+      the third layer it has had to be applied at, which is the point:
+      <strong>you may explain yourself to someone who has proved who they
+      are.</strong></p>
+    </div>
 
     <h2>Query parameter validation</h2>
 
@@ -460,9 +519,28 @@ function sanitize(input: string): string {
 
     <hr>
 
+    <h2>Now build it yourself</h2>
+
+    <p>
+      Write <code>toErrorResponse(err, ctx)</code> — the whole decision the
+      error handler makes, with no Express in it. Everything this lesson is
+      about ends up here: what the client is told, what only the log is told,
+      and the difference between a caller who has proved who they are and one
+      who has not.
+    </p>
+
+    <div id="exercise-errors"></div>
+    <div id="pg-exercise-errors"></div>
+
+    <h3>And the API it belongs to</h3>
+
     <h2>Exercise</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="explain-b3-0004"></div>
 
     <hr>
 
@@ -477,11 +555,192 @@ function sanitize(input: string): string {
 
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
+    createSolution("exercise-errors", {
+      exercise: "Write toErrorResponse(err, ctx) — decide what an error becomes on the wire.\n\nerr is one of:\n  { kind: 'validation', issues: [{ field, message }] }   a schema rejected the input\n  { kind: 'api', status, message }                       a deliberate business refusal\n  anything else                                          a bug: a thrown Error, a driver failure\n\nctx is { authenticated } — true if the caller proved who they are.\n\nReturn { status, body }, where body is { error, success: false } and MAY carry a details array.\n\nThe rules:\n\n1. AUTHENTICATED + validation -> 400, error 'Validation failed', and details: the issues, field by field. They own the resource and they mistyped something; tell them which field.\n\n2. AUTHENTICATED + api -> the error's own status and message. That is what an ApiError is for.\n\n3. NOT AUTHENTICATED -> one answer for everything except a bug: status 404, error 'That request could not be completed.', and NO details, whether the input was malformed, the token was unknown, revoked or exhausted. A public endpoint that distinguishes 'wrong shape' from 'right shape, no such token' hands a script a free format oracle.\n\n4. ANY unknown error -> 500 and the fixed string 'Internal server error', for everyone, authenticated or not. Never err.message: it carries stack fragments, SQL, file paths and occasionally the value that broke.\n\n5. An api error whose status is not a sane HTTP status (missing, not a number, outside 400-599) is not a deliberate refusal — it is a bug wearing the right shape. Treat it as rule 4.\n\nThe shape of the whole thing: the status and the words are for the client, and the reason is for your logs. Those are different audiences and only one of them has proved anything.",
+      hints: [
+        "Deal with the unknown-error case first and return from it. Everything below that point is then known to be a deliberate error, which means nothing below can accidentally hand a thrown Error's message to a client.",
+        "Validate err.status before trusting it. Something shaped like an ApiError with status undefined is a bug in the thrower, and res.status(undefined) throws inside your error handler — which is the worst place to have an error.",
+        "Build the public denial from one constant, and return a copy of it. If each branch writes its own object, two of them will eventually differ by a word, and a word is all the difference a guesser needs."
+      ],
+      solution: `const PUBLIC_DENIAL = {
+  status: 404,
+  body: { error: "That request could not be completed.", success: false },
+};
+
+const SERVER_ERROR = {
+  status: 500,
+  body: { error: "Internal server error", success: false },
+};
+
+function serverError() {
+  return { status: 500, body: { ...SERVER_ERROR.body } };
+}
+
+function publicDenial() {
+  return { status: 404, body: { ...PUBLIC_DENIAL.body } };
+}
+
+function toErrorResponse(err, ctx) {
+  const kind = err && err.kind;
+
+  // A bug is a 500 for everybody. Checked first so that nothing below can
+  // accidentally hand a thrown Error's message to a client.
+  if (kind !== "validation" && kind !== "api") return serverError();
+
+  // An 'api' error with a nonsense status is a bug in api-error shape.
+  if (kind === "api") {
+    const s = err.status;
+    const sane = typeof s === "number" && s >= 400 && s <= 599;
+    if (!sane) return serverError();
+  }
+
+  // Nothing below here is a bug, so the only question left is who is asking.
+  if (!ctx || ctx.authenticated !== true) return publicDenial();
+
+  if (kind === "validation") {
+    return {
+      status: 400,
+      body: {
+        error: "Validation failed",
+        details: (err.issues || []).map((i) => ({
+          field: i.field,
+          message: i.message,
+        })),
+        success: false,
+      },
+    };
+  }
+
+  return {
+    status: err.status,
+    body: { error: err.message, success: false },
+  };
+}`
+    });
+
+    createPlayground("pg-exercise-errors", `// Write toErrorResponse(err, ctx) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+const AUTH = { authenticated: true };
+const PUBLIC = { authenticated: false };
+const VALIDATION = { kind: "validation", issues: [{ field: "label", message: "Label is required" }] };
+const NOT_FOUND = { kind: "api", status: 404, message: "Token not found" };
+const FORBIDDEN = { kind: "api", status: 403, message: "Not your token" };
+// A thrown Error with a message that must never reach a client.
+const BUG = new Error("null value in column code_hash violates not-null constraint");
+function show(r) { return JSON.stringify(r); }
+
+try {
+  if (typeof toErrorResponse !== "function") throw new Error("not written yet");
+
+  try {
+    const r = toErrorResponse(VALIDATION, AUTH);
+    check("an authenticated validation error names the field",
+          r.status === 400 && r.body.details && r.body.details[0].field === "label",
+          "got " + show(r) + " -- they own it and they mistyped; help them");
+  } catch (e) { check("an authenticated validation error names the field", false, "threw " + e.message); }
+
+  try {
+    const r = toErrorResponse(NOT_FOUND, AUTH);
+    check("an authenticated api error keeps its own status and message",
+          r.status === 404 && r.body.error === "Token not found",
+          "got " + show(r));
+  } catch (e) { check("an authenticated api error keeps its own status and message", false, "threw " + e.message); }
+
+  try {
+    // THE format oracle. A malformed code must look exactly like a
+    // well-formed one that does not exist.
+    const malformed = toErrorResponse(VALIDATION, PUBLIC);
+    const unknown = toErrorResponse(NOT_FOUND, PUBLIC);
+    check("a public endpoint answers malformed and unknown identically",
+          show(malformed) === show(unknown),
+          "malformed=" + show(malformed) + " unknown=" + show(unknown) +
+          " -- a difference here tells a script whether its code generator is correct");
+  } catch (e) { check("a public endpoint answers malformed and unknown identically", false, "threw " + e.message); }
+
+  try {
+    const r = toErrorResponse(VALIDATION, PUBLIC);
+    check("a public endpoint never returns field details",
+          r.body.details === undefined,
+          "got " + show(r) + " -- 'code: wrong format' is free format validation for a guesser");
+  } catch (e) { check("a public endpoint never returns field details", false, "threw " + e.message); }
+
+  try {
+    const revoked = toErrorResponse({ kind: "api", status: 403, message: "Token revoked" }, PUBLIC);
+    const unknown = toErrorResponse(NOT_FOUND, PUBLIC);
+    check("a public endpoint does not distinguish revoked from unknown",
+          show(revoked) === show(unknown),
+          "revoked=" + show(revoked) + " -- confirming a code EXISTS is the most useful thing a guesser can learn");
+  } catch (e) { check("a public endpoint does not distinguish revoked from unknown", false, "threw " + e.message); }
+
+  try {
+    const r = toErrorResponse(BUG, AUTH);
+    check("an unknown error is 500 with a fixed message",
+          r.status === 500 && r.body.error === "Internal server error",
+          "got " + show(r));
+  } catch (e) { check("an unknown error is 500 with a fixed message", false, "threw " + e.message); }
+
+  try {
+    // A bug is a 500 for EVERYONE. Reporting it as the public denial makes
+    // a real outage look like ordinary 404 traffic -- on the redemption
+    // endpoint, which is the one that matters most.
+    const r = toErrorResponse(BUG, PUBLIC);
+    check("an unknown error is 500 even for a public caller",
+          r.status === 500,
+          "got " + show(r) + " -- a 500 dressed as a 404 hides an outage from your own metrics");
+  } catch (e) { check("an unknown error is 500 even for a public caller", false, "threw " + e.message); }
+
+  try {
+    const a = toErrorResponse(BUG, AUTH);
+    const p = toErrorResponse(BUG, PUBLIC);
+    const leaked = JSON.stringify([a, p]).indexOf("code_hash") !== -1;
+    check("err.message never reaches the client, authenticated or not",
+          !leaked,
+          "the response contained the driver's message -- it carries column names, SQL and file paths");
+  } catch (e) { check("err.message never reaches the client, authenticated or not", false, "threw " + e.message); }
+
+  try {
+    // Shaped like an ApiError, but the status is nonsense. That is a bug
+    // in whatever threw it, not a deliberate refusal.
+    const r = toErrorResponse({ kind: "api", status: undefined, message: "boom" }, AUTH);
+    check("an api error with no status is treated as a bug",
+          r.status === 500 && r.body.error === "Internal server error",
+          "got " + show(r) + " -- res.status(undefined) throws, and 'boom' is not a message for a user");
+  } catch (e) { check("an api error with no status is treated as a bug", false, "threw " + e.message); }
+
+  try {
+    const r = toErrorResponse({ kind: "api", status: 200, message: "fine?" }, AUTH);
+    check("an api error with a success status is treated as a bug",
+          r.status === 500,
+          "got " + show(r) + " -- an error path that returns 200 is worse than one that returns 500");
+  } catch (e) { check("an api error with a success status is treated as a bug", false, "threw " + e.message); }
+
+  try {
+    const r = toErrorResponse(FORBIDDEN, AUTH);
+    check("403 survives for an authenticated caller",
+          r.status === 403 && r.body.error === "Not your token", "got " + show(r));
+  } catch (e) { check("403 survives for an authenticated caller", false, "threw " + e.message); }
+
+  try {
+    const r = toErrorResponse(VALIDATION, AUTH);
+    check("every body carries success: false", r.body.success === false, "got " + show(r));
+  } catch (e) { check("every body carries success: false", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write toErrorResponse(err, ctx) above, then press Run. (" + e.message + ")");
+}`);
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is Express middleware and Zod schemas needing a running server",
       exercise: "Add full input validation to Token's API: (1) Create shared/schemas/tokens.ts with Zod schemas for create, update, and list-query validation, (2) Create the validate() middleware, (3) Create the errorHandler middleware that handles ZodError, ApiError, and unknown errors differently, (4) Wire them into the tokens router. Test by sending invalid data with curl and verify you get structured error responses.",
       hints: [
         "z.coerce.number() is essential for query params — they arrive as strings from the URL.",
@@ -574,6 +833,10 @@ router.patch('/:code', validate(updateTokenSchema), async (req, res, next) => {
 // Test:
 // curl -X POST -H "Content-Type: application/json" -d '{}' localhost:3000/api/tokens
 // Response: { "error": "Validation failed", "details": [{"field": "label", "message": "Label is required"}] }`
+    });
+
+    createExplain("explain-b3-0004", {
+      prompt: "On an authenticated route, telling the caller which field failed validation is good design. On <code>POST /api/redeem</code> it is a leak. Explain what a script learns from the difference between a 400 with field details and a 404 without them — and why that matters even though the script never obtains a working token from it."
     });
 
     createQuiz("lesson-quiz", [
