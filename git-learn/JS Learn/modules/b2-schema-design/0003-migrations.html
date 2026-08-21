@@ -62,6 +62,7 @@
 
     <pre><code>// api/migrate.js
 const { Pool } = require('pg');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -73,55 +74,140 @@ async function migrate() {
   const client = await pool.connect();
 
   try {
-    // Create migrations tracking table if it doesn't exist
+    // Only one deploy may migrate at a time. Two servers starting together
+    // would otherwise both see the same pending list and both run it.
+    await client.query('SELECT pg_advisory_lock($1)', [727272]);
+
     await client.query(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         id SERIAL PRIMARY KEY,
         filename TEXT NOT NULL UNIQUE,
+        checksum TEXT NOT NULL,
         applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);
 
-    // Get already-applied migrations
     const { rows: applied } = await client.query(
-      'SELECT filename FROM schema_migrations ORDER BY filename'
+      'SELECT filename, checksum FROM schema_migrations ORDER BY filename'
     );
-    const appliedSet = new Set(applied.map(r => r.filename));
 
-    // Get all migration files
     const migrationsDir = path.join(__dirname, 'migrations');
-    const files = fs.readdirSync(migrationsDir)
+    const available = fs.readdirSync(migrationsDir)
       .filter(f => f.endsWith('.sql'))
-      .sort();
+      .sort()
+      .map(f => ({
+        name: f,
+        checksum: sha256(fs.readFileSync(path.join(migrationsDir, f))),
+      }));
 
-    // Run pending migrations
-    for (const file of files) {
-      if (appliedSet.has(file)) {
-        console.log(`  skip: ${file} (already applied)`);
-        continue;
+    // All the deciding happens here, with no database in it. This is the
+    // exercise at the bottom of the lesson.
+    const plan = planMigrations(applied, available);
+
+    if (plan.error) {
+      throw new Error(
+        `refusing to migrate: ${plan.error.kind} (${plan.error.name})`
+      );
+    }
+
+    for (const file of plan.toRun) {
+      console.log(`  applying: ${file.name}...`);
+      const sql = fs.readFileSync(path.join(migrationsDir, file.name), 'utf8');
+
+      // The migration AND the record of it, in one transaction. If these
+      // can come apart, a crash between them leaves a migration that ran
+      // and is not recorded -- so it runs again on the next deploy.
+      await client.query('BEGIN');
+      try {
+        await client.query(sql);
+        await client.query(
+          'INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2)',
+          [file.name, file.checksum]
+        );
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
       }
 
-      console.log(`  applying: ${file}...`);
-      const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
-      await client.query(sql);
-      await client.query(
-        'INSERT INTO schema_migrations (filename) VALUES ($1)',
-        [file]
-      );
-      console.log(`  done: ${file}`);
+      console.log(`  done: ${file.name}`);
     }
 
     console.log('All migrations applied.');
   } finally {
-    client.release();
+    client.release();   // releases the advisory lock too
     await pool.end();
   }
+}
+
+function sha256(buf) {
+  return crypto.createHash('sha256').update(buf).digest('hex');
 }
 
 migrate().catch(err => {
   console.error('Migration failed:', err);
   process.exit(1);
 });</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">Three things this runner does that the obvious one does not</div>
+      <p>The four-line version — list the files, skip the applied ones, run the
+      rest — works for months and then fails in ways that are very hard to
+      diagnose, because by the time you notice, the evidence is a schema that
+      does not match another environment's and no record of why.</p>
+
+      <h4>1. A checksum, because files get edited after they run</h4>
+      <p>Someone fixes a typo in <code>003_add_index.sql</code> after it has
+      already been applied in staging. The runner sees the filename in
+      <code>schema_migrations</code> and skips it — forever. Staging has the old
+      index, a fresh database gets the new one, and <strong>the two schemas
+      diverge silently and permanently.</strong></p>
+      <p>Storing a hash of the file turns that into a loud failure on the next
+      deploy. The rule it enforces is the one migration systems live by:
+      <strong>an applied migration is immutable.</strong> Fix it forward with a
+      new file; never edit one that has run.</p>
+
+      <h4>2. Refusing out-of-order files</h4>
+      <p>Two people branch on Monday. Both write <code>005_*.sql</code>. One
+      merges, deploys, and <code>005</code> is applied. The other rebases,
+      renames to <code>006</code> — or does not, and now there is a second
+      <code>005</code>.</p>
+      <p>Worse is the quiet case: a migration numbered <em>below</em> the
+      highest one already applied shows up in a merge. The naive runner applies
+      it happily, and the resulting schema depends on the order the branches
+      merged in. <strong>A database whose shape depends on merge order is not
+      reproducible</strong>, which is the entire thing migrations exist to
+      provide. Refuse and make a human look.</p>
+
+      <h4>3. One transaction per migration, covering the bookkeeping</h4>
+      <p>The obvious version runs the SQL, then inserts the tracking row as a
+      separate statement. A crash in that gap leaves a migration that
+      <em>ran</em> and is not <em>recorded</em>, so the next deploy runs it
+      again — and <code>CREATE TABLE</code> the second time is an error that
+      stops the deploy with the database half-migrated.</p>
+      <p>Wrapping both means the outcome is always "applied and recorded" or
+      "neither".</p>
+
+      <div class="callout warning">
+        <div class="callout-title">Postgres lets you do this; not every database does</div>
+        <p>DDL inside a transaction is a Postgres luxury. MySQL commits
+        implicitly on <code>CREATE TABLE</code>, so a half-failed migration
+        there really is half-applied and you clean it up by hand. Worth knowing
+        before you assume the pattern travels.</p>
+        <p>Two Postgres exceptions of its own: <code>CREATE INDEX
+        CONCURRENTLY</code> and <code>ALTER TYPE ... ADD VALUE</code> cannot run
+        inside a transaction block. A migration needing either has to be its own
+        file, run outside the wrapper — which is why real tools have a
+        "no-transaction" flag.</p>
+      </div>
+
+      <h4>And the lock</h4>
+      <p><code>pg_advisory_lock</code> stops two servers deploying at the same
+      instant from both reading the same pending list and both running it. It
+      costs one line and the failure it prevents is a duplicate
+      <code>CREATE TABLE</code> during a rolling deploy — which is to say,
+      exactly when you are least able to think about it.</p>
+    </div>
 
     <p>Run it with:</p>
 
@@ -234,9 +320,27 @@ ALTER TABLE tokens ADD COLUMN description TEXT;
 
     <hr>
 
+    <h2>Now build it yourself</h2>
+
+    <p>
+      Write <code>planMigrations(applied, available)</code> — the function the
+      runner above calls before it touches anything. Every check that stops a
+      bad deploy lives in it, and none of them needs a database, which is why it
+      is worth pulling out.
+    </p>
+
+    <div id="exercise-plan"></div>
+    <div id="pg-exercise-plan"></div>
+
+    <h3>And the runner it belongs to</h3>
+
     <h2>Exercise</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="explain-b2-0003"></div>
 
     <hr>
 
@@ -251,11 +355,154 @@ ALTER TABLE tokens ADD COLUMN description TEXT;
 
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
+    createSolution("exercise-plan", {
+      exercise: "Write planMigrations(applied, available) — decide what the runner should do, and whether it should refuse.\n\napplied is what the database says has run: [{ name, checksum }], sorted by name.\navailable is what is on disk: [{ name, checksum }], sorted by name.\n\nReturn { toRun, error }.\n  toRun — the available migrations not yet applied, in name order. Empty array if none.\n  error — null, or { kind, name } describing the FIRST problem found.\n\nRefuse in three cases, checked in this order:\n\n1. 'missing' — a migration is in applied but not in available. A file that ran has been deleted, so the database's history can no longer be reproduced from the repo.\n\n2. 'modified' — a name is in both, and the checksums differ. Someone edited a migration after it ran. This is the worst of the three: the runner would skip it forever, so this environment keeps the old shape and a fresh database gets the new one, silently and permanently.\n\n3. 'out_of_order' — an UNAPPLIED migration sorts before the highest APPLIED one. Two branches both added a migration and merged in an order nobody chose. Running it now makes the schema depend on merge order.\n\nWhen there is an error, toRun must be an empty array. A partial plan is worse than no plan — it would apply some migrations and then stop, leaving the database in a state no file describes.\n\nIf everything is clean, error is null and toRun is the pending list.",
+      hints: [
+        "Check the already-applied migrations first, in their own loop, before you work out what is pending. Those two checks are about whether the history is trustworthy, and there is no point planning anything if it is not.",
+        "For out-of-order you only need the HIGHEST applied name. Anything pending that sorts before it arrived from somewhere it should not have.",
+        "Write one small refuse(kind, name) helper that returns the empty plan with the error. If each branch builds its own object, one of them will eventually return a half-plan alongside an error."
+      ],
+      solution: `function planMigrations(applied, available) {
+  const app = applied || [];
+  const avail = available || [];
+
+  const refuse = (kind, name) => ({ toRun: [], error: { kind, name } });
+
+  const availByName = new Map(avail.map((m) => [m.name, m]));
+
+  // 1 and 2 are about migrations that have ALREADY run. Check them before
+  // planning anything, because either one means the history is not what
+  // the repo says it is.
+  for (const done of app) {
+    const onDisk = availByName.get(done.name);
+    if (!onDisk) return refuse("missing", done.name);
+    if (onDisk.checksum !== done.checksum) return refuse("modified", done.name);
+  }
+
+  const appliedNames = new Set(app.map((m) => m.name));
+  const pending = avail.filter((m) => !appliedNames.has(m.name));
+
+  // 3. Nothing pending may sort before something already applied.
+  // Comparing against the HIGHEST applied name is the whole test.
+  const highestApplied = app.length ? app[app.length - 1].name : "";
+  for (const m of pending) {
+    if (m.name < highestApplied) return refuse("out_of_order", m.name);
+  }
+
+  return { toRun: pending, error: null };
+}`
+    });
+
+    createPlayground("pg-exercise-plan", `// Write planMigrations(applied, available) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function m(name, checksum) { return { name: name, checksum: checksum }; }
+function names(list) { return (list || []).map(function (x) { return x.name; }).join(","); }
+
+const A1 = m("001_init.sql", "aaa");
+const A2 = m("002_tokens.sql", "bbb");
+const A3 = m("003_messages.sql", "ccc");
+
+try {
+  if (typeof planMigrations !== "function") throw new Error("not written yet");
+
+  try {
+    const r = planMigrations([A1, A2], [A1, A2, A3]);
+    check("pending migrations are returned in order",
+          r.error === null && names(r.toRun) === "003_messages.sql",
+          "got " + JSON.stringify(r));
+  } catch (e) { check("pending migrations are returned in order", false, "threw " + e.message); }
+
+  try {
+    const r = planMigrations([A1, A2, A3], [A1, A2, A3]);
+    check("nothing pending is an empty plan, not an error",
+          r.error === null && r.toRun.length === 0,
+          "got " + JSON.stringify(r) + " -- the runner runs on every deploy and is usually a no-op");
+  } catch (e) { check("nothing pending is an empty plan, not an error", false, "threw " + e.message); }
+
+  try {
+    const r = planMigrations([], [A1, A2]);
+    check("an empty database runs everything",
+          r.error === null && names(r.toRun) === "001_init.sql,002_tokens.sql",
+          "got " + JSON.stringify(r));
+  } catch (e) { check("an empty database runs everything", false, "threw " + e.message); }
+
+  try {
+    // THE dangerous one. Same name, different content: the file was edited
+    // after it ran. Note 002 is otherwise perfectly pending-free.
+    const edited = m("002_tokens.sql", "bbb-EDITED");
+    const r = planMigrations([A1, A2], [A1, edited, A3]);
+    check("an edited migration is refused as 'modified'",
+          r.error && r.error.kind === "modified" && r.error.name === "002_tokens.sql",
+          "got " + JSON.stringify(r.error) + " -- the runner would skip it forever and the schemas diverge");
+  } catch (e) { check("an edited migration is refused as 'modified'", false, "threw " + e.message); }
+
+  try {
+    const edited = m("002_tokens.sql", "bbb-EDITED");
+    const r = planMigrations([A1, A2], [A1, edited, A3]);
+    check("an error means an EMPTY plan",
+          r.toRun.length === 0,
+          "got toRun=[" + names(r.toRun) + "] -- a partial plan leaves the database in a state no file describes");
+  } catch (e) { check("an error means an EMPTY plan", false, "threw " + e.message); }
+
+  try {
+    const r = planMigrations([A1, A2], [A1]);
+    check("a deleted applied migration is refused as 'missing'",
+          r.error && r.error.kind === "missing" && r.error.name === "002_tokens.sql",
+          "got " + JSON.stringify(r.error));
+  } catch (e) { check("a deleted applied migration is refused as 'missing'", false, "threw " + e.message); }
+
+  try {
+    // A file numbered BELOW the highest applied turns up in a merge.
+    const sneaked = m("002a_hotfix.sql", "zzz");
+    const r = planMigrations([A1, A2, A3], [A1, A2, sneaked, A3]);
+    check("a migration inserted below the high-water mark is refused",
+          r.error && r.error.kind === "out_of_order" && r.error.name === "002a_hotfix.sql",
+          "got " + JSON.stringify(r.error) + " -- running it makes the schema depend on merge order");
+  } catch (e) { check("a migration inserted below the high-water mark is refused", false, "threw " + e.message); }
+
+  try {
+    // Sorts AFTER the highest applied, so it is a normal new migration
+    // even though it is not the next number. Must NOT be refused.
+    const later = m("009_later.sql", "yyy");
+    const r = planMigrations([A1, A2, A3], [A1, A2, A3, later]);
+    check("a gap in the numbering is fine as long as it sorts after",
+          r.error === null && names(r.toRun) === "009_later.sql",
+          "got " + JSON.stringify(r) + " -- out-of-order is about position, not about consecutive numbers");
+  } catch (e) { check("a gap in the numbering is fine as long as it sorts after", false, "threw " + e.message); }
+
+  try {
+    // Both a modified file AND an out-of-order one. 'modified' concerns an
+    // already-applied migration, so it is the more serious and is reported.
+    const edited = m("002_tokens.sql", "bbb-EDITED");
+    const sneaked = m("002a_hotfix.sql", "zzz");
+    const r = planMigrations([A1, A2, A3], [A1, edited, sneaked, A3]);
+    check("problems with already-applied migrations are reported first",
+          r.error && r.error.kind === "modified",
+          "got " + JSON.stringify(r.error) + " -- history being wrong outranks the plan being wrong");
+  } catch (e) { check("problems with already-applied migrations are reported first", false, "threw " + e.message); }
+
+  try {
+    const r = planMigrations([], []);
+    check("empty and empty is a clean no-op",
+          r.error === null && r.toRun.length === 0, "got " + JSON.stringify(r));
+  } catch (e) { check("empty and empty is a clean no-op", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write planMigrations(applied, available) above, then press Run. (" + e.message + ")");
+}`);
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is a Node migration runner needing a running Postgres",
       exercise: "Set up Token's migration system: (1) Create the api/migrations/ folder structure, (2) Write migrate.js (the runner script), (3) Move your schema into 001_initial_schema.sql and 002_messaging.sql, (4) Write a third migration (003_add_token_notes.sql) that adds a 'notes' TEXT column to the tokens table, (5) Run the migration system and verify all three applied correctly.",
       hints: [
         "The migrate.js script needs the 'pg' package — run npm install pg in the api/ folder.",
@@ -305,6 +552,10 @@ DATABASE_URL=postgres://localhost:5432/token_dev node migrate.js
 #   skip: 002_messaging.sql (already applied)
 #   skip: 003_add_token_notes.sql (already applied)
 #   All migrations applied.`
+    });
+
+    createExplain("explain-b2-0003", {
+      prompt: "Of the three refusals, <code>modified</code> is the one that would otherwise cause the most damage — and it is also the only one that produces no error at all without the checksum. Explain what actually goes wrong when someone edits a migration that has already run, and why the damage is worse in an environment that has been live longer."
     });
 
     createQuiz("lesson-quiz", [
