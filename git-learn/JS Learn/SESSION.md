@@ -1270,8 +1270,12 @@ produce, in order:
    held zero entries and `verification-log.json` zero keys, so only prose in
    `CLAUDE.md` and `HANDOFF.md` pointed at them. **Warnings went 1 → 0**,
    which confirms the last one really was the dead link inside `07`.
-2. **Rewrite `b4-auth-server`** — all three lessons plus an OTP pass. See
-   below; note `0001` loses its subject rather than changing its examples.
+2. ~~Rewrite `b4-auth-server`~~ — **done 2026-08-22, all three lessons.** The
+   OTP-specific pass landed inside them rather than as a fourth unit: the
+   denial oracle and its timing half in `0001`, replay and single-use in
+   `0001` and `0002`, DLT template constraints in `0001`, cost control in
+   `0003`. All three now verified; the module had **one** verified lesson
+   before this session and has three now.
 3. **Write C5 — end-to-end encryption**, five lessons. Decided 2026-08-22 to
    come after B4 rather than being retro-fitted before B2.
 4. **`a3/0002` M3 extraction**, then **`a2` runtime type guards**.
