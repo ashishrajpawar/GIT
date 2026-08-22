@@ -12,9 +12,118 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean. **65/96 verified**, audit green, five suites
-pass. **B2, B3, B7, B10 and all of A11 bar `0005` complete.** Known-and-blocked
-is **2**.
+**Nothing.** Working tree clean. **66/96 verified**, audit green, five suites
+pass. **M3 is finished** — all 37 lessons. **B2, B3, B7, B10 and A11 complete.**
+Known-and-blocked is **2**.
+
+### a11/0005 — the store declaration named data Token has never had (2026-08-22)
+
+The last M3 lesson, and the prediction that it was checklist-shaped and
+`--unverifiable` was wrong, making it **15 out of 15**.
+
+**The headline is compliance and it is not subtle: the declarations named data
+Token does not collect, and omitted the data it does.** Four places said
+**email** — the privacy-policy bullet, Google **Data Safety**, iOS **App
+Privacy**, and a spot-the-bug question whose distractor treated collecting it
+as fine. `b2/0001`'s `users` table is `phone_hash`, `display_name`,
+`avatar_url`, and `CLAUDE.md` lists email under **out of scope** entirely.
+
+**Both halves are wrong and the second is the serious one.** Declaring data you
+do not collect is embarrassing. *Failing* to declare data you do collect is
+what gets an app removed — Data Safety and App Privacy are binding statements
+that both stores re-check against the binary. And the omitted field is
+`phone_hash`, settled **the same day** in `b10/0002`.
+
+### `b4/0001` is why it read plausibly, and that is now an open question
+
+That whole module registers and logs in by `email`:
+`ALTER TABLE users ADD COLUMN email TEXT NOT NULL UNIQUE`, `/register` and
+`/login` both keyed on it. So this is **not a slip in `0005`** — it is a
+cross-module contradiction about **how a user signs in**, and it needs the
+student. Raised as *Open question 0*. `0005` follows `CLAUDE.md`, which is the
+documented rule when a lesson and the docs disagree.
+
+**This is the A5 lesson again in a new place: two lessons can each be
+internally consistent and still contradict.** Neither `b4/0001` nor `a11/0005`
+looks wrong from inside itself. What found it was reading the store declaration
+against the migration — the same move that found `b10/0002`'s seven
+non-existent columns.
+
+### The description was making the collapsed claim in front of a reviewer
+
+*"No phone number shared, ever"*, in a listing that sits beside an App Privacy
+form declaring a collected phone number. A reviewer holding both reads a
+contradiction, and **a listing that contradicts its own privacy declaration is
+a rejection with no obvious fix**.
+
+Replaced with *"Nobody you give a token to ever sees your number"* plus an
+explicit closing paragraph about sign-in. **The replacement is stronger, not
+weaker** — a precise checkable promise about the thing the user actually fears,
+which survives contact with the form. Vague claims are not safer than specific
+ones, only harder to defend.
+
+Also added the honest Data Safety detail: **tick end-to-end encryption, and
+tick it accurately.** Google distinguishes it from "encrypted in transit", they
+are very different claims, and ADR-0002 earns Token the stronger one. Claiming
+it while holding a key ends an app; claiming only the weaker one throws away
+the product's distinguishing feature.
+
+### `runtimeVersion` was never mentioned, in the only lesson that ships updates
+
+The config solution already set `runtimeVersion: { policy: 'appVersion' }` and
+**the body never explained it** — so the gate deciding *who receives an update*
+was invisible. It produces two rules pointing opposite ways:
+
+| Shipping | `version` | Because |
+|---|---|---|
+| A native change | **must** change | else a later OTA lands on binaries without the native code |
+| A JS-only fix, OTA | **must not** change | else the update targets a binary nobody has installed |
+
+**"Let's call it 1.1.0" is therefore a decision about who gets the fix.** Bump
+the version for a JS-only release and the OTA has `runtimeVersion: '1.1.0'`
+against an installed base of `1.0.0`. It reaches **nobody**, the publish
+succeeds, and the dashboard is green. So: *asking for a new version number is
+asking for a new build.*
+
+### The two counters, and only one of them resets
+
+`versionCode` must exceed every value ever uploaded, **for the app's
+lifetime** — no reset, no reuse, not even from a release you deleted.
+`buildNumber` resets to 1 on a version change. **The mistake is applying the
+iOS rule to Android**, and there is no undo: you cannot reclaim the range,
+roll it back, or ask support. Same family as `revoked_at` in `0001`.
+
+### And an OTA channel can silently replace the encryption code
+
+ADR-0002's guarantee lives in client JavaScript, and `eas update` replaces
+client JavaScript with no review, no store record and no prompt. Not a reason
+to avoid OTA — a reason to say what it is. **The threat model of an E2EE app
+must include whoever can push code to it.** Two rules adopted: key handling
+ships as a store build, never an OTA; and the Expo account is a production
+credential in the `TOKEN_CODE_PEPPER` tier, not the sourcemap-token tier —
+`0004`'s *who needs it and when*, applied to a service instead of a secret.
+
+### Twelve wrong-cases, and this time the multi-trips were verified individually
+
+Six of twelve trip more than one check. **Every one was run against the
+self-check on its own to confirm the extra failures are inherent** — the
+channel is decided first, so a mistake that gets it wrong makes everything
+downstream of "this is a build" wrong too. That is one behavioural change with
+several consequences, which is fine; what is not fine is `b10/0002`'s case,
+which also failed for an unrelated reason.
+
+**The mutation case cascades and must not be "fixed".** Assigning to
+`current.version` corrupts `version === current.version` — the exact comparison
+rule 5 depends on — so mutating the input breaks the caller *and* silently
+breaks the function's own arithmetic. That cascade is the lesson, and there is
+now a comment saying so.
+
+### The quiz had three executable questions where it had none
+
+Same gap as `a11/0003`: 25 questions, all store-console trivia. Added the
+`runtimeVersion` match, the `'1.0.9'` patch bump (`parts[2] + 1` is `"1.0.91"`,
+which is invisible for the first nine patches of any minor version), and the
+two counters after a version bump.
 
 ### a11/0001 — the animation was a claim the app could not keep (2026-08-22)
 
@@ -910,27 +1019,29 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
-**One M3 lesson left: `a11/0005` (store submission).** **Nothing is blocked.**
+**M3 is finished.** All 37 lessons, ending with `a11/0005`. **Nothing is
+blocked**, and there is no work item currently in flight.
 
-**Done:** A3, A4, A5, A6, A8, B5, **all of B2, B3, B7 and B10**, plus
-`a11/0001`, `0002`, `0003` and `0004`.
+**The prediction that a lesson had nothing runnable in it was wrong 15 times
+out of 15.** `--unverifiable` was reached for exactly zero times across the
+whole of M3. Retire the reflex, not just the count.
 
-It was written off in advance and **that judgement has now been wrong 14 times
-out of 14**, so look for the plain function before reaching for
-`--unverifiable`.
+The next thing worth doing is **one of these, and it is the student's call**:
 
-- **`0005` (store submission)** is the checklist-shaped one, and the last
-  honest candidate for `--unverifiable` in Track A. Check first for
-  version-code arithmetic, an asset-size or screenshot-dimension rule, or a
-  "which fields block submission" predicate. Given `0001` turned out to carry a
-  terminal-action defect behind an animation, **read it against the ADRs before
-  concluding anything about what it contains** — a store listing is where
-  privacy claims get written down, and `b10/0002` has just established that the
-  *"no phone number"* sentence is wrong for what the company collects.
+1. **Answer open question 0** — phone or email sign-in. It is the only thing
+   here that blocks real work: `b4` is a whole module written the other way,
+   and `a11/0005`'s store declaration now depends on the answer.
+2. **Check the message-touching modules against ADR-0002** (B5, B8, legacy
+   `04`). A6 mentioned E2EE zero times until it was checked.
+3. **Phase 3** — the ten C-modules, just-in-time. The student is nowhere near.
+
+Given the student is partway through Module 01, **(1) is the only one with a
+deadline attached, and it is a two-minute question.**
 
 | Work | Gate |
 |---|---|
-| **M3** — extract the plain function from the remaining ~3 logic-rich lessons | none; A6, A7 and B5 done |
+| ~~**M3** — extract the plain function from the logic-rich lessons~~ | **done 2026-08-22**, 37 lessons |
+| **Decide phone-vs-email sign-in** — `b4` contradicts `b2/0001` and `CLAUDE.md` | needs the student; see *Open questions* 0 |
 | **Check the message-touching modules against ADR-0002** — A6 mentioned E2EE zero times until 2026-08-20 | none; likely candidates are B5, B8 and the legacy `04` |
 | A TypeScript-aware runner, so `a2/*` and `a3/0002` can be verified | needs a decision first — see *Open questions* |
 | **Phase 3** — the ten C-modules | just-in-time; the student is nowhere near |
@@ -948,6 +1059,20 @@ the course for months. Pitch to the profile in `CLAUDE.md` and let them steer.
 
 Both were raised on 2026-08-20 alongside the three that got settled, and
 neither was answered. They are not blocking anything.
+
+0. **How does a user sign in — phone or email?** *(new, 2026-08-22, and this
+   one does block something.)* `b2/0001` and `CLAUDE.md` say `users` holds
+   `phone_hash` and **no email**; `CLAUDE.md` lists email under *out of scope*.
+   **`b4/0001` teaches the opposite** — it adds an `email` column and both
+   `/register` and `/login` are keyed on it. `a11/0005`'s store declarations
+   inherited the email version, which is how it surfaced.
+
+   Both cannot be right, and the answer changes a whole module either way. Ask
+   it in concrete terms, per the note below: *"When you lose your phone and
+   reinstall Token, what do you type to get back in — your number, or an email
+   address you gave us?"* Everything else follows from that one answer.
+   `a11/0005` currently follows `CLAUDE.md`, which is the documented rule when
+   a lesson and the docs disagree.
 
 1. **How far ahead of yourself should this build?** M3 keeps finding real
    defects, but every lesson it touches is modules ahead of Module 01. Raised
@@ -995,7 +1120,7 @@ Per-item status only. The plan itself is in `TOKEN-TRACK.md`; the counts are in
 | 4 — the operating track | not started, deliberately |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
-| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus all of B2, B3, B7 and **B10**, and `a11/0001`+`0002`+`0003`+`0004`; **1 left** (`a11/0005`) |
+| **M3 — the plain function in Track A/B lessons** | **done 2026-08-22** — 37 lessons. A3, A4, A5, A6, A8, B5, all of B2, B3, B7, B10 and A11, plus A7's `0005` |
 
 ### M3 — where it has reached
 
@@ -1043,6 +1168,7 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `a11/0003` | `toCreateTokenPayload` | blank is an absence, never `''`; `maxUses: 0` and absent are opposites; an unreadable value is refused, never defaulted |
 | `a11/0002` | `auditContrast` | the sRGB gamma decode, which the usual anchors cannot catch; a pair is audited, not a colour; a value with alpha has no ratio and must be skipped, not scored |
 | `a11/0001` | `swipeOutcome` | the threshold is a *fraction* of the width, never a pixel; a flick back vetoes a committed distance; `commit` decides the gesture, never whether the action asks first |
+| `a11/0005` | `planRelease` | an OTA moves no numbers, because bumping the version is what stops it reaching anyone; `versionCode` never resets and `buildNumber` always does; a crypto change is plain JS and still needs a reviewed build |
 
 **A5 note:** not one of the five had a `createExplain` prompt or loaded
 `explain.js`. All five now do. A5 predates the practice pattern being made
@@ -1101,10 +1227,16 @@ existed, plus `status={item.status}` (the exact bug the new section describes)
 and `max_uses > 0` (which hides a zero limit). One prose fix, three live
 defects downstream — the Phase 1.5 lesson, again.
 
-Remaining, roughly: **~10 have an extractable function** (A6,
-A11, B2, B3, B5, B7, B10 …), **~40 are genuinely infra** (a device, a VPS, two
-phones, a live TURN server), and **4 are TypeScript**, which the runner cannot
-execute at all.
+**M3 is done.** Of the 30 lessons still `unverifiable`: **~26 are genuinely
+infra** (a device, a VPS, two phones, a live TURN server) and **4 are
+TypeScript**, which the runner cannot execute at all. Any further gain needs
+the TypeScript runner — see *Open questions* 2 — or a rewrite, not another
+extraction pass.
+
+**The A5/A7 prediction held all the way to the end.** `a11/0005` was the last
+pre-pattern lesson checked and it had neither an `explain.js` script tag nor a
+`createExplain` prompt, exactly like `a5/*` and `a7/0005`. Both added. Assume
+the gap in any module written before the practice pattern became universal.
 
 ---
 
@@ -1163,6 +1295,23 @@ Durable gotchas only. Anything narrative is in `HANDOFF.md`.
   verifier. Write a `bucketOf`/`valueOf` helper that returns a sentinel.
   **Three of `a11/0002`'s eleven cases were hidden by this**, in a self-check
   written the same day as the note warning about it.
+- **A compliance form is read off the schema, never off memory.** `a11/0005`
+  declared an `email` column that has never existed and omitted the
+  `phone_hash` that does. The second is the one that removes an app: declaring
+  data you do not hold is embarrassing, failing to declare data you do hold is
+  a breach of a binding statement. Same move that found `b10/0002`'s seven
+  invented columns — open the migration next to the document.
+- **"We hash it" is not a reason to leave it off the form.** Collection is
+  about what leaves the device. A hash of an enumerable value — a ten-digit
+  Indian mobile with a known prefix — is a lookup key, not an anonymisation.
+- **A marketing version number is a decision about who receives the fix.**
+  Under `runtimeVersion: { policy: 'appVersion' }`, bumping `version` for a
+  JS-only OTA sends it to a binary nobody has installed. It reaches zero users
+  and nothing reports an error. Asking for a new version number *is* asking for
+  a new build.
+- **`versionCode` never resets; `buildNumber` always does.** Applying the iOS
+  rule to Android burns the range permanently — no rollback, no support ticket.
+  It is the second number in this course with no undo, after `revoked_at`.
 - **An animation that removes something is a claim that it is gone.** Fire it
   from the state changing, never from the gesture ending. `a11/0001` animated
   the card off-screen and *then* called revoke, so a failed request left the

@@ -13,12 +13,12 @@ with this one, this one is right — everything below is measured, not asserted.
 |---|---|
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
-| Quiz questions (track) | 2586 |
-| Avg teaching prose per track lesson | 2008 words |
-| Lessons with a playground | 83 / 96 |
+| Quiz questions (track) | 2590 |
+| Avg teaching prose per track lesson | 2024 words |
+| Lessons with a playground | 84 / 96 |
 | Lessons with an exercise | 96 / 96 |
 | **Deepened** (all 3 spine sections) | 16 / 96 |
-| **Verified** (code executed) | 65 / 96 |
+| **Verified** (code executed) | 66 / 96 |
 | Ran clean but had nothing to run | 0 / 96 |
 | Errors | 0 |
 | Known and blocked | 2 |
@@ -29,12 +29,12 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 ## Answer-position distribution — **authored order, not what the student sees**
 
-1370 keyed questions (multiple-choice, spot-the-bug, which-breaks).
+1371 keyed questions (multiple-choice, spot-the-bug, which-breaks).
 
 > **This clustering is expected and already handled. Do not "fix" it again.**
 > `quiz.js` shuffles options at render time (`optionDisplayOrder`), so the
 > displayed distribution is roughly even — measured at 26.9 / 28.5 / 26.9 / 17.6
-> across all 1370 questions, versus the authored figures below. Index 3 sits
+> across all 1371 questions, versus the authored figures below. Index 3 sits
 > lower only because many questions have three options.
 >
 > The numbers here read `correct` straight from the lesson data, which is
@@ -53,8 +53,8 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Position | Count | Share |
 |---|---|---|
-| index 0 | 141 | 10.3% |
-| index 1 | 845 | 61.7% |
+| index 0 | 142 | 10.4% |
+| index 1 | 845 | 61.6% |
 | index 2 | 350 | 25.5% |
 | index 3 | 34 | 2.5% |
 
@@ -62,8 +62,8 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Type | Count |
 |---|---|
-| multiple-choice | 715 |
-| predict-output | 487 |
+| multiple-choice | 716 |
+| predict-output | 490 |
 | fill-blank | 454 |
 | spot-the-bug | 371 |
 | which-breaks | 284 |
@@ -76,7 +76,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | 01-javascript-fundamentals | 13 | 2556 | 85 | 15 | 380 | 0/13 | 13/13 |
 | 02-react-native | 14 | 2641 | 39 | 14 | 355 | 0/14 | 14/14 |
 | a10-device-security | 2 | 1908 | 2 | 2 | 50 | 1/2 | 0/2 |
-| a11-polish-publish | 5 | 1903 | 7 | 9 | 133 | 0/5 | 4/5 |
+| a11-polish-publish | 5 | 2196 | 9 | 10 | 137 | 0/5 | 5/5 |
 | a2-typescript | 3 | 781 | 2 | 3 | 76 | 0/3 | 0/3 |
 | a3-api-consumption | 4 | 1190 | 4 | 7 | 111 | 1/4 | 3/4 |
 | a4-auth-client | 3 | 1400 | 3 | 6 | 80 | 1/3 | 3/3 |
@@ -166,7 +166,7 @@ so they do not hold the audit red. They are **not** resolved.
 | a11-polish-publish/0002-theming-dark-mode.html | 2214 | 10 | 2 | 2 | 27 | — | yes |
 | a11-polish-publish/0003-forms-validation.html | 2104 | 10 | 2 | 2 | 28 | — | yes |
 | a11-polish-publish/0004-environment-config.html | 1467 | 13 | 1 | 2 | 25 | — | yes |
-| a11-polish-publish/0005-store-submission.html | 1227 | 9 | 0 | 1 | 25 | — | n/a |
+| a11-polish-publish/0005-store-submission.html | 2693 | 11 | 2 | 2 | 29 | — | yes |
 | a2-typescript/0001-types-and-interfaces.html | 733 | 9 | 1 | 1 | 26 | — | n/a |
 | a2-typescript/0002-generics-utility-types.html | 864 | 11 | 1 | 1 | 25 | — | n/a |
 | a2-typescript/0003-typescript-react-native.html | 747 | 9 | 0 | 1 | 25 | — | n/a |
