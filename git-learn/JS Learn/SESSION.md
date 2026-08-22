@@ -1019,6 +1019,61 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
+### b4/0002 — the grace window went from described to implemented (2026-08-22)
+
+M3: **`refreshOutcome`**. 21 self-checks, 12 wrong-cases. Was `unverifiable`
+with no wrong-cases since 2026-08-16; now **verified**. All 19 email references
+gone — the two that remain say *"there is no email"*.
+
+**The lesson was already good, which changed the job.** It had *Why this way*,
+*When this breaks* with five subsections, and a cost table. It had already
+found its own reuse-detection bug and its own log-everyone-out bug. What it did
+**not** have was any of it executing, and one section that said *"nobody has a
+perfect answer… decide it deliberately"* about the grace window — which is a
+fine thing for prose to say and a bad thing for a lesson to leave as prose.
+
+Now implemented, and the two ways it goes wrong are the exercise:
+
+- **A replay must return the existing successor, not rotate again.** Rotating
+  on a retry forks the chain, so the client holds one token while the newest
+  row is another — and **the *next* genuine refresh is then reported as
+  reuse.** The failure surfaces one request after the bug, which is what makes
+  it expensive to find.
+- **The window is measured from `superseded_at`, not from creation.** A session
+  refreshed every fifteen minutes for a month is otherwise never inside any
+  window you pick.
+
+### `revoked_at` and `superseded_at` are now separate columns
+
+Both make a row unusable and **they mean opposite things.** Rotated away is
+probably a retry; deliberately killed is not, and it must **never** revoke the
+family — the user ended that session on purpose, and treating it as theft logs
+out every device they chose to keep.
+
+The old code had one column and therefore could not tell them apart. This is
+the same shape as `a11/0005`'s two counters and `b4/0001`'s two meanings of
+`expires_at`: **one name covering two events is a bug waiting for the second
+event to happen.**
+
+### The wrong-case that is a denial-of-service handle
+
+*"An unknown token is suspicious, so revoke the family to be safe."* There is
+no family — no row matched, so there is no `family_id` to revoke. And if it
+somehow worked, **anyone could log out any user by posting random bytes.**
+An unknown token teaches you nothing and must cost nothing. That is now the
+first rule of the exercise and the first wrong-case.
+
+### Sessions never expiring made the device list load-bearing
+
+`expires_at` is gone from `refresh_tokens`. Family-based revocation already
+existed and was **unusable on its own**: it revokes *a* family and nothing let
+a user say which. So `device_label` and `last_used_at` were added, and the
+exercise now includes `GET /devices` and `DELETE /devices/:familyId`.
+
+**With no expiry, revocation is the only way a session ends — and a revocation
+nobody can reach is not a control.** Without that screen the only exit from a
+compromised session is deleting the account.
+
 ### Settled 2026-08-22, fourth round
 
 Four more, all surfaced by the B4 work rather than carried over.
@@ -1177,7 +1232,7 @@ module contradicting itself.
 | Lesson | Currently | Becomes |
 |---|---|---|
 | ~~`0001`~~ | ~~argon2 over email + password~~ | **Done 2026-08-22.** Renamed to `0001-phone-signup-otp.html`; `phone_hash` with a pepper, OTP issue/verify, the denial oracle and its timing half, DLT. M3 on `verifyOtp` |
-| `0002` | JWT refresh rotation, keyed on email, **7-day refresh expiry** | Identity changes, and the 7-day expiry **goes** — the refresh token is now the device credential and does not expire. The 15-minute access token is unchanged. The real rewrite is that revocation becomes per-device rather than time-based. 19 email references to sweep |
+| ~~`0002`~~ | ~~email-keyed, 7-day refresh expiry~~ | **Done 2026-08-22.** Expiry removed, `superseded_at` split from `revoked_at`, device list added, grace window implemented. M3 on `refreshOutcome` |
 | `0003` | Rate limiting, examples keyed on email | **Gains real substance.** Three layers now decided: ~1 code per number per 60s, ~5 per number per day, and a per-IP ceiling. The daily cap is the one that bounds the bill — without it a script walking the number range costs real money whether or not anyone signs up. Per-IP alone was rejected: Indian carriers NAT huge numbers of users behind shared addresses, so a useful limit locks out real people. 35 email references |
 
 **The OTP-specific pass** — the student chose the option that includes it.
@@ -1452,6 +1507,7 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `a11/0003` | `toCreateTokenPayload` | blank is an absence, never `''`; `maxUses: 0` and absent are opposites; an unreadable value is refused, never defaulted |
 | `a11/0002` | `auditContrast` | the sRGB gamma decode, which the usual anchors cannot catch; a pair is audited, not a colour; a value with alpha has no ratio and must be skipped, not scored |
 | `a11/0001` | `swipeOutcome` | the threshold is a *fraction* of the width, never a pixel; a flick back vetoes a committed distance; `commit` decides the gesture, never whether the action asks first |
+| `b4/0002` | `refreshOutcome` | an unknown token must cost nothing, because there is no family to revoke and garbage would otherwise log anyone out; a replay returns the *existing* successor, never a fresh rotation; logout is not theft |
 | `a11/0005` | `planRelease` | an OTA moves no numbers, because bumping the version is what stops it reaching anyone; `versionCode` never resets and `buildNumber` always does; a crypto change is plain JS and still needs a reviewed build |
 | `b4/0001` | `verifyOtp` | a null `expires_at` is refused here and honoured on `tokens`; the cap gates the comparison rather than reporting on it; every refusal is byte-identical and the reason exists only for the log |
 

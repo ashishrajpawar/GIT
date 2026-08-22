@@ -25,7 +25,7 @@
 
     <div class="callout">
       <div class="callout-title">Why this matters for Token</div>
-      <p>After login, the mobile app needs to make API requests without sending the password every time. JWTs (JSON Web Tokens) are the standard: the server issues a signed token, the client sends it with every request, the server verifies the signature without a database lookup. But JWTs can't be revoked once issued — so we pair a short-lived access token with a longer-lived refresh token that can be rotated and revoked.</p>
+      <p>Once the number is verified, the mobile app needs to make API requests without asking for a new SMS code every time. JWTs (JSON Web Tokens) are the standard: the server issues a signed token, the client sends it with every request, the server verifies the signature without a database lookup. But JWTs can't be revoked once issued — so we pair a short-lived access token with a longer-lived refresh token that can be rotated and revoked.</p>
     </div>
 
     <h2>How JWT works</h2>
@@ -36,7 +36,11 @@
 { "alg": "HS256", "typ": "JWT" }
 
 // Payload: your data (claims)
-{ "sub": "42", "email": "ashish@example.com", "iat": 1700000000, "exp": 1700000900 }
+{ "sub": "42", "iat": 1700000000, "exp": 1700000900 }
+
+// That is the whole payload. There is no email to put in it, and the phone
+// number must never go in one: a JWT is base64, not encrypted, and it lands
+// in logs, crash reports and proxy traces routinely.
 
 // Signature: HMAC of header + payload using your secret
 // If anyone modifies the payload, the signature won't match → rejected</code></pre>
@@ -57,7 +61,7 @@ npm install -D @types/jsonwebtoken</code></pre>
       <tr style="border-bottom:1px solid var(--gray-200);">
         <td style="padding:0.5rem;">Lifetime</td>
         <td style="padding:0.5rem;">15 minutes</td>
-        <td style="padding:0.5rem;">7 days</td>
+        <td style="padding:0.5rem;">Until revoked — no expiry</td>
       </tr>
       <tr style="border-bottom:1px solid var(--gray-200);">
         <td style="padding:0.5rem;">Stored in</td>
@@ -97,13 +101,16 @@ const ACCESS_EXPIRY = '15m';
 const REFRESH_EXPIRY_DAYS = 7;
 
 interface TokenPayload {
-  sub: string;  // user id
-  email: string;
+  sub: string;  // user id, and nothing else
 }
 
-export function signAccessToken(user: { id: number; email: string }): string {
+// A JWT is SIGNED, not encrypted. Anyone holding one can base64-decode it,
+// and access tokens land in proxy logs and crash reports routinely -- so a
+// claim earns its place by being needed on every request AND cheap to be
+// wrong about. sub qualifies. The phone number never would.
+export function signAccessToken(userId: number): string {
   return jwt.sign(
-    { sub: String(user.id), email: user.email } as TokenPayload,
+    { sub: String(userId) } as TokenPayload,
     ACCESS_SECRET,
     { expiresIn: ACCESS_EXPIRY }
   );
@@ -121,15 +128,16 @@ function hashToken(token: string): string {
 // familyId ties every rotation of one login together. It is what makes reuse
 // detection possible - see "When this breaks".
 export async function createRefreshToken(
-  client: PoolClient, userId: number, familyId?: string
+  client: PoolClient, userId: number, familyId?: string, deviceLabel?: string
 ): Promise&lt;string&gt; {
   const token = randomBytes(40).toString('hex');
-  const expiresAt = new Date(Date.now() + REFRESH_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
 
+  // No expiresAt. A refresh token dies when it is revoked or superseded,
+  // never on a clock -- see "Sessions do not expire" below.
   await client.query(
-    `INSERT INTO refresh_tokens (user_id, family_id, token_hash, expires_at)
+    `INSERT INTO refresh_tokens (user_id, family_id, token_hash, device_label)
      VALUES ($1, COALESCE($2, gen_random_uuid()), $3, $4)`,
-    [userId, familyId ?? null, hashToken(token), expiresAt]
+    [userId, familyId ?? null, hashToken(token), deviceLabel ?? 'Unknown device']
   );
 
   return token;
@@ -145,9 +153,15 @@ CREATE TABLE refresh_tokens (
   -- so "this session" is a thing you can revoke without touching the others.
   family_id   UUID NOT NULL,
   token_hash  TEXT NOT NULL UNIQUE,
-  expires_at  TIMESTAMPTZ NOT NULL,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  revoked_at  TIMESTAMPTZ
+  -- No expires_at. A refresh token dies by revocation, not by clock.
+  -- What the user needs instead is enough to RECOGNISE the session:
+  device_label  TEXT        NOT NULL,
+  last_used_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  revoked_at    TIMESTAMPTZ,
+  -- Set when this row is rotated away. Distinct from revoked_at, and the
+  -- distinction is what separates a retry from a theft -- see below.
+  superseded_at TIMESTAMPTZ
 );
 
 CREATE INDEX idx_refresh_tokens_user   ON refresh_tokens(user_id);
@@ -157,36 +171,63 @@ CREATE INDEX idx_refresh_tokens_family ON refresh_tokens(family_id);
 
     <p>Store the <strong>hash</strong> of the refresh token, not the token itself. If the database is breached, attackers can't use the hashed values as refresh tokens.</p>
 
-    <h2>Updated login route</h2>
+    <div class="callout">
+      <div class="callout-title">Sessions do not expire, so the device list is not a nicety</div>
+      <p>Token has no password. You verify your number once per device and
+      stay signed in — which means <strong>revocation is the only way a
+      session ever ends</strong>, and a revocation nobody can reach is not a
+      control.</p>
+      <p>The family-based logout further down is correct and, on its own,
+      unusable: it revokes <em>a</em> family, and nothing so far lets a user
+      say which. That is what <code>device_label</code> and
+      <code>last_used_at</code> are for — a settings screen reading
+      <em>"Pixel 7 — last used 3 minutes ago"</em> next to
+      <em>"iPhone — last used 4 months ago"</em>, each with a Revoke button.
+      <strong>Building indefinite sessions without that screen means the only
+      way out of a compromised session is to delete the account.</strong></p>
+      <p>Two columns rather than one, deliberately: <code>revoked_at</code>
+      means <em>someone ended this</em>, and <code>superseded_at</code> means
+      <em>this rotated into its successor</em>. Both make a row unusable and
+      they are not the same event, which the reuse-detection section depends
+      on entirely.</p>
+    </div>
 
-    <pre><code>router.post('/login', async (req, res, next) =&gt; {
-  try {
-    const { email, password } = loginSchema.parse(req.body);
+    <h2>Where the session starts</h2>
 
-    const { rows } = await pool.query(
-      'SELECT id, email, display_name, password_hash FROM users WHERE email = $1',
-      [email]
-    );
-    if (!rows[0]) throw ApiError.unauthorized('Invalid email or password');
+    <p>There is no login route here. <code>b4/0001</code>'s
+    <code>POST /auth/verify-code</code> is the only thing that creates a
+    session, and this is the part that gets added to the end of it, inside the
+    same transaction that consumes the OTP:</p>
 
-    const valid = await argon2.verify(rows[0].password_hash, password);
-    if (!valid) throw ApiError.unauthorized('Invalid email or password');
+    <pre><code>// ... inside POST /auth/verify-code, after the OTP is consumed
+// and the user row is upserted.
 
-    const user = rows[0];
-    const accessToken = signAccessToken(user);
-    // A fresh login starts a new family - no familyId passed.
-    const refreshToken = await createRefreshToken(pool, user.id);
+const accessToken = signAccessToken(user.id);
 
-    res.json({
-      data: {
-        user: { id: user.id, email: user.email, displayName: user.display_name },
-        accessToken,
-        refreshToken,
-      },
-      success: true,
-    });
-  } catch (err) { next(err); }
+// A fresh verification starts a new family - no familyId passed.
+// deviceLabel comes from the client and is for the USER to read, not
+// for us to trust: it is displayed on their device list and nowhere
+// else, so a lie in it deceives only the person who sent it.
+const refreshToken = await createRefreshToken(
+  client, user.id, undefined, req.body.deviceLabel
+);
+
+await client.query('COMMIT');
+
+res.json({
+  data: {
+    user: { id: user.id, displayName: user.display_name },
+    needsDisplayName: user.display_name === PLACEHOLDER_NAME,
+    accessToken,
+    refreshToken,
+  },
+  success: true,
 });</code></pre>
+
+    <p>Note what is <em>not</em> in that response: no email, because there is
+    none, and no phone number, because the client already knows it and the
+    server has only a hash. <strong>Every field in an auth response should be
+    something the caller needs and cannot already compute.</strong></p>
 
     <h2>Refresh endpoint with rotation</h2>
 
@@ -201,54 +242,65 @@ CREATE INDEX idx_refresh_tokens_family ON refresh_tokens(family_id);
     try {
       await client.query('BEGIN');
 
-      // Look it up WITHOUT filtering on revoked_at. A revoked row is the
-      // whole point: it means this token was already used once.
+      // Look it up WITHOUT filtering on revoked_at or superseded_at. A
+      // dead row is the whole point: it means this token was used before.
+      // No JOIN to users -- the access token carries only sub, so nothing
+      // from that table is needed here any more.
       const { rows } = await client.query(
-        `SELECT rt.*, u.email
-           FROM refresh_tokens rt
-           JOIN users u ON rt.user_id = u.id
-          WHERE rt.token_hash = $1
-          FOR UPDATE OF rt`,
+        `SELECT * FROM refresh_tokens
+          WHERE token_hash = $1
+          FOR UPDATE`,
         [tokenHash]
       );
 
-      const record = rows[0];
+      // The whole decision, as a pure function -- see the exercise below.
+      const outcome = refreshOutcome(toRecord(rows[0]), {
+        now: Date.now(),
+        graceMs: 10_000,
+      });
 
-      // Unknown token: nothing to revoke, nothing to learn from.
-      if (!record) {
-        await client.query('ROLLBACK');
-        throw ApiError.unauthorized('Invalid refresh token');
-      }
-
-      // REUSE. Someone presented a token that was already rotated away.
-      // Either it was stolen, or the legitimate client is retrying - and the
-      // server cannot tell which, so it assumes the worse one and kills the
-      // whole family. The other sessions are untouched.
-      if (record.revoked_at !== null) {
+      if (outcome.revokeFamily) {
         await client.query(
           `UPDATE refresh_tokens SET revoked_at = NOW()
             WHERE family_id = $1 AND revoked_at IS NULL`,
-          [record.family_id]
+          [rows[0].family_id]
         );
+      }
+
+      if (outcome.action === 'reject') {
+        // COMMIT rather than ROLLBACK: if a family was just revoked, that
+        // revocation must survive. When nothing was written it is a no-op.
         await client.query('COMMIT');
         throw ApiError.unauthorized('Invalid refresh token');
       }
 
-      if (new Date(record.expires_at) &lt;= new Date()) {
-        await client.query('ROLLBACK');
-        throw ApiError.unauthorized('Invalid refresh token');
+      if (outcome.action === 'replay') {
+        // A retry of a request whose response was lost. Hand back the
+        // successor that already exists instead of rotating again --
+        // rotating here would fork the chain and turn the NEXT genuine
+        // refresh into a reuse.
+        await client.query('COMMIT');
+        return res.json({
+          data: {
+            accessToken: signAccessToken(rows[0].user_id),
+            refreshToken: outcome.replayToken,
+          },
+          success: true,
+        });
       }
 
-      // Rotate. Both statements are in one transaction: revoking the old
+      // Rotate. Both statements are in one transaction: superseding the old
       // token and issuing the new one must succeed or fail together, or a
       // failed insert leaves the user with nothing.
       await client.query(
-        'UPDATE refresh_tokens SET revoked_at = NOW() WHERE id = $1',
-        [record.id]
+        'UPDATE refresh_tokens SET superseded_at = NOW(), last_used_at = NOW() WHERE id = $1',
+        [rows[0].id]
       );
 
-      const newAccessToken = signAccessToken({ id: record.user_id, email: record.email });
-      const newRefreshToken = await createRefreshToken(client, record.user_id, record.family_id);
+      const newAccessToken = signAccessToken(rows[0].user_id);
+      const newRefreshToken = await createRefreshToken(
+        client, rows[0].user_id, rows[0].family_id, rows[0].device_label
+      );
 
       await client.query('COMMIT');
 
@@ -293,8 +345,8 @@ export function requireAuth(req, res, next) {
     // confusion attacks worked. Never let the token choose how it is checked.
     const payload = jwt.verify(token, process.env.JWT_SECRET!, {
       algorithms: ['HS256'],
-    }) as { sub: string; email: string };
-    req.user = { id: parseInt(payload.sub, 10), email: payload.email };
+    }) as { sub: string };
+    req.user = { id: parseInt(payload.sub, 10) };
     next();
   } catch (err) {
     if (err.name === 'TokenExpiredError') {
@@ -385,19 +437,30 @@ router.post('/logout-all', requireAuth, async (req, res, next) =&gt; {
       was already exchanged. Either the thief is using their copy after the
       real client rotated, or the real client is using theirs after the thief
       did. The server cannot tell which — so it kills the whole family, and
-      both of them have to log in. The legitimate user knows their password.
+      both of them have to sign in again. <strong>The legitimate user has the
+      phone.</strong> That is the whole recovery path, and it is why this
+      trade is affordable here: killing a family costs a real user one SMS,
+      not a forgotten-password support ticket.
     </p>
 
-    <h3>Plain SHA-256 for the refresh token, argon2 for the password</h3>
+    <h3>Plain SHA-256 for the refresh token, a pepper for the phone</h3>
 
     <p>
-      Using a fast hash on a credential looks like the mistake B4.1 spent a
-      lesson warning about. It is not, and the difference is where the value
-      came from. A password is chosen by a human and might be
-      <code>monsoon2024</code>; argon2 is slow so that trying millions of
-      guesses costs real money. A refresh token is 40 bytes from the CSPRNG —
-      320 bits, unguessable at any speed. Slow hashing would add latency to
-      every refresh and defend against nothing.
+      Using a fast hash on a credential looks like the mistake
+      <code>b4/0001</code> spends a section warning about. It is not, and the
+      difference is <strong>where the value came from</strong>. A phone number
+      is ten digits with a known prefix and an OTP is six digits — both small
+      enough to enumerate, which is why both are peppered. A refresh token is
+      40 bytes from the CSPRNG — 320 bits, unguessable at any speed. Slow
+      hashing or a pepper would add cost to every refresh and defend against
+      nothing.
+    </p>
+    <p>
+      <strong>The rule, rather than the three cases: how you store a secret is
+      decided by the size of the space it was drawn from, never by how
+      important it feels.</strong> A refresh token is far more powerful than a
+      phone number and needs far less protection at rest, because guessing it
+      is not a strategy anyone can pursue.
     </p>
 
     <hr>
@@ -461,13 +524,33 @@ if (!rows[0]) {
       poor connection is logged out for doing nothing wrong.
     </p>
     <p>
-      Nobody has a perfect answer. The usual mitigation is a short grace window:
-      remember the token that <em>replaced</em> each revoked one, and if a
-      revoked token is presented within a few seconds of its rotation, return
-      the same new pair again rather than declaring theft. It makes replay
-      inside that window possible, which is a real cost — and it is a smaller
-      cost than logging people out on a train. Decide it deliberately; do not
-      discover it from support tickets.
+      Nobody has a perfect answer. The mitigation, and this lesson now
+      implements it rather than describing it: a <strong>short grace
+      window</strong>. Remember the token that <em>replaced</em> each
+      superseded one, and if a superseded token arrives within a few seconds
+      of its rotation, hand back the same successor again instead of declaring
+      theft. It makes replay possible inside that window, which is a real
+      cost — and a smaller one than logging people out on a train.
+    </p>
+    <p>
+      <strong>Two things about it are easy to get wrong and both are in the
+      exercise.</strong> First, the replay must return the <em>existing</em>
+      successor, not rotate again: issuing a fresh token on a retry forks the
+      chain, so the client ends up holding one token while the newest row is
+      another, and the <em>next</em> genuine refresh is then reported as
+      reuse. Second, the grace window is measured from when the token was
+      superseded, not from when it was created — a session refreshed every
+      fifteen minutes for a month would otherwise be permanently outside any
+      window you pick.
+    </p>
+    <p>
+      This is also why <code>superseded_at</code> and <code>revoked_at</code>
+      are separate columns. <strong>A token that was rotated away and a token
+      someone deliberately killed are both unusable and mean opposite
+      things.</strong> Presenting the first is probably a retry; presenting the
+      second is not, and it must never revoke the family — the user already
+      ended that session on purpose, and punishing them for it would log out
+      every device they kept.
     </p>
 
     <h3>Verifying a token the token gets to describe</h3>
@@ -522,20 +605,40 @@ if (!rows[0]) {
           <td>Concurrent refreshes of the same session serialise. Harmless at Token's scale, and a reason the client should not be firing several at once — which is what A3.2's single-flight refresh is for.</td>
         </tr>
         <tr>
-          <td>A 7-day refresh lifetime</td>
-          <td>A user who does not open the app for a week logs in again. Longer is friendlier and widens the window a stolen token stays useful; there is no correct number, only a chosen one.</td>
+          <td>A refresh token that never expires</td>
+          <td>A device you stopped using two years ago still holds a live session until someone revokes it. There is no clock cleaning up after you, which is exactly why the device list is part of the feature rather than a later addition. The alternative — a fixed lifetime — bought nothing here: the re-verification SMS costs money and the attacker holding the phone receives the code too.</td>
         </tr>
       </tbody>
     </table>
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h3>Try it yourself — this one is broken on purpose</h3>
+
+    <p>The refresh rule as it is usually first written, run against six real
+    requests. Two of them log out a user who did nothing wrong, and one hands
+    an attacker a way to log out anyone.</p>
+
+    <div id="playground-refresh"></div>
+
+    <h2>Now build it yourself</h2>
+
+    <p>The endpoint needs Postgres. The decision it makes when a refresh
+    token arrives is four comparisons, and getting one of them wrong either
+    signs people out on a train or lets a thief keep the session.</p>
+
+    <div id="exercise-refresh"></div>
+    <div id="pg-exercise-refresh"></div>
+
+    <h3>And the endpoints</h3>
 
     <div id="exercise-1"></div>
 
+    <div id="explain-b4-0002"></div>
+
     <hr>
 
+    <h2>Quiz</h2>
     <div id="lesson-quiz"></div>
 
     <nav class="lesson-nav">
@@ -546,30 +649,262 @@ if (!rows[0]) {
   </div>
 
   <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
-    createSolution("exercise-1", {
-      exercise: "Implement the full JWT auth flow: (1) Create the refresh_tokens migration, (2) Write signAccessToken and createRefreshToken functions, (3) Update the login route to return both tokens, (4) Write the /refresh endpoint with rotation, (5) Write the requireAuth middleware, (6) Write the /logout endpoint. Test the full cycle: register → login (get tokens) → access a protected route → wait for expiry → refresh → access again → logout.",
+    createPlayground("playground-refresh", `// BROKEN ON PURPOSE. The refresh rule as it is usually first written.
+
+function refreshOutcome(row, config) {
+  if (!row) {
+    // "An unknown token is suspicious -- kill the family to be safe."
+    return { action: "reject", reason: "unknown", revokeFamily: true };
+  }
+  // "Any dead row means it was used before, so it is theft."
+  if (row.revokedAt != null || row.supersededAt != null) {
+    return { action: "reject", reason: "reuse", revokeFamily: true };
+  }
+  return { action: "rotate", reason: "ok", revokeFamily: false };
+}
+
+const NOW = 1_000_000;
+const live = { familyId: "f1", revokedAt: null, supersededAt: null, replacedBy: null };
+
+const requests = [
+  { what: "normal refresh",            row: live },
+  { what: "token nobody ever issued",  row: null },
+  { what: "retry 2s after rotating",   row: { ...live, supersededAt: NOW - 2000, replacedBy: "t2" } },
+  { what: "stolen, replayed an hour later", row: { ...live, supersededAt: NOW - 3600000, replacedBy: "t2" } },
+  { what: "token the user logged out", row: { ...live, revokedAt: NOW - 50000 } },
+  { what: "40 random bytes from an attacker", row: null },
+];
+
+for (const r of requests) {
+  const out = refreshOutcome(r.row, { now: NOW, graceMs: 10000 });
+  console.log(
+    r.what.padEnd(28) + out.action.padEnd(8) +
+    (out.revokeFamily ? "AND KILLS THE SESSION" : "")
+  );
+}
+
+console.log("");
+console.log("Three are wrong:");
+console.log("  An unknown token kills a family -- but WHICH family? There is");
+console.log("  no row, so there is no family_id. In real code that query");
+console.log("  either throws or matches nothing. And if it did work, anyone");
+console.log("  could log out anyone by posting garbage.");
+console.log("");
+console.log("  The 2-second retry is a lost response, not a theft. The user");
+console.log("  is on a train, and you just signed them out of every device.");
+console.log("");
+console.log("  The logged-out token gets treated as theft too, so ending one");
+console.log("  session deliberately ends all the others as a punishment.");`);
+
+    createSolution("exercise-refresh", {
+      exercise: `Write refreshOutcome(row, config) — decide what happens when a refresh token arrives.\n\nrow is the refresh_tokens row matching the presented token's hash, or null if no row matched:\n\n  { familyId: "f1", revokedAt: null, supersededAt: null, replacedBy: null }\n\nrevokedAt is set when someone ENDED the session (logout, or a family kill). supersededAt is set when the row ROTATED into a successor, and replacedBy is that successor's token. Both are ms timestamps or null.\n\nconfig is { now, graceMs }.\n\nReturn { action, reason, revokeFamily, replayToken }.\n\naction is 'rotate', 'replay' or 'reject'. reason is for your logs: 'ok', 'unknown', 'revoked', 'retry' or 'reuse'.\n\nThe rules:\n\n1. NO ROW: reject with reason 'unknown', and revokeFamily MUST be false. There is no family to revoke — you did not find a row, so you do not have a family_id. Worse, if you somehow did revoke something, anyone could log any user out by posting random bytes. An unknown token teaches you nothing and must cost nothing.\n\n2. revokedAt SET: reject with reason 'revoked', revokeFamily false. The session was deliberately ended. It is already dead, and treating it as theft would revoke the OTHER devices the user chose to keep — punishing them for logging out properly.\n\n3. supersededAt SET, WITHIN THE GRACE WINDOW: this is a retry whose response was lost. Return action 'replay', reason 'retry', revokeFamily false, and replayToken set to row.replacedBy. Within means config.now - row.supersededAt <= config.graceMs. Measure from supersededAt, never from a creation time — a session refreshed every 15 minutes for a month would otherwise never be inside any window.\n\n4. supersededAt SET, PAST THE WINDOW: reject with reason 'reuse' and revokeFamily TRUE. This is the one case that kills the family. Someone is holding a token that was exchanged long ago, and the server cannot tell the thief from the victim — so both are signed out and both sign in again.\n\n5. OTHERWISE: action 'rotate', reason 'ok', revokeFamily false, replayToken null.\n\n6. Precedence: rule 2 before rule 3/4. A row can be both superseded and later revoked by a family kill, and 'revoked' is the honest reading — the family is already dead, so re-killing it is noise in the log at best.\n\n7. replayToken is null for every action except 'replay'. Never mutate row or config.`,
       hints: [
-        "Store the HASH of the refresh token in the database, not the raw value.",
-        "On refresh: revoke the old token, issue a new pair. If the old token is already revoked, someone stole it — revoke everything for that user.",
-        "The access token goes in the Authorization: Bearer <token> header. The refresh token is sent in the body to /api/auth/refresh."
+        "Write the four early returns in the order the rules are numbered and the precedence falls out for free. The only branch that sets revokeFamily true is rule 4 — if you find yourself setting it anywhere else, re-read rule 1.",
+        "Rule 3 and rule 4 are the same condition (supersededAt != null) split by one comparison. Compute the age once — config.now - row.supersededAt — and branch on it, rather than writing the null check twice.",
+        "The boundary in rule 3 is <=, so a retry landing exactly on graceMs is still a retry. Choosing < there means the one request sitting exactly on the boundary is treated as theft, which is the least defensible place to put a session-ending decision."
+      ],
+      solution: `function refreshOutcome(row, config) {
+  // Rule 1. No row means no family, so there is nothing that COULD be
+  // revoked -- and if there were, posting random bytes would be a way to
+  // log out any user. An unknown token must cost nothing.
+  if (!row) {
+    return {
+      action: "reject", reason: "unknown",
+      revokeFamily: false, replayToken: null,
+    };
+  }
+
+  // Rule 2, and rule 6 puts it first. Deliberately ended is not theft.
+  if (row.revokedAt != null) {
+    return {
+      action: "reject", reason: "revoked",
+      revokeFamily: false, replayToken: null,
+    };
+  }
+
+  // Rules 3 and 4 -- one condition, split by one comparison.
+  if (row.supersededAt != null) {
+    const age = config.now - row.supersededAt;
+
+    if (age <= config.graceMs) {
+      // A retry of a request whose response was lost. Hand back the
+      // successor that already exists; rotating again would fork the
+      // chain and make the NEXT genuine refresh look like reuse.
+      return {
+        action: "replay", reason: "retry",
+        revokeFamily: false, replayToken: row.replacedBy,
+      };
+    }
+
+    // Rule 4 -- the only branch that kills a family.
+    return {
+      action: "reject", reason: "reuse",
+      revokeFamily: true, replayToken: null,
+    };
+  }
+
+  // Rule 5.
+  return {
+    action: "rotate", reason: "ok",
+    revokeFamily: false, replayToken: null,
+  };
+}`
+    });
+
+    createPlayground("pg-exercise-refresh", `// Write refreshOutcome(row, config) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(v) { return JSON.stringify(v); }
+
+var NOW = 1000000;
+// graceMs 10000 and the ages below are chosen so no two are equal and
+// none is zero -- a swapped variable or a dropped comparison cannot pass
+// by coincidence.
+function cfg(over) {
+  var c = { now: NOW, graceMs: 10000 };
+  for (var k in (over || {})) c[k] = over[k];
+  return c;
+}
+function row(over) {
+  var r = { familyId: "f1", revokedAt: null, supersededAt: null, replacedBy: null };
+  for (var k in (over || {})) r[k] = over[k];
+  return r;
+}
+function got(r, config) {
+  var out = refreshOutcome(r, config || cfg());
+  return out || {};
+}
+
+try {
+  if (typeof refreshOutcome !== "function") throw new Error("not written yet");
+
+  // Rule 5
+  check("a live token rotates",
+    got(row()).action === "rotate", "got " + show(got(row()).action));
+  check("...and rotating never revokes a family",
+    got(row()).revokeFamily === false,
+    "revokeFamily was " + show(got(row()).revokeFamily));
+
+  // Rule 1 -- the DoS handle
+  check("an unknown token is rejected",
+    got(null).action === "reject", "got " + show(got(null).action));
+  check("...and an unknown token NEVER revokes a family",
+    got(null).revokeFamily === false,
+    "anyone could log any user out by posting random bytes");
+  check("...reported as unknown, not reuse",
+    got(null).reason === "unknown", "got " + show(got(null).reason));
+
+  // Rule 2 -- logout is not theft
+  var out2 = got(row({ revokedAt: NOW - 50000 }));
+  check("a deliberately revoked token is rejected",
+    out2.action === "reject", "got " + show(out2.action));
+  check("...and does NOT revoke the family",
+    out2.revokeFamily === false,
+    "logging out of one device would end all the others");
+  check("...reported as revoked, not reuse",
+    out2.reason === "revoked", "got " + show(out2.reason));
+
+  // Rule 3 -- the retry
+  var retry = row({ supersededAt: NOW - 2000, replacedBy: "t2" });
+  check("a retry inside the grace window replays",
+    got(retry).action === "replay", "got " + show(got(retry).action));
+  check("...returning the EXISTING successor, not a new token",
+    got(retry).replayToken === "t2", "got " + show(got(retry).replayToken));
+  check("...and does not revoke the family",
+    got(retry).revokeFamily === false,
+    "a user on a bad connection would be signed out of everything");
+  check("a retry landing exactly on the window is still a retry",
+    got(row({ supersededAt: NOW - 10000, replacedBy: "t2" })).action === "replay",
+    "got " + show(got(row({ supersededAt: NOW - 10000, replacedBy: "t2" })).action));
+
+  // Rule 4 -- the only family kill
+  var theft = row({ supersededAt: NOW - 3600000, replacedBy: "t2" });
+  check("a token replayed long after rotation is reuse",
+    got(theft).reason === "reuse", "got " + show(got(theft).reason));
+  check("...and THIS is the branch that revokes the family",
+    got(theft).revokeFamily === true,
+    "reuse detection that does not revoke detects nothing");
+  check("...and rejects rather than replaying",
+    got(theft).action === "reject", "got " + show(got(theft).action));
+  check("one millisecond past the window is reuse, not a retry",
+    got(row({ supersededAt: NOW - 10001, replacedBy: "t2" })).reason === "reuse",
+    "got " + show(got(row({ supersededAt: NOW - 10001, replacedBy: "t2" })).reason));
+
+  // Rule 6 -- precedence
+  check("superseded AND revoked reports revoked, and spares the family",
+    got(row({ supersededAt: NOW - 3600000, revokedAt: NOW - 10, replacedBy: "t2" })).reason === "revoked" &&
+    got(row({ supersededAt: NOW - 3600000, revokedAt: NOW - 10, replacedBy: "t2" })).revokeFamily === false,
+    "got " + show(got(row({ supersededAt: NOW - 3600000, revokedAt: NOW - 10, replacedBy: "t2" }))));
+
+  // Rule 7
+  check("replayToken is null on every non-replay outcome",
+    got(row()).replayToken === null &&
+    got(null).replayToken === null &&
+    got(theft).replayToken === null,
+    "got " + show([got(row()).replayToken, got(null).replayToken, got(theft).replayToken]));
+
+  // The grace window must be measured from supersededAt, not creation.
+  check("an old session rotating just now still replays on retry",
+    got(row({ supersededAt: NOW - 500, replacedBy: "t9" })).action === "replay",
+    "a month-old family refreshing normally must still get its grace window");
+} catch (err) {
+  console.log("Self-check could not run: " + err.message);
+}
+
+// Rule 7's mutation half, on its own -- a mutation bug can throw rather
+// than return, and a throw would hide every check above it.
+try {
+  var r7 = row({ supersededAt: NOW - 2000, replacedBy: "t2" });
+  var c7 = cfg();
+  refreshOutcome(r7, c7);
+  check("refreshOutcome does not mutate the row",
+    r7.supersededAt === NOW - 2000 && r7.revokedAt === null && r7.replacedBy === "t2",
+    "row is now " + show(r7));
+  check("...or the config",
+    c7.now === NOW && c7.graceMs === 10000,
+    "config is now " + show(c7));
+} catch (err) {
+  console.log("Mutation check could not run: " + err.message);
+}`);
+
+    createExplain("explain-b4-0002", {
+      prompt: "A refresh token that was <em>rotated away</em> and one the user <em>logged out</em> are both unusable. Explain why presenting them must produce different outcomes, and who gets hurt if you treat them the same."
+    });
+
+    createSolution("exercise-1", {
+      unverifiable: "the deliverable is Express routes and SQL migrations needing Postgres",
+      exercise: "Implement the full session flow: (1) Create the refresh_tokens migration with family_id, device_label, last_used_at, revoked_at and superseded_at, (2) Write signAccessToken and createRefreshToken, (3) Extend /auth/verify-code to return both tokens, (4) Write /refresh using refreshOutcome, (5) Write requireAuth, (6) Write /logout (this family) and /logout-all, (7) Write GET /devices returning the user's live families with their labels and last_used_at, and DELETE /devices/:familyId to revoke one. Test the full cycle: request-code → verify-code → protected route → refresh → replay the old token twice (once immediately, once after the grace window) → revoke from the device list.",
+      hints: [
+        "Store the HASH of the refresh token in the database, not the raw value. Plain SHA-256 is right here — the token is 320 random bits, so slow hashing would cost every refresh and defend against nothing.",
+        "GET /devices should group by family_id and return the newest row per family — that is the live one. A family whose newest row is revoked is a dead session and should not appear at all.",
+        "/logout takes the refresh token in the BODY and must not sit behind requireAuth. A user whose app has been closed for an hour has no valid access token, and logout failing exactly when the session is stale is the wrong way round."
       ],
       solution: `// Full implementation follows the code shown in this lesson.
 // Key test sequence with curl:
 
-# 1. Register
-curl -X POST http://localhost:3000/api/auth/register \\
+# 1. Request a code. Prints nothing useful -- the response is identical
+#    whether or not the number is registered. Read the code from the SMS,
+#    or from the dev-mode log line if the provider is stubbed.
+curl -X POST http://localhost:3000/api/auth/request-code \\
   -H "Content-Type: application/json" \\
-  -d '{"email":"test@example.com","password":"mypassword123","displayName":"Test User"}'
+  -d '{"phone":"9876543210"}'
 
-# 2. Login (get tokens)
-curl -X POST http://localhost:3000/api/auth/login \\
+# 2. Verify it. This both creates the account (first time) and starts the
+#    session, so there is no separate register step.
+curl -X POST http://localhost:3000/api/auth/verify-code \\
   -H "Content-Type: application/json" \\
-  -d '{"email":"test@example.com","password":"mypassword123"}'
+  -d '{"phone":"9876543210","code":"428391","deviceLabel":"curl"}'
 # Save the accessToken and refreshToken from response
 
 # 3. Access protected route
@@ -747,12 +1082,12 @@ curl -X POST http://localhost:3000/api/auth/logout \\
         code: "CREATE TABLE refresh_tokens (\n  id SERIAL PRIMARY KEY,\n  user_id INTEGER REFERENCES users(id),\n  token_hash TEXT NOT NULL,\n  created_at TIMESTAMPTZ DEFAULT NOW()\n);",
         options: [
           "SERIAL should be UUID",
-          "Missing revoked_at and expires_at columns — can't revoke or expire tokens",
+          "Missing revoked_at, superseded_at and family_id — nothing can be revoked, and reuse cannot be detected",
           "user_id should be TEXT not INTEGER",
           "created_at should not have a default"
         ],
         correct: 1,
-        explanation: "Without a revoked_at column, you can't mark tokens as revoked (needed for rotation detection and logout). Without expires_at, tokens live forever unless you delete rows. A proper schema needs: token_hash, user_id, expires_at, revoked_at, and optionally a family_id to group rotation chains."
+        explanation: "Sessions here have no expiry, so revocation is the only way one ever ends — and with no revoked_at there is no way to end it at all. superseded_at is separate because a rotated token and a deliberately killed token mean opposite things: the first is probably a retry, the second must never revoke the family. family_id is what makes reuse detection possible, since revoking on reuse means revoking the chain rather than the single row."
       },
       {
         question: "What is the 'sub' claim in a JWT payload?",
@@ -811,15 +1146,15 @@ curl -X POST http://localhost:3000/api/auth/logout \\
       {
         type: "spot-the-bug",
         question: "What's wrong with this JWT payload for the Token app?",
-        code: "const payload = {\n  sub: userId,\n  email: user.email,\n  phone: user.phone,\n  role: 'user',\n  tokenCodes: user.tokens.map(t => t.code),\n  exp: Math.floor(Date.now() / 1000) + 900\n};",
+        code: "const payload = {\n  sub: userId,\n  phone: user.phone,\n  displayName: user.display_name,\n  tokenCodes: user.tokens.map(t => t.code),\n  exp: Math.floor(Date.now() / 1000) + 900\n};",
         options: [
           "exp calculation is wrong",
           "sub should be a number, not userId",
-          "Payload is bloated with sensitive data (email, phone) and mutable data (tokenCodes) that will be stale within 15 min",
-          "role should be an array"
+          "A JWT is signed but not encrypted, so this publishes the phone number and every token code to anywhere the header is logged — and tokenCodes is stale the moment one is revoked",
+          "displayName should be a separate claim namespace"
         ],
         correct: 2,
-        explanation: "JWTs should carry minimal claims. Putting email and phone in every token violates Token's privacy-first principle and leaks PII if the token is intercepted. tokenCodes will be stale the moment a user creates/revokes a token — the JWT can't update until refresh. Keep it to: sub, iat, exp. Fetch mutable data from the DB per-request."
+        explanation: "Base64 is not encryption. Anyone holding the token reads every claim, and access tokens land in proxy logs, crash reports and error-tracker payloads as a matter of course. The phone number is the account identifier and must never travel in one; the token codes are worse, since ADR-0007 says a code never appears in a log at all. tokenCodes is also mutable — revoke a token and the JWT keeps asserting it for up to 15 minutes. A claim earns its place by being needed on every request and cheap to be wrong about: sub, iat, exp."
       },
       {
         question: "Why should the Token app use short-lived access tokens (15 minutes) rather than long-lived ones (30 days)?",

@@ -14,11 +14,11 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
 | Quiz questions (track) | 2590 |
-| Avg teaching prose per track lesson | 2036 words |
-| Lessons with a playground | 85 / 96 |
+| Avg teaching prose per track lesson | 2044 words |
+| Lessons with a playground | 86 / 96 |
 | Lessons with an exercise | 96 / 96 |
 | **Deepened** (all 3 spine sections) | 16 / 96 |
-| **Verified** (code executed) | 67 / 96 |
+| **Verified** (code executed) | 68 / 96 |
 | Ran clean but had nothing to run | 0 / 96 |
 | Errors | 0 |
 | Known and blocked | 2 |
@@ -89,7 +89,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b10-security-compliance | 2 | 3899 | 5 | 4 | 53 | 1/2 | 2/2 |
 | b2-schema-design | 3 | 2185 | 3 | 6 | 81 | 0/3 | 3/3 |
 | b3-node-http-server | 4 | 2042 | 5 | 8 | 117 | 2/4 | 4/4 |
-| b4-auth-server | 3 | 2290 | 2 | 4 | 81 | 2/3 | 1/3 |
+| b4-auth-server | 3 | 2571 | 4 | 5 | 81 | 2/3 | 2/3 |
 | b5-websocket-server | 3 | 1961 | 6 | 6 | 77 | 0/3 | 3/3 |
 | b6-webrtc-signalling | 2 | 2009 | 2 | 2 | 52 | 1/2 | 0/2 |
 | b7-token-engine | 3 | 3211 | 7 | 6 | 77 | 3/3 | 3/3 |
@@ -207,7 +207,7 @@ so they do not hold the audit red. They are **not** resolved.
 | b3-node-http-server/0003-rest-api-design.html | 2378 | 10 | 1 | 2 | 28 | yes | yes |
 | b3-node-http-server/0004-input-validation-error-handling.html | 2850 | 9 | 1 | 2 | 30 | yes | yes |
 | b4-auth-server/0001-phone-signup-otp.html | 1867 | 6 | 2 | 2 | 25 | — | yes |
-| b4-auth-server/0002-jwt-refresh-rotation.html | 2689 | 9 | 0 | 1 | 26 | yes | n/a |
+| b4-auth-server/0002-jwt-refresh-rotation.html | 3533 | 9 | 2 | 2 | 26 | yes | yes |
 | b4-auth-server/0003-rate-limiting.html | 2314 | 7 | 0 | 1 | 30 | yes | n/a |
 | b5-websocket-server/0001-ws-connection-lifecycle.html | 1928 | 11 | 2 | 2 | 25 | — | yes |
 | b5-websocket-server/0002-message-routing.html | 1850 | 10 | 2 | 2 | 26 | — | yes |
