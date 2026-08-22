@@ -58,34 +58,94 @@ npm install react-hook-form @hookform/resolvers zod
     <pre><code>// shared/src/schemas/token.ts
 import { z } from 'zod';
 
+// A text input that the user left alone gives you '', not undefined.
+// Turn it into "absent" ONCE, here, rather than in every consumer.
+const optionalText = z
+  .string()
+  .transform((s) =&gt; s.trim())
+  .transform((s) =&gt; (s === '' ? undefined : s));
+
 export const createTokenSchema = z.object({
+  // Trim BEFORE measuring: '   ab   ' is a 2-character label, not an 8.
   label: z
     .string()
-    .min(3, 'Label must be at least 3 characters')
-    .max(50, 'Label must be at most 50 characters'),
-  issuedTo: z
-    .string()
-    .max(100, 'Name too long')
-    .optional()
-    .or(z.literal('')),
-  expiresAt: z
-    .string()
-    .datetime()
-    .refine((d) =&gt; new Date(d) &gt; new Date(), 'Expiry must be in the future')
-    .optional()
-    .or(z.literal('')),
+    .transform((s) =&gt; s.trim())
+    .pipe(
+      z
+        .string()
+        .min(3, 'Label must be at least 3 characters')
+        .max(50, 'Label must be at most 50 characters')
+    ),
+
+  issuedTo: optionalText.pipe(
+    z.string().max(100, 'Name too long').optional()
+  ),
+
+  // undefined = never expires. NOT '' -- see the callout below.
+  expiresAt: optionalText.pipe(
+    z
+      .string()
+      .datetime({ message: 'Pick a date' })
+      .refine((d) =&gt; new Date(d) &gt; new Date(), 'Expiry must be in the future')
+      .optional()
+  ),
+
+  // undefined = unlimited. 0 = no uses at all. Both are meaningful and
+  // they are opposites, which is why .min(1) was wrong here.
   maxUses: z
     .number()
     .int()
-    .min(1, 'Must allow at least 1 use')
+    .min(0, 'Cannot be negative')
     .max(1000, 'Maximum 1000 uses')
     .optional(),
+
   channels: z
     .array(z.enum(['chat', 'voice', 'video']))
     .min(1, 'Select at least one channel'),
 });
 
 export type CreateTokenInput = z.infer&lt;typeof createTokenSchema&gt;;</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">Three things this schema got wrong, and they are all the same mistake</div>
+      <p>Until 2026-08-22 the block above said
+      <code>.optional().or(z.literal(''))</code> on two fields and
+      <code>.min(1)</code> on <code>maxUses</code>. Each is a small thing;
+      together they are one habit &mdash; <strong>treating "the user did not
+      fill this in" as a value rather than as an absence.</strong></p>
+
+      <ul>
+        <li><strong><code>''</code> is not a date.</strong>
+        <code>.or(z.literal(''))</code> makes the empty string <em>valid</em>,
+        so it passes validation, goes into the request body, and arrives at a
+        <code>TIMESTAMPTZ</code> column. <code>new Date('')</code> is
+        <code>Invalid Date</code>. The field the user deliberately left blank
+        is the one that breaks the insert.</li>
+
+        <li><strong><code>''</code> is not a name either.</strong> Same
+        transform on <code>issuedTo</code> stored an empty string where the
+        rest of the system expects <code>null</code>, so
+        <code>issuedTo ?? 'Unnamed'</code> renders nothing rather than the
+        fallback &mdash; <code>??</code> only catches <code>null</code> and
+        <code>undefined</code>.</li>
+
+        <li><strong><code>maxUses: 0</code> was unreachable.</strong>
+        <code>.min(1, 'Must allow at least 1 use')</code> means the form can
+        never produce it. But <code>CLAUDE.md</code> and the
+        <code>CHECK (max_uses &gt;= 0)</code> constraint both say
+        <strong><code>null</code> is unlimited and <code>0</code> permits no
+        uses at all</strong> &mdash; opposite meanings. A schema shared by
+        <code>app/</code> and <code>api/</code> that rejects <code>0</code>
+        makes half of that convention undefined behaviour: the column allows a
+        state nothing can create, and the day something else writes one, no
+        form can edit it back.</li>
+      </ul>
+
+      <p><strong>The reason it matters more here than in a component:</strong>
+      this schema is imported by the API too. A validation bug in a screen is a
+      bad screen. The same bug in <code>shared/</code> is the API's definition
+      of a valid token.</p>
+    </div>
 
     <p>This schema is imported by:</p>
     <ul>
@@ -382,7 +442,8 @@ const onSubmit = async (data: CreateTokenInput) =&gt; {
     <h2>Reusable Form Patterns</h2>
 
     <h3>Number fields (maxUses)</h3>
-    <p>TextInput always gives you a string. Transform it:</p>
+    <p>TextInput always gives you a string. Transform it &mdash; but read the
+    callout under this block before copying the obvious version.</p>
 
     <pre><code>&lt;Controller
   control={control}
@@ -390,14 +451,59 @@ const onSubmit = async (data: CreateTokenInput) =&gt; {
   render={({ field: { onChange, value } }) =&gt; (
     &lt;TextInput
       keyboardType="numeric"
-      value={value?.toString() || ''}
+      // value === 0 must render as "0", so ?? and not ||
+      value={value?.toString() ?? ''}
       onChangeText={(text) =&gt; {
-        const num = parseInt(text, 10);
-        onChange(isNaN(num) ? undefined : num);
+        const trimmed = text.trim();
+
+        // Blank means "unlimited" -- an absence, deliberately chosen.
+        if (trimmed === '') return onChange(undefined);
+
+        // Number(), not parseInt(): parseInt('7x') is 7 and parseInt('1e3')
+        // is 1. It reads a PREFIX and discards the rest, silently.
+        const num = Number(trimmed);
+
+        // Anything that is not a clean number stays as the raw string, so
+        // the resolver reports "Expected number" and the user sees an
+        // error. Do NOT map it to undefined -- see below.
+        onChange(Number.isInteger(num) ? num : trimmed);
       }}
     /&gt;
   )}
 /&gt;</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">A typo must not become an unlimited token</div>
+      <p>The version this lesson shipped was:</p>
+      <pre><code>const num = parseInt(text, 10);
+onChange(isNaN(num) ? undefined : num);</code></pre>
+
+      <p>It looks like careful defensive coding, and it hands the form's
+      <em>most dangerous value</em> to anyone who fumbles a keystroke.
+      <code>undefined</code> is not "invalid" &mdash; on an
+      <code>.optional()</code> field it means <strong>absent</strong>, and
+      absent on <code>maxUses</code> means <strong>unlimited</strong>. So
+      typing <code>3</code> and then hitting a letter clears the field to
+      <code>undefined</code>, validation passes cleanly, and the user issues a
+      token with no use limit believing they set one.</p>
+
+      <p>Nothing anywhere reports this. The form is valid, the request is
+      valid, the row is valid. <strong>The only trace is a token that keeps
+      working after the third use.</strong></p>
+
+      <p>And <code>parseInt</code> is the quieter half: it parses a
+      <em>prefix</em>. <code>parseInt('7x')</code> is <code>7</code> and
+      <code>parseInt('1e3')</code> is <code>1</code>, both without complaint.
+      <code>Number()</code> refuses the whole string, which is what you want
+      from something guarding a limit.</p>
+
+      <p><strong>The general rule, and it has now come up in four lessons:
+      when a value cannot be understood, refuse it &mdash; do not substitute a
+      default.</strong> The substituted default is always the permissive one,
+      because the permissive one is what "no opinion" looks like. Same shape as
+      <code>b7/0002</code>'s unknown rule type falling through to
+      <code>allowed</code>.</p>
+    </div>
 
     <h3>Date fields (expiresAt)</h3>
 
@@ -419,9 +525,24 @@ const onSubmit = async (data: CreateTokenInput) =&gt; {
 /&gt;</code></pre>
 
     <!-- ───────────────────────────────────────────── -->
-    <h2>Exercise</h2>
+    <h3>Try it yourself &mdash; this one is broken on purpose</h3>
+    <p>The <code>parseInt</code> handler the lesson used to ship, run over what
+    a user actually types. Every line prints what would reach the API. Read the
+    output before you read the callout above again, and fix the handler so that
+    a typo is an error rather than a limit.</p>
+    <div id="playground-typo"></div>
+
+    <h2>Now build it yourself</h2>
+    <p>The screen needs a device; the thing that decides what leaves it does
+    not.</p>
+    <div id="exercise-payload"></div>
+    <div id="pg-exercise-payload"></div>
+
+    <h3>And the whole form</h3>
 
     <div id="exercise-1"></div>
+
+    <div id="explain-a11-0003"></div>
 
     <h2>Quiz</h2>
     <div id="lesson-quiz"></div>
@@ -435,15 +556,255 @@ const onSubmit = async (data: CreateTokenInput) =&gt; {
     <script src="../../assets/quiz.js"></script>
     <script src="../../assets/playground.js"></script>
     <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
     <script src="../../assets/progress.js"></script>
     <script src="../../assets/copy-code.js"></script>
 
     <script>
+    createPlayground("playground-typo", `// BROKEN ON PURPOSE. This is the handler the lesson used to ship.
+//
+// undefined on an .optional() field does not mean "invalid".
+// It means ABSENT -- and absent on maxUses means UNLIMITED.
+
+function onChangeText(text) {
+  const num = parseInt(text, 10);
+  return isNaN(num) ? undefined : num;
+}
+
+function describe(sent) {
+  if (sent === undefined) return "(absent)  ->  UNLIMITED USES";
+  return String(sent) + "  ->  limit of " + sent;
+}
+
+const typed = ["3", "3x", "x", "", " 5", "1e3", "7.9", "0"];
+
+for (const text of typed) {
+  const sent = onChangeText(text);
+  console.log(JSON.stringify(text).padEnd(7) + " => " + describe(sent));
+}
+
+console.log("");
+console.log("Three of those are wrong, and two of the three are dangerous.");
+console.log("Rewrite onChangeText so an unreadable entry is REFUSED");
+console.log("(return the raw string, so the resolver reports an error)");
+console.log("rather than turned into an absence.");`);
+
+    createSolution("exercise-payload", {
+      exercise: `Write toCreateTokenPayload(values, now) — turn raw form state into the request body, or into field errors.\n\nvalues is what the form actually holds. Every text field is a STRING, including the numeric and date ones, because that is what TextInput gives you:\n\n  { label: '  Gym locker  ', issuedTo: '', expiresAt: '', maxUses: '3', channels: ['chat'] }\n\nnow is a Date, passed in rather than read from the clock, so the function can be tested at all.\n\nReturn { ok: true, payload } or { ok: false, errors } where errors is { field: message }.\n\nThe rules:\n\n1. TRIM EVERY TEXT FIELD BEFORE MEASURING IT. '   ab   ' is a 2-character label, not an 8-character one. Validating first and trimming later accepts labels the schema was written to reject.\n\n2. A BLANK FIELD IS AN ABSENCE, NOT A VALUE. Leave the key OUT of the payload — do not send '', and do not send null. An empty string passes a "required" check in most languages, reaches the database, and stores a name that renders as nothing while defeating every ?? fallback downstream.\n\n3. label is required: 3–50 characters after trimming.\n\n4. maxUses is the dangerous one. Blank means UNLIMITED, so omit the key. '0' means NO USES AT ALL and must survive as the number 0 — those are opposite meanings and only one of them is falsy. Anything that is not a clean whole number 0–1000 is an ERROR. Never turn an unreadable entry into an absence: absent means unlimited, so a typo would hand out the least restrictive token you offer.\n\n   Two traps in one line here. Number('') is 0, so the blank check has to come first or every empty field becomes a zero-use token. And parseInt('7x') is 7 — it reads a prefix and discards the rest without complaint, which is why Number() is the right tool for guarding a limit.\n\n5. expiresAt: blank means NEVER, so omit it. An unparseable date is an error — check for Invalid Date rather than letting it through. A date at or before now is an error. A good one goes in as an ISO string.\n\n6. channels: at least one, and every entry must be one of chat, voice, video. An unrecognised channel is an ERROR, not something to filter out quietly — silently dropping it gives the user a token that does less than the one they think they made.\n\n7. REPORT EVERY ERROR, not the first one you hit. A form that reveals one problem per submit is four round trips for one mistake.\n\n8. Never mutate values.`,
+      hints: [
+        "Write the trim helper first and use it for every text field, including maxUses and expiresAt. If you find yourself trimming in some branches and not others, that is where the bug will be.",
+        "Rule 4's ordering is the whole exercise: check blank, THEN convert. Number('') === 0 means the two cases collapse if you convert first, and they mean opposite things.",
+        "For rule 5, an invalid date is not detected by comparing it — every comparison with Invalid Date is false, including `when <= now`. Test Number.isNaN(when.getTime()) before you compare anything."
+      ],
+      solution: `function toCreateTokenPayload(values, now) {
+  const errors = {};
+  const payload = {};
+  const at = now instanceof Date ? now : new Date();
+
+  // Every text field goes through this. TextInput gives strings, and a
+  // field the user tabbed through gives ''.
+  const text = (v) => (typeof v === "string" ? v.trim() : "");
+
+  // --- label: required, measured AFTER trimming ---
+  const label = text(values.label);
+  if (label.length < 3) errors.label = "Label must be at least 3 characters";
+  else if (label.length > 50) errors.label = "Label must be at most 50 characters";
+  else payload.label = label;
+
+  // --- issuedTo: blank is an absence. Omit the key entirely. ---
+  const issuedTo = text(values.issuedTo);
+  if (issuedTo !== "") {
+    if (issuedTo.length > 100) errors.issuedTo = "Name too long";
+    else payload.issuedTo = issuedTo;
+  }
+
+  // --- maxUses: blank = unlimited, 0 = no uses, unreadable = REFUSED ---
+  const rawMax = text(values.maxUses);
+  if (rawMax !== "") {
+    // Blank was handled above, and it had to be: Number('') is 0, so
+    // converting first would turn every empty field into a dead token.
+    // Number(), not parseInt() -- parseInt('7x') is 7.
+    const n = Number(rawMax);
+    if (!Number.isInteger(n)) errors.maxUses = "Enter a whole number";
+    else if (n < 0) errors.maxUses = "Cannot be negative";
+    else if (n > 1000) errors.maxUses = "Maximum 1000 uses";
+    else payload.maxUses = n;          // 0 lands here, and is kept
+  }
+
+  // --- expiresAt: blank = never, unreadable = error, past = error ---
+  const rawExpiry = text(values.expiresAt);
+  if (rawExpiry !== "") {
+    const when = new Date(rawExpiry);
+    if (Number.isNaN(when.getTime())) {
+      // Must come first. Every comparison with Invalid Date is false,
+      // so 'when <= at' would wave it through.
+      errors.expiresAt = "Pick a date";
+    } else if (when <= at) {
+      errors.expiresAt = "Expiry must be in the future";
+    } else {
+      payload.expiresAt = when.toISOString();
+    }
+  }
+
+  // --- channels: at least one, and every one recognised ---
+  const ALLOWED = ["chat", "voice", "video"];
+  const channels = Array.isArray(values.channels) ? values.channels : [];
+  const unknown = channels.filter((c) => !ALLOWED.includes(c));
+  if (channels.length === 0) {
+    errors.channels = "Select at least one channel";
+  } else if (unknown.length > 0) {
+    // Refused, not filtered. Dropping it would issue a token that does
+    // less than the one the user thinks they made.
+    errors.channels = "Unknown channel: " + unknown.join(", ");
+  } else {
+    payload.channels = channels.slice();
+  }
+
+  return Object.keys(errors).length > 0
+    ? { ok: false, errors }
+    : { ok: true, payload };
+}`
+    });
+
+    createPlayground("pg-exercise-payload", `// Write toCreateTokenPayload(values, now) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(v) { return JSON.stringify(v); }
+
+// A fixed clock, so the expiry checks mean the same thing every run.
+const NOW = new Date("2026-08-22T12:00:00.000Z");
+
+// Deliberate fixture choices:
+//   label '  ab  ' is 6 raw and 2 trimmed, so trim-then-measure and
+//   measure-then-trim give different answers.
+//   maxUses '1e3' is 1000 to Number() and 1 to parseInt().
+function form(overrides) {
+  return Object.assign({
+    label: "Gym locker",
+    issuedTo: "",
+    expiresAt: "",
+    maxUses: "",
+    channels: ["chat"],
+  }, overrides || {});
+}
+function has(payload, key) {
+  return Object.prototype.hasOwnProperty.call(payload, key);
+}
+
+try {
+  if (typeof toCreateTokenPayload !== "function") throw new Error("not written yet");
+
+  const good = toCreateTokenPayload(form(), NOW);
+  check("a valid form is accepted", good.ok === true, show(good));
+  check("and carries only the fields that were filled in",
+    good.ok && has(good.payload, "label") && has(good.payload, "channels") &&
+    !has(good.payload, "issuedTo") && !has(good.payload, "expiresAt") &&
+    !has(good.payload, "maxUses"),
+    show(good.payload));
+
+  // Rule 1
+  const trimmed = toCreateTokenPayload(form({ label: "   Gym locker   " }), NOW);
+  check("label is trimmed", trimmed.ok && trimmed.payload.label === "Gym locker",
+    show(trimmed));
+  const short = toCreateTokenPayload(form({ label: "  ab  " }), NOW);
+  check("label length is measured after trimming",
+    short.ok === false && !!short.errors.label,
+    show(short) + " (6 raw characters, 2 real ones)");
+
+  // Rule 2
+  const named = toCreateTokenPayload(form({ issuedTo: "  Ravi  " }), NOW);
+  check("issuedTo is trimmed and kept when present",
+    named.ok && named.payload.issuedTo === "Ravi", show(named));
+  const blankName = toCreateTokenPayload(form({ issuedTo: "   " }), NOW);
+  check("a whitespace-only field is an absence, not an empty string",
+    blankName.ok && !has(blankName.payload, "issuedTo"), show(blankName.payload));
+
+  // Rule 4 -- the headline
+  const zero = toCreateTokenPayload(form({ maxUses: "0" }), NOW);
+  check("maxUses '0' is accepted",
+    zero.ok === true, show(zero));
+  check("and survives as the number 0, not as an absence",
+    zero.ok && zero.payload.maxUses === 0,
+    show(zero.payload) + " (absent would mean UNLIMITED -- the opposite)");
+  const blankMax = toCreateTokenPayload(form({ maxUses: "   " }), NOW);
+  check("a blank maxUses is omitted, not turned into 0 by Number('')",
+    blankMax.ok && !has(blankMax.payload, "maxUses"), show(blankMax.payload));
+  const typo = toCreateTokenPayload(form({ maxUses: "7x" }), NOW);
+  check("an unreadable maxUses is refused, never silently unlimited",
+    typo.ok === false && !!typo.errors.maxUses,
+    show(typo) + " (parseInt would have read this as 7)");
+  const exp = toCreateTokenPayload(form({ maxUses: "1e3" }), NOW);
+  check("'1e3' is 1000, not 1",
+    exp.ok === true && exp.payload.maxUses === 1000, show(exp));
+  const tooMany = toCreateTokenPayload(form({ maxUses: "1001" }), NOW);
+  check("maxUses above 1000 is refused", tooMany.ok === false && !!tooMany.errors.maxUses,
+    show(tooMany));
+  const negative = toCreateTokenPayload(form({ maxUses: "-4" }), NOW);
+  check("a negative maxUses is refused", negative.ok === false && !!negative.errors.maxUses,
+    show(negative));
+  const fraction = toCreateTokenPayload(form({ maxUses: "2.5" }), NOW);
+  check("a fractional maxUses is refused", fraction.ok === false && !!fraction.errors.maxUses,
+    show(fraction));
+
+  // Rule 5
+  const future = toCreateTokenPayload(
+    form({ expiresAt: "2026-09-01T09:00:00.000Z" }), NOW);
+  check("a future expiry is kept as an ISO string",
+    future.ok && future.payload.expiresAt === "2026-09-01T09:00:00.000Z",
+    show(future));
+  const past = toCreateTokenPayload(
+    form({ expiresAt: "2026-08-01T09:00:00.000Z" }), NOW);
+  check("a past expiry is refused", past.ok === false && !!past.errors.expiresAt,
+    show(past));
+  const nonsense = toCreateTokenPayload(form({ expiresAt: "next tuesday" }), NOW);
+  check("an unparseable expiry is refused, not sent as Invalid Date",
+    nonsense.ok === false && !!nonsense.errors.expiresAt,
+    show(nonsense) + " (every comparison with Invalid Date is false)");
+
+  // Rule 6
+  const noChannels = toCreateTokenPayload(form({ channels: [] }), NOW);
+  check("no channels is refused", noChannels.ok === false && !!noChannels.errors.channels,
+    show(noChannels));
+  const oddChannel = toCreateTokenPayload(form({ channels: ["chat", "fax"] }), NOW);
+  check("an unknown channel is refused, not filtered out",
+    oddChannel.ok === false && !!oddChannel.errors.channels,
+    show(oddChannel) + " (dropping it would issue a weaker token than the user made)");
+
+  // Rule 7
+  const messy = toCreateTokenPayload(
+    form({ label: "x", maxUses: "abc", channels: [] }), NOW);
+  check("every error is reported at once",
+    messy.ok === false && Object.keys(messy.errors).length === 3,
+    show(messy.errors));
+} catch (err) {
+  console.log("Self-check could not run: " + err.message);
+}
+
+// Rule 8, separated: a mistake here can throw and would hide the rest.
+try {
+  const original = form({ issuedTo: "  Ravi  ", channels: ["chat"] });
+  const copy = JSON.parse(JSON.stringify(original));
+  toCreateTokenPayload(original, NOW);
+  check("values is not mutated", JSON.stringify(original) === JSON.stringify(copy),
+    "before " + show(copy) + " after " + show(original));
+} catch (err) {
+  console.log("Mutation check could not run: " + err.message);
+}`);
+
+    createExplain("explain-a11-0003", {
+      prompt: "In this form, <code>undefined</code> and <code>0</code> are not two ways of saying \"almost nothing\" — they are opposites. Explain what each one means for <code>maxUses</code>, and why that makes <code>isNaN(n) ? undefined : n</code> a worse bug than simply rejecting the whole form would have been."
+    });
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is a React Native screen with react-hook-form and a DateTimePicker, needing a device",
       exercise: `Build an "Edit Access Rules" form for a token.\n\nThe form edits a single access rule with these fields:\n- Time window start (HH:MM, required)\n- Time window end (HH:MM, required, must be after start)\n- Days of week (multi-select: Mon–Sun, at least 1 required)\n- Auto-pause after (number, optional, 1–100 messages)\n\nRequirements:\n1. Create a zod schema in shared/ format (export it)\n2. Use react-hook-form with zodResolver\n3. Use the FormField pattern for text inputs\n4. Use chip-style multi-select for days (similar to channels)\n5. Show validation errors below each field`,
       hints: [
         "For time validation, use z.string().regex(/^([01]\\d|2[0-3]):[0-5]\\d$/) to enforce HH:MM format.",
-        "Use .refine() at the schema level to compare start < end.",
+        "Resist the obvious cross-field rule. 'End must be after start' looks right and forbids 22:00-06:00, which is a window a5/0004 spends a whole lesson teaching you to evaluate. The only impossible window is one where start and end are the same.",
         "For the days multi-select, use z.array(z.enum(['Mon','Tue','Wed','Thu','Fri','Sat','Sun'])).min(1).",
         "Use watch('timeStart') to access the start value for the cross-field refinement message."
       ],
@@ -463,10 +824,15 @@ export const accessRuleSchema = z.object({
     .min(1, 'Minimum 1 message')
     .max(100, 'Maximum 100 messages')
     .optional(),
-}).refine(
-  (data) => data.timeStart < data.timeEnd,
-  { message: 'End time must be after start time', path: ['timeEnd'] }
-);
+})
+  // NO timeStart < timeEnd refinement. See the note under this exercise:
+  // 22:00-06:00 is a legitimate window, and a5/0004's isWithinWindow is
+  // built to evaluate exactly that. The only thing to refuse is a window
+  // of zero length, which start === end would mean.
+  .refine((data) => data.timeStart !== data.timeEnd, {
+    message: 'Start and end cannot be the same time',
+    path: ['timeEnd'],
+  });
 
 export type AccessRuleInput = z.infer<typeof accessRuleSchema>;
 
@@ -813,6 +1179,27 @@ export function EditAccessRuleScreen() {
         code: `import { z } from 'zod';\nconst schema = z.object({\n  label: z.string().min(3, 'Too short').max(50, 'Too long')\n});\nconst result = schema.safeParse({ label: '' });\nconsole.log(result.error.issues[0].message);`,
         answer: "Too short",
         explanation: "An empty string has length 0, which fails min(3) first. Zod checks validators in order and reports the first failure. Since '' is shorter than 3 characters, 'Too short' is the error message. It never reaches the max(50) check."
+      },
+      {
+        type: "predict-output",
+        question: "The user types these into the max-uses field. What does parseInt hand to the form?",
+        code: `for (const typed of ['7x', '1e3', '2.9', 'x']) {\n  console.log(JSON.stringify(typed) + ' -> ' + parseInt(typed, 10));\n}`,
+        answer: '"7x" -> 7\n"1e3" -> 1\n"2.9" -> 2\n"x" -> NaN',
+        explanation: "parseInt reads a PREFIX and discards the rest without complaining. '7x' becomes 7, and '1e3' becomes 1 rather than 1000 — so a user asking for a thousand uses gets one. Only the last case is even detectable, and the lesson's original handler turned that one into undefined, which on an optional field means absent, which on maxUses means unlimited. Number() refuses all four, which is what you want from something guarding a limit."
+      },
+      {
+        type: "predict-output",
+        question: "Why must a blank check come before the conversion?",
+        code: `const raw = '';\nconsole.log('Number(raw) is ' + Number(raw));\nconsole.log('so maxUses would be sent as ' + Number(raw));\nconsole.log('and 0 means: ' + (Number(raw) === 0 ? 'NO USES AT ALL' : 'unlimited'));`,
+        answer: "Number(raw) is 0\nso maxUses would be sent as 0\nand 0 means: NO USES AT ALL",
+        explanation: "Number('') is 0, not NaN. So an implementation that converts before checking for blank turns every untouched max-uses field into a token that permits nothing — the exact opposite of the unlimited default the user expected. Blank means absent means unlimited; 0 means no uses. Two opposite meanings, one line's ordering apart."
+      },
+      {
+        type: "predict-output",
+        question: "The expiry field contains text a date parser cannot read. What does this validation conclude?",
+        code: `const when = new Date('next tuesday');\nconst now = new Date('2026-08-22T12:00:00.000Z');\nconsole.log('in the past? ' + (when <= now));\nconsole.log('in the future? ' + (when > now));`,
+        answer: "in the past? false\nin the future? false",
+        explanation: "Invalid Date compares false against everything, including itself — so a check written as 'reject it if it is in the past' does not reject it, and the value goes on to the TIMESTAMPTZ column. Neither branch of a two-way comparison catches this, which is why Number.isNaN(when.getTime()) has to run before any comparison rather than as a tidy-up afterwards."
       }
     ]);
     </script>

@@ -2109,6 +2109,86 @@ Status: `b10/0002` `unverifiable → verified`. **62/96. B10 complete**, so B2,
 B3, B7 and B10 are all done. Known-and-blocked down to two. Four M3 lessons
 remain, all in A11.
 
+### Session of 2026-08-22 (continued) — a11/0003, and a typo that issues an unlimited token
+
+Predicted as "the most likely of A11's four to hold a real function". It held
+one, and four live defects around it.
+
+**The headline.** The lesson's number-field handler was
+
+```js
+const num = parseInt(text, 10);
+onChange(isNaN(num) ? undefined : num);
+```
+
+which reads as careful defensive coding and hands out the most permissive value
+the form can produce. `undefined` on an `.optional()` field is not "invalid" —
+it is **absent**, and absent on `maxUses` means **unlimited**. Type `3`, fumble
+a letter, and you have issued a token with no use limit. Nothing reports it:
+the form is valid, the request is valid, the row is valid. The only trace is a
+token that keeps working after the third use.
+
+`parseInt` is the quieter half. It parses a *prefix*, so `parseInt('7x')` is
+`7` and `parseInt('1e3')` is `1` — a user asking for a thousand uses gets one,
+silently. `Number()` refuses the whole string, which is what you want from
+something guarding a limit.
+
+**The rule this makes explicit, now on its fourth lesson: when a value cannot
+be understood, refuse it — do not substitute a default.** The default you reach
+for is always the permissive one, because permissive is what "no opinion" looks
+like. `b7/0002`'s unknown rule type falling through to `allowed` is the same
+bug in the backend.
+
+**The shared schema had the same habit three times over**, and this matters
+more than a screen bug because `shared/src/schemas/token.ts` is imported by
+`api/` — it is the API's definition of a valid token.
+`.optional().or(z.literal(''))` made `''` a *valid* `expiresAt`, so the field a
+user deliberately left blank passes validation, enters the request body, and
+reaches a `TIMESTAMPTZ` column where `new Date('')` is `Invalid Date`. The same
+transform on `issuedTo` stored `''` where the rest of the system expects null,
+defeating every `??` fallback. And `maxUses: .min(1)` made `max_uses: 0`
+unreachable, while `CLAUDE.md` and `CHECK (max_uses >= 0)` both say `null` is
+unlimited and `0` permits no uses — so the column had a state nothing could
+create and no form could edit back.
+
+All three are one habit: **treating "the user did not fill this in" as a value
+rather than as an absence.**
+
+**And the mirror-image failure, which is the reason the exercise pins ordering
+rather than just conversion.** `Number('')` is `0`, not `NaN`. So an
+implementation that converts before checking for blank turns every untouched
+max-uses field into a **zero-use** token. One line's ordering apart from the
+headline bug, in the opposite direction, and equally silent.
+
+**A cross-lesson contradiction in the existing exercise.** It refined
+`timeStart < timeEnd`, which forbids `22:00–06:00` — the overnight window
+`a5/0004` spends a whole lesson teaching `isWithinWindow` to evaluate, where
+"the morning belongs to yesterday". The form could not create the rule the
+evaluator exists for. It now refuses only `start === end`. Third time a
+lesson's cross-field validation has been stricter than the system it feeds, and
+the tell each time was a rule that sounded obviously right.
+
+**Two process improvements worth keeping.**
+
+The wrong-cases file composes each mistake from one correct implementation
+split into named fragments, overriding exactly one. That makes them
+single-variable **by construction** rather than by care — which is the fix for
+what went wrong writing `b10/0002`'s cases the same day, and it made the file
+shorter as well. Four of the eleven still trip more than one check, and all
+four are inherent: one behavioural change with several consequences, which is
+fine. The bad kind is an extra failure from something you forgot to include.
+
+And: **the quiz had 25 questions and not one the verifier could run.** Every
+one was about Zod or react-hook-form API surface. A lesson can reach `verified`
+with an entirely unchecked quiz, which is worth remembering about the metric.
+Three executable ones were added — `parseInt` over four real inputs,
+`Number('')`, and the fact that `Invalid Date` compares false against
+everything including itself, so *neither* branch of a two-way date comparison
+catches it.
+
+Status: `a11/0003` `unverifiable → verified`. **63/96.** Three M3 lessons left,
+all in A11.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees

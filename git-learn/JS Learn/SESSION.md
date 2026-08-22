@@ -12,8 +12,92 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean. **62/96 verified**, audit green, five suites
-pass. **B2, B3, B7 and B10 complete.** Known-and-blocked is down to **2**.
+**Nothing.** Working tree clean. **63/96 verified**, audit green, five suites
+pass. **B2, B3, B7 and B10 complete.** Known-and-blocked is **2**.
+
+### a11/0003 — a typo that issues an unlimited token (2026-08-22)
+
+M3: **`toCreateTokenPayload`**. The lesson's number handler was:
+
+```js
+const num = parseInt(text, 10);
+onChange(isNaN(num) ? undefined : num);
+```
+
+It reads as careful defensive coding and hands out the most permissive value
+the form can produce. **`undefined` on an `.optional()` field is not "invalid",
+it is absent — and absent on `maxUses` means unlimited.** Type `3`, fumble a
+letter, and you issue a token with no use limit. The form is valid, the request
+is valid, the row is valid; **the only trace is a token that still works after
+the third use.**
+
+`parseInt` is the quieter half: it reads a *prefix*. `parseInt('7x')` is `7`
+and `parseInt('1e3')` is `1`, so a user asking for a thousand uses silently
+gets one.
+
+**The rule, now on its fourth lesson: when a value cannot be understood,
+refuse it — do not substitute a default.** The substituted default is always
+the permissive one, because permissive is what "no opinion" looks like. Same
+shape as `b7/0002`'s unknown rule type falling through to `allowed`.
+
+### The shared schema had the same habit three times
+
+`shared/src/schemas/token.ts` is imported by `api/` as well, so these are the
+API's definition of a valid token, not a screen's:
+
+- **`.optional().or(z.literal(''))` on `expiresAt`** made `''` a *valid* value.
+  It passes validation, enters the request body, and reaches a `TIMESTAMPTZ`.
+  `new Date('')` is `Invalid Date`. The field the user deliberately left blank
+  is the one that breaks the insert.
+- **Same on `issuedTo`**, storing `''` where the system expects null — so
+  `issuedTo ?? 'Unnamed'` renders nothing, because `??` only catches
+  `null`/`undefined`.
+- **`maxUses: .min(1)` made `max_uses: 0` unreachable.** `CLAUDE.md` and
+  `CHECK (max_uses >= 0)` both say `null` is unlimited and `0` permits no uses
+  — opposite meanings. A shared schema rejecting `0` leaves the column with a
+  state nothing can create and no form can edit back.
+
+**All three are one habit: treating "the user did not fill this in" as a value
+rather than as an absence.**
+
+### And a contradiction with a5/0004 in the exercise
+
+The existing exercise refined `timeStart < timeEnd`. That **forbids
+`22:00–06:00`** — the overnight window `a5/0004` spends a whole lesson teaching
+`isWithinWindow` to evaluate, where "the morning belongs to yesterday". The
+form could not create the rule the evaluator was built for. Now refuses only
+`start === end`, which is the genuinely empty window.
+
+**Third time a lesson's cross-field validation has been stricter than the
+system it feeds.** The tell is a rule that sounds obviously right.
+
+### `Number('')` is 0, and that is the opposite failure
+
+Worth keeping because it is the mirror image of the headline bug: an
+implementation that converts *before* checking for blank turns every untouched
+max-uses field into a **zero-use token**. One line's ordering apart, and both
+directions are silent. The self-check pins both.
+
+### Wrong-cases: eleven, and this time built from named seams
+
+`scripts/cases/0003-forms-validation.mjs` composes each mistake from one
+correct implementation with overridable fragments, so a case differs from the
+right answer in exactly one place **by construction** rather than by care. That
+is the fix for what went wrong writing `b10/0002`'s cases yesterday, and it
+made the file shorter as well as more honest.
+
+Four mistakes trip more than one check, and all four are *inherent* — one
+behavioural change with several visible consequences (`parseInt` breaks both
+the typo case and `1e3`). That is different from a case failing for an
+unrelated reason, which is what had to be fixed in `b10/0002`.
+
+### The quiz had no executable questions at all
+
+25 questions, **zero** that `verify-lesson.mjs` could run — every one was about
+Zod or react-hook-form. Added three that are pure JavaScript and now execute:
+`parseInt` on four real inputs, `Number('')`, and the fact that **`Invalid
+Date` compares false against everything, including itself** — so neither
+branch of a two-way date comparison catches it.
 
 ### b10/0002 — the compliance lesson could not have run (2026-08-22)
 
@@ -667,18 +751,20 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
-**Four M3 lessons left**, all in A11. One commit each. **Nothing is blocked.**
+**Three M3 lessons left**, all in A11. One commit each. **Nothing is blocked.**
 
 **Done:** A3, A4, A5, A6, A8, B5, **all of B2, B3, B7 and B10**, plus
-`a11/0004`.
-**Remaining:** A11's `0001`, `0002`, `0003`, `0005`.
+`a11/0003` and `a11/0004`.
+**Remaining:** A11's `0001` (animations), `0002` (theming), `0005` (store
+submission).
 
-**A11's remaining four are the weakest M3 candidates left in the course**:
-animations, theming, forms and store submission. `0003` (forms) is the most
-likely to hold a real function; `0005` (store submission) may genuinely be
-checklist-shaped and is the best candidate in the course for an honest
-`--unverifiable`. Look for the plain function before reaching for it —
-**that reflex has been wrong every time it has been tested.**
+`0003` was predicted to be "the most likely to hold a real function" and held
+four live defects as well. **`0002` (theming) is the next best bet** — a theme
+resolver is arithmetic over a palette plus a system-preference override, which
+is the same shape as every other function M3 has found. `0001` (animations)
+looks thin. `0005` (store submission) is still the best candidate in the course
+for an honest `--unverifiable`, and **that judgement has been wrong 11 times
+out of 11 so far**, so look for the plain function before reaching for it.
 
 | Work | Gate |
 |---|---|
@@ -747,7 +833,7 @@ Per-item status only. The plan itself is in `TOKEN-TRACK.md`; the counts are in
 | 4 — the operating track | not started, deliberately |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
-| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus all of B2, B3, B7 and **B10**, and `a11/0004`; **4 left**, all in A11 |
+| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus all of B2, B3, B7 and **B10**, and `a11/0003`+`0004`; **3 left**, all in A11 |
 
 ### M3 — where it has reached
 
@@ -792,6 +878,7 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `b10/0001` | `pickForLog` | allow-list, not deny-list; a value not a subtree; absent ≠ `undefined` |
 | `a11/0004` | `placeConfig` | *who needs it, and when* — not *is it sensitive*; unclassifiable ⇒ do not ship |
 | `b10/0002` | `planErasure` | order is read off the foreign keys, never off the list you were handed; a cycle is refused, not guessed; only data you could *read* leaves a backup tail |
+| `a11/0003` | `toCreateTokenPayload` | blank is an absence, never `''`; `maxUses: 0` and absent are opposites; an unreadable value is refused, never defaulted |
 
 **A5 note:** not one of the five had a `createExplain` prompt or loaded
 `explain.js`. All five now do. A5 predates the practice pattern being made
@@ -892,6 +979,19 @@ Durable gotchas only. Anything narrative is in `HANDOFF.md`.
   `b10/0002`'s tripped two checks until they were tightened, which hides which
   distinction each one tests — and one of them was then failing for a reason
   that had nothing to do with the case at all.
+  **`a11/0003` is the pattern that makes this structural rather than careful:**
+  one correct implementation split into named fragments, and each mistake
+  overrides exactly one. Shorter file, and single-variable by construction.
+  A case may still trip several checks — that is fine when one behavioural
+  change genuinely has several consequences, and wrong when the extra failure
+  comes from something you forgot to include.
+- **When a value cannot be understood, refuse it — never substitute a
+  default.** The default you reach for is always the permissive one, because
+  permissive is what "no opinion" looks like. `b7/0002`, `b3/0001`, `a5/0005`
+  and now `a11/0003`.
+- **Check the quiz for executable questions.** `a11/0003` had 25 and **none**
+  the verifier could run — all framework API trivia. A lesson can be fully
+  "verified" with an entirely unchecked quiz.
 
 ### Verifying a lesson
 
