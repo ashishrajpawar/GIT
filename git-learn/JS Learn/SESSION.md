@@ -1019,8 +1019,41 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
-**M3 is finished.** All 37 lessons, ending with `a11/0005`. **Nothing is
-blocked**, and there is no work item currently in flight.
+**Rewrite `b4-auth-server` for phone sign-in.** Three lessons, one commit
+each — the only module still teaching email.
+
+### Sign-in is by phone number — settled 2026-08-22
+
+The student was asked in concrete terms (*"when you lose your phone and
+reinstall Token, what do you type to get back in?"*) with the costs of all
+three options laid out, and chose **the phone number**. So:
+
+- `users` keeps `phone_hash`, `display_name`, `avatar_url`. **No `email`
+  column, now or later.** `b2/0001` and `CLAUDE.md` were right; `b4` is the
+  outlier.
+- `a11/0005`'s store declaration is already correct and needs no change.
+- **Do not reconcile the two by adding an email column.** That is the tempting
+  move and it is backwards.
+
+**What is settled is the identifier, not the challenge.** How a user *proves*
+they hold the number is a genuinely separate question and it is open — see
+below. `b4/0001` can be rewritten around `phone_hash` without answering it,
+because the hashing, the normalisation and the enumeration argument are the
+same either way; `b4/0002`'s login flow probably cannot.
+
+| Lesson | Currently | Needs |
+|---|---|---|
+| `b4/0001` | `ALTER TABLE users ADD COLUMN email`, argon2 over a password, `/register` + `/login` on email | `phone_hash` on the existing column. **`b3/0001` already wrote the right hashing argument** — a bare `sha256(phone)` is not enough, because ten digits with a known prefix is enumerable. It needs the server-side pepper, exactly as `code_hash` does |
+| `b4/0002` | login/session on email | the same flow keyed on `phone_hash`, and this is where the challenge question lands |
+| `b4/0003` | (check before assuming) | — |
+
+**One thing to carry in: `b4/0001`'s "constant-time response" note is good and
+should survive the rewrite.** It refuses to say whether the account exists —
+which is the denial-oracle rule from `b7/0001`, `a8/0002` and `b3/0004`, for
+the fourth time. On a phone-keyed login it matters *more*, not less: the
+identifier is enumerable, so an endpoint that distinguishes "no such account"
+from "wrong credential" is a registered-user oracle over the whole Indian
+mobile range.
 
 **The prediction that a lesson had nothing runnable in it was wrong 15 times
 out of 15.** `--unverifiable` was reached for exactly zero times across the
@@ -1060,19 +1093,27 @@ the course for months. Pitch to the profile in `CLAUDE.md` and let them steer.
 Both were raised on 2026-08-20 alongside the three that got settled, and
 neither was answered. They are not blocking anything.
 
-0. **How does a user sign in — phone or email?** *(new, 2026-08-22, and this
-   one does block something.)* `b2/0001` and `CLAUDE.md` say `users` holds
-   `phone_hash` and **no email**; `CLAUDE.md` lists email under *out of scope*.
-   **`b4/0001` teaches the opposite** — it adds an `email` column and both
-   `/register` and `/login` are keyed on it. `a11/0005`'s store declarations
-   inherited the email version, which is how it surfaced.
+0. **How does a user prove they hold the phone number?** *(new, 2026-08-22 —
+   opened by the answer above, not closed by it.)* SMS OTP is the obvious
+   answer and it collides with two rules:
 
-   Both cannot be right, and the answer changes a whole module either way. Ask
-   it in concrete terms, per the note below: *"When you lose your phone and
-   reinstall Token, what do you type to get back in — your number, or an email
-   address you gave us?"* Everything else follows from that one answer.
-   `a11/0005` currently follows `CLAUDE.md`, which is the documented rule when
-   a lesson and the docs disagree.
+   - **An SMS gateway is a third party**, and `CLAUDE.md` bans the comms SDKs
+     by name. An OTP aggregator is arguably a different category from Twilio
+     Voice — but it is the same *kind* of exception, and the FCM/APNs
+     precedent shows the bar: it was accepted only because nothing else can
+     wake a backgrounded app.
+   - **India requires DLT registration** plus a registered header and template
+     to send a transactional SMS at all. That is paperwork with a lead time,
+     not a signup form, and it should be discovered now rather than the week
+     before launch.
+
+   Alternatives worth pricing before defaulting to OTP: a passphrase set at
+   sign-up with the phone as a *recovery* channel only (which is close to what
+   was rejected, but not identical); or a device-key scheme where the phone is
+   proven once and the device keeps the credential — which fits the
+   `expo-secure-store` decision already made.
+
+   **Do not write `b4/0002` until this is answered.** `b4/0001` can go ahead.
 
 1. **How far ahead of yourself should this build?** M3 keeps finding real
    defects, but every lesson it touches is modules ahead of Module 01. Raised

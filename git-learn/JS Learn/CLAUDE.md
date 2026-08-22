@@ -587,6 +587,26 @@ hashed at sign-up and kept**, because it is how a user gets back into their
 account; passphrase-only sign-up was considered and rejected, since a lost
 passphrase would be an unrecoverable account.
 
+**Sign-in is by phone number, and there is no email anywhere** (asked and
+answered 2026-08-22). The student was given the three options with their costs
+and chose the phone. So `users` has **no `email` column and never will** —
+which matches the out-of-scope list below, and means one identifier is stored
+rather than two.
+
+> **`b4-auth-server` contradicts this and has not been rewritten yet.** All
+> three of its lessons teach `ALTER TABLE users ADD COLUMN email`, an
+> argon2 `password_hash`, and `/register` + `/login` keyed on email. That is
+> the *only* place in the course still doing so, it predates the decision, and
+> **`b2/0001` is right where `b4` is wrong.** Do not "reconcile" them by
+> adding an email column to the schema. See `SESSION.md`.
+
+**How the user proves they hold the number is a separate question and is still
+open.** SMS OTP is the obvious answer and it collides with two rules here: an
+SMS gateway is a third party, and India requires DLT registration plus an
+aggregator to send one. Do not write an auth lesson that assumes OTP without
+settling that first — the identifier being decided does not decide the
+challenge.
+
 **So do not write "Token does not collect your phone number."** A ten-digit
 Indian mobile has a known prefix and a small enough space to enumerate, so
 `phone_hash` is a lookup key, not an anonymisation — the same argument
