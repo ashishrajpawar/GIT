@@ -600,12 +600,25 @@ rather than two.
 > **`b2/0001` is right where `b4` is wrong.** Do not "reconcile" them by
 > adding an email column to the schema. See `SESSION.md`.
 
-**How the user proves they hold the number is a separate question and is still
-open.** SMS OTP is the obvious answer and it collides with two rules here: an
-SMS gateway is a third party, and India requires DLT registration plus an
-aggregator to send one. Do not write an auth lesson that assumes OTP without
-settling that first — the identifier being decided does not decide the
-challenge.
+**The number is proved by SMS OTP through an aggregator** (decided
+2026-08-22). This is a deliberate addition to the third-party list, made on
+the FCM/APNs precedent, and the distinction that keeps the rule coherent is:
+**the banned comms SDKs would carry the conversation, which is what E2EE
+exists to protect. An OTP carries six digits to a phone the user already
+owns, once.** One authenticates entry to the product; the others replace it.
+
+Two consequences that are not "later":
+
+- **DLT registration with TRAI is required to send a transactional SMS in
+  India at all**, plus a registered sender header and pre-approved templates.
+  That is a lead time measured in weeks. Start it before it is on the critical
+  path.
+- **An OTP flow is a denial oracle by construction.** "We sent a code" versus
+  "no such account" tells an enumerator which numbers are registered, across
+  a phone-number space small enough to enumerate completely. The response must
+  be identical either way — the fifth layer this same rule has had to be
+  applied at, after `b7/0001`, `a8/0002`, `b3/0004` and the login in
+  `b4/0001`.
 
 **So do not write "Token does not collect your phone number."** A ten-digit
 Indian mobile has a known prefix and a small enough space to enumerate, so
@@ -662,7 +675,12 @@ corrected. **When you see the phrase, check which one it means.**
 - **Phone-network (PSTN) voice.** Requires DoT telecom licence. Dropped.
 - **Email.** No relay, no bridge, no transactional email.
 - **Payment gateway.** Deferred (model subscription tiers in the schema, no integration).
-- **Third-party comms SDKs** — no Agora, no Twilio, no Exotel, no Stream, no Sendbird.
+- **Third-party comms SDKs** — no Agora, no Twilio, no Exotel, no Stream, no
+  Sendbird. **An SMS OTP aggregator is the one exception** (decided
+  2026-08-22): it authenticates entry rather than carrying the conversation.
+  See *What the server knows about the user*. Do not read that exception as
+  opening the door to the SDKs above — the same vendor selling both does not
+  make them the same decision.
 - **Prisma** — use raw SQL or Drizzle.
 
 ---

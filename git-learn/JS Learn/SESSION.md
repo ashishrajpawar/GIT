@@ -1088,39 +1088,91 @@ deadline attached, and it is a two-minute question.**
 inference is what produced the "Modules 1 and 2 complete" claim that mispitched
 the course for months. Pitch to the profile in `CLAUDE.md` and let them steer.
 
+### Settled 2026-08-22, second round
+
+The student asked to be given every open decision at once, with options. Four
+were put; three came back decided.
+
+| Question | Answer |
+|---|---|
+| **Proving the phone number** | **SMS OTP through an aggregator.** The third party is accepted, on the FCM/APNs precedent |
+| **Expiry modelled twice** | **Keep both, state precedence** — `tokens.expires_at` wins, the `ExpiryPayload` rule is a display convenience |
+| **Lookahead** | **Keep working ahead.** Asked and answered four times now; stop re-asking |
+| TypeScript runner | Deferred to a recommendation — see below |
+
+**On the OTP answer — what it commits you to, so nobody re-litigates it.**
+An SMS aggregator joins FCM/APNs as an accepted third party. The reasoning
+that makes it consistent rather than a hole in the rule: `CLAUDE.md` bans
+third-party *comms SDKs* because they would carry the conversation, and the
+conversation is what E2EE exists to protect. An OTP carries a six-digit
+number to a phone the user already owns, once. **The banned SDKs replace the
+product; this one authenticates entry to it.**
+
+Two things that follow and have a lead time, so they are not "later":
+- **DLT registration with TRAI**, plus a registered sender header and
+  pre-approved templates. Paperwork measured in weeks, not a signup form.
+- The OTP is a **denial oracle by construction** — "we sent a code" versus
+  "no such account" tells an enumerator which numbers are registered, over
+  the whole enumerable Indian mobile range. `b4/0001`'s constant-time note
+  already has the right instinct; it now has to survive into the OTP flow.
+  Fifth layer of the same rule.
+
+**On the expiry answer.** The student chose the documented-precedence option
+having been shown that two writable copies of one fact is the shape that
+produced the `max_uses` bug. Their call, and it is recorded. **The way to
+honour it without inheriting that risk is the mechanism this project already
+adopted for `status`/`paused_at`/`revoked_at`: make the agreement a database
+fact rather than a convention.** A `CHECK` that refuses a rules payload whose
+expiry disagrees with the column turns "documented precedence" into
+"enforced precedence" at the cost of one constraint. Propose it when B2 is
+next touched; do not silently implement the other option.
+
+### The TypeScript four — recommendation, not yet decided
+
+`a2/0001`, `a2/0002`, `a2/0003`, `a3/0002`. **Do not build the runner.** The
+evidence that decides it is not about tooling:
+
+- **Three of the four have no runtime behaviour at all.** The exercises are
+  *"Define the TypeScript types for Token's core data model"* and *"Build
+  Token's API type system"*. Strip the types and the file is empty. A
+  strip-and-run verifier would execute nothing and report success — the worst
+  possible outcome, since `verified` would then mean less than `unverifiable`
+  does now.
+- `a2/0003` is a React Native screen and is unverifiable in any language.
+- **`a3/0002` is the exception and needs no TypeScript support**: it has a
+  real generic `request` function. That is an ordinary M3 extraction.
+- Node here is **v24**, which strips types natively, so the cheap option is
+  free — and worthless for exactly the lessons it was meant to help.
+- The project has **no `package.json` and no `node_modules`.** `tsc` is the
+  only thing that would genuinely verify a type declaration, and it costs
+  that property.
+
+**The recommendation instead: apply M3 to `a2` by adding runtime type
+guards.** `isToken(x): x is Token` next to `interface Token` is idiomatic,
+useful to Token specifically (it is what should validate an API response),
+executes, and self-checks.
+
+**And it closes a real gap: `a2` never says that types are erased at
+runtime.** A grep for it finds nothing — the only "at runtime" mentions are
+quiz distractors about performance. That omission matters most at `a3/0002`,
+the API client, where the beginner conclusion *"I annotated the response as
+`Token`, so it is a `Token`"* is exactly wrong and exactly what a hostile or
+merely out-of-date server will punish.
+
 ### Open questions for the student
 
-Both were raised on 2026-08-20 alongside the three that got settled, and
-neither was answered. They are not blocking anything.
+One left. It blocks nothing.
 
-0. **How does a user prove they hold the phone number?** *(new, 2026-08-22 —
-   opened by the answer above, not closed by it.)* SMS OTP is the obvious
-   answer and it collides with two rules:
+1. **Is a TypeScript-aware runner worth building?** Put to the student
+   2026-08-22; they asked for a recommendation rather than picking. It is
+   written up under *The TypeScript four* above, and the recommendation is
+   **no runner** — the finding that settles it is that three of the four
+   lessons have no runtime behaviour to run, so a strip-and-run verifier
+   would execute nothing and report success.
 
-   - **An SMS gateway is a third party**, and `CLAUDE.md` bans the comms SDKs
-     by name. An OTP aggregator is arguably a different category from Twilio
-     Voice — but it is the same *kind* of exception, and the FCM/APNs
-     precedent shows the bar: it was accepted only because nothing else can
-     wake a backgrounded app.
-   - **India requires DLT registration** plus a registered header and template
-     to send a transactional SMS at all. That is paperwork with a lead time,
-     not a signup form, and it should be discovered now rather than the week
-     before launch.
-
-   Alternatives worth pricing before defaulting to OTP: a passphrase set at
-   sign-up with the phone as a *recovery* channel only (which is close to what
-   was rejected, but not identical); or a device-key scheme where the phone is
-   proven once and the device keeps the credential — which fits the
-   `expo-secure-store` decision already made.
-
-   **Do not write `b4/0002` until this is answered.** `b4/0001` can go ahead.
-
-1. **How far ahead of yourself should this build?** M3 keeps finding real
-   defects, but every lesson it touches is modules ahead of Module 01. Raised
-   three times now; the answer each time has been to continue.
-2. **Is a TypeScript-aware runner worth building?** Four lessons can never be
-   verified without one — `a2/*` and `a3/0002`. It is the only category a
-   rewrite cannot fix.
+**The lookahead question is closed. Stop asking it.** It was raised on
+2026-08-18, -20, -21 and -22 and answered "keep going" every time. Four
+identical answers is the student telling you it is not a live question.
 
 **How to ask, based on what worked.** The three decisions that got answered on
 2026-08-20 were answered only after being restated in **money, minutes and
