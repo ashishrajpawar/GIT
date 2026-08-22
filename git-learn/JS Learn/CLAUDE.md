@@ -194,14 +194,12 @@ modules/
                                        TypeScript, so it cannot be executed)
   a4-auth-client/                   ← 3 lessons; M3 pass 2026-08-18
   (03-firebase-backend/)           ← DELETED 2026-08-16. Firebase is out of
-                                      scope; Track B replaces it. In git history
-                                      if it is ever wanted back
-  04-whatsapp-features/             ← partially salvageable
-  05-audio-video-calls/             ← theory transfers, implementation rewritten
-  06-polish-and-publish/            ← keep for reference
-  07-store-compliance-and-safety/   ← partially relevant
-  08-production-at-scale/           ← partially relevant
-  09-advanced-features/             ← deep linking rewritten for Token
+                                      scope; Track B replaces it
+  (04 … 09/)                        ← DELETED 2026-08-22, 40 pre-pivot lessons.
+                                      They had been carried as "partially
+                                      salvageable" since the pivot and nobody
+                                      ever salvaged any of it. All in git
+                                      history if ever wanted back
 assets/
   styles.css                        ← shared stylesheet
   quiz.js                           ← createQuiz() widget (multi-type)

@@ -1022,8 +1022,11 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 Four decisions were taken on 2026-08-22 (third round, below). The queue they
 produce, in order:
 
-1. **Delete the 40 legacy lessons** — self-contained, clears the audit's one
-   warning. Sweep the referrers first.
+1. ~~Delete the 40 legacy lessons~~ — **done 2026-08-22.** They were already
+   fully orphaned: `index.html` linked to none of them, `search-index.json`
+   held zero entries and `verification-log.json` zero keys, so only prose in
+   `CLAUDE.md` and `HANDOFF.md` pointed at them. **Warnings went 1 → 0**,
+   which confirms the last one really was the dead link inside `07`.
 2. **Rewrite `b4-auth-server`** — all three lessons plus an OTP pass. See
    below; note `0001` loses its subject rather than changing its examples.
 3. **`a3/0002` M3 extraction**, then **`a2` runtime type guards**.
@@ -1105,7 +1108,7 @@ deadline attached, and it is a two-minute question.**
 | **Phase 4** — the operating track | after launch |
 | The **two** remaining orphan tables | `participants` behind C5/E2EE, `calls` behind B6. Parked in `scripts/known-issues.json`; `deletion_queue` closed 2026-08-22 |
 | ~~`users.phone_hash`~~ | **settled 2026-08-22** — keep the column, fix the sentence. See above and `CLAUDE.md` |
-| The one remaining warning — a dead `privacy-policy.html` link in legacy `07` | legacy module, outside the token track |
+| ~~The one remaining warning — a dead link in legacy `07`~~ | **closed 2026-08-22** by deleting the legacy modules. Warnings are now **0** |
 
 **Do not ask the student where they are in Module 01.** They asked on
 2026-08-18 not to be asked again. Do not infer it from the files either — that
@@ -1516,8 +1519,11 @@ Durable gotchas only. Anything narrative is in `HANDOFF.md`.
 - **The audit exits OK as of 2026-08-18** — the first time in the project's
   history. Treat any red audit as real from here on; that is the point of having
   made it green.
-- **Warnings are down to 1**, a genuine dead link in legacy `07`. Both former
-  token warnings were correct content. Treat a warning as real now.
+- **Warnings are at 0** as of 2026-08-22, the first time. The last one was a
+  dead link in legacy `07` and it went when the legacy modules did. Every
+  warning this audit has ever raised turned out to be correct content, so
+  **the next one to appear is real** — there is no longer any standing noise
+  to explain it away as.
 - `scripts/known-issues.json` parks real-but-gated errors with a **why** and a
   **gate**. **Acknowledged is not fixed.** An entry matching no error fails as
   stale — when B2 lands, that failure is the signal to delete the entry, not

@@ -12,7 +12,7 @@ with this one, this one is right — everything below is measured, not asserted.
 | Metric | Value |
 |---|---|
 | Token-track lessons | 96 |
-| Legacy lessons (pre-pivot, excluded) | 40 |
+| Legacy lessons (pre-pivot, excluded) | 0 |
 | Quiz questions (track) | 2590 |
 | Avg teaching prose per track lesson | 2024 words |
 | Lessons with a playground | 84 / 96 |
@@ -22,7 +22,7 @@ with this one, this one is right — everything below is measured, not asserted.
 | Ran clean but had nothing to run | 0 / 96 |
 | Errors | 0 |
 | Known and blocked | 2 |
-| Warnings | 1 |
+| Warnings | 0 |
 
 Student-completed lessons are **not** tracked here — that comes from the student
 or from `progress.js` localStorage, and is never inferred from the files.
@@ -125,9 +125,6 @@ so they do not hold the audit red. They are **not** resolved.
   - **why:** Call records depend on what WebRTC signalling actually needs to persist, which B6 has not settled.
   - **gate:** B2 schema rewrite, informed by B6 (signalling) _(since 2026-08-18)_
 
-## Warnings (1)
-
-- link (legacy): modules/07-store-compliance-and-safety/0005-data-export-and-terms.html -> ./privacy-policy.html
 
 ## Per-lesson detail
 
