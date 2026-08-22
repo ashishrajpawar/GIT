@@ -11,15 +11,15 @@ with this one, this one is right — everything below is measured, not asserted.
 
 | Metric | Value |
 |---|---|
-| Token-track lessons | 98 |
+| Token-track lessons | 99 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
-| Quiz questions (track) | 2641 |
-| Avg teaching prose per track lesson | 2045 words |
-| Lessons with a playground | 89 / 98 |
-| Lessons with an exercise | 98 / 98 |
-| **Deepened** (all 3 spine sections) | 16 / 98 |
-| **Verified** (code executed) | 71 / 98 |
-| Ran clean but had nothing to run | 0 / 98 |
+| Quiz questions (track) | 2666 |
+| Avg teaching prose per track lesson | 2037 words |
+| Lessons with a playground | 90 / 99 |
+| Lessons with an exercise | 99 / 99 |
+| **Deepened** (all 3 spine sections) | 16 / 99 |
+| **Verified** (code executed) | 72 / 99 |
+| Ran clean but had nothing to run | 0 / 99 |
 | Errors | 0 |
 | Known and blocked | 2 |
 | Warnings | 0 |
@@ -29,12 +29,12 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 ## Answer-position distribution — **authored order, not what the student sees**
 
-1414 keyed questions (multiple-choice, spot-the-bug, which-breaks).
+1434 keyed questions (multiple-choice, spot-the-bug, which-breaks).
 
 > **This clustering is expected and already handled. Do not "fix" it again.**
 > `quiz.js` shuffles options at render time (`optionDisplayOrder`), so the
 > displayed distribution is roughly even — measured at 26.9 / 28.5 / 26.9 / 17.6
-> across all 1414 questions, versus the authored figures below. Index 3 sits
+> across all 1434 questions, versus the authored figures below. Index 3 sits
 > lower only because many questions have three options.
 >
 > The numbers here read `correct` straight from the lesson data, which is
@@ -53,21 +53,21 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Position | Count | Share |
 |---|---|---|
-| index 0 | 147 | 10.4% |
-| index 1 | 887 | 62.7% |
-| index 2 | 346 | 24.5% |
+| index 0 | 148 | 10.3% |
+| index 1 | 905 | 63.1% |
+| index 2 | 347 | 24.2% |
 | index 3 | 34 | 2.4% |
 
 ## Question types
 
 | Type | Count |
 |---|---|
-| multiple-choice | 758 |
-| predict-output | 495 |
-| fill-blank | 456 |
-| spot-the-bug | 373 |
-| which-breaks | 283 |
-| order-steps | 276 |
+| multiple-choice | 776 |
+| predict-output | 497 |
+| fill-blank | 458 |
+| spot-the-bug | 374 |
+| which-breaks | 284 |
+| order-steps | 277 |
 
 ## Modules
 
@@ -95,7 +95,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b7-token-engine | 3 | 3211 | 7 | 6 | 77 | 3/3 | 3/3 |
 | b8-push-notifications | 1 | 1420 | 1 | 1 | 25 | 0/1 | 0/1 |
 | b9-docker-deployment | 3 | 2298 | 3 | 3 | 77 | 2/3 | 0/3 |
-| c5-end-to-end-encryption | 2 | 1397 | 4 | 4 | 51 | 0/2 | 2/2 |
+| c5-end-to-end-encryption | 3 | 1362 | 6 | 6 | 76 | 0/3 | 3/3 |
 | x1-git-dev-environment | 3 | 698 | 1 | 3 | 76 | 0/3 | 0/3 |
 | x2-debugging | 2 | 778 | 1 | 2 | 50 | 0/2 | 0/2 |
 
@@ -107,7 +107,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Quiz structure valid | ok |
 | Tables queried but never created | participants, calls |
 | Broken relative links | ok |
-| search-index.json | 99 entries, 0 dead, 0 unindexed |
+| search-index.json | 100 entries, 0 dead, 0 unindexed |
 | Example tokens valid under alphabet | ok |
 
 ## Errors
@@ -223,7 +223,8 @@ so they do not hold the audit red. They are **not** resolved.
 | b9-docker-deployment/0002-coolify-setup.html | 2663 | 12 | 1 | 1 | 26 | yes | n/a |
 | b9-docker-deployment/0003-logs-backups-monitoring.html | 1827 | 17 | 1 | 1 | 25 | — | n/a |
 | c5-end-to-end-encryption/0001-keys-on-the-device.html | 1371 | 5 | 2 | 2 | 26 | — | yes |
-| c5-end-to-end-encryption/0002-publishing-fetching-keys.html | 1423 | 3 | 2 | 2 | 25 | — | yes |
+| c5-end-to-end-encryption/0002-publishing-fetching-keys.html | 1426 | 3 | 2 | 2 | 25 | — | yes |
+| c5-end-to-end-encryption/0003-verification-safety-numbers.html | 1289 | 4 | 2 | 2 | 25 | — | yes |
 | x1-git-dev-environment/0001-git-fundamentals.html | 790 | 9 | 1 | 1 | 26 | — | n/a |
 | x1-git-dev-environment/0002-github-workflow.html | 719 | 7 | 0 | 1 | 25 | — | n/a |
 | x1-git-dev-environment/0003-dev-environment.html | 586 | 13 | 0 | 1 | 25 | — | n/a |

@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Verification &amp; Safety Numbers — C5.3</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">C5 — End-to-End Encryption</a>
+      <span class="sep">›</span>
+      <span class="current">Verification &amp; Safety Numbers</span>
+    </nav>
+
+    <h1>Verification &amp; Safety Numbers</h1>
+    <div class="lesson-meta">
+      <span>C5 — Lesson 3 of 5</span>
+      <span>~45 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p><code>0002</code> ended with a gap it could not close: the first time
+      you fetch someone's key there is nothing to compare it against, so you
+      pin what the server gives you and hope. Pinning makes a <em>later</em>
+      substitution visible; it does nothing about a substitution that was
+      there from the start.</p>
+      <p><strong>This lesson closes it, and the mechanism is not
+      cryptographic.</strong> Two people compare a number through a channel
+      the server does not control — out loud, in person, on a QR code held up
+      to a camera. That is the only information in the entire system that does
+      not pass through infrastructure someone else runs.</p>
+    </div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>What a safety number is</h2>
+
+    <p>A short, human-comparable rendering of <strong>both</strong> public keys
+    in a conversation:</p>
+
+    <pre><code>Ravi                                   You
+
+  38471  90233  17756  40182
+  55019  73846  22910  68374
+  11295  84061  39572  20648
+
+Compare these numbers. If they match on both phones,
+nobody is between you.</code></pre>
+
+    <p>Sixty digits in groups of five. It is a hash, truncated and formatted
+    for a human to read aloud in about twenty seconds. Nothing about it is
+    secret — you can shout it across a room. Its only job is to be
+    <strong>infeasible for an attacker to reproduce</strong> while being
+    <em>possible for two people to compare</em>, and those two requirements
+    pull in opposite directions, which is what makes the length a real
+    decision rather than a detail.</p>
+
+    <!-- ───────────────────────────────────────────── -->
+    <div class="callout danger">
+      <div class="callout-title">The bug that makes verification impossible, and it is one line</div>
+
+      <p>Both devices must compute the <strong>identical</strong> number. The
+      obvious implementation does not:</p>
+
+      <pre><code>// On MY phone
+hash(myKey + theirKey)
+
+// On THEIR phone -- same function, same two keys
+hash(myKey + theirKey)   // ...but "my" and "their" are swapped</code></pre>
+
+      <p>Each side puts its own key first, so each side hashes a different
+      string and sees a different number. <strong>The two people compare, find
+      they do not match, and conclude they are being attacked.</strong></p>
+
+      <p>What makes this worse than an ordinary bug is how it fails. It is not
+      that verification stops working — it is that verification
+      <em>always reports an attack</em>. Every user who tries it is told
+      something is wrong. The feature that exists to build confidence spends
+      its life destroying it, and the natural response from support is
+      <em>"ignore that screen, it's known to be buggy"</em> — which is the
+      worst possible outcome, because now nobody checks the one thing that
+      would catch a real interception.</p>
+
+      <p>The fix is to put the two keys in a <strong>canonical order</strong>
+      before hashing — sort them, so both sides feed the function the same
+      bytes regardless of who is asking:</p>
+
+      <pre><code>const [first, second] = [myKey, theirKey].sort();
+const number = hash(first + second);</code></pre>
+
+      <p>The general form is worth more than the fix: <strong>any value two
+      parties must agree on cannot depend on which of them is
+      computing it.</strong> Sorting is the usual way to make that true, and
+      the test is a one-liner — <code>f(a, b) === f(b, a)</code>.</p>
+    </div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Why it must contain both keys</h2>
+
+    <p>A tempting simplification is to show a fingerprint of the
+    <em>other</em> person's key alone. It is shorter and it seems to say the
+    same thing. It does not:</p>
+
+    <ul>
+      <li><strong>It only verifies one direction.</strong> You confirm you
+      hold Ravi's real key. Ravi learns nothing about whether he holds
+      yours — so an attacker intercepting one side of the conversation
+      survives the check.</li>
+      <li><strong>It is the same for everyone.</strong> Ravi's fingerprint is
+      Ravi's fingerprint, so it says nothing about <em>this</em>
+      conversation. A number that binds the pair changes if either key
+      changes, which is what makes it a statement about a channel rather than
+      about a person.</li>
+    </ul>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>How long is long enough</h2>
+
+    <p>Truncation is not free. If the displayed number is short, an attacker
+    can generate keypairs until one produces a matching number and then
+    substitute that key — the comparison passes and the interception
+    succeeds.</p>
+
+    <table>
+      <thead><tr><th>Digits shown</th><th>Work to find a match</th><th>Verdict</th></tr></thead>
+      <tbody>
+        <tr><td>8</td><td>~10<sup>8</sup> — seconds on a laptop</td><td><strong>Worse than nothing</strong></td></tr>
+        <tr><td>16</td><td>~10<sup>16</sup> — expensive but reachable</td><td>Not enough</td></tr>
+        <tr><td>32</td><td>~10<sup>32</sup></td><td>The floor</td></tr>
+        <tr><td>60</td><td>~10<sup>60</sup></td><td>What Token shows</td></tr>
+      </tbody>
+    </table>
+
+    <p><strong>"Worse than nothing" is the important row.</strong> A short
+    safety number does not merely fail to protect — it produces a green tick
+    the user has been taught to rely on, for a channel that is compromised.
+    A feature that gives false assurance is worse than the same feature
+    absent, because the absent one does not stop the user being careful.</p>
+
+    <p>So <code>safetyNumber</code> below <strong>refuses to produce a number
+    at all</strong> when asked for too few digits. It does not quietly return
+    a short one. That is the same rule as everywhere else in this module: when
+    you cannot do the secure thing, stop.</p>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>The QR path, which Token already has</h2>
+
+    <p>Reading sixty digits aloud works and almost nobody does it. The
+    practical form is a QR code on one screen, scanned by the other camera —
+    and <strong>Token already owns both halves</strong>: <code>a5/0001</code>
+    generates QR codes for token sharing and the app already asks for camera
+    permission for redemption scanning.</p>
+
+    <div class="callout">
+      <div class="callout-title">Scanning is stronger than reading, and only because of the channel</div>
+      <p>The digits and the QR encode the same value. Scanning is better for
+      two reasons that have nothing to do with cryptography: people actually
+      do it, and it removes the failure mode where someone compares the first
+      group, sees a match, and stops.</p>
+      <p><strong>What it does not change is the requirement that the two
+      phones be in the same room.</strong> A QR code sent through a chat app
+      is a QR code that passed through a server — which is the thing being
+      verified. If the channel can be tampered with, so can the code on it,
+      and the check proves nothing.</p>
+      <p>This is the same rule as Token's own sharing policy in
+      <code>CLAUDE.md</code>: <em>a token must never travel over a channel
+      that already identifies the user</em>. Here the parallel is sharper —
+      <strong>a verification must never travel over the channel it is
+      verifying.</strong></p>
+    </div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>What "verified" means, and what it does not</h2>
+
+    <pre><code>// The pin record from 0002, now with the verification recorded.
+{
+  publicKey: 'Kx1...',
+  keyVersion: 3,
+  verifiedAt: 1699000000,   // set only by a successful comparison
+}</code></pre>
+
+    <ul>
+      <li><strong>It means: the key I hold for this person is the key their
+      device holds.</strong> That is all, and it is enough — it is exactly the
+      claim a substituting server needs to be false.</li>
+      <li><strong>It does not mean the person is who they say they are.</strong>
+      Verification confirms a key matches a device. Whether the human holding
+      that device is really Ravi is a question about the world, and comparing
+      numbers in person answers it only because you can see him.</li>
+      <li><strong>It expires when the key changes</strong>, which
+      <code>0002</code>'s <code>verificationLost</code> already reports. A
+      fingerprint checked last year says nothing about a key that appeared
+      this morning.</li>
+    </ul>
+
+    <p>Note the storage: <code>verifiedAt</code> lives in the client's pin
+    store and <strong>is never sent to the server</strong>. It is a statement
+    about whether you trust the server's answer — telling the server would be
+    both useless and slightly absurd.</p>
+
+    <h3>Try it yourself — this one is broken on purpose</h3>
+
+    <p>The safety number as it is usually first written, computed from both
+    ends of the same conversation.</p>
+
+    <div id="playground-safety"></div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Now build it yourself</h2>
+
+    <p>The QR scanner and the camera need a device. The number itself is a
+    pure function, and it is the one place a single line decides whether
+    verification works at all.</p>
+
+    <div id="exercise-safety"></div>
+    <div id="pg-exercise-safety"></div>
+
+    <h3>And the screen</h3>
+
+    <div id="exercise-1"></div>
+
+    <div id="explain-c5-0003"></div>
+
+    <hr>
+
+    <h2>Quiz</h2>
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0002-publishing-fetching-keys.html">← Publishing &amp; Fetching Keys</a>
+      <span class="disabled">Next: Backup &amp; Recovery →</span>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+  createPlayground("playground-safety", `// BROKEN ON PURPOSE. Computed from both ends of one conversation.
+
+function safetyNumber(myKey, theirKey) {
+  // "Mine, then theirs. Obviously."
+  return digitsOf(myKey + theirKey).slice(0, 20);
+}
+
+// A stand-in for a real hash: deterministic, and different inputs give
+// very different digits. Not cryptographic -- this is about ORDER.
+function digitsOf(s) {
+  let h = 2166136261;
+  let out = "";
+  for (const ch of s) { h = (h ^ ch.charCodeAt(0)) * 16777619 >>> 0; }
+  for (let i = 0; i < 5; i++) { h = (h * 48271) % 2147483647; out += String(h).padStart(10, "0"); }
+  return out;
+}
+
+const RAVI = "RaviPublicKey00000000000000000";
+const YOU  = "YourPublicKey0000000000000000";
+
+// The SAME conversation, computed on each phone.
+const onYourPhone = safetyNumber(YOU, RAVI);
+const onRavisPhone = safetyNumber(RAVI, YOU);
+
+console.log("Your phone shows :", onYourPhone);
+console.log("Ravi's phone shows:", onRavisPhone);
+console.log("");
+console.log("match:", onYourPhone === onRavisPhone);
+console.log("");
+console.log("They will never match, for anybody, ever. Each phone puts its");
+console.log("OWN key first, so each hashes a different string.");
+console.log("");
+console.log("And notice how it fails: not 'verification is unavailable'");
+console.log("but 'verification says you are being attacked' -- to every");
+console.log("user, every time. Support learns to say 'ignore that screen',");
+console.log("and then nobody checks the one thing that catches a real");
+console.log("interception.");
+console.log("");
+console.log("The fix is one line: sort the two keys before hashing.");
+console.log("[a, b].sort() gives the same pair whichever end you are on.");`);
+
+  createSolution("exercise-safety", {
+    exercise: `Write safetyNumber(myKey, theirKey, config) — the number both people compare.\n\nconfig is { hash, digits, groupSize, minDigits, isWellFormed }:\n  hash(s)          returns a long string of decimal digits\n  digits           how many to show (60 for Token)\n  groupSize        how many per group (5)\n  minDigits        the shortest number allowed to exist at all (32)\n  isWellFormed(k)  true if k is structurally a public key\n\nReturn { number, groups, reason }.\n\nnumber is the grouped string, or null when one cannot be produced. groups is the array of group strings, or []. reason is 'ok', 'malformed', 'too_short' or 'hash_too_short'.\n\nThe rules:\n\n1. IF EITHER KEY IS MALFORMED, return null with reason 'malformed'. Check both, not just theirs — a corrupt local key produces a number that will never match anything, and the user would be told they are under attack when the fault is on their own device.\n\n2. IF config.digits IS BELOW config.minDigits, return null with reason 'too_short'. Do NOT return a short number. An eight-digit safety number can be matched by generating keypairs until one collides, so it produces a green tick for a channel that IS compromised — and a feature that gives false assurance is worse than one that is absent, because the absent one does not stop the user being careful.\n\n3. PUT THE TWO KEYS IN A CANONICAL ORDER BEFORE HASHING. Sort them and concatenate smaller-first. This is the whole lesson: both devices must feed the hash the identical string, and each device knows the same two keys by different names. Without it, safetyNumber(a, b) and safetyNumber(b, a) differ and NOBODY can ever verify.\n\n4. HASH THE ORDERED PAIR AND TAKE THE FIRST config.digits CHARACTERS. Call config.hash exactly once.\n\n5. IF THE HASH RETURNED FEWER THAN config.digits CHARACTERS, return null with reason 'hash_too_short'. Do not pad it and do not silently show what you got — padding invents digits that carry no information, and quietly showing fewer is rule 2 arriving through the back door.\n\n6. GROUP THE DIGITS INTO RUNS OF config.groupSize, joined by single spaces. A final short group is fine — with 60 digits and groups of 5 it does not arise, but the function must not depend on that.\n\nOne note rather than a rule, because nothing here can test it: [myKey, theirKey].sort() is safe precisely because that array literal is brand new. sort() mutates in place, so the same call on an array someone handed you reorders their data as a side effect of asking a question. The inputs here are strings and strings are immutable, so there is nothing to get wrong today — the habit matters the moment a function like this takes a list instead.`,
+    hints: [
+      "Rule 3 is one line and it is the only line that matters for correctness: const [a, b] = [myKey, theirKey].sort(). Test it with f(x, y) === f(y, x) — if that is not true, nothing else in the function can save it.",
+      "Do rules 1 and 2 before touching the hash. Rule 2 in particular is about config rather than about the keys, so it can be checked before anything is computed — and checking it late means you have already produced the number you are about to refuse.",
+      "For rule 6, walk the string in steps of groupSize and slice. slice() clamps at the end of the string, so the final short group falls out for free rather than needing a special case."
+    ],
+    solution: `function safetyNumber(myKey, theirKey, config) {
+  const no = (reason) => ({ number: null, groups: [], reason });
+
+  // Rule 1: BOTH keys. A corrupt local key would otherwise tell the
+  // user they are under attack when the fault is on their own device.
+  if (!config.isWellFormed(myKey) || !config.isWellFormed(theirKey)) {
+    return no("malformed");
+  }
+
+  // Rule 2: refuse, never truncate further. A short number is a green
+  // tick for a compromised channel.
+  if (config.digits < config.minDigits) {
+    return no("too_short");
+  }
+
+  // Rule 3 -- THE line. Both devices know the same two keys by
+  // different names, so the order has to come from the keys.
+  const [first, second] = [myKey, theirKey].sort();
+
+  // Rule 4: exactly one hash call.
+  const raw = config.hash(first + second);
+
+  // Rule 5: no padding, no quiet shortening.
+  if (raw.length < config.digits) {
+    return no("hash_too_short");
+  }
+
+  const shown = raw.slice(0, config.digits);
+
+  // Rule 6. slice() clamps, so a final short group needs no special case.
+  const groups = [];
+  for (let i = 0; i < shown.length; i += config.groupSize) {
+    groups.push(shown.slice(i, i + config.groupSize));
+  }
+
+  return { number: groups.join(" "), groups, reason: "ok" };
+}`
+  });
+
+  createPlayground("pg-exercise-safety", `// Write safetyNumber(myKey, theirKey, config) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(v) { return JSON.stringify(v); }
+
+// A deterministic stand-in. It is ORDER-SENSITIVE on purpose: if the
+// implementation does not sort, the two ends genuinely differ.
+var hashCalls = 0;
+function makeHash(len) {
+  return function (s) {
+    hashCalls++;
+    var h = 2166136261;
+    for (var i = 0; i < s.length; i++) { h = ((h ^ s.charCodeAt(i)) * 16777619) >>> 0; }
+    var out = "";
+    while (out.length < len) {
+      h = (h * 48271) % 2147483647;
+      out += String(h).padStart(10, "0");
+    }
+    return out.slice(0, len);
+  };
+}
+// Keys chosen so that KEY_B sorts BEFORE KEY_A -- otherwise "no sorting"
+// and "sorted" agree by luck for this pair, and the headline check
+// cannot see the bug.
+var KEY_A = "MMMMMMMM", KEY_B = "AAAAAAAA", KEY_C = "ZZZZZZZZ";
+function cfg(over) {
+  var c = {
+    hash: makeHash(80), digits: 60, groupSize: 5, minDigits: 32,
+    isWellFormed: function (k) { return typeof k === "string" && k.length === 8; },
+  };
+  for (var k in (over || {})) c[k] = over[k];
+  return c;
+}
+function got(a, b, over) {
+  try {
+    var r = safetyNumber(a, b, cfg(over));
+    return r || {};
+  } catch (e) {
+    return { number: null, groups: [], reason: "threw: " + e.message };
+  }
+}
+
+try {
+  if (typeof safetyNumber !== "function") throw new Error("not written yet");
+
+  // Rule 3 -- THE check. Everything else is detail if this fails.
+  check("both ends of the conversation see the SAME number",
+    got(KEY_A, KEY_B).number === got(KEY_B, KEY_A).number &&
+    got(KEY_A, KEY_B).number !== null,
+    "yours " + show(got(KEY_A, KEY_B).number) + " vs theirs " + show(got(KEY_B, KEY_A).number));
+  // Both pairs share KEY_B, and KEY_B sorts first in each. So an
+  // implementation that hashes only ONE of the two keys returns the
+  // same number for two different people -- which this catches and a
+  // pair with different minimums would not.
+  check("...and a different peer gives a different number",
+    got(KEY_B, KEY_A).number !== got(KEY_B, KEY_C).number,
+    "a number that does not depend on BOTH keys is a statement about a person, not a channel");
+
+  // Rule 6 -- shape
+  check("60 digits come back as 12 groups",
+    got(KEY_A, KEY_B).groups.length === 12,
+    "got " + show(got(KEY_A, KEY_B).groups.length));
+  check("...each of 5 characters",
+    got(KEY_A, KEY_B).groups.every(function (g) { return g.length === 5; }),
+    "got " + show(got(KEY_A, KEY_B).groups));
+  check("...joined by single spaces into number",
+    got(KEY_A, KEY_B).number === got(KEY_A, KEY_B).groups.join(" "),
+    "number and groups must agree");
+  check("...and are all digits",
+    /^[0-9 ]+$/.test(got(KEY_A, KEY_B).number || ""),
+    "got " + show(got(KEY_A, KEY_B).number));
+  check("a final short group is allowed",
+    got(KEY_A, KEY_B, { digits: 33 }).groups.length === 7 &&
+    got(KEY_A, KEY_B, { digits: 33 }).groups[6].length === 3,
+    "got " + show(got(KEY_A, KEY_B, { digits: 33 }).groups));
+
+  // Rule 1
+  check("a malformed peer key produces no number",
+    got(KEY_A, "short").number === null, "got " + show(got(KEY_A, "short").number));
+  check("...and so does a malformed LOCAL key",
+    got("short", KEY_B).number === null,
+    "a corrupt local key would otherwise report an attack that is not happening");
+  check("...reported as malformed",
+    got(KEY_A, "short").reason === "malformed",
+    "got " + show(got(KEY_A, "short").reason));
+
+  // Rule 2 -- refuse, do not truncate
+  check("fewer digits than minDigits produces NO number",
+    got(KEY_A, KEY_B, { digits: 8 }).number === null,
+    "an 8-digit number can be matched by grinding keypairs, and it shows a green tick for a compromised channel");
+  check("...reported as too_short",
+    got(KEY_A, KEY_B, { digits: 8 }).reason === "too_short",
+    "got " + show(got(KEY_A, KEY_B, { digits: 8 }).reason));
+  check("exactly minDigits is allowed",
+    got(KEY_A, KEY_B, { digits: 32 }).number !== null,
+    "32 is the floor, not the first refusal");
+
+  // Rule 5 -- a short hash is not padded
+  check("a hash shorter than requested produces no number",
+    got(KEY_A, KEY_B, { hash: makeHash(40) }).number === null,
+    "padding invents digits that carry no information");
+  check("...reported as hash_too_short, not too_short",
+    got(KEY_A, KEY_B, { hash: makeHash(40) }).reason === "hash_too_short",
+    "got " + show(got(KEY_A, KEY_B, { hash: makeHash(40) }).reason));
+
+  // Rule 4
+  hashCalls = 0;
+  got(KEY_A, KEY_B);
+  check("hash is called exactly once",
+    hashCalls === 1, "called " + hashCalls + " times");
+
+  // Refusals carry no half-answer
+  check("every refusal returns an empty groups array",
+    got(KEY_A, "short").groups.length === 0 &&
+    got(KEY_A, KEY_B, { digits: 8 }).groups.length === 0,
+    "got " + show([got(KEY_A, "short").groups, got(KEY_A, KEY_B, { digits: 8 }).groups]));
+} catch (err) {
+  console.log("Self-check could not run: " + err.message);
+}`);
+
+  createExplain("explain-c5-0003", {
+    prompt: "A colleague suggests showing a 10-digit safety number instead of 60, because it is easier to read aloud. Explain why that is worse than showing no safety number at all."
+  });
+
+  createSolution("exercise-1", {
+    unverifiable: "the deliverable is a React Native screen with a QR scanner, needing a camera and a device",
+    exercise: `Build the verification screen.\n\n1. Show the safety number for the conversation, in groups, alongside a QR encoding the same value.\n2. A Scan button opening the camera; on a successful scan, compare the scanned value against the locally computed one.\n3. On a match, set verifiedAt on the pin record and show the verified state. On a mismatch, say so clearly and do NOT set it.\n4. Handle every non-'ok' reason from safetyNumber with its own message — malformed, too_short and hash_too_short are different faults and only one of them is about the peer.\n5. When 0002 reported verificationLost, show that this conversation WAS verified and no longer is, rather than showing it as simply unverified.`,
+    hints: [
+      "Never send verifiedAt to the server. It records whether you trust the server's answer, so storing it there is both useless and slightly absurd — keep it in the SQLite pin store from 0002.",
+      "A mismatch is not an error state to retry. It is a result, and the screen should say what it means in words the user can act on: someone may be reading this conversation, do not send anything sensitive here.",
+      "For point 5, 'was verified, now is not' is a materially stronger warning than 'not verified'. The first says something changed; the second is the normal state of most conversations. Reusing one component for both throws away the distinction 0002 went to the trouble of computing."
+    ],
+    solution: `// app/src/screens/VerifyScreen.tsx
+import { useMemo, useState } from 'react';
+import { View, Text, Pressable, StyleSheet } from 'react-native';
+import { CameraView } from 'expo-camera';
+import QRCode from 'react-native-qrcode-svg';
+import { safetyNumber } from '../crypto/safety';
+import { useTheme } from '../theme';
+
+const CONFIG = {
+  hash: sha256Digits,
+  digits: 60,
+  groupSize: 5,
+  minDigits: 32,
+  isWellFormed: (k) => typeof k === 'string' && k.length === 44,
+};
+
+export function VerifyScreen({ myKey, pin, onVerified }) {
+  const { colors } = useTheme();
+  const [scanning, setScanning] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const sn = useMemo(
+    () => safetyNumber(myKey, pin.publicKey, CONFIG),
+    [myKey, pin.publicKey]
+  );
+
+  if (sn.number === null) {
+    // Three different faults, and only one of them is about the peer.
+    const message = {
+      malformed: 'One of the keys for this conversation is unreadable. This is a problem on a device, not an attack.',
+      too_short: 'This build is misconfigured and cannot show a safety number. Do not treat this conversation as verified.',
+      hash_too_short: 'This build is misconfigured and cannot show a safety number. Do not treat this conversation as verified.',
+    }[sn.reason];
+
+    return <Notice tone="danger" title="Cannot verify" body={message} />;
+  }
+
+  function onScan({ data }) {
+    setScanning(false);
+    if (data === sn.number) {
+      // Local only. The server is the party this defends against.
+      onVerified(Date.now());
+      setResult('match');
+    } else {
+      setResult('mismatch');
+    }
+  }
+
+  return (
+    <View style={styles.screen}>
+      {pin.verificationLost ? (
+        <Notice
+          tone="danger"
+          title="This conversation was verified, and is not any more"
+          body="The key changed. That happens when someone reinstalls or gets a new phone -- and it is also what an interception looks like. Verify again before sending anything sensitive."
+        />
+      ) : null}
+
+      <Text style={[styles.heading, { color: colors.text }]}>
+        Compare these numbers in person
+      </Text>
+
+      <View style={styles.numberBox}>
+        {chunk(sn.groups, 4).map((row, i) => (
+          <Text key={i} style={[styles.digits, { color: colors.text }]}>
+            {row.join('  ')}
+          </Text>
+        ))}
+      </View>
+
+      <QRCode value={sn.number} size={220} />
+
+      <Pressable style={styles.button} onPress={() => setScanning(true)}>
+        <Text style={{ color: colors.onAccent }}>Scan their code</Text>
+      </Pressable>
+
+      {scanning ? (
+        <CameraView
+          style={StyleSheet.absoluteFill}
+          barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+          onBarcodeScanned={onScan}
+        />
+      ) : null}
+
+      {result === 'match' ? (
+        <Notice tone="success" title="Verified"
+          body="The key on this device matches the key on theirs." />
+      ) : null}
+
+      {result === 'mismatch' ? (
+        <Notice tone="danger" title="These do not match"
+          body="Someone may be reading this conversation. Do not send anything sensitive here, and try again in person." />
+      ) : null}
+    </View>
+  );
+}
+
+function chunk(list, size) {
+  const out = [];
+  for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
+  return out;
+}`
+  });
+
+  createQuiz("lesson-quiz", [
+    {
+      question: "Both phones compute hash(myKey + theirKey). What goes wrong?",
+      options: [
+        "Nothing — the hash is deterministic",
+        "Each phone puts its own key first, so each hashes a different string and the numbers never match for anybody",
+        "The hash is too slow on older devices",
+        "The keys must be decoded to bytes first"
+      ],
+      correct: 1,
+      explanation: "The function is deterministic and that is exactly the problem: it deterministically produces two different answers, because 'my' and 'their' name different keys on each device. The fix is to sort the pair so both sides feed the hash the same string, and the test is one line: f(a, b) === f(b, a)."
+    },
+    {
+      question: "Why is the ordering bug worse than an ordinary broken feature?",
+      options: [
+        "It corrupts the stored keys",
+        "It does not fail as 'unavailable' — it reports an attack, to every user, every time, until support starts telling people to ignore the screen",
+        "It crashes the app",
+        "It leaks the private key"
+      ],
+      correct: 1,
+      explanation: "A feature that is merely broken gets fixed. A feature that cries wolf gets worked around, and the workaround is teaching users to dismiss the one screen that would catch a real interception. The failure mode trains people out of the behaviour the feature exists to create."
+    },
+    {
+      type: "predict-output",
+      code: `const mine = 'M', theirs = 'A';\nconsole.log('naive on my phone   :', mine + theirs);\nconsole.log('naive on their phone:', theirs + mine);\nconsole.log('sorted, either phone:', [mine, theirs].sort().join(''));`,
+      answer: "naive on my phone   : MA\nnaive on their phone: AM\nsorted, either phone: AM",
+      explanation: "Two different inputs to the hash on the two devices, and one identical input once sorted. This is the whole bug and the whole fix, in three lines. Note that sort() is doing something specific here: producing an order that comes from the values rather than from the caller's point of view."
+    },
+    {
+      question: "Why must the safety number include both keys rather than just the peer's?",
+      options: [
+        "To make it longer",
+        "A fingerprint of one key verifies only one direction and is identical for every conversation that person has — it says nothing about this channel",
+        "Because hashing one key is insecure",
+        "Because the peer's key might be missing"
+      ],
+      correct: 1,
+      explanation: "Two separate problems. One-directional: you confirm you hold Ravi's real key while Ravi learns nothing about whether he holds yours, so an attacker intercepting one side survives. And identical everywhere: Ravi's fingerprint is Ravi's fingerprint, so it is a statement about a person rather than about this conversation."
+    },
+    {
+      question: "An 8-digit safety number is described as 'worse than nothing'. Why?",
+      options: [
+        "It takes just as long to compare",
+        "An attacker can generate keypairs until one produces a matching number, so the check shows a green tick for a channel that is compromised",
+        "Eight digits cannot encode a hash",
+        "It would need to be regenerated more often"
+      ],
+      correct: 1,
+      explanation: "Roughly 10^8 attempts is seconds of work. The result is not merely an absent protection but a false assurance — and false assurance is worse than no feature, because a user with no verification screen stays cautious while a user with a green tick does not."
+    },
+    {
+      question: "safetyNumber is asked for 8 digits. What should it do?",
+      options: [
+        "Return the 8 digits and let the UI warn",
+        "Return no number at all, with reason 'too_short' — when you cannot do the secure thing, you stop",
+        "Pad to 32 digits with zeros",
+        "Throw an exception"
+      ],
+      correct: 1,
+      explanation: "Same rule as the plaintext downgrade in 0002 and the key regeneration in 0001. Returning a short number and hoping the UI warns puts the guarantee in the hands of whoever writes the screen next. Padding is worse still: it invents digits that look like security and carry no information."
+    },
+    {
+      type: "fill-blank",
+      code: `// Both devices must feed the hash the same string\nconst [first, second] = [myKey, theirKey].___();\nconst raw = config.hash(first + second);`,
+      answer: "sort",
+      explanation: "sort() derives the order from the values rather than from the caller, which is what makes the result independent of which device is computing it. Any value two parties must agree on cannot depend on which of them computed it, and sorting is the usual way to arrange that."
+    },
+    {
+      question: "Why does safetyNumber check that the LOCAL key is well-formed, not just the peer's?",
+      options: [
+        "For symmetry",
+        "A corrupt local key produces a number that will never match anything, so the user would be told they are under attack when the fault is on their own device",
+        "The local key is more likely to be corrupt",
+        "It is required to compute the hash"
+      ],
+      correct: 1,
+      explanation: "The user-visible outcome of skipping this check is a mismatch, and a mismatch means 'someone may be reading this conversation'. Reporting an attack for a local storage fault is the same class of false alarm as the ordering bug, just rarer — and 'malformed' is a message about a device while 'mismatch' is a message about a threat."
+    },
+    {
+      question: "A QR code of the safety number is sent through a chat app instead of being scanned in person. What does the comparison prove?",
+      options: [
+        "The same thing — the value is identical",
+        "Nothing. The code travelled over a channel that could be tampered with, which is the channel being verified",
+        "More, because a QR cannot be misread",
+        "It proves the peer's key but not yours"
+      ],
+      correct: 1,
+      explanation: "The value of an out-of-band check is entirely in the 'out of band'. A verification sent through the system it verifies can be substituted along with everything else. It is the same shape as Token's own sharing rule: a token must never travel over a channel that already identifies the user, and a verification must never travel over the channel it is verifying."
+    },
+    {
+      question: "What does a verified safety number actually establish?",
+      options: [
+        "That the person is who they claim to be",
+        "That the key you hold for them is the key their device holds — which is exactly the claim a substituting server needs to be false",
+        "That the conversation cannot be intercepted in future",
+        "That the server is honest"
+      ],
+      correct: 1,
+      explanation: "It is a statement about keys and devices, not about people. Whether the human holding that device is really Ravi is a question about the world, and comparing numbers in person answers it only because you can see him. It also says nothing about the future — which is why a key change clears it."
+    },
+    {
+      question: "Where is verifiedAt stored?",
+      options: [
+        "On the server, so it survives reinstall",
+        "In the client's local pin store, and never sent to the server — it records whether you trust the server's answer",
+        "Inside the safety number itself",
+        "In SecureStore alongside the private key"
+      ],
+      correct: 1,
+      explanation: "Telling the server would be both useless and slightly absurd: the value exists to record your judgement about that server's honesty. SecureStore is also wrong for a different reason — it is for small secrets, and a pin per conversation is neither small in aggregate nor secret."
+    },
+    {
+      type: "spot-the-bug",
+      code: `const raw = config.hash(myKey + theirKey);\nconst shown = raw.slice(0, config.digits);       // line 2\nif (shown.length < config.digits) {\n  return { number: shown.padEnd(config.digits, '0') };\n}`,
+      bugLine: 2,
+      options: [
+        "Line 2: the keys were not sorted, so the two devices compute different numbers",
+        "Line 2: slice should be substring",
+        "Line 2: config.digits should be validated first"
+      ],
+      correct: 0,
+      explanation: "The padding on line 4 is also wrong — inventing zeros produces digits that carry no information and make a short hash look like a long one. But the unsorted concatenation on line 1 is the fatal one: it makes the number differ on the two devices, so nothing downstream can matter."
+    },
+    {
+      type: "predict-output",
+      code: `const digits = '123456789012';\nconst groupSize = 5;\nconst groups = [];\nfor (let i = 0; i < digits.length; i += groupSize) {\n  groups.push(digits.slice(i, i + groupSize));\n}\nconsole.log(JSON.stringify(groups));`,
+      answer: '["12345","67890","12"]',
+      explanation: "slice() clamps at the end of the string, so the final short group falls out without a special case. Writing this loop with substring arithmetic and an explicit last-chunk branch is where off-by-one errors live, and the branch is unnecessary."
+    },
+    {
+      question: "Why is scanning a QR code better than reading digits aloud?",
+      options: [
+        "The QR is cryptographically stronger",
+        "For two non-cryptographic reasons: people actually do it, and it removes the failure where someone checks the first group, sees a match and stops",
+        "The QR contains more entropy",
+        "Digits can be mistyped and QRs cannot"
+      ],
+      correct: 1,
+      explanation: "Both encode the same value, so there is no cryptographic difference at all. The advantages are behavioural, and behavioural advantages are the ones that decide whether a security feature works in practice. Neither form removes the requirement that both phones be in the same room."
+    },
+    {
+      question: "0002 reported verificationLost for a conversation. How should the screen differ from an unverified one?",
+      options: [
+        "It should not — both are unverified",
+        "'Was verified, now is not' says something changed; 'not verified' is the normal state of most conversations, and collapsing them throws away the distinction",
+        "It should block sending entirely",
+        "It should re-verify automatically"
+      ],
+      correct: 1,
+      explanation: "Most conversations are simply unverified and that is unremarkable. A conversation that was verified and is no longer had an event happen to it, which is the thing worth surfacing. Reusing one component for both discards the distinction 0002 went to the trouble of computing."
+    },
+    {
+      type: "which-breaks",
+      question: "Which of these will fail?",
+      variants: [
+        "const [a, b] = [myKey, theirKey].sort(); return hash(a + b);",
+        "return myKey < theirKey ? hash(myKey + theirKey) : hash(theirKey + myKey);",
+        "return hash([myKey, theirKey].join('')) ;"
+      ],
+      correct: 2,
+      explanation: "join() on an unsorted array preserves the caller's order, so it has exactly the bug the sort exists to fix — it just looks tidier. The explicit comparison is equivalent to sorting and is fine, if wordier. Whenever a fix is 'sort first', check that any rewrite still sorts."
+    },
+    {
+      question: "safetyNumber calls config.hash exactly once. Why does that matter here?",
+      options: [
+        "Hashing is slow",
+        "Two calls are two chances to disagree, and the one that was validated is not necessarily the one that is displayed",
+        "The hash function is stateful",
+        "It reduces memory use"
+      ],
+      correct: 1,
+      explanation: "Same discipline as c5/0001's decode-once rule. Even when the function is pure this is a bug waiting for it to stop being pure — and here the displayed value is the entire point, so showing a different one than you checked defeats the check silently."
+    },
+    {
+      question: "What is the floor for safety number length, and what does 'floor' mean here?",
+      options: [
+        "8 digits, below which it is merely weak",
+        "32 digits — and 'floor' means exactly 32 is allowed while 31 is refused, not that 32 is the first refusal",
+        "60 digits, which is what Token shows",
+        "There is no floor if the hash is strong"
+      ],
+      correct: 1,
+      explanation: "An off-by-one on a boundary like this is easy to write and hard to notice, which is why the self-check tests exactly minDigits explicitly. Token shows 60, well above the floor, because the cost of extra digits is a slightly longer comparison and the cost of too few is a green tick on a compromised channel."
+    },
+    {
+      question: "Why does a refusal return an empty groups array rather than leaving it undefined?",
+      options: [
+        "To save memory",
+        "So a caller that renders groups without checking number gets nothing rather than crashing or displaying a partial number",
+        "Because JSON cannot serialise undefined",
+        "It is required by the type system"
+      ],
+      correct: 1,
+      explanation: "The same reasoning as keyBytes being null on every non-reuse outcome in c5/0001: a refusal should carry no half-answer. A partially populated result is an invitation for a caller to use the part that looks fine, and here the part that looks fine would be a fragment of a safety number."
+    },
+    {
+      question: "An attacker substitutes a key BEFORE two people have ever talked. Which lesson's mechanism catches it?",
+      options: [
+        "0002's pinning, because the key is new",
+        "Only this one. Pinning makes a later substitution visible; it cannot help when there is nothing to compare against",
+        "0001's refusal to regenerate keys",
+        "None of them — this attack is undetectable"
+      ],
+      correct: 1,
+      explanation: "This is precisely the trust-on-first-use gap 0002 named and could not close. The first key you see is pinned by definition, so nothing is anomalous. Only information arriving through a channel the server does not control — two people in a room — distinguishes the honest first key from the attacker's."
+    },
+    {
+      type: "order-steps",
+      steps: [
+        "Reject either key if it is malformed",
+        "Reject the request if digits is below minDigits",
+        "Sort the two keys into a canonical order",
+        "Hash the ordered pair, once",
+        "Slice to the requested length and group for display"
+      ],
+      correctOrder: [0, 1, 2, 3, 4],
+      explanation: "The two refusals come first because neither needs anything computed — checking digits after hashing means you have already produced the number you are about to refuse. Sorting before hashing is the correctness step, and formatting is last because it is only presentation."
+    },
+    {
+      type: "fill-blank",
+      code: `// Refuse rather than invent digits\nif (raw.length < config.digits) {\n  return no('___');\n}`,
+      answer: "hash_too_short",
+      explanation: "A distinct reason from too_short, and the difference matters for diagnosis: too_short means the app was configured to show too few digits, while hash_too_short means the hash function did not produce enough. One is a config bug and one is a code bug, and the screen shows the same message for both while the log does not."
+    },
+    {
+      question: "Why does the exercise forbid sorting the array the caller passed in?",
+      options: [
+        "sort() is slow on small arrays",
+        "sort() mutates in place, so sorting a caller's array reorders their data as a side effect of asking a question",
+        "The array may be frozen",
+        "sort() is not stable"
+      ],
+      correct: 1,
+      explanation: "Array.prototype.sort sorts in place and returns the same array. Building a fresh array literal — [myKey, theirKey].sort() — is safe precisely because the array is new. Sorting something you were handed is the same class of defect as the mutation cases in b4/0002 and c5/0002: a function asked to decide something quietly editing its input."
+    },
+    {
+      question: "A user compares numbers and they do not match. What should the screen say?",
+      options: [
+        "An error occurred, please try again",
+        "That someone may be reading this conversation, and not to send anything sensitive — a mismatch is a result, not a failure to retry",
+        "The keys are corrupt",
+        "Nothing, until it has been retried three times"
+      ],
+      correct: 1,
+      explanation: "Framing a mismatch as an error invites a retry, and retrying produces the same answer while suggesting the app is flaky. It is a successful comparison with a meaningful outcome, and the message has to be something the user can act on rather than a description of internal state."
+    },
+    {
+      question: "What is the general rule the ordering bug demonstrates?",
+      options: [
+        "Always sort arrays before hashing",
+        "Any value two parties must agree on cannot depend on which of them is computing it",
+        "Hash functions must be deterministic",
+        "Concatenation is unsafe in cryptographic code"
+      ],
+      correct: 1,
+      explanation: "Sorting is one way to satisfy the rule, not the rule itself — the same requirement shows up wherever two sides derive a shared value independently, including conversation key derivation and any content-addressed identifier built from a pair. The one-line test that catches it is f(a, b) === f(b, a)."
+    }
+  ]);
+  </script>
+</body>
+</html>

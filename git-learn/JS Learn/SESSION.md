@@ -1019,6 +1019,65 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
+### c5/0003 — verification, and the one line that makes it impossible (2026-08-22)
+
+M3: **`safetyNumber`**. 18 self-checks, 11 wrong-cases. **99 track lessons,
+72 verified.** C5 is 3 of 5.
+
+**The subject is a one-line bug with a disproportionate failure mode.** Both
+devices must compute the identical number, and the obvious implementation —
+`hash(myKey + theirKey)` — does not: each side puts *its own* key first, so
+each hashes a different string.
+
+**What makes it worse than an ordinary broken feature is how it fails.** Not
+"verification unavailable" but **"verification says you are being attacked"**,
+to every user, every time. The natural response is support telling people to
+ignore that screen — and then nobody checks the one thing that would catch a
+real interception. **A feature that cries wolf gets worked around, and the
+workaround is the damage.**
+
+Fix is `[myKey, theirKey].sort()`. **General form: any value two parties must
+agree on cannot depend on which of them is computing it.** The test is one
+line — `f(a, b) === f(b, a)` — and it is the first check in the self-check.
+
+### Two things the lesson argues rather than asserts
+
+- **The number must bind *both* keys.** A fingerprint of the peer's key alone
+  verifies one direction only, and is identical for every conversation that
+  person has — a statement about a *person* rather than about *this channel*.
+- **A short safety number is worse than none.** Eight digits is ~10⁸ — an
+  attacker grinds keypairs until one matches. The result is not an absent
+  protection but a **green tick on a compromised channel**, and a user with no
+  verification screen stays cautious while a user with a tick does not. So
+  `safetyNumber` **refuses** below 32 digits rather than returning a short one.
+  Same rule as the plaintext downgrade in `0002` and the regeneration in
+  `0001`: when you cannot do the secure thing, stop.
+
+### The fixture that could not see the bug it was aimed at
+
+*"A different pair gives a different number"* used `(A,B)` vs `(A,C)` — whose
+sorted-smaller keys **differ**, so an implementation hashing only the smaller
+key passed. Changed to `(B,A)` vs `(B,C)`, which **share** the smaller key, and
+the case now trips.
+
+**This is the discriminating-fixture rule again** (`a11/0002`'s grey anchors,
+`b4/0003`'s one-stamp window), and the tell is the same: the fixture varied
+something the bug does not depend on.
+
+### And a test of mine that could not have failed
+
+The mutation check asserted `safetyNumber` "does not reorder the caller's
+data" — but the function **takes two strings**. There is no caller-owned
+structure to reorder and strings are immutable, so the check was unfalsifiable
+and its wrong-case passed everything. Both deleted; the point survives as a
+note in the exercise, since `[a, b].sort()` being safe *because the array is
+fresh* is still worth saying.
+
+**Worth generalising: a check that cannot fail is not a weak check, it is
+noise** — it costs a line, reports PASS forever, and makes the suite look more
+thorough than it is. The wrong-case is what exposed it, which is the eleventh
+time.
+
 ### c5/0002 — the key directory, and the two things a rotation cannot look like (2026-08-22)
 
 M3: **`classifyPeerKey`**. 22 self-checks, 11 wrong-cases, **all passing on
@@ -1420,13 +1479,23 @@ produce, in order:
    `0001` and `0002`, DLT template constraints in `0001`, cost control in
    `0003`. All three now verified; the module had **one** verified lesson
    before this session and has three now.
-3. **Write C5 — end-to-end encryption.** **`0001` and `0002` done
-   2026-08-22**; three to go. **`0003` (verification) is next** and is
-   determined by ADR-0002 — safety numbers, and the canonical ordering that
-   makes both devices derive the identical one. **`0004` (backup) and `0005`
-   (multi-device) need decisions first** — the ADR deliberately leaves them
-   open, and `0004`'s first question already has a fixed constraint from this
-   session: the key backup must not be recoverable by SMS alone.
+3. **Write C5 — end-to-end encryption.** **`0001`, `0002` and `0003` done
+   2026-08-22** — everything ADR-0002 determines. **The remaining two are
+   blocked on decisions and must not be guessed:**
+   - **`0004` (backup &amp; recovery)** — ADR-0002 requires it at launch and
+     forbids a server-held copy. One constraint is already fixed by this
+     session: **the key backup must not be recoverable by SMS alone**, or a
+     SIM-swap takes the message history along with the account. The open
+     question is *what the user actually does* — a recovery phrase they write
+     down, a passphrase-wrapped blob the server stores blind, or an export to
+     their own cloud.
+   - **`0005` (multi-device)** — ADR-0002 says multi-device needs explicit key
+     sharing because there is no server copy to sync from. The open question
+     is the linking mechanism, and whether history transfers to a new device
+     at all.
+
+   **Ask before writing either.** Both change what the lessons contain, not
+   just their examples.
 4. **`a3/0002` M3 extraction**, then **`a2` runtime type guards**.
 5. The small `a8/0004` fix — `tokenCode` is sent over the WebSocket on every
    chat message, twice. The holder knows the code so nothing leaks to *them*,
@@ -1741,6 +1810,7 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `a11/0003` | `toCreateTokenPayload` | blank is an absence, never `''`; `maxUses: 0` and absent are opposites; an unreadable value is refused, never defaulted |
 | `a11/0002` | `auditContrast` | the sRGB gamma decode, which the usual anchors cannot catch; a pair is audited, not a colour; a value with alpha has no ratio and must be skipped, not scored |
 | `a11/0001` | `swipeOutcome` | the threshold is a *fraction* of the width, never a pixel; a flick back vetoes a committed distance; `commit` decides the gesture, never whether the action asks first |
+| `c5/0003` | `safetyNumber` | both ends must derive the identical value, so the order comes from the keys and never from the caller; the number binds *both* keys; too short is refused, never truncated |
 | `c5/0002` | `classifyPeerKey` | a missing key is blocked, never downgraded to plaintext; exactly one branch may pin; a rotation increments and a substitution does not |
 | `c5/0001` | `planKeyInit` | only `null` is a first run — `''` is a locked Keychain; a key that will not load is refused, never regenerated; length is not validity |
 | `b4/0003` | `checkLimits` | a sliding window, never a bucket that resets; the per-number limits cannot see an enumerator at all; `retryAfterMs` comes from the oldest live stamp |
@@ -1887,6 +1957,11 @@ Durable gotchas only. Anything narrative is in `HANDOFF.md`.
   claimed; it broke something worse and inverted. Run the case on its own
   rather than reading the summary line — and expect the real failure to be
   more interesting than the one you predicted.
+- **A check that cannot fail is not a weak check, it is noise.** It costs a
+  line, reports PASS forever, and makes the suite look more thorough than it
+  is. `c5/0003` asserted a function did not reorder the caller's array when
+  the function takes two strings — unfalsifiable, and only the wrong-case
+  found it. When you write an assertion, ask what input would make it fail.
 - **A compliance form is read off the schema, never off memory.** `a11/0005`
   declared an `email` column that has never existed and omitted the
   `phone_hash` that does. The second is the one that removes an app: declaring
