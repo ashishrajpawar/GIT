@@ -580,6 +580,31 @@ summarised here rather than left in the ADR:
   rather than an optimisation. The API may still *return* a computed count;
   `a5/0003`'s `displayStatus` takes one.
 
+### What the server knows about the user (decided 2026-08-22)
+
+`users` holds `phone_hash`, `display_name`, `avatar_url`. **The phone number is
+hashed at sign-up and kept**, because it is how a user gets back into their
+account; passphrase-only sign-up was considered and rejected, since a lost
+passphrase would be an unrecoverable account.
+
+**So do not write "Token does not collect your phone number."** A ten-digit
+Indian mobile has a known prefix and a small enough space to enumerate, so
+`phone_hash` is a lookup key, not an anonymisation — the same argument
+`b3/0001` makes about a different column. The accurate sentence, and the one
+lessons and the privacy policy must use, is **"we store a scrambled version of
+your phone number, used only to sign you in."**
+
+**Two different claims that had been collapsed into one line**, and only one of
+them was ever true:
+
+- *What a token holder learns* — **nothing**: not the number, not the email,
+  not the identity. This is the product's actual promise and is unaffected.
+- *What the company collects* — a hashed number and a display name.
+
+Most "no phone number" phrasing across the course is about the first and is
+fine. `b10/0002` was making the second claim, in a compliance document, and was
+corrected. **When you see the phrase, check which one it means.**
+
 ### Communication
 - Chat: WebSocket on own server, routed across nodes through Redis pub/sub
 - Voice/video: WebRTC (`react-native-webrtc` on mobile, native APIs in browser)

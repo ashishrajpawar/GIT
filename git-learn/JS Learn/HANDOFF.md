@@ -2065,14 +2065,28 @@ feature. The general form is worth keeping: **"a row in my table" and "my
 personal data" are different sets**, and an export written from the schema
 rather than from that question ships the difference.
 
-**`phone_hash`: named, not fixed.** The lesson's compliance table claims *no
-phone number, no email, no real name*; `b2/0001` stores `phone_hash` and a
-`NOT NULL display_name`. A hash of a ten-digit Indian mobile is a lookup key,
-not an anonymisation — the argument `b3/0001` already makes about a different
-column. This is the one place the product's central claim and its schema
-disagree, and it is a **compliance document** that will carry whichever answer
-wins, so it went to the student as an open question rather than being quietly
+**`phone_hash`: asked the same day, and answered.** The lesson's compliance
+table claimed *no phone number, no email, no real name*; `b2/0001` stores
+`phone_hash` and a `NOT NULL display_name`. A hash of a ten-digit Indian mobile
+is a lookup key, not an anonymisation — the argument `b3/0001` already makes
+about a different column. This was the one place the product's central claim
+and its schema disagreed, and it is a **compliance document** that would carry
+whichever answer won, so it went to the student rather than being quietly
 resolved either way.
+
+The student chose **keep the column, fix the sentence**: the number is how you
+recover your account, and passphrase-only sign-up means a lost passphrase is a
+lost account. The claim is now *"we store a scrambled version of your phone
+number, used only to sign you in"*, recorded in `CLAUDE.md`.
+
+**What made the question answerable was separating two claims that had been one
+line.** *What a token holder learns* is nothing — the product's real promise,
+never in doubt. *What the company collects* is a hashed number and a display
+name. Sweeping the course for "no phone number" found ~14 uses and **all but
+`b10/0002`'s two meant the first**, so they were correct and left alone. Framing
+it in those terms — "should we stop keeping it, or stop saying that?" — is what
+made it a decision rather than an architecture argument, which is the same
+lesson the ADR-0008 framing produced on 2026-08-20.
 
 **Two process notes.**
 

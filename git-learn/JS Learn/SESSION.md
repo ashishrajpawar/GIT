@@ -88,17 +88,27 @@ feature. **"A row in my table" and "my personal data" are different sets**, and
 an export written from the schema rather than from that question ships the
 difference.
 
-### `phone_hash` — named, not fixed
+### `phone_hash` — asked, answered, applied (2026-08-22)
 
-The lesson's compliance table claims *"no phone number, no email, no real
+The lesson's compliance table claimed *"no phone number, no email, no real
 name"*. `b2/0001` stores `phone_hash` and a `NOT NULL display_name`. A hash of
 a ten-digit Indian mobile is a lookup key, not an anonymisation — the argument
 `b3/0001` already makes about a different column.
 
-Written up in the lesson as a named gap rather than silently corrected: the
-honest sentence is *"we store a hash of your phone number, used only to sign
-you in"*. **If the intent is really to not have it, that is a B2 change to make
-deliberately** — see *Open questions*.
+**The student chose: keep the column, fix the sentence.** The number is doing
+real work (account recovery), and passphrase-only sign-up means a lost
+passphrase is an unrecoverable account. The claim is now *"we store a scrambled
+version of your phone number, used only to sign you in"*. Recorded in
+`CLAUDE.md` under **What the server knows about the user**, so it is not
+re-litigated.
+
+**The thing worth carrying: two different claims had been collapsed into one
+line.** *What a token holder learns* is nothing — that is the product's promise
+and was never in doubt. *What the company collects* is a hashed number and a
+display name. A sweep found ~14 "no phone number" phrasings across the course
+and **all but `b10/0002`'s two were about the first**, so they are correct and
+were left alone. **When you meet the phrase, check which claim it is making**
+before either trusting it or rewriting it.
 
 ### The wrong-cases caught a self-check hole again, and then a self-inflicted one
 
@@ -678,7 +688,7 @@ checklist-shaped and is the best candidate in the course for an honest
 | **Phase 3** — the ten C-modules | just-in-time; the student is nowhere near |
 | **Phase 4** — the operating track | after launch |
 | The **two** remaining orphan tables | `participants` behind C5/E2EE, `calls` behind B6. Parked in `scripts/known-issues.json`; `deletion_queue` closed 2026-08-22 |
-| **`users.phone_hash`** — the schema contradicts the product's headline claim | needs the student's answer, see *Open questions* 0 |
+| ~~`users.phone_hash`~~ | **settled 2026-08-22** — keep the column, fix the sentence. See above and `CLAUDE.md` |
 | The one remaining warning — a dead `privacy-policy.html` link in legacy `07` | legacy module, outside the token track |
 
 **Do not ask the student where they are in Module 01.** They asked on
@@ -691,18 +701,6 @@ the course for months. Pitch to the profile in `CLAUDE.md` and let them steer.
 Both were raised on 2026-08-20 alongside the three that got settled, and
 neither was answered. They are not blocking anything.
 
-0. **Does `users` keep `phone_hash`?** New, 2026-08-22, from `b10/0002`. The
-   product's headline privacy claim is *"we never ask for your phone number"*;
-   the schema stores a hash of one, and a ten-digit Indian mobile is small
-   enough to enumerate, so the hash is a lookup key rather than an
-   anonymisation. Three ways out: keep it and **say so plainly** in the privacy
-   policy (cheapest, and honest); move to a passphrase or passkey at sign-up so
-   there is no number to hash (a B4 change); or keep it only until first login
-   and drop the column. **Not urgent, but it is the one place the product's
-   central claim and its schema disagree** — and it is a compliance document
-   that will carry whichever answer wins. Ask in plain terms: *"the app says we
-   don't want your phone number, but the database keeps a scrambled copy of it
-   — should we stop keeping it, or stop saying that?"*
 1. **How far ahead of yourself should this build?** M3 keeps finding real
    defects, but every lesson it touches is modules ahead of Module 01. Raised
    three times now; the answer each time has been to continue.
