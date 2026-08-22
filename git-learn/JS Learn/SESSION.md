@@ -12,8 +12,92 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean. **63/96 verified**, audit green, five suites
+**Nothing.** Working tree clean. **64/96 verified**, audit green, five suites
 pass. **B2, B3, B7 and B10 complete.** Known-and-blocked is **2**.
+
+### a11/0002 — the light palette was the broken one (2026-08-22)
+
+M3: **`auditContrast`**. Measured the shipped palette before writing anything,
+which is the whole finding. On `#FFFFFF`:
+
+| | ratio | needs |
+|---|---|---|
+| `warning` | 2.19 | 4.5 |
+| `textMuted` | 2.07 | 4.5 |
+| `success` | 2.87 | 4.5 |
+| `accent` | 3.15 | 4.5 |
+| `danger` | 3.82 | 4.5 |
+
+**The dark palette passed almost everything.** That is the reverse of the usual
+worry and it has a reason: choosing a colour to sit on near-black *is* choosing
+for contrast whether you mean to or not, while choosing one to sit next to
+white is a question about taste. **The mode nobody tests is the one people use
+in daylight.**
+
+**Where it lands for Token:** `a5/0003` derives five states and the badge
+renders them with `success`/`warning`/`danger` — the three worst colours in the
+palette. *"Is this token still live?"* was being answered at **2.19:1**. The
+exercise then instructed the student to build exactly that badge.
+
+### Three things that only fell out of measuring
+
+- **A colour is not accessible; a pair is.** The old `textSecondary` was 4.69
+  on `background` and **4.45 on `surface`** — same colour, passing and failing,
+  depending on which card it landed in. The check anyone would have run is the
+  one that passes.
+- **Amber cannot carry white text.** No shade of `warning` reaches 4.5 against
+  white while still being amber. The fix is not a darker fill, it is dark ink
+  on it — hence the `on*` keys. **When one colour cannot be fixed, fix the
+  pair.**
+- **`textMuted` could not be saved.** Any grey light enough to read as "muted"
+  on white is under 4.5, and the first one that passes *is* `textSecondary`. So
+  it is now documented as disabled-and-decorative only (WCAG exempts disabled
+  controls) with the rule that **no information may live in it**. A palette
+  that cannot express a distinction beats one that expresses it illegibly.
+
+Also two things fixed and one stated: `border` is 1.19/1.55 and is now
+explicitly dividers-only, with `inputBorder` added at 3.75/4.12 for anything
+whose boundary locates a control (WCAG 1.4.11).
+
+### Contrast is not the colour-blindness fix
+
+A 5.38 green and a 5.44 red are both legible and **identical to each other**.
+Red-green affects ~8% of men, and Token's badge uses exactly that pair for
+active-vs-revoked. WCAG 1.4.1 is a separate rule and the fix is free here:
+`displayStatus` already returns a word, so render it. The test needs no tooling
+— **screenshot it, convert to greyscale, see if you can still tell.**
+
+### The exercise also violated ADR-0007
+
+It told the student to show "the token code (monospace)" on a list card.
+`GET /tokens` returns **no `code` field at all**. Same defect as `a5/0003`'s
+`{item.code}`. The revealed solution took `tokenCode: string` as a prop and
+rendered it, so the card would have shown `undefined` on every row.
+
+Its badge also used `statusColor + '20'`, a 12% tint — which makes the ratio
+**unknowable**, because it then depends on whatever is painted behind. That is
+the same class as the `rgba()` case the exercise refuses to score.
+
+### My own self-check had the throw bug it warns about
+
+Four wrong-cases initially reported `passed everything`. Three were one cause:
+my checks did `find(list, name).ratio`, and a mistake that puts a pair in a
+different bucket makes `find` return `undefined`, so the check **threw** —
+aborting every check below it and reporting as "could not run", which reads as
+a broken verifier rather than a caught mistake. Exactly the trap already
+written down under *Verifying a lesson*, in the file I wrote the same day.
+Fixed with `ratioOf`/`bucketOf` helpers that never dereference a miss.
+
+The fourth was a wrong `expect`: I assumed averaging the channels instead of
+weighting them would break the body-text case, and it breaks the *large-text*
+one. **Added a check that isolates the weights properly** — pure blue on white
+is 8.59 weighted and 2.74 unweighted, because blue carries only 7% of perceived
+brightness. Grey anchors cannot see that; a saturated colour can.
+
+**And the anchors everyone writes are the two that cannot catch the real bug.**
+Black-on-white is exactly 21 and self-vs-self is exactly 1 *with or without*
+the sRGB gamma decode. It takes a mid-grey (4.48 correct, 2.03 without) to see
+it.
 
 ### a11/0003 — a typo that issues an unlimited token (2026-08-22)
 
@@ -751,20 +835,24 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
-**Three M3 lessons left**, all in A11. One commit each. **Nothing is blocked.**
+**Two M3 lessons left**, both in A11. One commit each. **Nothing is blocked.**
 
 **Done:** A3, A4, A5, A6, A8, B5, **all of B2, B3, B7 and B10**, plus
-`a11/0003` and `a11/0004`.
-**Remaining:** A11's `0001` (animations), `0002` (theming), `0005` (store
-submission).
+`a11/0002`, `0003` and `0004`.
+**Remaining:** A11's `0001` (animations) and `0005` (store submission).
 
-`0003` was predicted to be "the most likely to hold a real function" and held
-four live defects as well. **`0002` (theming) is the next best bet** — a theme
-resolver is arithmetic over a palette plus a system-preference override, which
-is the same shape as every other function M3 has found. `0001` (animations)
-looks thin. `0005` (store submission) is still the best candidate in the course
-for an honest `--unverifiable`, and **that judgement has been wrong 11 times
-out of 11 so far**, so look for the plain function before reaching for it.
+Both were written off in advance and **that judgement has now been wrong 13
+times out of 13**, so look for the plain function before reaching for
+`--unverifiable`.
+
+- **`0001` (animations)** looks thin, but a spring/timing config is arithmetic,
+  a gesture handler has thresholds and velocity, and any swipe-to-reveal has a
+  "did it pass the commit point" decision in it. Interpolation ranges are pure
+  functions with off-by-one edges.
+- **`0005` (store submission)** is the checklist-shaped one. If a plain
+  function genuinely is not there, this is the honest `--unverifiable` — but
+  check first for version-code arithmetic, an asset-size or screenshot-
+  dimension rule, or a "which fields block submission" predicate.
 
 | Work | Gate |
 |---|---|
@@ -833,7 +921,7 @@ Per-item status only. The plan itself is in `TOKEN-TRACK.md`; the counts are in
 | 4 — the operating track | not started, deliberately |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
-| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus all of B2, B3, B7 and **B10**, and `a11/0003`+`0004`; **3 left**, all in A11 |
+| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus all of B2, B3, B7 and **B10**, and `a11/0002`+`0003`+`0004`; **2 left** (`a11/0001`, `a11/0005`) |
 
 ### M3 — where it has reached
 
@@ -879,6 +967,7 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `a11/0004` | `placeConfig` | *who needs it, and when* — not *is it sensitive*; unclassifiable ⇒ do not ship |
 | `b10/0002` | `planErasure` | order is read off the foreign keys, never off the list you were handed; a cycle is refused, not guessed; only data you could *read* leaves a backup tail |
 | `a11/0003` | `toCreateTokenPayload` | blank is an absence, never `''`; `maxUses: 0` and absent are opposites; an unreadable value is refused, never defaulted |
+| `a11/0002` | `auditContrast` | the sRGB gamma decode, which the usual anchors cannot catch; a pair is audited, not a colour; a value with alpha has no ratio and must be skipped, not scored |
 
 **A5 note:** not one of the five had a `createExplain` prompt or loaded
 `explain.js`. All five now do. A5 predates the practice pattern being made
@@ -992,6 +1081,19 @@ Durable gotchas only. Anything narrative is in `HANDOFF.md`.
 - **Check the quiz for executable questions.** `a11/0003` had 25 and **none**
   the verifier could run — all framework API trivia. A lesson can be fully
   "verified" with an entirely unchecked quiz.
+- **A self-check must never dereference a lookup that can miss.**
+  `find(list, name).ratio` throws when a mistake puts the entry in a different
+  bucket, and a throw aborts every check below it — so the case reports
+  "passed everything" or "could not run", both of which read as a broken
+  verifier. Write a `bucketOf`/`valueOf` helper that returns a sentinel.
+  **Three of `a11/0002`'s eleven cases were hidden by this**, in a self-check
+  written the same day as the note warning about it.
+- **Pick the fixture that isolates the variable you are testing.** `a11/0002`'s
+  channel-weighting case was aimed at the wrong check, because greys are the
+  one input where weighted and unweighted luminance nearly agree. Pure blue
+  separates them 8.59 vs 2.74. **Anchors that are famous are usually the ones
+  that discriminate least** — black-on-white is exactly 21 with or without the
+  sRGB gamma decode, which is the actual bug.
 
 ### Verifying a lesson
 

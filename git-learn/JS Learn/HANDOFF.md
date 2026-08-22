@@ -2189,6 +2189,88 @@ catches it.
 Status: `a11/0003` `unverifiable → verified`. **63/96.** Three M3 lessons left,
 all in A11.
 
+### Session of 2026-08-22 (continued) — a11/0002, and measuring a palette nobody had measured
+
+The theming lesson. Its palette was chosen by eye, and the first thing I did
+was run the contrast formula over it, which turned out to be the whole finding.
+
+**In light mode: `warning` 2.19, `textMuted` 2.07, `success` 2.87, `accent`
+3.15, `danger` 3.82 — every one under the 4.5 a body-text pair needs.** The
+dark palette passed almost everything.
+
+That is the reverse of the usual worry and it has a reason worth keeping:
+**choosing a colour to sit on near-black is choosing for contrast whether you
+mean to or not**, because that is the only way it will be visible at all.
+Choosing one to sit next to white is a question about taste. The mode nobody
+tests is the one people use in daylight.
+
+**For Token specifically it was worse than a generic accessibility miss.**
+`a5/0003` derives five display states and the badge renders them with
+`success`, `warning` and `danger` — which were the three worst colours in the
+palette. *"Is this token still live?"* is the single most important question
+the app answers, and it was being answered at 2.19:1. The exercise then
+instructed the student to build precisely that badge.
+
+**Three things fell out of measuring rather than eyeballing:**
+
+*A colour is not accessible; a pair is.* The old `textSecondary` was 4.69 on
+`background` and 4.45 on `surface` — the same colour, passing and failing,
+depending which card it landed in. The check anyone would think to run is the
+one that passes.
+
+*Amber cannot carry white text.* No shade of `warning` reaches 4.5 against
+white while remaining amber. The fix is not a darker fill, it is dark ink on
+it — which is why each semantic colour now ships with a paired `on*` key.
+**When one colour cannot be fixed, fix the pair.**
+
+*`textMuted` could not be saved at all.* Any grey light enough to read as
+"muted" on white is below 4.5, and the first one that passes is already
+`textSecondary`. So it is documented as disabled-and-decorative only, with the
+rule that no information may live in it. A palette that cannot express a
+distinction is better than one that expresses it illegibly.
+
+**Contrast is not the colour-blindness fix, and it is worth being explicit
+about that** because fixing the numbers feels like finishing the job. A 5.38
+green and a 5.44 red are both perfectly legible and completely identical to
+each other, and red-green is ~8% of men. Token's badge uses exactly that pair
+for active-versus-revoked. WCAG 1.4.1 is separate, and here the fix costs
+nothing because `displayStatus` already returns a word — render it. The test
+needs no tooling: screenshot, greyscale, see if you can still tell.
+
+**Two more defects in the exercise.** It told the student to show "the token
+code (monospace)" on a list card, and `GET /tokens` returns no `code` field at
+all (ADR-0007) — the revealed solution took `tokenCode: string` as a prop, so
+every row would have rendered `undefined`. Same defect as `a5/0003`'s
+`{item.code}`. And the badge used `statusColor + '20'`, a 12% tint, which makes
+the ratio **unknowable** — it then depends on whatever is painted behind, which
+is the same class as the `rgba()` value the new exercise refuses to score.
+
+**The part I got wrong, and it was the trap I had written down that morning.**
+Four of the eleven wrong-cases first reported `passed everything`. Three shared
+one cause: my checks did `find(list, name).ratio`, and a mistake that puts an
+entry in a different bucket makes `find` return `undefined`, so the check
+**threw** — which aborts every check below it and surfaces as "could not run".
+That reads as a broken verifier rather than as a caught mistake. It is exactly
+the note already sitting in `SESSION.md` under *Verifying a lesson*, and I
+still wrote it. Fixed with `ratioOf`/`bucketOf` helpers that return a sentinel
+instead of dereferencing a miss.
+
+The fourth was a wrong `expect`: I had assumed averaging the channels rather
+than weighting them would break the body-text case, and it breaks the
+large-text one. The real lesson was in the fixture, not the expectation —
+**greys are the one input where weighted and unweighted luminance nearly
+agree**, so a grey cannot test the weights. Pure blue on white is 8.59 weighted
+and 2.74 unweighted, because blue carries only 7% of perceived brightness.
+
+Which generalises usefully: **the anchors everyone knows are the ones that
+discriminate least.** Black-on-white is exactly 21 and self-against-self is
+exactly 1 *with or without* the sRGB gamma decode — the actual bug. It takes a
+mid-grey (4.48 correct, 2.03 broken) to see it, and that is the one number
+nobody has memorised.
+
+Status: `a11/0002` `unverifiable → verified`. **64/96.** Two M3 lessons left,
+both in A11.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees
