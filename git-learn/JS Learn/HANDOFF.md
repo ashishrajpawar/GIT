@@ -2003,6 +2003,98 @@ heading — because a duplicated block parses fine and verifies fine.
 Status: `b10/0001` and `a11/0004` `unverifiable → verified`. 61/96. Five M3
 lessons remain: `b10/0002` and four in A11.
 
+### Session of 2026-08-22 — b10/0002 finishes B10, and an endpoint that could not run
+
+The last B10 lesson, and the worst column drift found so far. The DPDP lesson
+teaches two endpoints — data export and account erasure — and **both named
+columns that do not exist**. `users.username` (it is `display_name`),
+`messages.sender_id` (it is `sender_type`; holders are not users),
+`messages.content` (it is `ciphertext`), `redemption_events.redeemed_at` and
+`.ip_address` (they are `created_at` and `holder_ip`), `tokens.code` (deleted
+by ADR-0007), and a `participants` table that has never been created.
+
+Seven names. Not one of them would be caught by anything: `verify-lesson.mjs`
+runs JavaScript, and a `<pre>` block of confident SQL is read by no tool in
+this repo. The lesson had sat at `unverifiable` since 2026-08-18 with a
+plausible reason attached, and plausible is exactly what it looked like.
+
+**The revealed solution was the worse half.** The body had been half-corrected
+earlier in the session — someone changed `content` to `ciphertext` in the prose
+snippet — and the `createSolution` block, which is the copy the student pastes,
+still selected `code` and `content`. The lesson's own callout spends four
+paragraphs explaining that a bulk export of token codes is *a worse artefact
+than the database it came from*, and then the exercise solution built one.
+`b10/0001` had the identical shape a day earlier: prose fixed, solution not.
+**They are different strings, and only one of them gets re-read.**
+
+**The erasure order had been wrong since B2 grew a table.** The transaction
+deleted `tokens` while `conversations` and `redemption_events` still pointed at
+it, both with `ON DELETE RESTRICT` — so account deletion would have thrown for
+every user who had ever been messaged. `conversations` was not in the list at
+all, because it did not exist when the list was written; `b2/0002` added it,
+two modules away, and nobody was looking at a DELETE order in B10 that morning.
+The `order-steps` quiz question keyed the broken order as correct.
+
+That is the `SELECT *` defect class from `b3/0003` again: **a bug created by an
+edit somewhere else, in a file the editor never opened.** So the exercise is
+`planErasure`, which *reads* the foreign keys, rather than a list a person
+maintains. Eleven wrong-cases; the headline one just returns the stores in the
+order it was handed, which is what a person does.
+
+**The thing the lesson gained, which is better than what it lost.** It claimed
+*"Once done, the data is gone"* two inches below a retention table saying
+backups are kept seven days. Both cannot be true, and the resolution is not to
+delete harder — it is that every erasure has a **tail**, and naming it is the
+compliant answer while denying it is the actual failure.
+
+Then the part that only works here: under ADR-0002 those snapshots contain
+message bodies the server never held a key for, so their survival discloses
+nothing. **The tail applies only to what you chose to keep in the clear** —
+display names, labels, timestamps, who talked to whom. Which makes data
+minimisation the *mechanism* that makes erasure achievable rather than a box on
+a checklist, and means the date you can honestly give a user was decided at
+schema-design time, years before they asked. The limits are stated too, so it
+does not become a general excuse: `code_enc` is encrypted with a key the API
+holds and therefore counts as clear, and the holder's copy on their own device
+is outside your reach entirely.
+
+**And the export was disclosing a third party.** `redemption_events` holds the
+redeemer's IP, name and browser. The issuer's download shipped all of it — one
+Data Principal handed another's location, on request, through a compliance
+feature. The general form is worth keeping: **"a row in my table" and "my
+personal data" are different sets**, and an export written from the schema
+rather than from that question ships the difference.
+
+**`phone_hash`: named, not fixed.** The lesson's compliance table claims *no
+phone number, no email, no real name*; `b2/0001` stores `phone_hash` and a
+`NOT NULL display_name`. A hash of a ten-digit Indian mobile is a lookup key,
+not an anonymisation — the argument `b3/0001` already makes about a different
+column. This is the one place the product's central claim and its schema
+disagree, and it is a **compliance document** that will carry whichever answer
+wins, so it went to the student as an open question rather than being quietly
+resolved either way.
+
+**Two process notes.**
+
+Defining `deletion_queue` cleared the orphan error and the audit immediately
+failed with *"no longer matches any error — delete the entry"*. That is the
+stale-acknowledgement check doing precisely the job it was built for, on its
+first real occasion. The entry was deleted, not re-worded.
+
+And: **a wrong-case must differ from the right answer in exactly one way.** Six
+of the eleven initially tripped two checks, because I had also left correct
+cycle-detection out of them. Tightening that produced an immediate `FAIL` —
+which turned out to be a missing `${PRELUDE}` in one case, not a hole in the
+self-check. Both outcomes matter: until a case differs in one variable, a case
+failing for the wrong reason and a case passing for the wrong reason look
+identical. The tightening also drove a genuinely missing check — `untilDays: 0`
+is a retention that expires today, and `if (r.untilDays)` rejects it. The
+`max_uses: 0` mistake, in a new table.
+
+Status: `b10/0002` `unverifiable → verified`. **62/96. B10 complete**, so B2,
+B3, B7 and B10 are all done. Known-and-blocked down to two. Four M3 lessons
+remain, all in A11.
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees

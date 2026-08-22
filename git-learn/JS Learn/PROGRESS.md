@@ -4,7 +4,7 @@
      Regenerate with: node scripts/audit.mjs
      Hand-written session state lives in SESSION.md, never here. -->
 
-Generated 2026-08-21 from the files on disk. Where any other document disagrees
+Generated 2026-08-22 from the files on disk. Where any other document disagrees
 with this one, this one is right — everything below is measured, not asserted.
 
 ## Summary
@@ -13,15 +13,15 @@ with this one, this one is right — everything below is measured, not asserted.
 |---|---|
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
-| Quiz questions (track) | 2575 |
-| Avg teaching prose per track lesson | 1962 words |
+| Quiz questions (track) | 2578 |
+| Avg teaching prose per track lesson | 1978 words |
 | Lessons with a playground | 80 / 96 |
 | Lessons with an exercise | 96 / 96 |
 | **Deepened** (all 3 spine sections) | 16 / 96 |
-| **Verified** (code executed) | 61 / 96 |
+| **Verified** (code executed) | 62 / 96 |
 | Ran clean but had nothing to run | 0 / 96 |
 | Errors | 0 |
-| Known and blocked | 3 |
+| Known and blocked | 2 |
 | Warnings | 1 |
 
 Student-completed lessons are **not** tracked here — that comes from the student
@@ -29,12 +29,12 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 ## Answer-position distribution — **authored order, not what the student sees**
 
-1368 keyed questions (multiple-choice, spot-the-bug, which-breaks).
+1370 keyed questions (multiple-choice, spot-the-bug, which-breaks).
 
 > **This clustering is expected and already handled. Do not "fix" it again.**
 > `quiz.js` shuffles options at render time (`optionDisplayOrder`), so the
 > displayed distribution is roughly even — measured at 26.9 / 28.5 / 26.9 / 17.6
-> across all 1368 questions, versus the authored figures below. Index 3 sits
+> across all 1370 questions, versus the authored figures below. Index 3 sits
 > lower only because many questions have three options.
 >
 > The numbers here read `correct` straight from the lesson data, which is
@@ -53,17 +53,17 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Position | Count | Share |
 |---|---|---|
-| index 0 | 138 | 10.1% |
-| index 1 | 845 | 61.8% |
-| index 2 | 351 | 25.7% |
+| index 0 | 140 | 10.2% |
+| index 1 | 845 | 61.7% |
+| index 2 | 351 | 25.6% |
 | index 3 | 34 | 2.5% |
 
 ## Question types
 
 | Type | Count |
 |---|---|
-| multiple-choice | 713 |
-| predict-output | 478 |
+| multiple-choice | 715 |
+| predict-output | 479 |
 | fill-blank | 454 |
 | spot-the-bug | 371 |
 | which-breaks | 284 |
@@ -86,7 +86,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a8-redemption-web | 4 | 1722 | 8 | 8 | 115 | 0/4 | 4/4 |
 | a9-deep-linking | 2 | 1167 | 2 | 2 | 53 | 0/2 | 0/2 |
 | b1-sql-fundamentals | 4 | 1038 | 0 | 4 | 103 | 0/4 | 0/4 |
-| b10-security-compliance | 2 | 3099 | 3 | 3 | 50 | 1/2 | 1/2 |
+| b10-security-compliance | 2 | 3825 | 5 | 4 | 53 | 1/2 | 2/2 |
 | b2-schema-design | 3 | 2185 | 3 | 6 | 81 | 0/3 | 3/3 |
 | b3-node-http-server | 4 | 1998 | 5 | 8 | 117 | 2/4 | 4/4 |
 | b4-auth-server | 3 | 1969 | 0 | 3 | 81 | 2/3 | 0/3 |
@@ -104,7 +104,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 |---|---|
 | Inline `<script>` blocks parse | ok |
 | Quiz structure valid | ok |
-| Tables queried but never created | participants, deletion_queue, calls |
+| Tables queried but never created | participants, calls |
 | Broken relative links | ok |
 | search-index.json | 96 entries, 0 dead, 0 unindexed |
 | Example tokens valid under alphabet | ok |
@@ -113,17 +113,14 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 None.
 
-## Known and blocked (3)
+## Known and blocked (2)
 
 Real problems with a named gate, acknowledged in `scripts/known-issues.json`
 so they do not hold the audit red. They are **not** resolved.
 
-- schema: table "participants" is queried in 2 lesson(s) but never created
+- schema: table "participants" is queried in 1 lesson(s) but never created
   - **why:** Group/thread membership has no schema yet. Writing one now would bake in a shape that E2EE key distribution is about to change.
   - **gate:** B2 schema rewrite, itself behind C5 (E2EE) _(since 2026-08-18)_
-- schema: table "deletion_queue" is queried in 1 lesson(s) but never created
-  - **why:** DPDP erasure needs a retention policy decided first; the queue's columns follow from that, not the other way round. NARROWED 2026-08-21: b2/0002 settled the BULK half — messages are partitioned by month, so time-based retention is DROP TABLE on an old partition and needs no queue at all. What is still open is PER-USER erasure on request, which partitioning cannot serve because you cannot drop a partition for one person. That is the case the queue exists for, and it is the one still waiting on a policy: what must be erased, what may be kept as ciphertext nobody can read, and how long the queue is allowed to take.
-  - **gate:** a per-user erasure policy, informed by b10/0002 (DPDP) _(since 2026-08-18)_
 - schema: table "calls" is queried in 2 lesson(s) but never created
   - **why:** Call records depend on what WebRTC signalling actually needs to persist, which B6 has not settled.
   - **gate:** B2 schema rewrite, informed by B6 (signalling) _(since 2026-08-18)_
@@ -204,7 +201,7 @@ so they do not hold the audit red. They are **not** resolved.
 | b1-sql-fundamentals/0003-indexes-transactions-constraints.html | 972 | 11 | 0 | 1 | 26 | — | n/a |
 | b1-sql-fundamentals/0004-postgres-specifics.html | 910 | 8 | 0 | 1 | 26 | — | n/a |
 | b10-security-compliance/0001-security-hardening.html | 3838 | 20 | 2 | 2 | 25 | yes | yes |
-| b10-security-compliance/0002-dpdp-act.html | 2359 | 11 | 1 | 1 | 25 | — | n/a |
+| b10-security-compliance/0002-dpdp-act.html | 3812 | 12 | 3 | 2 | 28 | — | yes |
 | b2-schema-design/0001-token-schema.html | 2721 | 10 | 1 | 2 | 26 | — | yes |
 | b2-schema-design/0002-messaging-schema.html | 2245 | 8 | 1 | 2 | 26 | — | yes |
 | b2-schema-design/0003-migrations.html | 1588 | 11 | 1 | 2 | 29 | — | yes |

@@ -101,12 +101,9 @@ router.delete('/consent/:purpose', authenticateJWT, async (req, res) => {
   }
 
   if (purpose === 'data_processing') {
-    // This is withdrawing ALL consent — equivalent to account deletion request
-    // Queue account deletion (must complete within 72 hours per DPDP)
-    await db.query(
-      'INSERT INTO deletion_queue (user_id, requested_at, deadline) VALUES ($1, NOW(), NOW() + interval \'72 hours\')',
-      [userId]
-    );
+    // Withdrawing the consent the whole service rests on IS an erasure
+    // request. Do not invent a second, softer meaning for it.
+    await eraseAccount(userId);   // the transaction in section 5
   }
 
   req.log.info({ userId, purpose }, 'consent withdrawn');
@@ -120,15 +117,39 @@ router.delete('/consent/:purpose', authenticateJWT, async (req, res) => {
 router.get('/me/data-export', authenticateJWT, async (req, res) => {
   const userId = req.user.id;
 
-  // Gather all user data
+  // Every column below is named on purpose. Check each one against
+  // migrations/001 before adding to this list -- see the callout after.
   const [user, tokens, messages, consents, redemptions] = await Promise.all([
-    db.query('SELECT id, username, created_at FROM users WHERE id = $1', [userId]),
-    // No 'code' column exists, and no decryption happens here -- see below.
-    db.query('SELECT id, label, status, created_at, revoked_at FROM tokens WHERE user_id = $1', [userId]),
-    // Ciphertext. The server cannot read these and does not try -- see below.
-    db.query('SELECT id, conversation_id, ciphertext, created_at FROM messages WHERE sender_id = $1', [userId]),
+    // No SELECT * -- that would ship password_hash.
+    db.query('SELECT id, display_name, avatar_url, created_at FROM users WHERE id = $1', [userId]),
+
+    // No 'code' column exists (ADR-0007), and no decryption happens here.
+    db.query('SELECT id, label, status, max_uses, expires_at, created_at, paused_at, revoked_at FROM tokens WHERE user_id = $1', [userId]),
+
+    // messages has no sender_id -- holders are not users, so the column is
+    // sender_type ('owner' | 'holder'). A message is reached through its
+    // conversation, which is reached through the token you own.
+    db.query(
+      `SELECT m.id, m.conversation_id, m.sender_type, m.ciphertext, m.nonce,
+              m.key_version, m.created_at, m.delivered_at, m.read_at
+         FROM messages m
+         JOIN conversations c ON c.id = m.conversation_id
+         JOIN tokens t       ON t.id = c.token_id
+        WHERE t.user_id = $1`,
+      [userId]
+    ),
+
     db.query('SELECT purpose, granted, granted_at, withdrawn_at FROM consent_records WHERE user_id = $1', [userId]),
-    db.query('SELECT id, token_id, redeemed_at, ip_address FROM redemption_events WHERE token_id IN (SELECT id FROM tokens WHERE user_id = $1)', [userId]),
+
+    // holder_ip, holder_name and user_agent are deliberately NOT selected.
+    // They describe the HOLDER, not the person asking -- see the callout.
+    db.query(
+      `SELECT r.id, r.token_id, r.created_at
+         FROM redemption_events r
+         JOIN tokens t ON t.id = r.token_id
+        WHERE t.user_id = $1`,
+      [userId]
+    ),
   ]);
 
   const exportData = {
@@ -147,6 +168,10 @@ router.get('/me/data-export', authenticateJWT, async (req, res) => {
       tokenCodes:
         'Token codes are not included. Request an individual code from the ' +
         'token detail screen; each disclosure is logged.',
+      redemptionEvents:
+        'We record that a token was redeemed and when. The IP address, name ' +
+        'and browser of the person who redeemed it are their personal data, ' +
+        'not yours, so they are not in this file.',
     },
   };
 
@@ -172,36 +197,173 @@ router.get('/me/data-export', authenticateJWT, async (req, res) => {
     <pre><code>// api/src/routes/account.ts
 router.delete('/me', authenticateJWT, async (req, res) => {
   const userId = req.user.id;
+  const client = await pool.connect();
 
-  req.log.info({ userId }, 'account deletion requested');
-
-  // Start deletion in a transaction
-  await db.query('BEGIN');
+  req.log.info({ userId }, 'account erasure requested');
 
   try {
-    // Delete in dependency order (foreign keys)
-    await db.query('DELETE FROM consent_records WHERE user_id = $1', [userId]);
-    await db.query('DELETE FROM redemption_events WHERE token_id IN (SELECT id FROM tokens WHERE user_id = $1)', [userId]);
-    await db.query('DELETE FROM access_rules WHERE token_id IN (SELECT id FROM tokens WHERE user_id = $1)', [userId]);
-    await db.query('DELETE FROM messages WHERE sender_id = $1', [userId]);
-    await db.query('DELETE FROM participants WHERE user_id = $1', [userId]);
-    await db.query('DELETE FROM tokens WHERE user_id = $1', [userId]);
-    await db.query('DELETE FROM users WHERE id = $1', [userId]);
+    await client.query('BEGIN');
 
-    await db.query('COMMIT');
+    // The order is read off the foreign keys, not off intuition.
+    // conversations.token_id and redemption_events.token_id are both
+    // ON DELETE RESTRICT, and tokens.user_id is too -- so a parent row
+    // cannot go until every row pointing at it has gone first.
+    await client.query('DELETE FROM consent_records WHERE user_id = $1', [userId]);
 
-    req.log.info({ userId }, 'account deleted completely');
-    res.json({ deleted: true });
+    // messages cascades from conversations. Written out anyway: a cascade
+    // you did not write is a cascade you will forget you are relying on.
+    await client.query(
+      `DELETE FROM messages
+        WHERE conversation_id IN (
+          SELECT c.id FROM conversations c
+            JOIN tokens t ON t.id = c.token_id
+           WHERE t.user_id = $1)`,
+      [userId]
+    );
+
+    await client.query(
+      `DELETE FROM conversations
+        WHERE token_id IN (SELECT id FROM tokens WHERE user_id = $1)`,
+      [userId]
+    );
+
+    await client.query(
+      `DELETE FROM redemption_events
+        WHERE token_id IN (SELECT id FROM tokens WHERE user_id = $1)`,
+      [userId]
+    );
+
+    await client.query(
+      `DELETE FROM access_rules
+        WHERE token_id IN (SELECT id FROM tokens WHERE user_id = $1)`,
+      [userId]
+    );
+
+    await client.query('DELETE FROM tokens WHERE user_id = $1', [userId]);
+    await client.query('DELETE FROM users WHERE id = $1', [userId]);
+
+    // The LIVE database is clean here. The backups are not, for another
+    // seven days -- see the callout below. Record the tail so the promise
+    // made to the user has a date on it.
+    await client.query(
+      `INSERT INTO deletion_queue (erased_user_id, requested_at, live_erased_at, backups_clear_at)
+       VALUES ($1, NOW(), NOW(), NOW() + interval '7 days')`,
+      [userId]
+    );
+
+    await client.query('COMMIT');
+
+    req.log.info({ userId }, 'live rows erased; backup tail recorded');
+    res.json({ erased: true, backupsClearInDays: 7 });
   } catch (err) {
-    await db.query('ROLLBACK');
-    req.log.error({ err, userId }, 'account deletion failed');
-    res.status(500).json({ error: 'deletion failed — please contact support' });
+    await client.query('ROLLBACK');
+    req.log.error({ err, userId }, 'account erasure failed');
+    res.status(500).json({ error: 'erasure failed — please contact support' });
+  } finally {
+    client.release();
   }
-});
+});</code></pre>
 
-// IMPORTANT: This is HARD deletion. Once done, the data is gone.
-// The only thing you may retain is an anonymised record that an account
-// existed (for audit purposes) — but NO personal data.</code></pre>
+    <p>The queue row is what makes the promise checkable. It is deliberately
+    the thinnest possible table &mdash; and note what it <em>cannot</em> have:</p>
+
+    <pre><code>-- api/migrations/016_deletion_queue.sql
+
+CREATE TABLE deletion_queue (
+  id               SERIAL PRIMARY KEY,
+
+  -- A plain integer, NOT a foreign key. The row it would reference is
+  -- the one we just deleted, which is the entire point. This is a
+  -- tombstone: it says an account with this id existed and was erased.
+  erased_user_id   INTEGER NOT NULL,
+
+  requested_at     TIMESTAMPTZ NOT NULL,
+  live_erased_at   TIMESTAMPTZ,      -- when the live rows went
+  backups_clear_at TIMESTAMPTZ NOT NULL,  -- when the last backup holding
+                                          -- them rolls over
+  completed_at     TIMESTAMPTZ       -- set by the job that checks the above
+);
+
+CREATE INDEX idx_deletion_queue_pending ON deletion_queue(backups_clear_at)
+  WHERE completed_at IS NULL;
+
+-- No display_name, no phone_hash, no labels. If this table held anything
+-- ABOUT the person, it would be the place the erasure leaked to.</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">&ldquo;Once done, the data is gone&rdquo; is not true, and the fix is not more deleting</div>
+      <p>This lesson's own retention table says <strong>backups: 7 days</strong>.
+      So the moment the transaction above commits, the erased rows still exist
+      in up to seven nightly snapshots. Nobody is going to restore seven
+      snapshots, edit one user out of each, and re-take them &mdash; and a
+      backup you have been editing is not a backup any more.</p>
+
+      <p>Every real erasure therefore has a <strong>tail</strong>: a period
+      after you told the user &ldquo;deleted&rdquo; during which the data is
+      still recoverable by you. Pretending otherwise is the actual compliance
+      failure. Saying &ldquo;live records erased immediately, backup copies
+      roll off within 7 days&rdquo; is both true and defensible; that is what
+      <code>backups_clear_at</code> is for.</p>
+
+      <p><strong>Now the part that only works because of ADR-0002.</strong> Ask
+      what is actually sitting in those seven snapshots:</p>
+
+      <ul>
+        <li><strong>Message bodies</strong> &mdash; ciphertext. The server had
+        no key on the day the backup was taken and has none now. That data was
+        never readable by the fiduciary, so its survival in a backup discloses
+        nothing. <strong>The tail on sealed data is zero.</strong></li>
+        <li><strong>Everything the server keeps in the clear</strong> &mdash;
+        <code>display_name</code>, <code>avatar_url</code>, token labels,
+        timestamps, who talked to whom and when. This is fully readable, and
+        this is what the seven days are for.</li>
+      </ul>
+
+      <p>So the length and the seriousness of your erasure tail is decided
+      entirely by <strong>how much you kept in the clear</strong> &mdash; a
+      choice you made years earlier, at schema-design time, and cannot revisit
+      once a user asks. <strong>Data minimisation is not a legal box to tick;
+      it is the mechanism that makes erasure achievable at all.</strong> That
+      is the honest version of &ldquo;Token's natural compliance advantage&rdquo;
+      in the table below: not that the law happens to like the product, but
+      that a server holding less has less that outlives a delete.</p>
+
+      <p><strong>What this does not buy you.</strong> Encryption is not a
+      general erasure excuse. It works here only because the server never held
+      the key. <code>code_enc</code> is the counter-example in this very
+      schema: the API <em>does</em> hold <code>TOKEN_CODE_KEY</code>, so an
+      encrypted token code in a backup is readable by you, and it counts as
+      clear data for this purpose. And the holder's copy of the conversation
+      sits on the holder's device, where your erasure cannot reach at all
+      &mdash; the export and the deletion both stop at your own storage, and
+      the privacy policy should say so rather than imply a reach you do not
+      have.</p>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Whose data is it? The redemption log has two people in it</div>
+      <p><code>redemption_events</code> holds <code>holder_ip</code>,
+      <code>holder_name</code> and <code>user_agent</code>. Those describe the
+      person who redeemed the token &mdash; a different Data Principal, who
+      never signed up and never consented to anything.</p>
+      <p>That makes the row awkward in both directions, and the awkwardness is
+      real rather than a technicality:</p>
+      <ul>
+        <li><strong>It is not the issuer's to export.</strong> Putting
+        <code>holder_ip</code> into the issuer's download hands one person
+        another person's location, through a compliance feature, on request.
+        The issuer's data is <em>that a redemption happened, and when</em>.</li>
+        <li><strong>It is not entirely the issuer's to erase either.</strong>
+        The event is an append-only security record; it is also the only trace
+        the holder has. Deleting the token's events on account closure is
+        defensible because the record exists to protect the issuer &mdash; but
+        it is a decision, not an obvious consequence.</li>
+      </ul>
+      <p><strong>The general rule: &ldquo;a row in my table&rdquo; and
+      &ldquo;my personal data&rdquo; are different sets</strong>, and an export
+      endpoint written from the schema rather than from that question will
+      quietly ship the difference.</p>
+    </div>
 
     <h3>6. Grievance Redressal</h3>
     <p>You must provide a mechanism for users to raise data-related complaints and get a response.</p>
@@ -278,8 +440,34 @@ router.delete('/me', authenticateJWT, async (req, res) => {
         <tr><td>Purpose limitation</td><td>Data used only for communication (no ads, no profiling)</td></tr>
         <tr><td>Consent</td><td>Every token is an explicit consent grant from the user</td></tr>
         <tr><td>Right to withdraw</td><td>Token revocation IS consent withdrawal</td></tr>
-        <tr><td>Security safeguards</td><td>End-to-end encrypted (planned), encrypted at rest</td></tr>
+        <tr><td>Security safeguards</td><td>End-to-end encrypted from v1 (ADR-0002); token codes hashed with a pepper and never stored in the clear (ADR-0007)</td></tr>
     </table>
+
+    <div class="callout warning">
+      <div class="callout-title">Check the table against the schema before you put it in a privacy policy</div>
+      <p>Row one says <em>no phone number, no email, no real name</em>. The
+      schema this course teaches says
+      <code>users(phone_hash, display_name, avatar_url)</code>. Those are not
+      the same claim, and the difference is the kind that ends up in a filing.</p>
+      <ul>
+        <li><strong><code>phone_hash</code> is not the absence of a phone
+        number.</strong> An Indian mobile is ten digits with a known prefix, so
+        the space is small enough to enumerate — a hash of one is a lookup key,
+        not an anonymisation. <code>b3/0001</code> makes this argument at
+        length about a different column.</li>
+        <li><strong><code>display_name</code> and <code>avatar_url</code> are
+        optional in the product and mandatory in the table</strong>
+        (<code>display_name TEXT NOT NULL</code>). "Need not be a real name" is
+        true of the policy and not enforced by the schema.</li>
+      </ul>
+      <p>Neither is a scandal; sign-up has to authenticate <em>somebody</em>.
+      But the honest statement is <strong>"we store a hash of your phone
+      number, used only to sign you in"</strong>, not "we do not collect your
+      phone number" — and if the design intent is really the latter, that is a
+      B2 change to make deliberately, not a sentence to write as though it had
+      already happened. <strong>A compliance document is the last place a
+      hopeful description of your own schema should survive.</strong></p>
+    </div>
 
     <p><strong>The product IS the compliance mechanism.</strong> A token is a consent artifact &mdash;
     it represents the user's decision to allow contact, with specific rules, revocable at any time.
@@ -291,12 +479,15 @@ router.delete('/me', authenticateJWT, async (req, res) => {
     <pre><code>// Required sections for Token's privacy policy:
 
 // 1. What data you collect
-//    - Username (chosen by user, need not be real name)
-//    - Password (hashed, never stored in plaintext)
-//    - Messages (content of conversations)
-//    - Token metadata (when created, rules, redemption events)
+//    Name the COLUMN, not the intention. Read this list off migrations/001.
+//    - A hash of your phone number (users.phone_hash) — used to sign you in
+//    - A display name, and optionally an avatar (need not be your real name)
+//    - Messages — stored end-to-end encrypted; we hold no key and cannot
+//      read them (say this here, not only in the marketing copy)
+//    - Token metadata: labels, state, rules, and the times of redemptions
+//    - Token codes, hashed for lookup and encrypted for one-time display
 //    - Device push tokens (for notifications)
-//    - IP addresses (in server logs, retained 30 days)
+//    - IP addresses of people who redeem your tokens (retained 30 days)
 
 // 2. Why you collect it (purpose)
 //    - Account management
@@ -310,10 +501,17 @@ router.delete('/me', authenticateJWT, async (req, res) => {
 //    - VPS provider (data at rest on their hardware)
 
 // 4. How long you retain it
-//    - Account data: until account deletion
-//    - Messages: until account deletion
+//    - Account data: until you delete your account
+//    - Messages: until you delete your account
 //    - Server logs: 30 days
 //    - Backups: 7 days (then overwritten)
+//
+//    And the sentence most policies leave out, which is the one that makes
+//    the four above true rather than aspirational:
+//    - "When you delete your account we erase your records immediately.
+//       Copies in our encrypted backups are overwritten within 7 days.
+//       Message contents are unreadable to us in backups as they are
+//       everywhere else, because we have never held the key."
 
 // 5. How to exercise your rights
 //    - Export: Settings → Download My Data
@@ -391,11 +589,27 @@ const CONSENT_ITEMS: ConsentItem[] = [
 // If you choose a VPS in India (e.g., Mumbai region on AWS/DigitalOcean),
 // cross-border transfer isn't an issue at all.</code></pre>
 
-    <h2>Playground: Data Export Builder</h2>
+    <h3>Try it yourself</h3>
+    <p>What the export contains, and &mdash; just as important &mdash; what it
+    leaves out.</p>
     <div id="playground-1"></div>
 
-    <h2>Exercise: Implement DPDP Compliance</h2>
+    <h3>Try it yourself &mdash; this one is broken on purpose</h3>
+    <p>The deletion order this lesson shipped for months, run against a
+    stand-in for Postgres that enforces <code>ON DELETE RESTRICT</code>. Read
+    the error, work out which table is missing from the order, and fix it.</p>
+    <div id="playground-2"></div>
+
+    <h2>Now build it yourself</h2>
+    <p>The erasure order above was read off the foreign keys by hand, and got
+    it wrong for months. Write the function that reads them instead.</p>
+    <div id="exercise-erase"></div>
+    <div id="pg-exercise-erase"></div>
+
+    <h3>And the whole feature</h3>
     <div id="exercise-1"></div>
+
+    <div id="explain-b10-0002"></div>
 
     <h2>Quiz</h2>
     <div id="lesson-quiz"></div>
@@ -408,6 +622,7 @@ const CONSENT_ITEMS: ConsentItem[] = [
     <script src="../../assets/quiz.js"></script>
     <script src="../../assets/playground.js"></script>
     <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
     <script src="../../assets/progress.js"></script>
     <script src="../../assets/copy-code.js"></script>
     <script>
@@ -423,18 +638,24 @@ function generateDataExport(userId) {
 
     user: {
       id: userId,
-      username: "ashish_dev",
-      createdAt: "2024-01-15T08:00:00Z",
+      displayName: "Ashish",
+      avatarUrl: null,
+      createdAt: "2026-01-15T08:00:00Z",
     },
 
+    // Labels and state. No code, no code_hash, no code_enc -- there is no
+    // plaintext code column to export, and building one here would be worse
+    // than the database it came from.
     tokens: [
-      { id: "t1", code: "MERC-8GH2-KP4X", label: "Delivery service", createdAt: "2024-02-01", revokedAt: null },
-      { id: "t2", code: "XPRD-4KN9-MN2T", label: "Old gym", createdAt: "2024-01-20", revokedAt: "2024-03-01" },
+      { id: 1, label: "Delivery service", status: "active", maxUses: null, expiresAt: null, createdAt: "2026-02-01", revokedAt: null },
+      { id: 2, label: "Old gym", status: "revoked", maxUses: 3, expiresAt: null, createdAt: "2026-01-20", revokedAt: "2026-03-01" },
     ],
 
+    // Sealed. The server has no key for these and never had one, so what
+    // it can honestly hand over is the envelope.
     messages: [
-      { id: "m1", conversationId: "c1", content: "Your package is ready", createdAt: "2024-03-10" },
-      { id: "m2", conversationId: "c1", content: "Thanks, will pick up today", createdAt: "2024-03-10" },
+      { id: 11, conversationId: 1, senderType: "owner", ciphertext: "[184 bytes]", keyVersion: 1, createdAt: "2026-03-10" },
+      { id: 12, conversationId: 1, senderType: "holder", ciphertext: "[210 bytes]", keyVersion: 1, createdAt: "2026-03-10" },
     ],
 
     consentRecords: [
@@ -443,8 +664,11 @@ function generateDataExport(userId) {
       { purpose: "analytics", granted: false, grantedAt: "2024-01-15", withdrawnAt: null },
     ],
 
+    // That a redemption happened, and when. holder_ip, holder_name and
+    // user_agent stay out: they describe the redeemer, not the person
+    // who asked for this file.
     redemptionEvents: [
-      { tokenId: "t1", redeemedAt: "2024-02-05", ipAddress: "[redacted]" },
+      { id: 5, tokenId: 1, createdAt: "2026-02-05" },
     ],
   };
 
@@ -456,7 +680,7 @@ console.log("=== DPDP Data Export ===");
 console.log("Format: " + exportData.format);
 console.log("Exported at: " + exportData.exportedAt);
 console.log("");
-console.log("User: " + exportData.user.username + " (since " + exportData.user.createdAt + ")");
+console.log("User: " + exportData.user.displayName + " (since " + exportData.user.createdAt + ")");
 console.log("Tokens: " + exportData.tokens.length + " (" + exportData.tokens.filter(t => !t.revokedAt).length + " active)");
 console.log("Messages: " + exportData.messages.length);
 console.log("Consent records: " + exportData.consentRecords.length);
@@ -467,13 +691,301 @@ exportData.consentRecords.forEach(c => {
   console.log("  " + c.purpose + ": " + (c.granted ? "GRANTED" : "DECLINED") + (c.withdrawnAt ? " (withdrawn)" : ""));
 });
 console.log("");
+console.log("Deliberately absent, and why:");
+console.log("  token codes  - no plaintext column exists; a file of live codes");
+console.log("                 is a worse artefact than the database (ADR-0007)");
+console.log("  message text - the server holds no key and cannot produce it");
+console.log("  holder IPs   - another person's data, not the requester's");
+console.log("");
 console.log("Total export size: " + JSON.stringify(exportData).length + " bytes");`);
 
+        createPlayground("playground-2", `// BROKEN ON PURPOSE. Run it, read the error, then fix the order below.
+//
+// A tiny stand-in for Postgres. It knows one thing: which tables point at
+// which, with ON DELETE RESTRICT -- and it refuses to delete a row while
+// something still references it.
+
+const restrictedBy = {
+  conversations:     "tokens",   // conversations.token_id -> tokens(id)
+  redemption_events: "tokens",   // redemption_events.token_id -> tokens(id)
+  tokens:            "users",    // tokens.user_id -> users(id)
+};
+
+const remaining = new Set([
+  "consent_records", "conversations", "redemption_events",
+  "access_rules", "tokens", "users",
+]);
+
+function del(table) {
+  for (const child of Object.keys(restrictedBy)) {
+    if (restrictedBy[child] === table && remaining.has(child)) {
+      throw new Error(
+        'ERROR: update or delete on table "' + table + '" violates foreign ' +
+        'key constraint on table "' + child + '" (ON DELETE RESTRICT)'
+      );
+    }
+  }
+  remaining.delete(table);
+  console.log("deleted " + table);
+}
+
+// The order the lesson shipped. It gets three tables in and then stops.
+del("consent_records");
+del("redemption_events");
+del("access_rules");
+del("tokens");
+del("users");
+
+console.log("still there: " + [...remaining].join(", "));`);
+
+        createSolution("exercise-erase", {
+            exercise: "Write planErasure(stores, options) — turn a description of your schema into an erasure plan.\n\nEach store is:\n\n  {\n    name:       'tokens',\n    holds:      'clear' | 'sealed' | 'other-party' | 'none',\n    references: ['users'],       // rows HERE point at these stores\n    retention:  null | { reason, untilDays }\n  }\n\noptions is { backupTailDays } — how long a deleted row survives in your backups.\n\nReturn { steps, refused, tailDays } where steps is [{ store, action }] in an order the foreign keys permit.\n\nThe rules:\n\n1. ORDER COMES FROM references, NOT from the order you were handed. A store must appear before every store it references, because the thing pointing at a row has to go before the row does. Any order satisfying that is correct.\n\n2. A CYCLE IS REFUSED, NOT GUESSED. If the references form a loop there is no safe order; return no steps and say so in refused. Half an erasure is worse than none — it is a failed transaction plus a user who was told 'deleted'.\n\n3. A RETENTION NEEDS BOTH A reason AND A NUMERIC untilDays >= 0. One without the other is not a retention, it is a refusal wearing a lanyard: record it in refused and erase the store anyway. (Same discipline as scripts/known-issues.json — an acknowledgement is not a fix.)\n\n4. ACTIONS: a valid retention is 'retain'. Otherwise holds decides — 'none' is 'skip' (nothing personal in it), 'other-party' is 'anonymise' (erasing your data is not a licence to erase someone else's), and 'clear' or 'sealed' is 'delete'.\n\n5. A RETAINED STORE KEEPS ALIVE EVERYTHING IT POINTS AT, transitively. You cannot delete a row that a retained row references. Any 'delete' reached that way becomes 'anonymise' instead — strip the identifiers, keep the row. One lawful retention can stop you deleting the account row itself, and the plan has to admit that rather than emit a DELETE that will throw.\n\n6. tailDays is WHEN THE ERASURE IS ACTUALLY COMPLETE: the LARGEST of backupTailDays for every 'clear' store you deleted or anonymised, and untilDays for every store you retained. 'sealed' data contributes NOTHING — the backup copy was never readable, so there is no tail on it. 0 if there is nothing to wait for.\n\nRule 6 is the one the whole lesson is for. The date you can honestly give the user falls out of how much you chose to keep in the clear.",
+            hints: [
+                "Rule 1 is a topological sort. Depth-first over references, push each store after visiting what it references, then reverse — that gives you children-before-parents.",
+                "For rule 2, a plain 'seen' set is not enough: you need to tell 'already finished' apart from 'currently on the stack'. Only the second is a cycle.",
+                "Rule 5 walks the SAME edges as rule 1, but only from the retained stores, and it must keep going. A one-hop version passes a two-store schema and fails the moment there are three."
+            ],
+            solution: `function planErasure(stores, options) {
+  const backupTailDays = (options && options.backupTailDays) || 0;
+  const byName = new Map(stores.map(s => [s.name, s]));
+  const refused = [];
+
+  // --- Rule 3: a retention has to be argued, not asserted. ---
+  const retained = new Set();
+  for (const s of stores) {
+    if (!s.retention) continue;
+    const r = s.retention;
+    const hasReason = typeof r.reason === "string" && r.reason.trim() !== "";
+    const hasUntil = typeof r.untilDays === "number" && r.untilDays >= 0;
+    if (hasReason && hasUntil) retained.add(s.name);
+    else refused.push(
+      s.name + ": a retention needs both a reason and an end date — erasing it"
+    );
+  }
+
+  // --- Rule 1: order is read off the foreign keys. ---
+  const order = [];
+  const state = new Map();
+  let cycle = null;
+
+  function visit(name, trail) {
+    if (state.get(name) === "done") return;
+    if (state.get(name) === "open") {
+      cycle = trail.concat(name).join(" -> ");
+      return;
+    }
+    const store = byName.get(name);
+    if (!store) return;               // referenced, but not ours to erase
+    state.set(name, "open");
+    for (const ref of store.references || []) {
+      visit(ref, trail.concat(name));
+      if (cycle) return;
+    }
+    state.set(name, "done");
+    order.push(name);                 // parents land first, so reverse below
+  }
+
+  for (const s of stores) {
+    visit(s.name, []);
+    if (cycle) break;
+  }
+
+  // --- Rule 2: no safe order means no plan. ---
+  if (cycle) {
+    refused.push("cycle: " + cycle + " — refusing to guess an order");
+    return { steps: [], refused, tailDays: 0 };
+  }
+  order.reverse();
+
+  // --- Rule 5: a retained store pins everything it points at, transitively. ---
+  const pinned = new Set();
+  const stack = [...retained];
+  while (stack.length) {
+    const store = byName.get(stack.pop());
+    for (const ref of (store && store.references) || []) {
+      if (!pinned.has(ref)) { pinned.add(ref); stack.push(ref); }
+    }
+  }
+
+  // --- Rule 4: what happens to each store. ---
+  function actionFor(store) {
+    if (retained.has(store.name)) return "retain";
+    if (store.holds === "none") return "skip";
+    if (store.holds === "other-party") return "anonymise";
+    return pinned.has(store.name) ? "anonymise" : "delete";
+  }
+
+  // --- Rule 6: when this is honestly finished. ---
+  let tailDays = 0;
+  for (const store of stores) {
+    const action = actionFor(store);
+    if (action === "retain") {
+      tailDays = Math.max(tailDays, store.retention.untilDays);
+    } else if (store.holds === "clear" &&
+               (action === "delete" || action === "anonymise")) {
+      // Only data the server could READ leaves a tail. Sealed rows sit in
+      // the same backups and disclose nothing, because we never held a key.
+      tailDays = Math.max(tailDays, backupTailDays);
+    }
+  }
+
+  return {
+    steps: order.map(name => ({ store: name, action: actionFor(byName.get(name)) })),
+    refused,
+    tailDays,
+  };
+}`
+        });
+
+        createPlayground("pg-exercise-erase", `// Write planErasure(stores, options) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(v) { return JSON.stringify(v); }
+
+// Token's real shape. Deliberately NOT in dependency order, so an
+// implementation that returns what it was handed cannot pass.
+// backupTailDays is 7 and the retention is 180 so that max, sum and
+// first-found are three different numbers.
+function schema() {
+  return [
+    { name: "users", holds: "clear", references: [] },
+    { name: "messages", holds: "sealed", references: ["conversations"] },
+    { name: "tokens", holds: "clear", references: ["users"] },
+    // holder_name and holder_session_id belong to the redeemer.
+    { name: "conversations", holds: "other-party", references: ["tokens"] },
+    { name: "redemption_events", holds: "clear", references: ["tokens"],
+      retention: { reason: "fraud investigation, board ref 2026/114", untilDays: 180 } },
+    { name: "consent_records", holds: "clear", references: ["users"] },
+    { name: "schema_migrations", holds: "none", references: [] },
+  ];
+}
+function at(plan, name) {
+  const i = plan.steps.findIndex(s => s.store === name);
+  return i;
+}
+function actionOf(plan, name) {
+  const s = plan.steps.find(s => s.store === name);
+  return s && s.action;
+}
+
+try {
+  if (typeof planErasure !== "function") throw new Error("not written yet");
+
+  const plan = planErasure(schema(), { backupTailDays: 7 });
+
+  check("every store appears exactly once",
+    plan.steps.length === 7 && new Set(plan.steps.map(s => s.store)).size === 7,
+    "got " + plan.steps.length + ": " + plan.steps.map(s => s.store).join(", "));
+
+  // Rule 1 -- asserted as constraints, not as one blessed array, so any
+  // valid order passes.
+  check("conversations before tokens", at(plan, "conversations") < at(plan, "tokens"),
+    show(plan.steps.map(s => s.store)));
+  check("redemption_events before tokens", at(plan, "redemption_events") < at(plan, "tokens"),
+    show(plan.steps.map(s => s.store)));
+  check("messages before conversations", at(plan, "messages") < at(plan, "conversations"),
+    show(plan.steps.map(s => s.store)));
+  check("tokens before users", at(plan, "tokens") < at(plan, "users"),
+    show(plan.steps.map(s => s.store)));
+  check("consent_records before users", at(plan, "consent_records") < at(plan, "users"),
+    show(plan.steps.map(s => s.store)));
+
+  // Rule 4
+  check("sealed data is still deleted", actionOf(plan, "messages") === "delete",
+    "messages -> " + actionOf(plan, "messages"));
+  check("the other party's rows are anonymised, not deleted",
+    actionOf(plan, "conversations") === "anonymise",
+    "conversations -> " + actionOf(plan, "conversations"));
+  check("a store holding nothing personal is skipped",
+    actionOf(plan, "schema_migrations") === "skip",
+    "schema_migrations -> " + actionOf(plan, "schema_migrations"));
+  check("a justified retention is retained",
+    actionOf(plan, "redemption_events") === "retain",
+    "redemption_events -> " + actionOf(plan, "redemption_events"));
+
+  // Rule 5, one hop and then two -- users is only reachable THROUGH tokens.
+  check("a store a retained store points at cannot be deleted",
+    actionOf(plan, "tokens") === "anonymise",
+    "tokens -> " + actionOf(plan, "tokens"));
+  check("the pin carries all the way to users",
+    actionOf(plan, "users") === "anonymise",
+    "users -> " + actionOf(plan, "users"));
+  check("a store the retention does NOT reach is still deleted",
+    actionOf(plan, "consent_records") === "delete",
+    "consent_records -> " + actionOf(plan, "consent_records"));
+
+  // Rule 6
+  check("tailDays is the largest wait, not the backup window",
+    plan.tailDays === 180, "got " + plan.tailDays + " (7 = ignored the retention, 187 = summed)");
+  check("nothing was refused in a well-formed schema",
+    Array.isArray(plan.refused) && plan.refused.length === 0, show(plan.refused));
+} catch (err) {
+  console.log("Self-check could not run: " + err.message);
+}
+
+// Sealed-only erasure completes immediately -- separated because the
+// checks above must still report if this one throws.
+try {
+  const sealedOnly = planErasure(
+    [{ name: "messages", holds: "sealed", references: [] }], { backupTailDays: 7 });
+  check("sealed data leaves no backup tail", sealedOnly.tailDays === 0,
+    "got " + sealedOnly.tailDays + " -- a backup of ciphertext we hold no key for discloses nothing");
+} catch (err) {
+  console.log("Sealed-tail check could not run: " + err.message);
+}
+
+// Rule 3, on its own: an unjustified retention is refused AND erased.
+try {
+  const sloppy = planErasure([
+    { name: "users", holds: "clear", references: [],
+      retention: { reason: "might be useful" } },
+  ], { backupTailDays: 7 });
+  check("a retention with no end date is refused",
+    sloppy.refused.length === 1, show(sloppy.refused));
+  check("and the store is erased anyway",
+    sloppy.steps[0] && sloppy.steps[0].action === "delete",
+    show(sloppy.steps));
+
+  // untilDays: 0 is a lawful retention that expires today, not a missing
+  // one. Same shape as max_uses: 0 -- the falsy test is the wrong test.
+  const expiringToday = planErasure([
+    { name: "users", holds: "clear", references: [],
+      retention: { reason: "audit closes today", untilDays: 0 } },
+  ], { backupTailDays: 7 });
+  check("untilDays: 0 is a retention, not a missing one",
+    expiringToday.refused.length === 0 &&
+    expiringToday.steps[0] && expiringToday.steps[0].action === "retain",
+    show(expiringToday));
+} catch (err) {
+  console.log("Retention check could not run: " + err.message);
+}
+
+// Rule 2, on its own: a loop has no safe order.
+try {
+  const looped = planErasure([
+    { name: "a", holds: "clear", references: ["b"] },
+    { name: "b", holds: "clear", references: ["a"] },
+  ], { backupTailDays: 7 });
+  check("a cycle produces no steps", looped.steps.length === 0, show(looped.steps));
+  check("and says why", looped.refused.some(r => /cycle/i.test(r)), show(looped.refused));
+} catch (err) {
+  console.log("Cycle check could not run: " + err.message);
+}`);
+
+        createExplain("explain-b10-0002", {
+            prompt: "The erasure transaction deletes the same rows whether a message body is <code>ciphertext</code> or plain <code>content</code> — the SQL is identical. Explain why the <em>promise you can honestly make to the user</em> is different in the two cases, and what that says about when the decision was really made."
+        });
+
         createSolution("exercise-1", {
-            exercise: "Implement the DPDP compliance features for Token:\n\n1. Write the SQL migration for a `consent_records` table that tracks granular consent per user per purpose.\n2. Write the consent withdrawal endpoint that immediately acts on the withdrawal (e.g., deletes push tokens if push consent is withdrawn).\n3. Write the data export endpoint that gathers all of a user's personal data into a single JSON response.\n4. Write the account deletion endpoint that performs HARD deletion of all user data in the correct order (respecting foreign key constraints).\n5. Write the consent UI data structure (what the app displays during registration).",
+            unverifiable: "the deliverable is Express routes and a SQL migration needing Postgres",
+            exercise: "Implement the DPDP compliance features for Token:\n\n1. Write the SQL migration for a `consent_records` table that tracks granular consent per user per purpose.\n2. Write the consent withdrawal endpoint that immediately acts on the withdrawal (e.g., deletes push tokens if push consent is withdrawn).\n3. Write the data export endpoint that gathers all of a user's personal data into a single JSON response — every column named explicitly, and nothing in it that belongs to someone else.\n4. Write the account erasure endpoint that deletes all user data in an order the foreign keys actually permit.\n5. Write the consent UI data structure (what the app displays during registration).",
             hints: [
                 "The consent_records table needs a UNIQUE constraint on (user_id, purpose) — one record per purpose per user.",
-                "For account deletion, delete in reverse dependency order: consent → redemption_events → access_rules → messages → participants → tokens → users.",
+                "For account erasure, read the order off the foreign keys. tokens is referenced by conversations AND redemption_events with ON DELETE RESTRICT, so both go first; users is referenced by tokens the same way, so it goes last.",
                 "The data export should include consent records themselves — the user should see what they consented to.",
                 "Use Promise.all for the export queries — they're independent reads that can run in parallel."
             ],
@@ -552,11 +1064,24 @@ router.get('/me/data-export', authenticateJWT, async (req, res) => {
   const userId = req.user.id;
 
   const [user, tokens, messages, consents, redemptions] = await Promise.all([
-    db.query('SELECT id, username, created_at FROM users WHERE id = $1', [userId]),
-    db.query('SELECT id, code, label, created_at, revoked_at FROM tokens WHERE user_id = $1 ORDER BY created_at', [userId]),
-    db.query('SELECT id, conversation_id, content, created_at FROM messages WHERE sender_id = $1 ORDER BY created_at', [userId]),
+    db.query('SELECT id, display_name, avatar_url, created_at FROM users WHERE id = $1', [userId]),
+
+    // No code column exists (ADR-0007) and none is reconstructed here.
+    db.query('SELECT id, label, status, max_uses, expires_at, created_at, paused_at, revoked_at FROM tokens WHERE user_id = $1 ORDER BY created_at', [userId]),
+
+    // sender_type, not sender_id; ciphertext, not content.
+    db.query(\`SELECT m.id, m.conversation_id, m.sender_type, m.ciphertext,
+                     m.nonce, m.key_version, m.created_at
+                FROM messages m
+                JOIN conversations c ON c.id = m.conversation_id
+                JOIN tokens t       ON t.id = c.token_id
+               WHERE t.user_id = $1
+               ORDER BY m.created_at\`, [userId]),
+
     db.query('SELECT purpose, granted, granted_at, withdrawn_at FROM consent_records WHERE user_id = $1', [userId]),
-    db.query('SELECT r.id, r.token_id, r.redeemed_at FROM redemption_events r JOIN tokens t ON t.id = r.token_id WHERE t.user_id = $1', [userId]),
+
+    // holder_ip / holder_name / user_agent describe the redeemer.
+    db.query('SELECT r.id, r.token_id, r.created_at FROM redemption_events r JOIN tokens t ON t.id = r.token_id WHERE t.user_id = $1', [userId]),
   ]);
 
   res.setHeader('Content-Disposition', 'attachment; filename="token-data-export.json"');
@@ -568,6 +1093,11 @@ router.get('/me/data-export', authenticateJWT, async (req, res) => {
     messages: messages.rows,
     consentRecords: consents.rows,
     redemptionEvents: redemptions.rows,
+    notes: {
+      messages: 'End-to-end encrypted. Open in the Token app to read them.',
+      tokenCodes: 'Not included. Request one code at a time; each is logged.',
+      redemptionEvents: 'The redeemer\\'s IP, name and browser are their data, not yours.',
+    },
   });
 });
 
@@ -577,20 +1107,32 @@ router.get('/me/data-export', authenticateJWT, async (req, res) => {
 router.delete('/me', authenticateJWT, async (req, res) => {
   const userId = req.user.id;
 
+  const owned = 'SELECT id FROM tokens WHERE user_id = $1';
+
   await db.query('BEGIN');
   try {
     await db.query('DELETE FROM consent_records WHERE user_id = $1', [userId]);
-    await db.query('DELETE FROM redemption_events WHERE token_id IN (SELECT id FROM tokens WHERE user_id = $1)', [userId]);
-    await db.query('DELETE FROM access_rules WHERE token_id IN (SELECT id FROM tokens WHERE user_id = $1)', [userId]);
-    await db.query('DELETE FROM messages WHERE sender_id = $1', [userId]);
-    await db.query('DELETE FROM participants WHERE user_id = $1', [userId]);
+
+    // messages -> conversations -> tokens -> users. Anything referencing
+    // tokens with ON DELETE RESTRICT has to go before tokens does, which
+    // is why conversations appears at all.
+    await db.query(\`DELETE FROM messages WHERE conversation_id IN
+                     (SELECT id FROM conversations WHERE token_id IN (\${owned}))\`, [userId]);
+    await db.query(\`DELETE FROM conversations WHERE token_id IN (\${owned})\`, [userId]);
+    await db.query(\`DELETE FROM redemption_events WHERE token_id IN (\${owned})\`, [userId]);
+    await db.query(\`DELETE FROM access_rules WHERE token_id IN (\${owned})\`, [userId]);
     await db.query('DELETE FROM tokens WHERE user_id = $1', [userId]);
     await db.query('DELETE FROM users WHERE id = $1', [userId]);
+
+    await db.query(
+      \`INSERT INTO deletion_queue (erased_user_id, requested_at, live_erased_at, backups_clear_at)
+       VALUES ($1, NOW(), NOW(), NOW() + interval '7 days')\`, [userId]);
+
     await db.query('COMMIT');
-    res.json({ deleted: true });
+    res.json({ erased: true, backupsClearInDays: 7 });
   } catch (err) {
     await db.query('ROLLBACK');
-    res.status(500).json({ error: 'deletion failed' });
+    res.status(500).json({ error: 'erasure failed' });
   }
 });`
         });
@@ -633,17 +1175,16 @@ router.delete('/me', authenticateJWT, async (req, res) => {
             },
             {
                 type: "order-steps",
-                question: "Order the account deletion steps respecting foreign key constraints:",
+                question: "Order the account erasure steps so that no foreign key is violated:",
                 steps: [
-                    "DELETE FROM consent_records WHERE user_id = $1",
-                    "DELETE FROM redemption_events WHERE token_id IN (user's tokens)",
-                    "DELETE FROM access_rules WHERE token_id IN (user's tokens)",
+                    "DELETE FROM messages WHERE conversation_id IN (the user's conversations)",
+                    "DELETE FROM conversations WHERE token_id IN (the user's tokens)",
+                    "DELETE FROM redemption_events WHERE token_id IN (the user's tokens)",
                     "DELETE FROM tokens WHERE user_id = $1",
-                    "DELETE FROM messages WHERE sender_id = $1",
                     "DELETE FROM users WHERE id = $1"
                 ],
-                correctOrder: [0, 1, 2, 4, 3, 5],
-                explanation: "You must delete child records before parents (foreign keys prevent otherwise). Users is last because everything references it. Tokens must come after access_rules and redemption_events which reference tokens."
+                correctOrder: [0, 1, 2, 3, 4],
+                explanation: "Read the order off the foreign keys rather than off intuition. messages cascades from conversations; conversations.token_id and redemption_events.token_id are both ON DELETE RESTRICT, so neither may outlive its token; tokens.user_id is RESTRICT too, so users is last. The version of this that omitted conversations entirely shipped in this lesson for months and would have thrown on the very first user who had ever been messaged."
             },
             // --- Questions 6-25 ---
             {
@@ -710,7 +1251,7 @@ router.delete('/me', authenticateJWT, async (req, res) => {
                 question: "What does this deletion queue check return?",
                 code: "const deadline = new Date('2024-03-15T10:00:00Z');\nconst now = new Date('2024-03-17T10:00:00Z');\nconst overdue = now > deadline;\nconst hoursOverdue = Math.round((now - deadline) / (1000 * 60 * 60));\nconsole.log(`Overdue: ${overdue}, by ${hoursOverdue} hours`);",
                 answer: "Overdue: true, by 48 hours",
-                explanation: "The DPDP Act requires account deletion to complete within a reasonable timeframe. This code checks if a deletion request has passed its deadline. 2 days = 48 hours overdue. In Token's implementation, the deadline is 72 hours from request."
+                explanation: "Two days past the deadline is 48 hours overdue. The job that watches deletion_queue does this comparison: live rows go immediately, but the request is not finished until backups_clear_at has passed, and something has to notice when that date goes by without completed_at being set. A deadline nobody checks is a sentence in a privacy policy."
             },
             {
                 type: "order-steps",
@@ -839,6 +1380,35 @@ router.delete('/me', authenticateJWT, async (req, res) => {
                 code: "CREATE TABLE consent_records (\n  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n  user_id UUID NOT NULL REFERENCES users(id) ON DELETE ___,\n  purpose VARCHAR(50) NOT NULL\n);",
                 answer: "CASCADE",
                 explanation: "ON DELETE CASCADE automatically deletes consent_records rows when the referenced user is deleted. This ensures that when you exercise the right to erasure (DELETE FROM users), all related consent records are cleaned up in a single transaction without foreign key violations."
+            },
+            {
+                question: "Your erasure transaction commits successfully at 09:00. Your backups are kept for 7 days. What may you honestly tell the user?",
+                options: [
+                    "Their live records are erased now, and copies in backups are overwritten within 7 days",
+                    "Their data is gone — the transaction committed, so there is nothing left",
+                    "Nothing until the backups roll; the erasure is not real for another week",
+                    "Their data is gone, because backups are not covered by the DPDP Act"
+                ],
+                correct: 0,
+                explanation: "Erasure has a tail. For seven days the rows still exist in snapshots you control and could restore, and nobody is going to edit one user out of seven backups — a backup you have been rewriting is not a backup. Claiming the data is simply gone is the actual compliance failure, and waiting a week to act is not required either. Naming the live erasure and the backup window separately is both true and defensible, which is why deletion_queue stores backups_clear_at."
+            },
+            {
+                type: "predict-output",
+                question: "What does this tail calculation print?",
+                code: "const stores = [\n  { name: 'tokens', holds: 'clear' },\n  { name: 'messages', holds: 'sealed' }\n];\nconst backupTailDays = 7;\nconst tail = stores.reduce(\n  (worst, s) => s.holds === 'clear' ? Math.max(worst, backupTailDays) : worst,\n  0\n);\nconsole.log('erasure complete in ' + tail + ' days');",
+                answer: "erasure complete in 7 days",
+                explanation: "Only data the server could read leaves a tail. The sealed rows sit in exactly the same backups, but we never held a key for them, so their survival discloses nothing and they contribute 0. Remove the tokens row and the answer becomes 0 days. The length of your erasure tail is decided by how much you chose to keep in the clear — a schema decision, made years before anyone asks to be erased."
+            },
+            {
+                question: "redemption_events stores holder_ip, holder_name and user_agent. Why are these left out of the token issuer's data export?",
+                options: [
+                    "They are another person's personal data, and the issuer's right is to their own",
+                    "They are too large to include in a JSON download",
+                    "IP addresses are not personal data under the DPDP Act",
+                    "They are already covered by the messages section of the export"
+                ],
+                correct: 0,
+                explanation: "The redeemer is a separate Data Principal who never signed up and never consented to being disclosed. Shipping their IP address to the issuer would hand one person another person's location through a compliance feature, on request. What belongs to the issuer is that a redemption happened and when. The general trap: 'a row in my table' and 'my personal data' are different sets, and an export written from the schema rather than from that question ships the difference."
             },
         ]);
     </script>

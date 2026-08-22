@@ -12,8 +12,121 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean. **61/96 verified**, audit green, five suites
-pass. **B2, B3 and B7 complete.**
+**Nothing.** Working tree clean. **62/96 verified**, audit green, five suites
+pass. **B2, B3, B7 and B10 complete.** Known-and-blocked is down to **2**.
+
+### b10/0002 — the compliance lesson could not have run (2026-08-22)
+
+M3: **`planErasure`**. The defects were not nuance — the two endpoints this
+lesson exists to teach both reference columns that do not exist:
+
+| Written | Actually in the schema |
+|---|---|
+| `users.username` | `display_name` (plus `phone_hash`, `avatar_url`) |
+| `messages.sender_id` | `sender_type` — holders are not users |
+| `messages.content` | `ciphertext` + `nonce` + `key_version` |
+| `redemption_events.redeemed_at` / `.ip_address` | `created_at` / `holder_ip` |
+| `tokens.code` | does not exist and never will (ADR-0007) |
+| `participants` | never created — a known orphan |
+
+The **revealed solution** still selected `code` and `content` — the exact two
+things the lesson's own callout spends four paragraphs forbidding, and the
+copy the student pastes. The body had been half-fixed earlier in the session
+and the `createSolution` block was never touched. **`b10/0001` was the same
+shape a day earlier.** When a lesson's prose gets corrected, grep its solution
+block in the same commit; they are not the same text and only one of them is
+read carefully.
+
+### The erasure order was wrong from the moment B2 grew a table
+
+```sql
+DELETE FROM tokens WHERE user_id = $1;   -- with conversations still pointing at it
+```
+
+`conversations.token_id` and `redemption_events.token_id` are both
+`ON DELETE RESTRICT`, and `tokens.user_id` is too. The shipped order never
+mentioned `conversations` at all, so **account deletion would have thrown for
+every user who had ever been messaged** — which is every real user. The
+`order-steps` quiz question keyed that same broken order as correct.
+
+Nothing could have caught this. `b2/0002` added `conversations` in a different
+module; the person adding a table is not looking at a DELETE list two modules
+away. **The same defect shape as `SELECT *` in `b3/0003`: an edit somewhere
+else creates the bug.** That is why the exercise is a function that *reads* the
+foreign keys rather than a list someone maintains.
+
+### What the lesson now says, and why it is stronger than what it said
+
+It claimed *"Once done, the data is gone"* while its own retention table said
+**backups: 7 days**. Both cannot be true. The fix is not more deleting:
+
+- Every erasure has a **tail** — a window where you have told the user
+  "deleted" and could still restore them. Naming it is the compliant answer;
+  denying it is the actual failure.
+- **Under ADR-0002 the tail applies only to what the server kept in the
+  clear.** Message bodies in those snapshots are ciphertext the server never
+  held a key for, so their survival discloses nothing. The tail is on
+  `display_name`, labels, timestamps, who-talked-to-whom.
+- Therefore **data minimisation is the mechanism that makes erasure
+  achievable**, not a box to tick. How long you must wait was decided at
+  schema-design time, years before anyone asked.
+- Stated limits, so this does not become a general excuse: `code_enc` is
+  encrypted *with a key the API holds*, so it counts as clear; and the
+  holder's copy on their device is outside your reach entirely.
+
+**`deletion_queue` now exists**, defined here because this lesson is where the
+policy got decided. Deliberately a tombstone: `erased_user_id` is a plain
+integer with **no foreign key**, because the row it would reference is the one
+just deleted.
+
+### The export was handing one person another person's data
+
+`redemption_events` holds `holder_ip`, `holder_name`, `user_agent` — the
+**redeemer's** data. The issuer's export shipped all of it. A different Data
+Principal, who never signed up, disclosed on request through a compliance
+feature. **"A row in my table" and "my personal data" are different sets**, and
+an export written from the schema rather than from that question ships the
+difference.
+
+### `phone_hash` — named, not fixed
+
+The lesson's compliance table claims *"no phone number, no email, no real
+name"*. `b2/0001` stores `phone_hash` and a `NOT NULL display_name`. A hash of
+a ten-digit Indian mobile is a lookup key, not an anonymisation — the argument
+`b3/0001` already makes about a different column.
+
+Written up in the lesson as a named gap rather than silently corrected: the
+honest sentence is *"we store a hash of your phone number, used only to sign
+you in"*. **If the intent is really to not have it, that is a B2 change to make
+deliberately** — see *Open questions*.
+
+### The wrong-cases caught a self-check hole again, and then a self-inflicted one
+
+Eleven mistakes, two alternatives. Two things worth keeping:
+
+- **`untilDays: 0` had no check.** A retention expiring today is a retention;
+  `if (r.untilDays)` rejects it. Same shape as `max_uses: 0`, in a new table.
+  The check was added *because* the case was written.
+- **Six mistakes initially tripped two checks**, because I had left correct
+  cycle-detection out of them as well. A case that fails two checks does not
+  say which distinction it tests. Tightening them to single-variable changes
+  immediately produced a real `FAIL` — and that one turned out to be a missing
+  `${PRELUDE}`, not a hole. **Both outcomes are the point: a case that fails
+  for the wrong reason is indistinguishable from a case that passes for the
+  wrong reason until you make it differ in exactly one way.**
+
+**That is six times a wrong-case has caught a gap in the self-check written
+beside it.** Still the only mechanism that does.
+
+### The known-issues file worked from both ends
+
+Defining `deletion_queue` cleared the orphan error, and the audit immediately
+failed with *"no longer matches any error — delete the entry"*. That stale
+check is doing exactly the job it was written for; the entry is gone.
+
+Also: my own fixture `DPBI-2026-114` tripped the token-alphabet warning
+(`0` and `1` are excluded). Warnings are at 1 again — a real dead link in
+legacy `07`. **Treat a warning as real**, including your own.
 
 ### b10/0001 — the security lesson did not name its own security model
 
@@ -269,13 +382,13 @@ All three were parked behind "the B2 schema rewrite". Having done part of it:
 - **`participants`** — still blocked. Its real gate is C5 (E2EE key
   distribution), which has not happened.
 - **`calls`** — still blocked. Its real gate is B6 (signalling).
-- **`deletion_queue`** — **gate narrowed, not lifted.** `b2/0002` settled the
-  *bulk* half: messages are partitioned by month, so time-based retention is
-  `DROP TABLE` on an old partition and needs no queue. What remains is
-  **per-user erasure on request**, which partitioning cannot serve — you cannot
-  drop a partition for one person. Its gate is now "a per-user erasure policy,
-  informed by `b10/0002`" rather than the vaguer B2 one, and `known-issues.json`
-  records the distinction so nobody re-derives it.
+- **`deletion_queue`** — **closed 2026-08-22.** The gate was "a per-user
+  erasure policy, informed by `b10/0002`", and `b10/0002` now decides it: live
+  rows go inside one transaction in foreign-key order, and the queue tracks the
+  only part that cannot be immediate — the backup tail. The table is defined in
+  that lesson because that is where the policy was settled. The
+  `known-issues.json` entry is deleted, not re-worded; the audit's stale check
+  is what said so.
 
 ### Both schema decisions are settled (2026-08-20) and implemented
 
@@ -544,17 +657,11 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
-**Five M3 lessons left**, all in two modules. One commit each. **Nothing is
-blocked.**
+**Four M3 lessons left**, all in A11. One commit each. **Nothing is blocked.**
 
-**Done:** A3, A4, A5, A6, A8, B5, **all of B2, B3 and B7**, plus `b10/0001`
-and `a11/0004`.
-**Remaining:** `b10/0002` (DPDP), and A11's `0001`, `0002`, `0003`, `0005`.
-
-**Take `b10/0002` next** and finish B10. It was edited earlier in this session
-— the DPDP export was selecting a `code` column that does not exist and
-`content` that is ciphertext — but it never got an exercise, and the
-per-user-erasure question parked in `known-issues.json` points straight at it.
+**Done:** A3, A4, A5, A6, A8, B5, **all of B2, B3, B7 and B10**, plus
+`a11/0004`.
+**Remaining:** A11's `0001`, `0002`, `0003`, `0005`.
 
 **A11's remaining four are the weakest M3 candidates left in the course**:
 animations, theming, forms and store submission. `0003` (forms) is the most
@@ -570,7 +677,8 @@ checklist-shaped and is the best candidate in the course for an honest
 | A TypeScript-aware runner, so `a2/*` and `a3/0002` can be verified | needs a decision first — see *Open questions* |
 | **Phase 3** — the ten C-modules | just-in-time; the student is nowhere near |
 | **Phase 4** — the operating track | after launch |
-| The three orphan tables | behind the B2 rewrite, itself behind C5/E2EE. Parked in `scripts/known-issues.json` |
+| The **two** remaining orphan tables | `participants` behind C5/E2EE, `calls` behind B6. Parked in `scripts/known-issues.json`; `deletion_queue` closed 2026-08-22 |
+| **`users.phone_hash`** — the schema contradicts the product's headline claim | needs the student's answer, see *Open questions* 0 |
 | The one remaining warning — a dead `privacy-policy.html` link in legacy `07` | legacy module, outside the token track |
 
 **Do not ask the student where they are in Module 01.** They asked on
@@ -583,6 +691,18 @@ the course for months. Pitch to the profile in `CLAUDE.md` and let them steer.
 Both were raised on 2026-08-20 alongside the three that got settled, and
 neither was answered. They are not blocking anything.
 
+0. **Does `users` keep `phone_hash`?** New, 2026-08-22, from `b10/0002`. The
+   product's headline privacy claim is *"we never ask for your phone number"*;
+   the schema stores a hash of one, and a ten-digit Indian mobile is small
+   enough to enumerate, so the hash is a lookup key rather than an
+   anonymisation. Three ways out: keep it and **say so plainly** in the privacy
+   policy (cheapest, and honest); move to a passphrase or passkey at sign-up so
+   there is no number to hash (a B4 change); or keep it only until first login
+   and drop the column. **Not urgent, but it is the one place the product's
+   central claim and its schema disagree** — and it is a compliance document
+   that will carry whichever answer wins. Ask in plain terms: *"the app says we
+   don't want your phone number, but the database keeps a scrambled copy of it
+   — should we stop keeping it, or stop saying that?"*
 1. **How far ahead of yourself should this build?** M3 keeps finding real
    defects, but every lesson it touches is modules ahead of Module 01. Raised
    three times now; the answer each time has been to continue.
@@ -629,7 +749,7 @@ Per-item status only. The plan itself is in `TOKEN-TRACK.md`; the counts are in
 | 4 — the operating track | not started, deliberately |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
-| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus all of B2, B3 and B7, and `b10/0001`+`a11/0004`; **5 left** |
+| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus all of B2, B3, B7 and **B10**, and `a11/0004`; **4 left**, all in A11 |
 
 ### M3 — where it has reached
 
@@ -673,6 +793,7 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `b3/0001` | `checkEnv` | report *all* problems; `'undefined'` is a string; the result is going into a log |
 | `b10/0001` | `pickForLog` | allow-list, not deny-list; a value not a subtree; absent ≠ `undefined` |
 | `a11/0004` | `placeConfig` | *who needs it, and when* — not *is it sensitive*; unclassifiable ⇒ do not ship |
+| `b10/0002` | `planErasure` | order is read off the foreign keys, never off the list you were handed; a cycle is refused, not guessed; only data you could *read* leaves a backup tail |
 
 **A5 note:** not one of the five had a `createExplain` prompt or loaded
 `explain.js`. All five now do. A5 predates the practice pattern being made
@@ -762,6 +883,17 @@ Durable gotchas only. Anything narrative is in `HANDOFF.md`.
   Restructure so each option stands alone.
 - **Never write an explanation that names an option by letter or place.**
   `render-as-authored` is 0; if it rises, one has crept back in.
+- **When you fix a lesson's prose, fix its `createSolution` in the same
+  commit.** Twice now (`b10/0001`, `b10/0002`) the body was corrected and the
+  revealed solution — the copy the student actually pastes — kept the defect.
+  They are different strings and only one of them gets re-read.
+- **Check every column name against the migration, not against memory.**
+  `b10/0002` named seven that do not exist. `verify-lesson.mjs` cannot see SQL,
+  so a `<pre>` block full of confident queries is unchecked by anything.
+- **A wrong-case must differ from the right answer in exactly one way.** Six of
+  `b10/0002`'s tripped two checks until they were tightened, which hides which
+  distinction each one tests — and one of them was then failing for a reason
+  that had nothing to do with the case at all.
 
 ### Verifying a lesson
 
