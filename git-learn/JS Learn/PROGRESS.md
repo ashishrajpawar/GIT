@@ -13,12 +13,12 @@ with this one, this one is right — everything below is measured, not asserted.
 |---|---|
 | Token-track lessons | 96 |
 | Legacy lessons (pre-pivot, excluded) | 40 |
-| Quiz questions (track) | 2583 |
-| Avg teaching prose per track lesson | 1998 words |
-| Lessons with a playground | 82 / 96 |
+| Quiz questions (track) | 2586 |
+| Avg teaching prose per track lesson | 2008 words |
+| Lessons with a playground | 83 / 96 |
 | Lessons with an exercise | 96 / 96 |
 | **Deepened** (all 3 spine sections) | 16 / 96 |
-| **Verified** (code executed) | 64 / 96 |
+| **Verified** (code executed) | 65 / 96 |
 | Ran clean but had nothing to run | 0 / 96 |
 | Errors | 0 |
 | Known and blocked | 2 |
@@ -53,9 +53,9 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Position | Count | Share |
 |---|---|---|
-| index 0 | 140 | 10.2% |
+| index 0 | 141 | 10.3% |
 | index 1 | 845 | 61.7% |
-| index 2 | 351 | 25.6% |
+| index 2 | 350 | 25.5% |
 | index 3 | 34 | 2.5% |
 
 ## Question types
@@ -63,7 +63,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Type | Count |
 |---|---|
 | multiple-choice | 715 |
-| predict-output | 484 |
+| predict-output | 487 |
 | fill-blank | 454 |
 | spot-the-bug | 371 |
 | which-breaks | 284 |
@@ -76,7 +76,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | 01-javascript-fundamentals | 13 | 2556 | 85 | 15 | 380 | 0/13 | 13/13 |
 | 02-react-native | 14 | 2641 | 39 | 14 | 355 | 0/14 | 14/14 |
 | a10-device-security | 2 | 1908 | 2 | 2 | 50 | 1/2 | 0/2 |
-| a11-polish-publish | 5 | 1703 | 5 | 8 | 130 | 0/5 | 3/5 |
+| a11-polish-publish | 5 | 1903 | 7 | 9 | 133 | 0/5 | 4/5 |
 | a2-typescript | 3 | 781 | 2 | 3 | 76 | 0/3 | 0/3 |
 | a3-api-consumption | 4 | 1190 | 4 | 7 | 111 | 1/4 | 3/4 |
 | a4-auth-client | 3 | 1400 | 3 | 6 | 80 | 1/3 | 3/3 |
@@ -162,7 +162,7 @@ so they do not hold the audit red. They are **not** resolved.
 | 02-react-native/0014-message-thread-screen.html | 3405 | 8 | 2 | 1 | 25 | — | yes |
 | a10-device-security/0001-secure-storage.html | 2244 | 7 | 1 | 1 | 25 | yes | n/a |
 | a10-device-security/0002-biometric-app-lock.html | 1572 | 9 | 1 | 1 | 25 | — | n/a |
-| a11-polish-publish/0001-animations-gestures.html | 1501 | 12 | 0 | 1 | 25 | — | n/a |
+| a11-polish-publish/0001-animations-gestures.html | 2503 | 13 | 2 | 2 | 28 | — | yes |
 | a11-polish-publish/0002-theming-dark-mode.html | 2214 | 10 | 2 | 2 | 27 | — | yes |
 | a11-polish-publish/0003-forms-validation.html | 2104 | 10 | 2 | 2 | 28 | — | yes |
 | a11-polish-publish/0004-environment-config.html | 1467 | 13 | 1 | 2 | 25 | — | yes |

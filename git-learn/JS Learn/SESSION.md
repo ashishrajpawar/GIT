@@ -12,8 +12,83 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean. **64/96 verified**, audit green, five suites
-pass. **B2, B3, B7 and B10 complete.** Known-and-blocked is **2**.
+**Nothing.** Working tree clean. **65/96 verified**, audit green, five suites
+pass. **B2, B3, B7, B10 and all of A11 bar `0005` complete.** Known-and-blocked
+is **2**.
+
+### a11/0001 — the animation was a claim the app could not keep (2026-08-22)
+
+M3: **`swipeOutcome`**. "Looks thin" was wrong for the 14th time out of 14.
+
+The lesson said the token is *"revoked immediately with a satisfying
+animation"*, and the code meant it: the card animated to `-SCREEN_WIDTH` and
+called `onRevoke` **from the completion callback**. Two defects, and the second
+is the one worth carrying.
+
+- **A gesture is not consent.** `b2/0001` comments `revoked_at` as *"set once,
+  never cleared"* and `b7/0003` makes revoked terminal — there is no un-revoke,
+  by design. So an accidental swipe permanently destroys a capability, and the
+  delivery driver on the other end loses the channel with no recovery for
+  either party. **An irreversible action reached by a gesture needs a
+  confirmation step, and the reason is not timidity — it is that there is no
+  undo to fall back on.** The long-press-to-archive in the same lesson
+  correctly does *not* ask, which is the contrast that makes the rule legible.
+- **The row was destroyed before the work succeeded.** If the request then
+  fails — offline, 500, expired session — the card is gone and **the token is
+  still live**. Optimistic UI is fine when being wrong is cheap; here the two
+  directions are not symmetric. Showing "revoking…" on a success costs a
+  moment; showing "revoked" on a failure costs the user the one thing a
+  security feature must never fake.
+
+**The general form: an exit animation is a claim.** `exiting={FadeOut}` fires
+when the item leaves the array, so it belongs to the list re-reading real
+server state — never to the gesture ending. The app should not be able to say
+something happened before it is true.
+
+### Four more, each already forbidden somewhere else
+
+- **`tokenCode` as a prop on a list card, and in the callback** — third lesson
+  running. `GET /tokens` returns no `code` field, so the card rendered
+  `undefined`; the callback now carries `tokenId`, which is also what the owner
+  endpoint takes (ADR-0007: never in a URL). The detail sheet keeps the code
+  but now *fetches* it on an explicit "Show code" press, which is the one
+  disclosure the ADR allows and logs.
+- **`key={token.code}` on the animated list** — the same missing field, with a
+  second-order consequence: every row keyed `undefined` makes React fall back
+  to the array index, rows get reused across positions, and **removing the
+  first item animates the wrong card out.** A data-shape bug surfacing as an
+  animation bug.
+- **A descending `interpolate` input range.** `[0, SWIPE_THRESHOLD]` with a
+  negative threshold. Reanimated requires non-decreasing input and does **not**
+  reverse it for you — the result is undefined. Put the smaller number first
+  and flip the *output*.
+- **Hardcoded `#e74c3c` / `#f39c12` / `#27ae60` / `#666`**, one lesson before
+  `0002` says nothing visual may be hardcoded — and `0002` had just *measured*
+  three of them as failing (2.19, 2.87, 3.82). Replaced with the corrected
+  values and a comment saying they are literals only so the file reads alone.
+
+### The threshold was a pixel count
+
+`SWIPE_THRESHOLD = -SCREEN_WIDTH * 0.35` was computed once at module load.
+137px is 35% of a phone and **17% of a tablet**, so the control means different
+things on different devices and the difference only shows up on hardware nobody
+tested. `swipeOutcome` takes `thresholdFraction` and recomputes every call —
+and one wrong-case is *the identical gesture on an 800-wide tablet*.
+
+**Velocity was ignored entirely**, which is the defect a user would actually
+notice: a fast flick that never travels far is how people really use a swipe
+control, and a distance-only rule feels broken to anyone with a quick thumb.
+The rule everyone leaves out is the third one — **a flick in the opposite
+direction vetoes a committed distance.** The position is the past; the release
+velocity is what they meant last. Dragged past the threshold, flicked back,
+released: the position says commit and the person says no, and the person is
+right.
+
+**The function deliberately does not decide whether "commit" means do-it or
+ask-first.** That is a property of the action, not of the gesture — which is
+why the same function serves both the revoke card and the dismissable banner.
+
+If this stops mid-edit: previous good state is `50f3b7b`.
 
 ### a11/0002 — the light palette was the broken one (2026-08-22)
 
@@ -835,24 +910,23 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
-**Two M3 lessons left**, both in A11. One commit each. **Nothing is blocked.**
+**One M3 lesson left: `a11/0005` (store submission).** **Nothing is blocked.**
 
 **Done:** A3, A4, A5, A6, A8, B5, **all of B2, B3, B7 and B10**, plus
-`a11/0002`, `0003` and `0004`.
-**Remaining:** A11's `0001` (animations) and `0005` (store submission).
+`a11/0001`, `0002`, `0003` and `0004`.
 
-Both were written off in advance and **that judgement has now been wrong 13
-times out of 13**, so look for the plain function before reaching for
+It was written off in advance and **that judgement has now been wrong 14 times
+out of 14**, so look for the plain function before reaching for
 `--unverifiable`.
 
-- **`0001` (animations)** looks thin, but a spring/timing config is arithmetic,
-  a gesture handler has thresholds and velocity, and any swipe-to-reveal has a
-  "did it pass the commit point" decision in it. Interpolation ranges are pure
-  functions with off-by-one edges.
-- **`0005` (store submission)** is the checklist-shaped one. If a plain
-  function genuinely is not there, this is the honest `--unverifiable` — but
-  check first for version-code arithmetic, an asset-size or screenshot-
-  dimension rule, or a "which fields block submission" predicate.
+- **`0005` (store submission)** is the checklist-shaped one, and the last
+  honest candidate for `--unverifiable` in Track A. Check first for
+  version-code arithmetic, an asset-size or screenshot-dimension rule, or a
+  "which fields block submission" predicate. Given `0001` turned out to carry a
+  terminal-action defect behind an animation, **read it against the ADRs before
+  concluding anything about what it contains** — a store listing is where
+  privacy claims get written down, and `b10/0002` has just established that the
+  *"no phone number"* sentence is wrong for what the company collects.
 
 | Work | Gate |
 |---|---|
@@ -921,7 +995,7 @@ Per-item status only. The plan itself is in `TOKEN-TRACK.md`; the counts are in
 | 4 — the operating track | not started, deliberately |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
-| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus all of B2, B3, B7 and **B10**, and `a11/0002`+`0003`+`0004`; **2 left** (`a11/0001`, `a11/0005`) |
+| **M3 — the plain function in Track A/B lessons** | **started 2026-08-18** — A3, A4, A5, A6, A8, B5 complete, A7 partly (`0005`), plus all of B2, B3, B7 and **B10**, and `a11/0001`+`0002`+`0003`+`0004`; **1 left** (`a11/0005`) |
 
 ### M3 — where it has reached
 
@@ -968,6 +1042,7 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `b10/0002` | `planErasure` | order is read off the foreign keys, never off the list you were handed; a cycle is refused, not guessed; only data you could *read* leaves a backup tail |
 | `a11/0003` | `toCreateTokenPayload` | blank is an absence, never `''`; `maxUses: 0` and absent are opposites; an unreadable value is refused, never defaulted |
 | `a11/0002` | `auditContrast` | the sRGB gamma decode, which the usual anchors cannot catch; a pair is audited, not a colour; a value with alpha has no ratio and must be skipped, not scored |
+| `a11/0001` | `swipeOutcome` | the threshold is a *fraction* of the width, never a pixel; a flick back vetoes a committed distance; `commit` decides the gesture, never whether the action asks first |
 
 **A5 note:** not one of the five had a `createExplain` prompt or loaded
 `explain.js`. All five now do. A5 predates the practice pattern being made
@@ -1088,6 +1163,16 @@ Durable gotchas only. Anything narrative is in `HANDOFF.md`.
   verifier. Write a `bucketOf`/`valueOf` helper that returns a sentinel.
   **Three of `a11/0002`'s eleven cases were hidden by this**, in a self-check
   written the same day as the note warning about it.
+- **An animation that removes something is a claim that it is gone.** Fire it
+  from the state changing, never from the gesture ending. `a11/0001` animated
+  the card off-screen and *then* called revoke, so a failed request left the
+  user believing a live token was dead. The general test: **if the request
+  fails, does the screen still say it worked?**
+- **When a lesson loses a field, grep its `key=` too.** `a11/0001` had
+  `key={token.code}` on a list whose response has no `code` — so every key was
+  `undefined`, React fell back to the array index, and *removing the first row
+  animated the wrong card out*. A data-shape bug that presents as an animation
+  bug, which is the hardest kind to trace backwards.
 - **Pick the fixture that isolates the variable you are testing.** `a11/0002`'s
   channel-weighting case was aimed at the wrong check, because greys are the
   one input where weighted and unweighted luminance nearly agree. Pure blue

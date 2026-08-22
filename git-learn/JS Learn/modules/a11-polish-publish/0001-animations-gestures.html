@@ -181,8 +181,9 @@ function DraggableCard() {
     <!-- ───────────────────────────────────────────── -->
     <h2>Building: Swipe-to-Revoke</h2>
 
-    <p>Token's killer interaction &mdash; the user swipes a token card left to reveal a revoke button.
-    If they swipe past the threshold, the token is revoked immediately with a satisfying animation.</p>
+    <p>The user swipes a token card left to reveal a revoke action. Swiping
+    past the threshold <em>asks</em> to revoke &mdash; read the callout under
+    this block before you decide it should just do it.</p>
 
     <pre><code>// app/src/components/SwipeableTokenCard.tsx
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -198,15 +199,21 @@ import Animated, {
 import { View, Text, StyleSheet, Dimensions } from 'react-native';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
-const SWIPE_THRESHOLD = -SCREEN_WIDTH * 0.35;
+
+// A FRACTION of the width, not a pixel count: 137px is 35% of a phone and
+// 17% of a tablet, and a swipe control that means different things on
+// different devices is a swipe control you cannot tune.
+const THRESHOLD = SCREEN_WIDTH * 0.35;
+const MIN_FLING_VELOCITY = 800;   // px/s — a flick that never travels far
 
 interface Props {
-  tokenCode: string;
-  issuedTo: string;
-  onRevoke: (tokenCode: string) =&gt; void;
+  tokenId: number;         // NOT the code. GET /tokens returns none (ADR-0007)
+  label: string;
+  issuedTo?: string;
+  onAskRevoke: (tokenId: number) =&gt; void;   // ASK, not do -- see the callout
 }
 
-export function SwipeableTokenCard({ tokenCode, issuedTo, onRevoke }: Props) {
+export function SwipeableTokenCard({ tokenId, label, issuedTo, onAskRevoke }: Props) {
   const translateX = useSharedValue(0);
 
   const pan = Gesture.Pan()
@@ -215,16 +222,21 @@ export function SwipeableTokenCard({ tokenCode, issuedTo, onRevoke }: Props) {
       // Only allow left swipe
       translateX.value = Math.min(0, event.translationX);
     })
-    .onEnd(() =&gt; {
-      if (translateX.value &lt; SWIPE_THRESHOLD) {
-        // Past threshold — animate off-screen and revoke
-        translateX.value = withTiming(-SCREEN_WIDTH, { duration: 200 }, () =&gt; {
-          runOnJS(onRevoke)(tokenCode);
-        });
-      } else {
-        // Snap back
-        translateX.value = withSpring(0);
-      }
+    .onEnd((event) =&gt; {
+      // Distance OR a fast flick commits -- but a flick back at the moment
+      // of release vetoes either. See swipeOutcome() in the exercise below;
+      // this is the same decision, written where it can be tested.
+      const travelled = -translateX.value;
+      const flickingBack = event.velocityX &gt; MIN_FLING_VELOCITY;
+      const flickingAway = -event.velocityX &gt;= MIN_FLING_VELOCITY;
+      const commit = !flickingBack &amp;&amp; (travelled &gt;= THRESHOLD || flickingAway);
+
+      // The card always returns to rest. It does NOT fly off-screen:
+      // nothing has been revoked yet, and a row that has already left the
+      // list cannot come back if the user says no -- or if the API fails.
+      translateX.value = withSpring(0);
+
+      if (commit) runOnJS(onAskRevoke)(tokenId);
     });
 
   const cardStyle = useAnimatedStyle(() =&gt; ({
@@ -232,10 +244,13 @@ export function SwipeableTokenCard({ tokenCode, issuedTo, onRevoke }: Props) {
   }));
 
   const revokeStyle = useAnimatedStyle(() =&gt; ({
+    // Reanimated requires the INPUT range to be non-decreasing. Writing it
+    // as [0, -THRESHOLD] descends, and the result is undefined -- it is not
+    // "reversed for you". Put the smaller number first and flip the OUTPUT.
     opacity: interpolate(
       translateX.value,
-      [0, SWIPE_THRESHOLD],
-      [0, 1],
+      [-THRESHOLD, 0],
+      [1, 0],
       Extrapolation.CLAMP
     ),
   }));
@@ -250,14 +265,20 @@ export function SwipeableTokenCard({ tokenCode, issuedTo, onRevoke }: Props) {
       {/* Foreground card */}
       &lt;GestureDetector gesture={pan}&gt;
         &lt;Animated.View style={[styles.card, cardStyle]}&gt;
-          &lt;Text style={styles.code}&gt;{tokenCode}&lt;/Text&gt;
-          &lt;Text style={styles.issuedTo}&gt;Issued to: {issuedTo}&lt;/Text&gt;
+          &lt;Text style={styles.label}&gt;{label}&lt;/Text&gt;
+          {issuedTo ? (
+            &lt;Text style={styles.issuedTo}&gt;Issued to: {issuedTo}&lt;/Text&gt;
+          ) : null}
         &lt;/Animated.View&gt;
       &lt;/GestureDetector&gt;
     &lt;/View&gt;
   );
 }
 
+// Colours come from useTheme() in the real component -- see 0002, which is
+// the next lesson and says nothing visual may be hardcoded. They are
+// literals here only so this file reads on its own. In particular
+// '#e74c3c' was the old danger red, and it is 3.82:1 against white.
 const styles = StyleSheet.create({
   container: {
     marginVertical: 8,
@@ -265,19 +286,19 @@ const styles = StyleSheet.create({
   },
   revokeAction: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#e74c3c',
+    backgroundColor: '#C0392B',   // colors.danger
     borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'flex-end',
     paddingRight: 24,
   },
   revokeText: {
-    color: '#fff',
+    color: '#FFFFFF',             // colors.onDanger
     fontWeight: '700',
     fontSize: 16,
   },
   card: {
-    backgroundColor: '#fff',
+    backgroundColor: '#FFFFFF',   // colors.cardBackground
     borderRadius: 12,
     padding: 16,
     elevation: 3,
@@ -286,14 +307,13 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 4,
   },
-  code: {
+  label: {
     fontSize: 18,
-    fontFamily: 'monospace',
     fontWeight: '600',
   },
   issuedTo: {
     fontSize: 14,
-    color: '#666',
+    color: '#5A6268',             // colors.textSecondary
     marginTop: 4,
   },
 });</code></pre>
@@ -301,10 +321,71 @@ const styles = StyleSheet.create({
     <p>Key details:</p>
     <ul>
         <li><code>activeOffsetX([-10, 10])</code> &mdash; prevents accidental swipes; the gesture only activates after 10px of horizontal movement</li>
-        <li><code>runOnJS(onRevoke)(tokenCode)</code> &mdash; bridges back from the UI thread to the JS thread for the API call</li>
-        <li><code>interpolate</code> &mdash; maps one range to another (swipe distance → opacity)</li>
+        <li><code>runOnJS(onAskRevoke)(tokenId)</code> &mdash; bridges back from the UI thread to the JS thread. Note it carries the <strong>id</strong>: owner endpoints take <code>:id</code> and the code is never in a URL (ADR-0007)</li>
+        <li><code>interpolate</code> &mdash; maps one range to another (swipe distance → opacity), and its input range must be non-decreasing</li>
         <li><code>Extrapolation.CLAMP</code> &mdash; prevents values from exceeding the output range</li>
     </ul>
+
+    <div class="callout danger">
+      <div class="callout-title">A gesture is not consent, and revoke cannot be undone</div>
+      <p>This section used to say the token is <em>"revoked immediately with a
+      satisfying animation"</em>, and the code fired <code>onRevoke</code> from
+      the end of a pan. Two separate problems, and both matter more here than
+      they would in a mail app.</p>
+
+      <p><strong>Revocation is terminal.</strong> <code>b2/0001</code>'s column
+      comment is <code>revoked_at</code> &mdash; <em>"set once, never
+      cleared"</em>, and <code>b7/0003</code> makes revoked a state nothing
+      transitions out of. There is no un-revoke, by design. So an accidental
+      swipe permanently destroys a capability, and on the other end of it a
+      delivery driver's channel goes dead with no way for either party to
+      recover it. <strong>An irreversible action reached by a gesture needs a
+      confirmation step, and the reason is not timidity &mdash; it is that
+      there is no undo to fall back on.</strong> Compare a swipe that archives
+      a conversation, which is why the long-press section further down does not
+      ask.</p>
+
+      <p><strong>It also destroyed the row before the work succeeded.</strong>
+      The old code animated the card to <code>-SCREEN_WIDTH</code> and called
+      <code>onRevoke</code> from the completion callback. If that request then
+      fails &mdash; offline, 500, expired session &mdash; the card is gone from
+      the list and <strong>the token is still live</strong>. The user has been
+      shown the one outcome a security feature must never fake.</p>
+
+      <p>Optimistic UI is fine when being wrong is cheap. Here the two failure
+      directions are not symmetric: showing "revoking…" briefly when it
+      succeeded costs a moment, and showing "revoked" when it did not costs the
+      user the thing they came to the app to do. So the card springs back, the
+      screen asks, and the row changes only when the server says it did.</p>
+
+      <pre><code>// In the screen, not the card.
+const askRevoke = (tokenId: number) =&gt; {
+  Alert.alert(
+    'Revoke this token?',
+    'Anyone holding it loses access immediately. This cannot be undone.',
+    [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Revoke',
+        style: 'destructive',
+        onPress: async () =&gt; {
+          try {
+            await api.post(`/tokens/${tokenId}/revoke`);
+            refresh();                     // the list re-reads the real state
+          } catch (err) {
+            showError('Could not revoke — the token is still active.');
+          }
+        },
+      },
+    ]
+  );
+};</code></pre>
+
+      <p>Note the error message says what is <em>true of the token</em>, not
+      what went wrong with the request. "Network error" leaves the user
+      wondering; "the token is still active" tells them the thing they need to
+      act on.</p>
+    </div>
 
     <!-- ───────────────────────────────────────────── -->
     <h2>Bottom Sheet: Token Detail Panel</h2>
@@ -321,8 +402,9 @@ import { useCallback, useMemo, useRef } from 'react';
 import { Text, View, StyleSheet } from 'react-native';
 
 interface Props {
-  tokenCode: string;
-  issuedTo: string;
+  tokenId: number;
+  label: string;
+  issuedTo?: string;
   createdAt: string;
   expiresAt: string | null;
   status: 'active' | 'paused' | 'revoked';
@@ -331,6 +413,15 @@ interface Props {
 export function TokenDetailSheet(props: Props) {
   const sheetRef = useRef&lt;BottomSheet&gt;(null);
   const snapPoints = useMemo(() =&gt; ['25%', '60%', '90%'], []);
+
+  // The code is NOT a prop -- the list it came from does not have one.
+  // This is the one screen allowed to show it, and only on request, one
+  // token at a time, through an endpoint that logs the disclosure.
+  const [code, setCode] = useState&lt;string | null&gt;(null);
+  const revealCode = async () =&gt; {
+    const res = await api.post(`/tokens/${props.tokenId}/reveal`);
+    setCode(res.data.code);
+  };
 
   const handleSheetChange = useCallback((index: number) =&gt; {
     console.log('Sheet snapped to index:', index);
@@ -347,10 +438,17 @@ export function TokenDetailSheet(props: Props) {
       handleIndicatorStyle={styles.indicator}
     &gt;
       &lt;BottomSheetView style={styles.content}&gt;
-        &lt;Text style={styles.code}&gt;{props.tokenCode}&lt;/Text&gt;
+        &lt;Text style={styles.heading}&gt;{props.label}&lt;/Text&gt;
+        {code ? (
+          &lt;Text style={styles.code}&gt;{code}&lt;/Text&gt;
+        ) : (
+          &lt;Pressable onPress={revealCode}&gt;
+            &lt;Text style={styles.reveal}&gt;Show code&lt;/Text&gt;
+          &lt;/Pressable&gt;
+        )}
         &lt;View style={styles.row}&gt;
           &lt;Text style={styles.label}&gt;Issued to&lt;/Text&gt;
-          &lt;Text style={styles.value}&gt;{props.issuedTo}&lt;/Text&gt;
+          &lt;Text style={styles.value}&gt;{props.issuedTo ?? '—'}&lt;/Text&gt;
         &lt;/View&gt;
         &lt;View style={styles.row}&gt;
           &lt;Text style={styles.label}&gt;Status&lt;/Text&gt;
@@ -406,9 +504,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-  active: { color: '#27ae60' },
-  paused: { color: '#f39c12' },
-  revoked: { color: '#e74c3c' },
+  // Status as TEXT, not just as a hue -- 0002 covers why, and these are its
+  // measured values (#27ae60 was 2.87:1 on white and #f39c12 was 2.19).
+  active: { color: '#197A41' },     // colors.success
+  paused: { color: '#8A5A00' },     // amber is unreadable as text; this is
+                                    // the darkened text variant, 5.93:1
+  revoked: { color: '#C0392B' },    // colors.danger
 });</code></pre>
 
     <!-- ───────────────────────────────────────────── -->
@@ -424,15 +525,21 @@ function TokenList({ tokens, onRevoke }) {
     &lt;View&gt;
       {tokens.map((token) =&gt; (
         &lt;Animated.View
-          key={token.code}
+          // token.id, not token.code. GET /tokens has no code field, so
+          // keying on it gives every row key={undefined} -- React falls
+          // back to the array index and the layout animations below stop
+          // working: rows get reused across positions, so removing the
+          // first item animates the wrong card out.
+          key={token.id}
           entering={SlideInRight.duration(300)}
           exiting={FadeOut.duration(200)}
           layout={Layout.springify()}
         &gt;
           &lt;SwipeableTokenCard
-            tokenCode={token.code}
+            tokenId={token.id}
+            label={token.label}
             issuedTo={token.issuedTo}
-            onRevoke={onRevoke}
+            onAskRevoke={onAskRevoke}
           /&gt;
         &lt;/Animated.View&gt;
       ))}
@@ -442,6 +549,13 @@ function TokenList({ tokens, onRevoke }) {
 
     <p><code>Layout.springify()</code> animates position changes when items above are removed &mdash;
     the remaining cards spring upward to fill the gap.</p>
+
+    <p><strong>An exit animation is a claim.</strong> <code>exiting={FadeOut}</code>
+    runs when the item leaves the array, so it fires when the list re-reads
+    from the server and the token is genuinely gone &mdash; not when the swipe
+    ends. That ordering is the whole point of the callout above: the row
+    animating away is the app telling the user something happened, and it
+    should not be able to say that before it is true.</p>
 
     <!-- ───────────────────────────────────────────── -->
     <h2>Long-press to Archive a Conversation</h2>
@@ -492,9 +606,22 @@ function ConversationItem({ conversation, onArchive }) {
     </ol>
 
     <!-- ───────────────────────────────────────────── -->
-    <h2>Exercise</h2>
+    <h3>Try it yourself &mdash; this one is broken on purpose</h3>
+    <p>The distance-only rule, run against gestures a real thumb produces.
+    Three of the six answers are wrong, and one of them revokes a token.</p>
+    <div id="playground-swipe"></div>
+
+    <h2>Now build it yourself</h2>
+    <p>The card needs a device. The decision it makes when your thumb lifts is
+    ten lines of arithmetic, and it is the part that can revoke something.</p>
+    <div id="exercise-swipe"></div>
+    <div id="pg-exercise-swipe"></div>
+
+    <h3>And the banner</h3>
 
     <div id="exercise-1"></div>
+
+    <div id="explain-a11-0001"></div>
 
     <h2>Quiz</h2>
     <div id="lesson-quiz"></div>
@@ -508,12 +635,210 @@ function ConversationItem({ conversation, onArchive }) {
     <script src="../../assets/quiz.js"></script>
     <script src="../../assets/playground.js"></script>
     <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
     <script src="../../assets/progress.js"></script>
     <script src="../../assets/copy-code.js"></script>
 
     <script>
+    createPlayground("playground-swipe", `// BROKEN ON PURPOSE. The rule this lesson shipped: distance only.
+
+const WIDTH = 390;                 // an ordinary phone
+const THRESHOLD = WIDTH * 0.35;    // 136.5px
+
+function commits(gesture) {
+  return -gesture.translationX >= THRESHOLD;
+}
+
+// Six gestures a real thumb produces. translationX is negative for a
+// left swipe; velocityX is px/second at the moment of release.
+const gestures = [
+  { what: "slow deliberate drag",        translationX: -150, velocityX:   -40 },
+  { what: "quick flick, barely moved",   translationX:  -55, velocityX: -1400 },
+  { what: "dragged far, then flicked BACK", translationX: -150, velocityX:  +950 },
+  { what: "small nudge",                 translationX:  -20, velocityX:   -60 },
+  { what: "swipe the WRONG way, hard",   translationX: +260, velocityX: +1800 },
+  { what: "thumb rested, no movement",   translationX:    0, velocityX:     0 },
+];
+
+for (const g of gestures) {
+  const verdict = commits(g) ? "REVOKE" : "snap back";
+  console.log(g.what.padEnd(26) + verdict);
+}
+
+console.log("");
+console.log("Three of those are wrong:");
+console.log("  the flick should count -- it is how people actually swipe");
+console.log("  the flick BACK should not -- they changed their mind mid-gesture");
+console.log("  and on a 800px tablet, THRESHOLD is 280, so the first row");
+console.log("  silently stops working on a device you did not test on.");`);
+
+    createSolution("exercise-swipe", {
+      exercise: `Write swipeOutcome(gesture, config) — decide what happens when the thumb lifts.\n\ngesture is what Gesture.Pan() hands you at onEnd:\n\n  { translationX: -150, velocityX: -40 }   // px, and px per second\n\nA LEFT swipe is negative in both. config is:\n\n  { width: 390, thresholdFraction: 0.35, minVelocity: 800, minTravel: 8 }\n\nReturn { action, progress } where action is 'commit', 'snapBack' or 'ignore', and progress is 0–1 for the reveal animation behind the card.\n\nThe rules:\n\n1. THE THRESHOLD IS A FRACTION OF THE WIDTH, NOT A PIXEL COUNT. 137px is 35% of a phone and 17% of a tablet. Compute it as width * thresholdFraction every time; a hardcoded pixel threshold is a control that means different things on different devices, and you will only find out from a review nobody wrote.\n\n2. DISTANCE OR VELOCITY COMMITS. Past the threshold commits. So does a fast flick that never got there — |velocityX| >= minVelocity in the swipe direction — because that is how people actually use a swipe control, and a distance-only rule feels broken to anyone with a fast thumb.\n\n3. A FLICK IN THE OPPOSITE DIRECTION VETOES BOTH. Dragged well past the threshold, then flicked back and released: the position says commit and the person says no. The person is right. This is the rule everyone leaves out, and it is the difference between a swipe control you trust and one you learn to be careful around.\n\n4. MOVEMENT THE WRONG WAY NEVER COMMITS, no matter how fast. A right-swipe on a left-swipe card is not a very enthusiastic left-swipe.\n\n5. BELOW minTravel IN EITHER DIRECTION IS 'ignore'. Nothing moved worth animating; a thumb resting on a scrolling list should not fire a spring-back on every touch.\n\n6. progress IS travel / thresholdPixels, CLAMPED TO 0–1, and 0 for movement in the wrong direction. It drives the opacity of the destructive action showing through behind the card, so it must never exceed 1 and must never go negative — that is what Extrapolation.CLAMP does for you in interpolate(), and here you do it yourself.\n\n7. Never mutate gesture or config.\n\nWhat this function deliberately does NOT decide: whether committing means "do it" or "ask first". That is a property of the action, not of the gesture — revoking is terminal and asks, dismissing a banner is not and does not. See the callout above.`,
+      hints: [
+        "Work in one positive number early: travel = -translationX for a left swipe. Sign errors are most of what goes wrong here, and they stop happening once there is exactly one place the sign is handled.",
+        "Rule 3 is a separate test from rule 2, not a branch inside it. Ask 'is the release velocity carrying it back?' first, and let that answer beat everything else.",
+        "For rule 6, clamp with Math.max(0, Math.min(1, x)). Dividing by thresholdPixels before clamping is fine; clamping before dividing is not."
+      ],
+      solution: `function swipeOutcome(gesture, config) {
+  const width = config.width;
+  // Rule 1: recomputed from the width every call. Never a stored pixel.
+  const thresholdPx = width * config.thresholdFraction;
+  const minVelocity = config.minVelocity;
+  const minTravel = config.minTravel;
+
+  // One place the sign is handled. Positive means "went the way we want".
+  const travel = -gesture.translationX;
+  const velocityAway = -gesture.velocityX;
+
+  // Rule 6: the reveal never over- or under-runs, whatever the fingers do.
+  const progress = travel <= 0
+    ? 0
+    : Math.max(0, Math.min(1, travel / thresholdPx));
+
+  // Rule 5: a resting thumb is not a gesture.
+  if (Math.abs(gesture.translationX) < minTravel) {
+    return { action: "ignore", progress };
+  }
+
+  // Rule 4: wrong way is never a commit, however hard it was thrown.
+  if (travel <= 0) {
+    return { action: "snapBack", progress };
+  }
+
+  // Rule 3, and it has to be asked BEFORE rule 2, not inside it. The
+  // position is the past; the release velocity is what they meant last.
+  const flickingBack = gesture.velocityX > minVelocity;
+  if (flickingBack) {
+    return { action: "snapBack", progress };
+  }
+
+  // Rule 2: either one is enough.
+  const farEnough = travel >= thresholdPx;
+  const fastEnough = velocityAway >= minVelocity;
+
+  return {
+    action: farEnough || fastEnough ? "commit" : "snapBack",
+    progress,
+  };
+}`
+    });
+
+    createPlayground("pg-exercise-swipe", `// Write swipeOutcome(gesture, config) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(v) { return JSON.stringify(v); }
+
+// A phone. thresholdPx is 136.5 -- deliberately not a round number, so a
+// hardcoded 100 or 150 cannot pass by luck.
+function phone() {
+  return { width: 390, thresholdFraction: 0.35, minVelocity: 800, minTravel: 8 };
+}
+// A tablet. The SAME 150px drag is past the threshold on the phone and
+// nowhere near it here, which is the only way to test rule 1.
+function tablet() {
+  return { width: 800, thresholdFraction: 0.35, minVelocity: 800, minTravel: 8 };
+}
+function act(translationX, velocityX, config) {
+  const r = swipeOutcome({ translationX: translationX, velocityX: velocityX },
+                         config || phone());
+  return r && r.action;
+}
+function prog(translationX, velocityX, config) {
+  const r = swipeOutcome({ translationX: translationX, velocityX: velocityX },
+                         config || phone());
+  return r && r.progress;
+}
+
+try {
+  if (typeof swipeOutcome !== "function") throw new Error("not written yet");
+
+  // Rule 2 -- distance
+  check("a slow drag past the threshold commits",
+    act(-150, -40) === "commit", "got " + act(-150, -40));
+  check("a slow drag short of it snaps back",
+    act(-120, -40) === "snapBack", "got " + act(-120, -40));
+
+  // Rule 2 -- velocity. This is the one a distance-only rule gets wrong.
+  check("a fast flick commits even though it barely moved",
+    act(-55, -1400) === "commit",
+    "got " + act(-55, -1400) + " (55px of 136.5, but thrown at 1400px/s)");
+  check("a slow short drag still snaps back",
+    act(-55, -100) === "snapBack", "got " + act(-55, -100));
+
+  // Rule 3 -- the veto
+  check("dragged past the threshold but flicked back snaps back",
+    act(-150, 950) === "snapBack",
+    "got " + act(-150, 950) + " (position says yes, the thumb said no)");
+  check("a gentle drift back does NOT veto a committed distance",
+    act(-150, 200) === "commit",
+    "got " + act(-150, 200) + " (200px/s is releasing, not flicking)");
+
+  // Rule 4
+  check("a hard swipe the wrong way never commits",
+    act(260, 1800) === "snapBack", "got " + act(260, 1800));
+  // The mirror of the veto, and the only gesture that isolates rule 4:
+  // net displacement is to the RIGHT, but the thumb is moving fast to the
+  // LEFT at release. A rule that tests |velocityX| reads that as a
+  // committed swipe. Where the card actually IS still decides.
+  check("net movement the wrong way is not rescued by a fast flick toward the action",
+    act(200, -1500) === "snapBack",
+    "got " + act(200, -1500) + " (the card is 200px to the RIGHT of rest)");
+
+  // Rule 5
+  check("a thumb resting with no movement is ignored",
+    act(0, 0) === "ignore", "got " + act(0, 0));
+  check("a 3px twitch is ignored, not snapped back",
+    act(-3, -20) === "ignore", "got " + act(-3, -20));
+  check("and 20px is a real gesture again",
+    act(-20, -60) === "snapBack", "got " + act(-20, -60));
+
+  // Rule 1 -- the same gesture, two devices
+  check("150px commits on a 390-wide phone",
+    act(-150, -40, phone()) === "commit", "got " + act(-150, -40, phone()));
+  check("and the identical gesture snaps back on an 800-wide tablet",
+    act(-150, -40, tablet()) === "snapBack",
+    "got " + act(-150, -40, tablet()) + " (threshold is 280 here, not 136.5)");
+
+  // Rule 6
+  check("progress is 0 at rest", prog(0, 0) === 0, "got " + prog(0, 0));
+  check("progress is 0.5 at half the threshold",
+    Math.abs(prog(-68.25, 0) - 0.5) < 0.001, "got " + prog(-68.25, 0));
+  check("progress is exactly 1 at the threshold",
+    Math.abs(prog(-136.5, 0) - 1) < 0.001, "got " + prog(-136.5, 0));
+  check("progress is clamped at 1, not 2.2",
+    prog(-300, 0) === 1, "got " + prog(-300, 0));
+  check("progress is 0 for movement the wrong way, never negative",
+    prog(200, 0) === 0, "got " + prog(200, 0));
+  check("progress uses the tablet's larger threshold too",
+    Math.abs(prog(-140, 0, tablet()) - 0.5) < 0.001, "got " + prog(-140, 0, tablet()));
+} catch (err) {
+  console.log("Self-check could not run: " + err.message);
+}
+
+// Rule 7, separated: a mistake here can throw and would hide the rest.
+try {
+  const gesture = { translationX: -150, velocityX: -40 };
+  const config = phone();
+  const before = JSON.stringify([gesture, config]);
+  swipeOutcome(gesture, config);
+  check("gesture and config are not mutated",
+    JSON.stringify([gesture, config]) === before,
+    "before " + before + " after " + JSON.stringify([gesture, config]));
+} catch (err) {
+  console.log("Mutation check could not run: " + err.message);
+}`);
+
+    createExplain("explain-a11-0001", {
+      prompt: "The banner dismiss and the revoke swipe are the same gesture, written with the same API, and only one of them should ask before it acts. Explain what you would have to know about an action to decide that &mdash; and why <em>\"the user might not have meant it\"</em> is not the deciding factor, since it is equally true of both."
+    });
+
     createSolution("exercise-1", {
-      exercise: `Build a "pull-to-dismiss" notification banner component for Token.\n\nRequirements:\n1. A banner slides in from the top (entering animation)\n2. The user can drag it upward to dismiss\n3. If dragged up past 50% of banner height, it animates out. Otherwise it snaps back.\n4. Use Gesture.Pan() and Reanimated shared values\n5. Show the token code and a short message ("New message on MERC-8GH2")`,
+      unverifiable: "the deliverable is a React Native component using Reanimated and Gesture Handler, needing a device",
+      exercise: `Build a "pull-to-dismiss" notification banner component for Token.\n\nRequirements:\n1. A banner slides in from the top (entering animation)\n2. The user can drag it upward to dismiss\n3. If dragged up past 50% of banner height, it animates out. Otherwise it snaps back.\n4. Use Gesture.Pan() and Reanimated shared values\n5. Show the token's LABEL and a short message ("New message on Gym locker").\n   Not the code — b8/0001 settled this for push payloads and the same\n   reasoning applies on screen: a banner renders over whatever is in front\n   of the phone, including someone else's shoulder, and the label is what\n   the user chose precisely because it means something to them and nothing\n   to anyone else.\n6. Dismissing is safe and reversible, so it needs no confirmation — unlike\n   the revoke swipe above. Decide that per action, not per gesture.`,
       hints: [
         "Use useSharedValue for translateY, start at 0 (visible position).",
         "In onUpdate, only allow negative translateY (upward drag).",
@@ -679,17 +1004,22 @@ const styles = StyleSheet.create({
       {
         type: "fill-blank",
         question: "Complete the code to bridge a callback from the UI thread back to JS:",
-        code: `pan.onEnd(() => {\n  translateX.value = withTiming(-SCREEN_WIDTH, { duration: 200 }, () => {\n    ___(onRevoke)(tokenCode);\n  });\n});`,
+        code: `pan.onEnd(() => {\n  translateX.value = withSpring(0);\n  if (commit) ___(onAskRevoke)(tokenId);\n});`,
         answer: "runOnJS",
-        explanation: "runOnJS wraps a JS-thread function so it can be called from a worklet running on the UI thread. Without it, calling onRevoke directly from a worklet would crash."
+        explanation: "runOnJS wraps a JS-thread function so it can be called from a worklet running on the UI thread. Without it, calling onAskRevoke directly from a worklet would crash. Note what it carries: the token id, not the code — owner endpoints take :id (ADR-0007) — and it ASKS rather than revokes, because revocation is terminal."
       },
       {
         type: "spot-the-bug",
         question: "This swipe-to-revoke handler has a bug. Which line causes it?",
-        code: `const pan = Gesture.Pan()\n  .onUpdate((event) => {\n    translateX.value = event.translationX; // line 3\n  })\n  .onEnd(() => {\n    if (translateX.value < SWIPE_THRESHOLD) {\n      onRevoke(tokenCode); // line 7\n    }\n  });`,
-        options: ["Line 3: should clamp to negative values for left-only swipe", "Line 7: calling a JS function directly inside a worklet", "Both lines 3 and 7 have bugs"],
-        correct: 2,
-        explanation: "Line 3 allows right-swipe (should use Math.min(0, event.translationX) for left-only). Line 7 calls a JS function directly in a UI-thread worklet without runOnJS, which will crash. Both are bugs."
+        code: `const pan = Gesture.Pan()\n  .onUpdate((event) => {\n    translateX.value = event.translationX; // line 3\n  })\n  .onEnd(() => {\n    if (translateX.value < SWIPE_THRESHOLD) {\n      onRevoke(tokenId); // line 7\n    }\n  });`,
+        options: [
+          "Line 3 lets the card be dragged right as well as left, and line 7 calls a JS function from inside a worklet without runOnJS",
+          "Only line 3 — the missing clamp is the whole problem",
+          "Only line 7 — dragging right is harmless",
+          "Neither line: SWIPE_THRESHOLD should be positive"
+        ],
+        correct: 0,
+        explanation: "Line 3 needs Math.min(0, event.translationX) to keep the swipe left-only. Line 7 calls a JS-thread function directly from a UI-thread worklet, which crashes without runOnJS. There is a third problem this question does not ask about and the lesson body does: onRevoke fires a terminal, irreversible action straight off a gesture, with nothing asked and nothing to undo."
       },
       {
         type: "which-breaks",
@@ -834,6 +1164,27 @@ const styles = StyleSheet.create({
         ],
         correct: 1,
         explanation: "Variant B nests GestureHandlerRootView inside NavigationContainer. Some navigation screens render outside the root view's tree, causing gestures in those screens to fail silently. The root view must wrap everything, including navigation."
+      },
+      {
+        type: "predict-output",
+        question: "The same 150px swipe, on a phone and on a tablet. What does a 35% threshold decide?",
+        code: `const swipe = -150;\n\nfor (const width of [390, 800]) {\n  const threshold = width * 0.35;\n  const commits = -swipe >= threshold;\n  console.log(width + 'px wide: threshold ' + threshold + ', commits ' + commits);\n}`,
+        answer: "390px wide: threshold 136.5, commits true\n800px wide: threshold 280, commits false",
+        explanation: "One gesture, two answers, which is the point of expressing the threshold as a fraction. The inverse is the bug: hardcoding 137px makes the control require 35% of a phone and only 17% of a tablet, so it gets progressively more hair-trigger on bigger screens. Nothing fails, no test breaks, and the action behind it is irreversible."
+      },
+      {
+        type: "predict-output",
+        question: "Two gestures that end in the same place. What does a distance-only rule conclude?",
+        code: `const THRESHOLD = 136.5;\n\nconst gestures = [\n  { what: 'flicked away', translationX: -150, velocityX: -900 },\n  { what: 'flicked back', translationX: -150, velocityX: 950 },\n];\n\nfor (const g of gestures) {\n  console.log(g.what + ': ' + (-g.translationX >= THRESHOLD ? 'REVOKE' : 'snap back'));\n}`,
+        answer: "flicked away: REVOKE\nflicked back: REVOKE",
+        explanation: "Identical positions, opposite intentions, one answer. The second gesture is someone who dragged past the line, changed their mind, and threw the card back before lifting their thumb — and the rule revokes their token anyway. Position is where the gesture has been; release velocity is what the person decided last. That is why the veto has to be tested before the distance rule rather than inside its else branch."
+      },
+      {
+        type: "predict-output",
+        question: "Why does interpolate() need its input range to ascend?",
+        code: `const THRESHOLD = 136.5;\nconst x = -68.25;   // halfway through the swipe\n\n// Written as the lesson first had it: input range descends.\nconsole.log('descending input [0, -136.5] -> [0, 1]');\nconsole.log('  fraction: ' + ((x - 0) / (-THRESHOLD - 0)).toFixed(2));\n\n// Rewritten so the input ascends and the OUTPUT is flipped.\nconsole.log('ascending input [-136.5, 0] -> [1, 0]');\nconsole.log('  fraction: ' + ((x - -THRESHOLD) / (0 - -THRESHOLD)).toFixed(2));`,
+        answer: "descending input [0, -136.5] -> [0, 1]\n  fraction: 0.50\nascending input [-136.5, 0] -> [1, 0]\n  fraction: 0.50",
+        explanation: "The arithmetic happens to agree at the midpoint, which is exactly why the descending version survives a casual look. Reanimated documents the input range as having to be non-decreasing, and outside that contract the result is not 'reversed for you' — it is undefined, and the clamping in particular stops behaving. Put the smaller number first and flip the output range instead."
       }
     ]);
     </script>
