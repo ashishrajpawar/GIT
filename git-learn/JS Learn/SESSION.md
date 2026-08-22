@@ -1019,6 +1019,81 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
+### C5 started — `0001` written, four to go (2026-08-22)
+
+**The module now exists**: `modules/c5-end-to-end-encryption/`, wired into
+`index.html`, `search-index.json` and the module table. **97 track lessons,
+70 verified.**
+
+M3: **`planKeyInit`**. 18 self-checks, 11 wrong-cases, verified on first
+write — the first lesson in the course written with an exercise from the
+start rather than retrofitted.
+
+**Most of C5's architecture was already decided**, which is why `0001` needed
+no new decisions: ADR-0002 fixes X25519, on-device generation, publishing
+public keys through the API, `expo-secure-store` over `AsyncStorage`,
+fingerprint verification, and no ratchet in v1. The lesson implements that;
+it does not relitigate it.
+
+### The subject: a key that will not load must be refused, never regenerated
+
+The tempting version is three lines shorter and reads as robust —
+`if (!isValid(stored)) return generateAndStore()`. It recovers from a corrupt
+key without troubling the user and **silently destroys every conversation
+they have ever had.** A new identity key cannot decrypt anything sealed to
+the old one; the messages are still in the SQLite cache and permanently
+unreadable, and the app looks fine because a fresh key works perfectly for
+messages not yet sent.
+
+**And it is unrecoverable in a way the corrupt key was not.** A key that
+fails to parse might be a truncated read, a Keychain error, a migration bug,
+or a device locked at the moment of the call — all fixable while the bytes
+exist. Overwriting removes the option.
+
+**`!stored` is true for `''`, and `''` is what a locked Keychain returns.**
+So the destructive branch fires on the code path that runs most often: opening
+the app from a notification. Frequent, silent and irreversible together is
+what makes it the worst line in the function.
+
+**Fifth appearance of the permissive-default rule** (`b7/0002`, `a5/0005`,
+`b3/0001`, `a11/0003`, now this), and the lesson tabulates all five. The tell
+is identical every time: the fallback is whatever "no opinion" produces, and
+no-opinion is always the permissive option.
+
+### Two more self-check holes, both found by the wrong-cases
+
+- **A throw aborted everything.** The mistake that drops the base64 check
+  reaches `null.length`, throws, and the whole block reports *"could not
+  run"* — which the runner scored as **passed everything**. This is the trap
+  written down under *Verifying a lesson* and it has now caught me a third
+  time. Fixed by making the `got()` helper catch and return
+  `action: "threw"`, so a throw is a **wrong answer** rather than a stop.
+- **Coercing a non-string still refused**, so checking `action` alone could
+  not see it. `String(12345)` decodes fine and is the wrong size, so it
+  reports `wrong_size` — blaming the key for a **storage-layer** fault, which
+  sends whoever debugs it hunting corruption instead of the bug that produced
+  a number. Now checks the reason too.
+
+**Ninth and tenth times a wrong-case has caught a gap in the self-check
+written beside it.**
+
+### And I introduced a second `render-as-authored` in three days
+
+An explanation said *"the first option is impossible by design"*. Caught on
+the next audit run, reworded, back to 0. **That is twice now** — both while
+writing fresh quiz content at speed. The check is doing exactly the job it
+was added for, and the habit it guards against is clearly not automatic yet:
+describe what an option *says*, never where it sits.
+
+### What `0002`–`0005` still need
+
+`0002` (publish/fetch) and `0003` (verification) are determined by ADR-0002
+and can be written directly. **`0004` (backup) and `0005` (multi-device)
+cannot** — they need decisions the ADR deliberately leaves open, and `0004`'s
+first question is already fixed by this session's auth work: **the key backup
+must not be recoverable by SMS alone**, or a SIM-swap takes the message
+history along with the account. Ask before writing those two.
+
 ### b4/0003 — rate limiting became a bill, and lockout was deleted rather than tuned (2026-08-22)
 
 M3: **`checkLimits`**. 18 self-checks, 11 wrong-cases. **B4 is complete** —
@@ -1592,6 +1667,7 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `a11/0003` | `toCreateTokenPayload` | blank is an absence, never `''`; `maxUses: 0` and absent are opposites; an unreadable value is refused, never defaulted |
 | `a11/0002` | `auditContrast` | the sRGB gamma decode, which the usual anchors cannot catch; a pair is audited, not a colour; a value with alpha has no ratio and must be skipped, not scored |
 | `a11/0001` | `swipeOutcome` | the threshold is a *fraction* of the width, never a pixel; a flick back vetoes a committed distance; `commit` decides the gesture, never whether the action asks first |
+| `c5/0001` | `planKeyInit` | only `null` is a first run — `''` is a locked Keychain; a key that will not load is refused, never regenerated; length is not validity |
 | `b4/0003` | `checkLimits` | a sliding window, never a bucket that resets; the per-number limits cannot see an enumerator at all; `retryAfterMs` comes from the oldest live stamp |
 | `b4/0002` | `refreshOutcome` | an unknown token must cost nothing, because there is no family to revoke and garbage would otherwise log anyone out; a replay returns the *existing* successor, never a fresh rotation; logout is not theft |
 | `a11/0005` | `planRelease` | an OTA moves no numbers, because bumping the version is what stops it reaching anyone; `versionCode` never resets and `buildNumber` always does; a crypto change is plain JS and still needs a reviewed build |

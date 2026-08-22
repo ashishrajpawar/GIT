@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Keys on the Device — C5.1</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">C5 — End-to-End Encryption</a>
+      <span class="sep">›</span>
+      <span class="current">Keys on the Device</span>
+    </nav>
+
+    <h1>Keys on the Device</h1>
+    <div class="lesson-meta">
+      <span>C5 — Lesson 1 of 5</span>
+      <span>~45 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>Every lesson touching messages has said the server cannot read them.
+      <code>b2/0002</code> built a schema with no <code>content</code> column
+      to prove it meant that. <strong>None of it is true until a key exists
+      that the server has never seen</strong> — and that key is made here, on
+      the phone, in the first seconds after sign-in.</p>
+      <p>It is also the one piece of Token that cannot be fixed later. A
+      password can be reset and a token can be revoked; a private key that
+      leaks was never private, and a private key that is lost takes every
+      message with it.</p>
+    </div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>What gets generated, and when</h2>
+
+    <p>One long-term <strong>identity keypair</strong> per device, made the
+    first time the app runs after a successful sign-in. X25519, per
+    ADR-0002:</p>
+
+    <pre><code>// app/src/crypto/identity.ts
+import sodium from 'react-native-libsodium';
+
+export async function generateIdentity() {
+  await sodium.ready;
+
+  // X25519. The private half must never leave this function's caller,
+  // and never leaves the device at all.
+  const pair = sodium.crypto_box_keypair();
+
+  return {
+    publicKey: sodium.to_base64(pair.publicKey),
+    privateKey: sodium.to_base64(pair.privateKey),
+  };
+}</code></pre>
+
+    <div class="callout">
+      <div class="callout-title">Why a library, and why this one</div>
+      <p>Nothing here is hand-rolled and nothing should be. libsodium is the
+      standard answer: it exposes a small number of correct operations and
+      does not offer you the ones that are easy to misuse. <strong>The whole
+      skill in applied cryptography is choosing the right pre-built thing and
+      then not being clever with it.</strong></p>
+      <p>Note the shape of the API — <code>crypto_box_keypair</code>, not
+      "pick a curve, pick a mode, pick a padding". Every one of those choices
+      is a place to be wrong, so a good library removes them.</p>
+    </div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Where the private key lives</h2>
+
+    <p>Two places it could go, and only one of them is acceptable:</p>
+
+    <table>
+      <thead><tr><th></th><th><code>AsyncStorage</code></th><th><code>expo-secure-store</code></th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Actually is</td>
+          <td>A plaintext file (SQLite / JSON) in the app's sandbox</td>
+          <td>iOS Keychain, Android Keystore</td>
+        </tr>
+        <tr>
+          <td>On a rooted or jailbroken device</td>
+          <td>Readable by any process with the file</td>
+          <td>Hardware-backed on most devices; the key can be non-exportable</td>
+        </tr>
+        <tr>
+          <td>In a device backup</td>
+          <td>Often included, so the key leaves the phone</td>
+          <td>Excludable, and Token excludes it</td>
+        </tr>
+        <tr>
+          <td>After the app is uninstalled</td>
+          <td>Gone</td>
+          <td>Gone — see the warning below, this one bites</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <pre><code>import * as SecureStore from 'expo-secure-store';
+
+const IDENTITY_KEY = 'token.identity.v1';
+
+export async function storeIdentity(privateKey: string) {
+  await SecureStore.setItemAsync(IDENTITY_KEY, privateKey, {
+    keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+  });
+}</code></pre>
+
+    <p><code>WHEN_UNLOCKED_THIS_DEVICE_ONLY</code> is doing two jobs, and both
+    are deliberate:</p>
+
+    <ul>
+      <li><strong><code>WHEN_UNLOCKED</code></strong> — the key is unreadable
+      while the phone is locked. A background push arriving at 3am cannot
+      decrypt anything, which is a real constraint on how notifications are
+      designed. <code>b8/0001</code> already sends the label rather than the
+      content, so this costs nothing here — but it would have, if that lesson
+      had gone the other way.</li>
+      <li><strong><code>THIS_DEVICE_ONLY</code></strong> — the key is excluded
+      from iCloud Keychain and device backups. It cannot be restored onto a
+      new phone, <em>by design</em>: a key that syncs to Apple's servers is a
+      key Apple has, and the whole claim is that nobody else has it.</li>
+    </ul>
+
+    <div class="callout danger">
+      <div class="callout-title">This is why lesson 4 exists, and it is not optional</div>
+      <p>Read those two together and the consequence is unavoidable:
+      <strong>losing the phone loses every message on it.</strong> Not "until
+      you restore a backup" — there is no backup, because we just excluded
+      the key from all of them on purpose.</p>
+      <p>ADR-0002 states this as <em>"key loss is data loss"</em> and requires
+      a backup mechanism <strong>at launch</strong>, not later. That
+      mechanism is lesson 4, and it has one hard constraint from the auth
+      decisions: since sign-in is OTP-only, <strong>whoever controls the SIM
+      controls the account</strong> — so the key backup must not be
+      recoverable by SMS alone, or a SIM-swap hands over the message history
+      as well as the account.</p>
+      <p>Do not build the app expecting to add this afterwards. A backup
+      designed after launch cannot protect the keys of users who signed up
+      before it.</p>
+    </div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Startup: the decision that looks trivial</h2>
+
+    <p>Every launch, the app asks the same question: <em>do I already have an
+    identity?</em> There are only four answers, and one of them is a trap.</p>
+
+    <pre><code>// app/src/crypto/init.ts
+export async function initIdentity() {
+  const stored = await SecureStore.getItemAsync(IDENTITY_KEY);
+  const plan = planKeyInit(stored, { expectedBytes: 32 });
+
+  switch (plan.action) {
+    case 'reuse':
+      return plan;
+
+    case 'generate': {
+      const pair = await generateIdentity();
+      await storeIdentity(pair.privateKey);
+      await publishPublicKey(pair.publicKey);   // lesson 2
+      return plan;
+    }
+
+    case 'refuse':
+      // NOT 'generate'. See the callout.
+      throw new IdentityUnreadableError(plan.reason);
+  }
+}</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">A key that will not load must be refused, never regenerated</div>
+
+      <p>The tempting version is three lines shorter and reads as robust:</p>
+
+      <pre><code>const stored = await SecureStore.getItemAsync(IDENTITY_KEY);
+if (!isValid(stored)) {
+  // "Something's wrong with the stored key - make a fresh one."
+  return generateAndStore();
+}</code></pre>
+
+      <p>It recovers from a corrupt key without troubling the user, and
+      <strong>it silently destroys every conversation they have ever
+      had.</strong> A new identity key cannot decrypt anything sealed to the
+      old one. The messages are still on the device, still in the SQLite
+      cache, and permanently unreadable — and the app looks like it is
+      working, because a new key is a perfectly good key for messages that
+      have not been sent yet.</p>
+
+      <p>Worse, it is <em>unrecoverable in a way the corrupt key was
+      not</em>. A key that fails to parse might be a truncated read, a
+      Keychain access error, a migration bug, or a device that was locked at
+      the moment of the call. Every one of those is potentially fixable
+      while the bytes still exist. <strong>Overwriting them removes the
+      option.</strong></p>
+
+      <p>So the rule this lesson exists for, and it is the fifth lesson to
+      reach it from a different direction: <strong>when a value cannot be
+      understood, refuse it — do not substitute a default.</strong> Refusing
+      shows the user an error and keeps their data. Regenerating shows them
+      nothing and destroys it.</p>
+
+      <table>
+        <thead><tr><th>Where</th><th>The permissive default that was wrong</th></tr></thead>
+        <tbody>
+          <tr><td><code>b7/0002</code></td><td>an unknown rule type fell through to <code>allowed</code></td></tr>
+          <tr><td><code>a5/0005</code></td><td>an unrecognised share target was treated as safe</td></tr>
+          <tr><td><code>b3/0001</code></td><td>a missing env var read as the string <code>'undefined'</code></td></tr>
+          <tr><td><code>a11/0003</code></td><td>an unparseable number became <code>undefined</code>, which means <em>unlimited</em></td></tr>
+          <tr><td><code>c5/0001</code></td><td>an unreadable key became a new key, and the history became noise</td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Every one of them looked like careful defensive coding.</strong>
+      The tell is the same each time: the fallback is whatever "no opinion"
+      happens to produce, and "no opinion" is always the permissive option.</p>
+    </div>
+
+    <h3>Try it yourself — this one is broken on purpose</h3>
+
+    <p>The startup check as it is usually first written, run against six real
+    states a device can be in. Three of them destroy the user's history.</p>
+
+    <div id="playground-init"></div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>What the public key is for</h2>
+
+    <p>The private half never moves. The public half is uploaded, and this is
+    the seam where a server could attack the whole scheme:</p>
+
+    <pre><code>// Lesson 2 builds this properly. The shape, for now:
+POST /api/keys
+{ "publicKey": "Vc3n...", "deviceId": 4 }
+
+// And to talk to someone:
+GET /api/keys/:userId  ->  { "publicKey": "Xk91...", "keyVersion": 1 }</code></pre>
+
+    <p><strong>The server hands you the key you will encrypt to.</strong> If
+    it hands you its own key instead, it reads everything, and nothing in the
+    code above would notice. That is not a flaw in this design — it is the
+    unavoidable shape of any system where a directory tells you who someone
+    is, and it is why lessons 2 and 3 exist. The answer is not to trust the
+    directory less; it is to let users compare fingerprints out of band.</p>
+
+    <p>Note what this means for <code>key_version</code>, which
+    <code>b2/0002</code> put on the messages table and which has looked like
+    over-engineering ever since: <strong>it is what lets a message record
+    which key sealed it</strong>, so a key change is survivable rather than a
+    cliff. Without it, rotating a key makes every past message undecryptable
+    even when you still hold the old key.</p>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Now build it yourself</h2>
+
+    <p>The generation and the Keychain both need a device. The decision the
+    app makes at startup is a pure function, and it is the one that can
+    silently destroy a user's history.</p>
+
+    <div id="exercise-init"></div>
+    <div id="pg-exercise-init"></div>
+
+    <h3>And the module</h3>
+
+    <div id="exercise-1"></div>
+
+    <div id="explain-c5-0001"></div>
+
+    <hr>
+
+    <h2>Quiz</h2>
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./README.html">← C5 Overview</a>
+      <span class="disabled">Next: Publishing &amp; Fetching Public Keys →</span>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+  createPlayground("playground-init", `// BROKEN ON PURPOSE. The startup check as it is usually first written.
+
+function planKeyInit(stored, config) {
+  // "No key, or a key that looks wrong -> make a fresh one."
+  if (!stored || stored.length !== config.expectedChars) {
+    return { action: "generate", reason: "missing_or_invalid" };
+  }
+  return { action: "reuse", reason: "ok" };
+}
+
+// 44 base64 characters is a 32-byte key.
+const config = { expectedChars: 44, expectedBytes: 32 };
+const GOOD = "b".repeat(43) + "=";
+
+const states = [
+  { what: "first ever launch",        stored: null },
+  { what: "normal launch",            stored: GOOD },
+  { what: "truncated read",           stored: GOOD.slice(0, 20) },
+  { what: "Keychain locked, got ''",  stored: "" },
+  { what: "old v0 key, 16 bytes",     stored: "c".repeat(24) },
+  { what: "right length, not base64", stored: "!".repeat(44) },
+];
+
+for (const s of states) {
+  const out = planKeyInit(s.stored, config);
+  const doom = out.action === "generate" && s.stored !== null;
+  console.log(
+    s.what.padEnd(26) + out.action.padEnd(10) +
+    (doom ? "<-- DESTROYS ALL HISTORY" : "")
+  );
+}
+
+console.log("");
+console.log("Only the first row should generate. The other three that do");
+console.log("are overwriting bytes that might still have been recoverable:");
+console.log("");
+console.log("  A truncated read is a BUG, not a missing key. The real key");
+console.log("  may be sitting in the Keychain, intact, one retry away.");
+console.log("");
+console.log("  A locked Keychain returns nothing on some devices. Generating");
+console.log("  here means every user who opens the app from a notification");
+console.log("  on a locked phone loses their history.");
+console.log("");
+console.log("  And the last row is the reason a length check is not a");
+console.log("  validity check: 44 exclamation marks are the right LENGTH.");`);
+
+  createSolution("exercise-init", {
+    exercise: `Write planKeyInit(stored, config) — decide what the app does with whatever came back from the Keychain.\n\nstored is the raw value SecureStore returned: a base64 string, null when there is genuinely nothing, or something wrong.\n\nconfig is { expectedBytes: 32, decode } — the key size, and a function that turns base64 into a byte array or returns null if the input is not valid base64.\n\nReturn { action, reason, keyBytes }.\n\naction is 'generate', 'reuse' or 'refuse'. reason is 'first_run', 'ok', 'unreadable', 'wrong_size' or 'not_base64'. keyBytes is the decoded array on 'reuse', and null otherwise.\n\nThe rules:\n\n1. ONLY null MEANS FIRST RUN. Return { action: 'generate', reason: 'first_run' }. This is the ONLY branch that may ever generate. Everything else that looks wrong is a possible bug over real bytes, and generating would overwrite them.\n\n2. AN EMPTY STRING IS NOT null. '' is what some devices return when the Keychain is locked or the read failed — a key almost certainly exists and could not be read. Refuse with reason 'unreadable'. Treating it as first_run is the single most destructive line you can write in this function, because it fires on a locked phone, which is most launches from a notification.\n\n3. ANYTHING NOT A STRING is 'unreadable' too — undefined, a number, an object. The storage layer is not supposed to produce these, and the moment it does you are guessing.\n\n4. IF IT DOES NOT DECODE AS BASE64, refuse with reason 'not_base64'. Use config.decode and check for null. Do NOT infer validity from length: a string of the right length made of invalid characters passes every length check and is still not a key.\n\n5. IF IT DECODES TO THE WRONG NUMBER OF BYTES, refuse with reason 'wrong_size'. Check the decoded LENGTH, not the string length — base64 padding means several string lengths map to the same byte count and vice versa.\n\n6. OTHERWISE reuse, with reason 'ok' and keyBytes set to the decoded bytes.\n\n7. keyBytes is null for every action except 'reuse'. Never mutate config, and never call config.decode more than once for a given input — decoding is not free and calling it twice invites the two calls to disagree.`,
+    hints: [
+      "Take the branches in the order the rules are numbered. Rule 1 is the ONLY place 'generate' may appear — if the word shows up twice in your function, one of them is wrong.",
+      "Rules 2 and 3 collapse into one guard if you write it as: not a string, or an empty string, then 'unreadable'. Doing it that way makes rule 3 automatic rather than something to remember.",
+      "Decode once into a local, then check for null (rule 4) and then check its length (rule 5). Two separate decode calls is the shape that produces a function which passes validation and then reuses different bytes."
+    ],
+    solution: `function planKeyInit(stored, config) {
+  const no = (reason) => ({ action: "refuse", reason, keyBytes: null });
+
+  // Rule 1: the ONLY branch that generates. Nothing exists, so nothing
+  // can be destroyed.
+  if (stored === null) {
+    return { action: "generate", reason: "first_run", keyBytes: null };
+  }
+
+  // Rules 2 and 3. '' is a FAILED READ, not an absent key -- it is what
+  // a locked Keychain returns, and a locked phone is most launches from
+  // a notification.
+  if (typeof stored !== "string" || stored === "") {
+    return no("unreadable");
+  }
+
+  // Rule 4. Decode ONCE (rule 7) and judge the result.
+  const bytes = config.decode(stored);
+  if (bytes === null) {
+    return no("not_base64");
+  }
+
+  // Rule 5: the decoded length, never the string length.
+  if (bytes.length !== config.expectedBytes) {
+    return no("wrong_size");
+  }
+
+  // Rule 6.
+  return { action: "reuse", reason: "ok", keyBytes: bytes };
+}`
+  });
+
+  createPlayground("pg-exercise-init", `// Write planKeyInit(stored, config) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(v) { return JSON.stringify(v); }
+
+// A deliberately fake base64: any string of [A-Za-z0-9+/=] decodes to
+// one byte per 4/3 characters. The point is that decode and length
+// DISAGREE for some inputs, which is what rules 4 and 5 are about.
+var decodeCalls = 0;
+function decode(s) {
+  decodeCalls++;
+  if (!/^[A-Za-z0-9+\\/]*={0,2}$/.test(s)) return null;
+  var padding = (s.match(/=/g) || []).length;
+  var n = Math.floor((s.length * 3) / 4) - padding;
+  var out = [];
+  for (var i = 0; i < n; i++) out.push(i % 256);
+  return out;
+}
+// 44 chars -> 33 - 1 padding = 32 bytes. Deliberately NOT a round
+// number of characters, so a length check cannot stand in for a decode.
+var GOOD = "b".repeat(43) + "=";
+// expectedBytes 32 and the 44-char string are different numbers, so a
+// function comparing the STRING length against expectedBytes fails.
+function cfg() { return { expectedBytes: 32, decode: decode }; }
+// A throw is a WRONG ANSWER, not a reason to stop. An implementation
+// that drops the not_base64 check reaches null.length and throws -- and
+// without this catch that aborts every check below it, which reads as a
+// broken verifier rather than a caught mistake.
+function got(stored) {
+  try {
+    var r = planKeyInit(stored, cfg());
+    return r || {};
+  } catch (e) {
+    return { action: "threw", reason: "threw: " + e.message, keyBytes: null };
+  }
+}
+
+try {
+  if (typeof planKeyInit !== "function") throw new Error("not written yet");
+
+  // Rule 6 -- the normal case
+  check("a good stored key is reused",
+    got(GOOD).action === "reuse", "got " + show(got(GOOD).action));
+  check("...with the DECODED bytes attached",
+    Array.isArray(got(GOOD).keyBytes) && got(GOOD).keyBytes.length === 32,
+    "got " + show(got(GOOD).keyBytes && got(GOOD).keyBytes.length));
+
+  // Rule 1 -- the only generate
+  check("null is first run, and generates",
+    got(null).action === "generate", "got " + show(got(null).action));
+  check("...reported as first_run",
+    got(null).reason === "first_run", "got " + show(got(null).reason));
+
+  // Rule 2 -- THE destructive one
+  check("an empty string does NOT generate",
+    got("").action !== "generate",
+    "'' is a failed read on a locked Keychain -- generating here wipes the history of every user who opens the app from a notification");
+  check("...it is refused as unreadable",
+    got("").action === "refuse" && got("").reason === "unreadable",
+    "got " + show([got("").action, got("").reason]));
+
+  // Rule 3
+  check("undefined is refused, not generated",
+    got(undefined).action === "refuse", "got " + show(got(undefined).action));
+  check("a non-string is refused, not generated",
+    got(12345).action === "refuse" && got({}).action === "refuse",
+    "got " + show([got(12345).action, got({}).action]));
+  // Coercing it with String() also refuses -- but blames the KEY for
+  // what is a storage-layer fault, which sends whoever debugs it looking
+  // for corruption instead of for the bug that produced a number.
+  check("...as unreadable, not as a corrupt key",
+    got(12345).reason === "unreadable" && got({}).reason === "unreadable",
+    "got " + show([got(12345).reason, got({}).reason]));
+
+  // Rule 4 -- length is not validity
+  var RIGHT_LENGTH_GARBAGE = "!".repeat(44);
+  check("44 characters of garbage is refused",
+    got(RIGHT_LENGTH_GARBAGE).action === "refuse",
+    "it is the right LENGTH and not a key");
+  check("...reported as not_base64, not wrong_size",
+    got(RIGHT_LENGTH_GARBAGE).reason === "not_base64",
+    "got " + show(got(RIGHT_LENGTH_GARBAGE).reason));
+
+  // Rule 5 -- decoded length, not string length
+  var SHORT = "c".repeat(24);        // valid base64, 18 bytes
+  check("a valid but short key is refused",
+    got(SHORT).action === "refuse", "got " + show(got(SHORT).action));
+  check("...reported as wrong_size",
+    got(SHORT).reason === "wrong_size", "got " + show(got(SHORT).reason));
+  var TRUNCATED = GOOD.slice(0, 20);  // valid base64, 15 bytes
+  check("a truncated read is refused, never regenerated",
+    got(TRUNCATED).action === "refuse",
+    "the real key may still be intact in the Keychain, one retry away");
+
+  // Rule 7
+  check("keyBytes is null on every non-reuse outcome",
+    got(null).keyBytes === null && got("").keyBytes === null &&
+    got(SHORT).keyBytes === null,
+    "got " + show([got(null).keyBytes, got("").keyBytes, got(SHORT).keyBytes]));
+
+  // The whole point, stated once: only ONE input may ever generate.
+  var everything = [null, "", undefined, 12345, {}, GOOD, SHORT, TRUNCATED, RIGHT_LENGTH_GARBAGE];
+  var generated = everything.filter(function (v) { return got(v).action === "generate"; });
+  check("exactly one input in nine may generate, and it is null",
+    generated.length === 1 && generated[0] === null,
+    "generated for " + show(generated) + " -- every extra one is a user's history");
+} catch (err) {
+  console.log("Self-check could not run: " + err.message);
+}
+
+// Rule 7's decode half, on its own -- it can throw rather than return.
+try {
+  decodeCalls = 0;
+  planKeyInit(GOOD, cfg());
+  check("decode is called at most once per input",
+    decodeCalls <= 1,
+    "called " + decodeCalls + " times -- two decodes can disagree");
+} catch (err) {
+  console.log("Decode-count check could not run: " + err.message);
+}`);
+
+  createExplain("explain-c5-0001", {
+    prompt: "The Keychain returns <code>''</code> instead of your key. Explain why generating a fresh key here is worse than showing the user an error, and what exactly is lost."
+  });
+
+  createSolution("exercise-1", {
+    unverifiable: "the deliverable is a React Native crypto module needing libsodium, the Keychain and a device",
+    exercise: `Build app/src/crypto/ for Token.\n\n1. identity.ts — generateIdentity() using react-native-libsodium's crypto_box_keypair, returning base64 strings.\n2. storage.ts — storeIdentity / loadIdentity over expo-secure-store, with keychainAccessible set to WHEN_UNLOCKED_THIS_DEVICE_ONLY.\n3. init.ts — initIdentity() calling planKeyInit and acting on the three outcomes. 'refuse' must throw a typed error the UI can catch; it must NOT generate.\n4. A screen for the refuse case that offers Retry and explains what has happened without offering a "reset" button that silently wipes the key.\n5. publishPublicKey() as a stub — lesson 2 builds the real one.`,
+    hints: [
+      "Retry is the right first action for 'unreadable', because a locked Keychain succeeds on the second attempt once the device is unlocked. Wire it to re-run initIdentity rather than to a fresh generate.",
+      "Do not put a 'Start fresh' button on that screen without a confirmation that names the cost — every message on this device becomes permanently unreadable. It is the same class of terminal, irreversible action as revoke in a11/0001, and it needs the same treatment.",
+      "Keep the SecureStore key name versioned ('token.identity.v1'). When the format changes you will want to read the old name and migrate rather than discovering that v2 looks like a first run."
+    ],
+    solution: `// app/src/crypto/identity.ts
+import sodium from 'react-native-libsodium';
+
+export async function generateIdentity() {
+  await sodium.ready;
+  const pair = sodium.crypto_box_keypair();
+  return {
+    publicKey: sodium.to_base64(pair.publicKey),
+    privateKey: sodium.to_base64(pair.privateKey),
+  };
+}
+
+// app/src/crypto/storage.ts
+import * as SecureStore from 'expo-secure-store';
+
+const IDENTITY_KEY = 'token.identity.v1';
+
+export async function storeIdentity(privateKey) {
+  await SecureStore.setItemAsync(IDENTITY_KEY, privateKey, {
+    // Unreadable while locked, and excluded from iCloud and device
+    // backups. The second half is why lesson 4 has to exist.
+    keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+  });
+}
+
+export function loadIdentity() {
+  return SecureStore.getItemAsync(IDENTITY_KEY);
+}
+
+// app/src/crypto/init.ts
+import sodium from 'react-native-libsodium';
+import { generateIdentity } from './identity';
+import { storeIdentity, loadIdentity } from './storage';
+import { planKeyInit } from './plan';
+import { publishPublicKey } from '../api/keys';
+
+export class IdentityUnreadableError extends Error {
+  constructor(reason) {
+    super('identity key unreadable: ' + reason);
+    this.reason = reason;
+  }
+}
+
+export async function initIdentity() {
+  await sodium.ready;
+
+  // A THROWN read is not an absent key either -- catching it and
+  // passing null would land in the generate branch, which is exactly
+  // the bug this whole lesson is about.
+  let stored;
+  try {
+    stored = await loadIdentity();
+  } catch (err) {
+    throw new IdentityUnreadableError('keychain_threw');
+  }
+
+  const plan = planKeyInit(stored, {
+    expectedBytes: 32,
+    decode: (s) => {
+      try { return sodium.from_base64(s); } catch { return null; }
+    },
+  });
+
+  if (plan.action === 'refuse') {
+    throw new IdentityUnreadableError(plan.reason);
+  }
+
+  if (plan.action === 'generate') {
+    const pair = await generateIdentity();
+    await storeIdentity(pair.privateKey);
+    await publishPublicKey(pair.publicKey);
+    return { publicKey: pair.publicKey, created: true };
+  }
+
+  return { keyBytes: plan.keyBytes, created: false };
+}`
+  });
+
+  createQuiz("lesson-quiz", [
+    {
+      question: "Why must the private identity key never go in AsyncStorage?",
+      options: [
+        "AsyncStorage is slower than SecureStore",
+        "AsyncStorage is a plaintext file in the app sandbox — readable on a rooted device and often included in device backups",
+        "AsyncStorage has a size limit smaller than a key",
+        "AsyncStorage cannot store base64 strings"
+      ],
+      correct: 1,
+      explanation: "AsyncStorage is unencrypted storage on disk. SecureStore is the iOS Keychain and the Android Keystore, which are hardware-backed on most modern devices. The difference matters most in the two cases you cannot control: a device someone else has rooted, and a backup that leaves the phone."
+    },
+    {
+      question: "What does THIS_DEVICE_ONLY buy, and what does it cost?",
+      options: [
+        "It encrypts the key twice; it costs a little performance",
+        "It keeps the key out of iCloud and device backups, so nobody else ever holds it — and it means losing the phone loses the messages",
+        "It restricts the key to one app; it costs nothing",
+        "It makes the key readable while the device is locked; it costs battery"
+      ],
+      correct: 1,
+      explanation: "A key that syncs to iCloud Keychain is a key Apple holds, which contradicts the entire claim. Excluding it is correct and it removes any possibility of restoring the key onto a new phone. That is precisely why ADR-0002 requires a backup mechanism at launch — and why it must not be a server-held copy either."
+    },
+    {
+      type: "spot-the-bug",
+      code: `const stored = await SecureStore.getItemAsync(KEY);\nif (!stored) {                       // line 2\n  return generateAndStore();\n}\nreturn stored;`,
+      bugLine: 2,
+      options: [
+        "Line 2: !stored is true for an empty string as well as null, and an empty string means the read FAILED — so a locked Keychain silently replaces a real key",
+        "Line 2: the check should use === undefined",
+        "Line 4: the function should return a parsed key rather than the string"
+      ],
+      correct: 0,
+      explanation: "!'' is true. On devices where a locked Keychain returns an empty string rather than throwing, this generates a brand new identity over the top of the existing one — and every message ever received becomes permanently undecryptable. The user sees no error, because a new key works perfectly for messages that have not been sent yet. Only an explicit null may be treated as first run."
+    },
+    {
+      type: "predict-output",
+      code: `const stored = '';\nconsole.log('!stored     :', !stored);\nconsole.log('=== null    :', stored === null);\nconsole.log('== null     :', stored == null);`,
+      answer: "!stored     : true\n=== null    : false\n== null     : false",
+      explanation: "This is the whole bug in three lines. !stored fires on the empty string; both null comparisons correctly do not. The habit of writing if (!x) as a null check is right in most code and destroys data here — which is why the rule is to test for null explicitly when the difference between absent and failed matters."
+    },
+    {
+      question: "The stored value is 44 characters of exclamation marks. Which refusal reason is correct?",
+      options: [
+        "wrong_size — 44 characters is not a 32-byte key",
+        "not_base64 — it is the right length and does not decode at all, so length was never the test",
+        "unreadable — anything unexpected is a read failure",
+        "first_run — it is clearly not a real key, so start over"
+      ],
+      correct: 1,
+      explanation: "It is exactly the length a valid key would be, which is why a length check is not a validity check. The decode fails, so not_base64 is the accurate reason. Distinguishing the two matters for diagnosis: not_base64 suggests corruption or a wrong value in the slot, while wrong_size suggests a format migration."
+    },
+    {
+      type: "fill-blank",
+      code: `// Only ONE value may be treated as first run\nif (stored ___ null) {\n  return { action: 'generate', reason: 'first_run' };\n}`,
+      answer: "===",
+      explanation: "Strict equality against null, so that '' and undefined both fall through to the refuse branches. Using == null would also catch undefined, which is a read failure rather than an absent key — and !stored would catch the empty string too, which is the destructive version."
+    },
+    {
+      question: "Why must a corrupt key be refused rather than regenerated?",
+      options: [
+        "Regenerating is slow",
+        "The corrupt bytes might still be recoverable, and overwriting them removes that option while silently making all past messages unreadable",
+        "The server rejects a second key upload",
+        "libsodium cannot generate a key twice on the same device"
+      ],
+      correct: 1,
+      explanation: "A key that fails to parse might be a truncated read, a Keychain error, a migration bug or a locked device — all potentially fixable while the bytes still exist. Regenerating destroys them, and it does so invisibly, because a fresh key works fine for future messages. Refusing preserves the option to fix it."
+    },
+    {
+      question: "How does key_version on the messages table earn its place here?",
+      options: [
+        "It lets the server pick which key to decrypt with",
+        "It records which key sealed each message, so a key change is survivable rather than making all history unreadable at once",
+        "It is a foreign key to the users table",
+        "It orders messages within a conversation"
+      ],
+      correct: 1,
+      explanation: "The server cannot decrypt anything, so it could never use this column to choose a key — that reading is impossible by design. The column exists so that a client holding an old key alongside a new one can tell which message needs which. Without it, rotating a key would make every past message undecryptable even when you still had the old key sitting there."
+    },
+    {
+      question: "The server hands your client a public key for the person you are messaging. What stops it handing you its own key instead?",
+      options: [
+        "TLS — the response is signed by the server's certificate",
+        "Nothing in the protocol; users comparing fingerprints out of band is the only defence, which is why verification is its own lesson",
+        "The key_version column would not match",
+        "libsodium rejects keys that were not generated on a device"
+      ],
+      correct: 1,
+      explanation: "TLS proves you are talking to the right server; it says nothing about whether that server is honest. This is the unavoidable shape of any system with a key directory, and it is why the answer is out-of-band comparison rather than a cleverer protocol. Pretending otherwise is the single most common way an E2EE claim turns out to be theatre."
+    },
+    {
+      type: "predict-output",
+      code: `// Base64 length does not map neatly to byte count\nconst chars = 44;\nconst padding = 1;\nconsole.log('bytes:', Math.floor(chars * 3 / 4) - padding);\nconsole.log('same as expected 32?', Math.floor(chars * 3 / 4) - padding === 32);`,
+      answer: "bytes: 32\nsame as expected 32? true",
+      explanation: "44 base64 characters with one padding character encode 32 bytes. The arithmetic works out here, which is exactly what makes a string-length check look correct — it agrees with the byte check for well-formed input and disagrees for everything else, which is the input you are trying to catch."
+    },
+    {
+      question: "WHEN_UNLOCKED means the key cannot be read while the phone is locked. What does that constrain?",
+      options: [
+        "Nothing — messages are only read when the app is open",
+        "Background work, including push notifications: a notification arriving on a locked phone cannot decrypt anything, so the payload must be useful without the content",
+        "The app can no longer run in the background at all",
+        "The key must be re-fetched from the server on every unlock"
+      ],
+      correct: 1,
+      explanation: "It is a real constraint on notification design, and Token already satisfies it — b8/0001 sends the issuer's chosen label rather than any message content, partly for FCM/APNs privacy reasons. Two decisions made for different reasons turning out to be compatible is luck worth noticing, because the alternative would have been discovered late."
+    },
+    {
+      question: "Why use libsodium rather than implementing X25519 from the specification?",
+      options: [
+        "The specification is not public",
+        "A library exposes a small number of correct operations and removes the choices that are easy to get wrong; hand-rolled crypto fails in ways that testing does not reveal",
+        "libsodium is faster than any implementation you could write",
+        "React Native cannot do the required arithmetic"
+      ],
+      correct: 1,
+      explanation: "Note the shape of the API — crypto_box_keypair, not 'choose a curve, a mode and a padding'. Every one of those choices is a place to be wrong, and cryptographic bugs are distinctive in that the code produces plausible-looking output while being broken. Tests pass. The skill is picking the right prebuilt thing and not being clever with it."
+    },
+    {
+      type: "order-steps",
+      steps: [
+        "Read the stored value from SecureStore",
+        "Run planKeyInit on whatever came back",
+        "Generate a keypair (only if the plan says first_run)",
+        "Store the private key with THIS_DEVICE_ONLY",
+        "Publish the public key to the API"
+      ],
+      correctOrder: [0, 1, 2, 3, 4],
+      explanation: "The decision comes before any action, which is what makes it testable without a device. Storing before publishing matters too: if the publish fails you still hold the key and can retry, whereas publishing a key you failed to store leaves the server advertising a key nobody can decrypt with."
+    },
+    {
+      question: "loadIdentity() throws instead of returning a value. What should initIdentity do?",
+      options: [
+        "Catch it and pass null to planKeyInit, so the app can recover",
+        "Treat it as unreadable and refuse — catching it and passing null lands in the generate branch, which is the destructive one",
+        "Retry silently three times, then generate",
+        "Let it crash the app"
+      ],
+      correct: 1,
+      explanation: "This is the same bug wearing different clothes. A thrown read is a failed read, not an absent key, and converting it to null hands it to the one branch allowed to overwrite. Retrying is reasonable as a user-visible action, but silently retrying and then generating just delays the same destruction by three attempts."
+    },
+    {
+      type: "spot-the-bug",
+      code: `const bytes = config.decode(stored);\nif (config.decode(stored) === null) return refuse('not_base64');   // line 2\nif (bytes.length !== 32) return refuse('wrong_size');\nreturn { action: 'reuse', keyBytes: bytes };`,
+      bugLine: 2,
+      options: [
+        "Line 2: decode is called twice, so the value that was validated is not necessarily the value that gets used",
+        "Line 2: the comparison should be == null",
+        "Line 3: 32 should come from config"
+      ],
+      correct: 0,
+      explanation: "Two calls to a decoder is two chances to get different answers — and the one that was checked is thrown away while the one that was not is returned. Even when the decoder is pure this is a bug waiting for it to stop being pure. Decode once into a local and judge that."
+    },
+    {
+      question: "What is the accepted consequence of excluding the key from all backups?",
+      options: [
+        "Slower first launch on a new device",
+        "Losing the phone loses every message on it, unless a separate backup mechanism exists — which ADR-0002 requires at launch, not later",
+        "The user must re-verify their phone number every month",
+        "Messages cannot be searched"
+      ],
+      correct: 1,
+      explanation: "This is not a bug to fix later. A backup designed after launch cannot protect the keys of users who signed up before it, so the mechanism has to ship with v1. It also cannot be a server-held copy of the key, and — because sign-in is OTP-only — it cannot be recoverable by SMS alone, or a SIM-swap takes the history along with the account."
+    },
+    {
+      type: "fill-blank",
+      code: `await SecureStore.setItemAsync(IDENTITY_KEY, privateKey, {\n  keychainAccessible: SecureStore.WHEN_UNLOCKED_______,\n});`,
+      answer: "_THIS_DEVICE_ONLY",
+      explanation: "WHEN_UNLOCKED_THIS_DEVICE_ONLY. The THIS_DEVICE_ONLY suffix is what excludes the key from iCloud Keychain and device backups. Without it the key syncs, and a key that syncs to a cloud service is a key that service holds."
+    },
+    {
+      question: "Which of these is the single most destructive line you could write in planKeyInit?",
+      options: [
+        "Returning 'reuse' for a key of the wrong size",
+        "Treating an empty string as first run, because that fires on a locked Keychain — which is most launches from a notification",
+        "Returning the string instead of the decoded bytes",
+        "Using the wrong reason string for a corrupt key"
+      ],
+      correct: 1,
+      explanation: "Reusing a wrong-sized key fails loudly at the first decrypt. Returning the wrong type fails immediately. A wrong reason string is a diagnosis problem. Generating over a locked Keychain destroys data permanently, silently, and on the code path that runs most often — the combination of frequent, silent and irreversible is what makes it the worst."
+    },
+    {
+      question: "Why does the refuse screen need a confirmation before any 'start fresh' option?",
+      options: [
+        "To satisfy the app stores",
+        "Because it is a terminal, irreversible action — the same class as revoking a token, and it needs the same treatment a11/0001 gave that",
+        "Because generating a key is slow",
+        "Because the server needs warning before a key changes"
+      ],
+      correct: 1,
+      explanation: "a11/0001 established the rule on swipe-to-revoke: an irreversible action reached casually needs a confirmation, and the reason is not timidity but that there is no undo to fall back on. Wiping an identity key is strictly worse than revoking a token, because a revoked token can be reissued and a lost key cannot be recovered."
+    },
+    {
+      question: "planKeyInit returns keyBytes rather than the base64 string on reuse. Why does that matter?",
+      options: [
+        "Base64 strings cannot be passed between modules",
+        "The caller needs bytes to do anything cryptographic, and returning them means the decode that was validated is the decode that gets used",
+        "It makes the function faster",
+        "SecureStore requires bytes"
+      ],
+      correct: 1,
+      explanation: "If the function validated a decode and then handed back the string, every caller would decode again — and any disagreement between the two decodes lands after validation, where nothing is checking. Returning the validated artefact rather than the input it came from is a general habit worth keeping."
+    },
+    {
+      question: "The permissive-default mistake has now appeared in five lessons. What is the common tell?",
+      options: [
+        "They all involve cryptography",
+        "The fallback is whatever 'no opinion' produces — and 'no opinion' is always the permissive option, which is why each one reads as careful defensive coding",
+        "They all use the || operator",
+        "They all occur in client code"
+      ],
+      correct: 1,
+      explanation: "b7/0002 fell through to allowed, a5/0005 treated an unknown share target as safe, b3/0001 read a missing env var as the string 'undefined', a11/0003 turned an unparseable number into unlimited, and this one turns an unreadable key into a new key. None of them looks reckless in isolation. The rule is to refuse rather than substitute, and it has to be applied deliberately because the wrong version looks more robust."
+    },
+    {
+      type: "predict-output",
+      code: `// Which values would a careless first-run check treat as "no key"?\nconst candidates = [null, '', undefined, 0, 'abc'];\nconsole.log(candidates.filter(v => !v).length);\nconsole.log(candidates.filter(v => v === null).length);`,
+      answer: "4\n1",
+      explanation: "Four of the five are falsy; only one is genuinely null. Three of those four represent a failed read over a real key, so the careless check is wrong three times out of four in exactly the situations that matter. The strict check is right in all five."
+    },
+    {
+      question: "Where does the public key go, and what does the server learn from it?",
+      options: [
+        "Nowhere — both keys stay on the device",
+        "It is uploaded to the API so peers can fetch it; the server learns the key and who it belongs to, which is enough to lie to a peer but not to decrypt",
+        "It is embedded in every message",
+        "It is stored in the users table as a replacement for phone_hash"
+      ],
+      correct: 1,
+      explanation: "The server has to hold public keys, because something must tell your client which key to encrypt to. Holding them does not let it decrypt anything — but substituting one does, which is a different attack and the reason verification exists. The distinction between what a component knows and what it can substitute is worth carrying beyond this lesson."
+    },
+    {
+      question: "A user gets the refuse screen and taps Retry. What should Retry actually do?",
+      options: [
+        "Generate a new key, since the old one failed",
+        "Re-run the whole init, because a locked Keychain succeeds on the second attempt once the device is unlocked",
+        "Clear SecureStore and start over",
+        "Sign the user out"
+      ],
+      correct: 1,
+      explanation: "The most likely cause of unreadable is a device that was locked at the moment of the read. Re-running init after an unlock resolves it with no loss. The other three options all destroy or discard something in response to a condition that usually fixes itself."
+    },
+    {
+      question: "Why version the SecureStore key name as 'token.identity.v1'?",
+      options: [
+        "SecureStore requires a version suffix",
+        "So a future format change can read the old name and migrate, instead of finding nothing under a new name and concluding it is a first run",
+        "To let multiple users share a device",
+        "To make the key harder to find"
+      ],
+      correct: 1,
+      explanation: "This is the same failure mode as the whole lesson, arriving through a rename. A v2 build looking under a v2 name finds nothing, which is indistinguishable from a genuine first run — so the destructive branch fires for every existing user at once, on upgrade day."
+    },
+    {
+      type: "which-breaks",
+      question: "Which of these will fail?",
+      variants: [
+        "if (stored === null) return generate();",
+        "if (stored == null) return generate();",
+        "if (typeof stored !== 'string' || stored === '') return refuse('unreadable');"
+      ],
+      correct: 1,
+      explanation: "== null is true for undefined as well as null. undefined coming back from the storage layer is a failed or unexpected read, not an absent key, so this routes it into the one branch permitted to overwrite. The strict version and the explicit guard both handle it correctly."
+    }
+  ]);
+  </script>
+</body>
+</html>
