@@ -1019,6 +1019,82 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
+### b4/0001 — rewritten as phone + OTP, and the old login's "constant-time" comment was false (2026-08-22)
+
+Renamed `0001-password-hashing-registration.html` →
+**`0001-phone-signup-otp.html`**, because the old name described a lesson
+that no longer exists. All four referrers swept per the rename checklist:
+module README, `0002`'s prev link, `search-index.json`, and the stale
+`verification-log.json` key pruned by script.
+
+M3: **`verifyOtp`**. 25 self-checks, 12 wrong-cases, verified.
+
+**The find: the old login's constant-time claim was false, and the lesson
+disproved itself three screens later.** The code was:
+
+```js
+// Constant-time response: don't reveal whether email exists
+if (!user) throw ApiError.unauthorized('Invalid email or password');
+const valid = await argon2.verify(user.password_hash, password);
+```
+
+The message really is identical on both paths. The *work* is not — no
+account is one indexed `SELECT` at ~1 ms, an existing account is that plus
+an argon2 verify at ~200 ms. **That gap is visible by eye, on the first
+attempt, over ordinary broadband.** And the lesson carried a section titled
+*Timing attacks* three screens below, explaining the concept in terms of
+string comparison, while its own login leaked the answer by a margin four
+orders of magnitude larger than the one it warned about.
+
+**The general form, and the reason this is worth more than the fix: an early
+return is a disclosure.** Two branches that must be indistinguishable have to
+*do the same work*, not merely say the same words. The same trap reappears in
+the OTP flow as skipping the SMS send for an unknown number.
+
+### `expires_at` means the opposite thing one table over
+
+`otp_requests.expires_at` is `NOT NULL`, and a null expiry must be **refused**.
+On `tokens`, null means *never expires* and is a normal state. Same column
+name, opposite meaning, because an OTP that never expires is a bug rather than
+a policy.
+
+**This is the `max_uses` shape again** — a value whose meaning inverts between
+two tables — and it is the lesson's headline wrong-case: carrying the `tokens`
+habit across produces a one-time code that works forever. The broken-on-purpose
+playground opens with exactly that mistake.
+
+### A wrong-case named the wrong check, and the mistake turned out to be worse
+
+The compare-before-cap case was written expecting *"at the cap, the correct
+code is still refused"* and did not trip it — because a correct code **does**
+still reach the cap test. What it actually breaks is inverted and worse: a
+**wrong** code returns `wrong_code` and increments forever, so guessing is
+never limited, while the only thing the cap ever stops is the legitimate user
+typing the right code. **The guess limit protects nothing and locks out only
+the person who should get in.**
+
+Caught by running the case individually rather than trusting the summary line.
+It also exposed a genuine hole — nothing asserted that a wrong guess at the cap
+is *stopped* rather than counted — so a check was added. **Seventh time a
+wrong-case has found a gap in the self-check written beside it.**
+
+### The neighbour contradiction, found by writing the function
+
+`b3/0001` ended: *"Token's answer to a phone number is not to hash it, it is
+not to have it."* Written before anyone had asked, and flatly against the
+settled decision. Rewritten rather than deleted, because the *reasoning* above
+it is correct and only the conclusion overreached:
+
+**The argument was about what a hash protects you from; the decision is about
+what the product needs in order to work. A rule derived from the first cannot
+settle the second.** What survives is the narrower claim — a hashed phone
+number is a lookup key, not an anonymisation — which is exactly why the privacy
+policy says *"we store a scrambled version of your phone number"* rather than
+*"we do not collect your phone number"*. Re-verified `b3/0001` after the edit;
+a prose change to a verified lesson still has to re-run.
+
+---
+
 Four decisions were taken on 2026-08-22 (third round, below). The queue they
 produce, in order:
 
@@ -1039,7 +1115,7 @@ module contradicting itself.
 
 | Lesson | Currently | Becomes |
 |---|---|---|
-| `0001` | `ALTER TABLE users ADD COLUMN email`, argon2 over a password, `/register` + `/login` on email | **Its subject is gone**, not adjusted. No password exists, so there is nothing to hash. Rewritten around `phone_hash` with the pepper — `b3/0001` already wrote the argument for why bare `sha256(phone)` is not enough — plus OTP issuance and verification |
+| ~~`0001`~~ | ~~argon2 over email + password~~ | **Done 2026-08-22.** Renamed to `0001-phone-signup-otp.html`; `phone_hash` with a pepper, OTP issue/verify, the denial oracle and its timing half, DLT. M3 on `verifyOtp` |
 | `0002` | JWT refresh rotation, keyed on email | The rotation logic survives intact; the identity it carries changes. Mostly an audit |
 | `0003` | Rate limiting, examples keyed on email | **Gains real substance.** An unthrottled OTP endpoint is a stranger spending your SMS budget. Rate limiting stops being generic advice and becomes a bill with a number on it |
 
@@ -1316,6 +1392,7 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `a11/0002` | `auditContrast` | the sRGB gamma decode, which the usual anchors cannot catch; a pair is audited, not a colour; a value with alpha has no ratio and must be skipped, not scored |
 | `a11/0001` | `swipeOutcome` | the threshold is a *fraction* of the width, never a pixel; a flick back vetoes a committed distance; `commit` decides the gesture, never whether the action asks first |
 | `a11/0005` | `planRelease` | an OTA moves no numbers, because bumping the version is what stops it reaching anyone; `versionCode` never resets and `buildNumber` always does; a crypto change is plain JS and still needs a reviewed build |
+| `b4/0001` | `verifyOtp` | a null `expires_at` is refused here and honoured on `tokens`; the cap gates the comparison rather than reporting on it; every refusal is byte-identical and the reason exists only for the log |
 
 **A5 note:** not one of the five had a `createExplain` prompt or loaded
 `explain.js`. All five now do. A5 predates the practice pattern being made
@@ -1442,6 +1519,20 @@ Durable gotchas only. Anything narrative is in `HANDOFF.md`.
   verifier. Write a `bucketOf`/`valueOf` helper that returns a sentinel.
   **Three of `a11/0002`'s eleven cases were hidden by this**, in a self-check
   written the same day as the note warning about it.
+- **An early return is a disclosure.** Two branches that must be
+  indistinguishable have to *do the same work*, not just say the same words.
+  `b4/0001`'s old login returned the identical message and leaked the answer
+  by 200 ms, under a comment that said "constant-time". Check the *cost* of
+  each path, not only its output.
+- **A value's meaning can invert between two tables.** `expires_at` null means
+  *never* on `tokens` and is *refused* on `otp_requests`. Same name, opposite
+  rule, because the domains differ. This is the `max_uses` shape, and the tell
+  is a field you already have a confident habit about.
+- **When a wrong-case names a check and trips a different one, believe the
+  runner.** `b4/0001`'s compare-before-cap case did not break what the comment
+  claimed; it broke something worse and inverted. Run the case on its own
+  rather than reading the summary line — and expect the real failure to be
+  more interesting than the one you predicted.
 - **A compliance form is read off the schema, never off memory.** `a11/0005`
   declared an `email` column that has never existed and omitted the
   `phone_hash` that does. The second is the one that removes an app: declaring

@@ -1,0 +1,1017 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Phone Sign-up &amp; One-Time Codes — B4.1</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">B4 — Auth (Server)</a>
+      <span class="sep">›</span>
+      <span class="current">Phone Sign-up &amp; One-Time Codes</span>
+    </nav>
+
+    <h1>Phone Sign-up &amp; One-Time Codes</h1>
+    <div class="lesson-meta">
+      <span>B4 — Lesson 1 of 3</span>
+      <span>~50 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p>Token has no passwords. You sign in with your phone number and a
+      six-digit code, and the device remembers you afterwards. That decision
+      removes a whole category of work — no password rules, no reset flow, no
+      argon2 — and replaces it with a smaller, sharper one: <strong>proving
+      that the person holding the phone is the person who owns the
+      number</strong>, and doing it without telling strangers which numbers
+      have accounts.</p>
+    </div>
+
+    <div class="callout warning">
+      <div class="callout-title">This lesson used to be about password hashing</div>
+      <p>It taught argon2 over an email and password, and it was rewritten on
+      2026-08-22 when sign-in was settled as phone-only. If you are looking for
+      the argon2 material, it is gone deliberately: <strong>there is no
+      user-chosen secret in Token for it to hash.</strong></p>
+      <p>Worth knowing why that is not a loss. Every password system is
+      really two systems — the password, and the thing you fall back on when
+      the user forgets it. That fallback is almost always a code sent to a
+      phone or an email. Token has no email, so the fallback would have been
+      an SMS code regardless. <strong>Building the password on top of the SMS
+      code adds a secret users forget without removing the one they
+      don't.</strong></p>
+    </div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>The number is the account</h2>
+
+    <p>The <code>users</code> table already has what it needs, from
+    <code>b2/0001</code>. Nothing is added here:</p>
+
+    <pre><code>CREATE TABLE users (
+  id            SERIAL PRIMARY KEY,
+  phone_hash    TEXT NOT NULL UNIQUE,
+  display_name  TEXT NOT NULL,
+  avatar_url    TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);</code></pre>
+
+    <p>No <code>email</code>, no <code>password_hash</code>. A previous version
+    of this lesson added both with an <code>ALTER TABLE</code>; they are not
+    coming back.</p>
+
+    <h3>A hash of a phone number is not an anonymisation</h3>
+
+    <p><code>b3/0001</code> makes this argument about a different column and
+    it applies here exactly. An Indian mobile is ten digits with a known
+    prefix — on the order of a billion candidates, which is minutes of
+    computation. <strong>Given a bare <code>sha256(phone)</code>, you get the
+    number back.</strong></p>
+
+    <p>So <code>phone_hash</code> uses a server-side pepper, for the same
+    reason and in the same shape as <code>code_hash</code> under ADR-0007:</p>
+
+    <pre><code>// api/src/auth/phone.ts
+import { createHash } from 'node:crypto';
+
+const PEPPER = process.env.PHONE_HASH_PEPPER;
+if (!PEPPER) throw new Error('PHONE_HASH_PEPPER is required');
+
+export function phoneHashInput(raw) {
+  // Normalisation is part of the STORED FORMAT, not a convenience.
+  // Every hash ever written was produced by whatever this did on the
+  // day it ran, so changing it later orphans every existing account.
+  const digits = String(raw).replace(/[\s\-()]/g, '');
+  const national = digits
+    .replace(/^\+91/, '')     // +91XXXXXXXXXX
+    .replace(/^91(?=\d{10}$)/, '')  // 91XXXXXXXXXX
+    .replace(/^0/, '');       // 0XXXXXXXXXX, the STD-dialling habit
+
+  if (!/^[6-9]\d{9}$/.test(national)) return null;  // not an Indian mobile
+  return national;
+}
+
+export function phoneHash(raw) {
+  const input = phoneHashInput(raw);
+  if (input === null) return null;
+  return createHash('sha256').update(input + PEPPER).digest('hex');
+}</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">Lose PHONE_HASH_PEPPER and every account is unreachable</div>
+      <p>It sits in exactly the same tier as <code>TOKEN_CODE_PEPPER</code>
+      and <code>TOKEN_CODE_KEY</code>: required at startup, validated at
+      startup, and stored somewhere the database backups are not. Without it
+      no one can sign in, and there is no recovery path — the whole point of
+      a pepper is that the database alone is not enough.</p>
+      <p>Note also that <code>+91 98765 43210</code>, <code>09876543210</code>
+      and <code>9876543210</code> must all reach the same row. They are one
+      number typed three ways, and a user who signs up on one and returns on
+      another has, as far as an un-normalised system is concerned, two
+      accounts and no way to merge them.</p>
+    </div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Requesting a code</h2>
+
+    <p>The OTP gets its own table. Note two columns that look ordinary and
+    are load-bearing:</p>
+
+    <pre><code>CREATE TABLE otp_requests (
+  id           SERIAL PRIMARY KEY,
+  phone_hash   TEXT        NOT NULL,
+  code_hash    TEXT        NOT NULL,   -- the CODE is not stored either
+  attempts     INTEGER     NOT NULL DEFAULT 0,
+  expires_at   TIMESTAMPTZ NOT NULL,   -- NOT NULL, unlike tokens.expires_at
+  consumed_at  TIMESTAMPTZ,            -- set once, never cleared
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_otp_phone_hash ON otp_requests (phone_hash, created_at DESC);</code></pre>
+
+    <div class="callout">
+      <div class="callout-title">Two columns that mean the opposite of what they mean elsewhere</div>
+      <ul>
+        <li><strong><code>expires_at</code> is <code>NOT NULL</code> here.</strong>
+        On <code>tokens</code>, <code>NULL</code> means <em>never expires</em>
+        and is a legitimate, common state. On an OTP there is no such thing as
+        a code that never expires — a null expiry is a bug, not a policy, so
+        the schema refuses to store one. <strong>Same column name, opposite
+        meaning, because the domains are different.</strong> Carrying the
+        <code>tokens</code> habit across is the single easiest mistake to make
+        in this lesson, and the exercise below is built around it.</li>
+        <li><strong><code>code_hash</code>, not <code>code</code>.</strong> A
+        six-digit code is trivially enumerable, so this is peppered the same
+        way. It matters less than the token code — the thing expires in five
+        minutes — but a database dump should not hand over every in-flight
+        login, and the cost of doing it right is one function call.</li>
+      </ul>
+    </div>
+
+    <pre><code>// api/src/routes/auth.ts
+import { Router } from 'express';
+import { randomInt, createHash } from 'node:crypto';
+import { z } from 'zod';
+import { pool } from '../db/pool.js';
+import { phoneHash } from '../auth/phone.js';
+import { sendOtpSms } from '../sms/client.js';
+
+const router = Router();
+
+const OTP_TTL_MS = 5 * 60 * 1000;
+
+const requestSchema = z.object({
+  phone: z.string().min(1),
+});
+
+router.post('/auth/request-code', async (req, res, next) =&gt; {
+  try {
+    const { phone } = requestSchema.parse(req.body);
+    const hash = phoneHash(phone);
+
+    // randomInt, not Math.random. Six digits is a small enough space that a
+    // predictable generator is genuinely guessable, and randomInt is
+    // rejection-sampled for you so there is no modulo bias to reason about.
+    const code = String(randomInt(0, 1000000)).padStart(6, '0');
+
+    if (hash !== null) {
+      await pool.query(
+        `INSERT INTO otp_requests (phone_hash, code_hash, expires_at)
+         VALUES ($1, $2, NOW() + $3::interval)`,
+        [hash, hashCode(code), OTP_TTL_MS + ' milliseconds']
+      );
+      await sendOtpSms(phone, code);
+    }
+
+    // Identical response whether or not the number is valid or registered.
+    // See the callout below -- this is the part that is easy to get wrong
+    // and impossible to notice.
+    res.json({ data: { sent: true }, success: true });
+  } catch (err) { next(err); }
+});</code></pre>
+
+    <p><code>padStart</code> is not cosmetic: <code>randomInt(0, 1000000)</code>
+    can return <code>7</code>, and a code displayed as <code>7</code> rather
+    than <code>000007</code> is both confusing and, if you ever compare
+    lengths, a bug.</p>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>The denial oracle, for the fifth time</h2>
+
+    <div class="callout danger">
+      <div class="callout-title">"Is this number registered?" must be unanswerable</div>
+      <p>This same rule has now had to be applied at five separate layers:
+      <code>b7/0001</code>'s redemption endpoint, <code>a8/0002</code>'s
+      redemption page, <code>b3/0004</code>'s error handler, the login below,
+      and here. Each looked like a different problem and they are one
+      rule: <strong>you may explain yourself to someone who has proved who
+      they are.</strong></p>
+      <p>It bites harder on a phone number than anywhere else in this system,
+      because <strong>the identifier space is enumerable</strong>. There are
+      only so many Indian mobile numbers. An endpoint that distinguishes
+      "code sent" from "no such account" is a machine for listing every Token
+      user, and Token's whole proposition is that being a user is not
+      something strangers get to learn.</p>
+    </div>
+
+    <h3>The trap: the message is identical and the timing is not</h3>
+
+    <p>Here is the version this lesson shipped for months, from the old
+    password login. Read it before reading the criticism:</p>
+
+    <pre><code>// Constant-time response: don't reveal whether email exists
+if (!user) {
+  throw ApiError.unauthorized('Invalid email or password');
+}
+
+const valid = await argon2.verify(user.password_hash, password);
+if (!valid) {
+  throw ApiError.unauthorized('Invalid email or password');
+}</code></pre>
+
+    <p>The comment says <em>constant-time</em>. The message is genuinely
+    identical on both paths. <strong>And it leaks the answer anyway</strong>,
+    because the two paths do different amounts of work:</p>
+
+    <table>
+      <thead><tr><th>Request</th><th>Work done</th><th>Response time</th></tr></thead>
+      <tbody>
+        <tr><td>No such account</td><td>one indexed <code>SELECT</code></td><td>~1&nbsp;ms</td></tr>
+        <tr><td>Account exists, wrong password</td><td><code>SELECT</code> + argon2 verify</td><td>~200&nbsp;ms</td></tr>
+      </tbody>
+    </table>
+
+    <p>Two hundred milliseconds is not a subtle signal. It is visible over a
+    home broadband connection, on the first attempt, without statistics.
+    <strong>The lesson had a section called "Timing attacks" three screens
+    below this code, explaining the concept in terms of string comparison,
+    while its own login was timing-distinguishable in a way you could see by
+    eye.</strong></p>
+
+    <p>The general form is worth more than the specific fix: <strong>an
+    early return is a disclosure.</strong> Whenever two branches are supposed
+    to be indistinguishable, they have to <em>do the same work</em>, not just
+    say the same words. In the OTP flow the same trap appears as skipping the
+    SMS send for an unknown number — the response body is identical, and it
+    comes back a great deal sooner.</p>
+
+    <p>The fix is to make the paths symmetric rather than to make one of them
+    faster:</p>
+
+    <pre><code>// Do the work either way. The dummy hash is a real, valid record
+// with a code nobody has, so verification runs to completion and takes
+// the same time as the genuine path.
+const record = await findLatestOtp(hash) ?? DUMMY_OTP_RECORD;
+const outcome = verifyOtp(record, submitted, Date.now());
+
+// Only now does the answer diverge -- and only in what we LOG.
+if (!outcome.accept) {
+  logAuthFailure(outcome.reason);          // for us
+  return res.status(400).json(REFUSAL);    // identical for everyone
+}</code></pre>
+
+    <p>Note the shape: <strong>one refusal object, constructed once, returned
+    for every failing reason.</strong> This is the same structure
+    <code>canRedeem</code> uses in <code>b7/0001</code>, and for the same
+    reason — if the response is built per-branch, the branches drift apart the
+    first time someone adds a helpful detail to one of them.</p>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>The SMS itself: DLT is not a signup form</h2>
+
+    <p>Sending a transactional SMS in India requires registration on a
+    <strong>DLT</strong> (Distributed Ledger Technology) platform, mandated by
+    TRAI. Three consequences that shape the code rather than the paperwork:</p>
+
+    <ul>
+      <li><strong>The template is pre-registered and approved.</strong> You do
+      not compose the message at send time. You register
+      <code>Your Token code is {#var#}. Valid 5 minutes.</code>, get a
+      template ID, and send variables against it. A message that does not
+      match an approved template is rejected by the operator, not by your
+      code — so it fails in production, for real users, and never in
+      development.</li>
+      <li><strong>The sender header is registered separately</strong> — a
+      six-character ID like <code>TOKNAP</code>. It is not free text and it is
+      not per-message.</li>
+      <li><strong>Approval takes time.</strong> Registration, header approval
+      and template approval are measured in weeks, not minutes. This is the
+      one part of Token that cannot be hurried at the end, which is why it is
+      worth starting before it is on the critical path.</li>
+    </ul>
+
+    <p>The practical effect on the API: <code>sendOtpSms</code> takes a
+    template ID and a variable, never a composed string. Any lesson or code
+    that builds the message body inline is describing a system that cannot
+    ship in India.</p>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h3>Try it yourself — this one is broken on purpose</h3>
+
+    <p>The verification rule as it is usually first written, run against six
+    real attempts. Three of them let someone in who should not get in.</p>
+
+    <div id="playground-otp"></div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Now build it yourself</h2>
+
+    <p>The route needs Postgres and an SMS provider. The decision it makes
+    when a code arrives is arithmetic and comparison, and it is the part that
+    lets people in.</p>
+
+    <div id="exercise-otp"></div>
+    <div id="pg-exercise-otp"></div>
+
+    <h3>And the route</h3>
+
+    <div id="exercise-1"></div>
+
+    <div id="explain-b4-0001"></div>
+
+    <hr>
+
+    <h2>Quiz</h2>
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <span class="disabled">← Previous</span>
+      <a href="./0002-jwt-refresh-rotation.html">Next: JWT &amp; Refresh Rotation →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+  createPlayground("playground-otp", `// BROKEN ON PURPOSE. The check as it is usually first written.
+
+function verifyOtp(record, attempt, now) {
+  if (!record) return { accept: false, reason: "no_request" };
+
+  // "An expiry of null means it never expires" -- the habit from the
+  // tokens table, carried across to a table where it makes no sense.
+  if (record.expiresAt != null && now >= record.expiresAt) {
+    return { accept: false, reason: "expired" };
+  }
+
+  if (record.codeHash !== hash(attempt)) {
+    return { accept: false, reason: "wrong_code" };
+  }
+
+  return { accept: true, reason: "ok" };
+}
+
+// A stand-in for the peppered hash, so this runs here.
+function hash(code) { return "h:" + code; }
+
+const NOW = 1_000_000;
+const base = {
+  codeHash: hash("428391"),
+  attempts: 0,
+  expiresAt: NOW + 60_000,
+  consumedAt: null,
+};
+
+const attempts = [
+  { what: "the right code, in time",   rec: base, code: "428391" },
+  { what: "the wrong code",            rec: base, code: "111111" },
+  { what: "expired 10 minutes ago",    rec: { ...base, expiresAt: NOW - 600_000 }, code: "428391" },
+  { what: "a code with NO expiry set", rec: { ...base, expiresAt: null }, code: "428391" },
+  { what: "a code already used",       rec: { ...base, consumedAt: NOW - 5000 }, code: "428391" },
+  { what: "the 900th guess",           rec: { ...base, attempts: 900 }, code: "428391" },
+];
+
+for (const a of attempts) {
+  const out = verifyOtp(a.rec, a.code, NOW);
+  console.log(a.what.padEnd(26) + (out.accept ? "LET IN" : "refused (" + out.reason + ")"));
+}
+
+console.log("");
+console.log("Three of those are wrong, and each is a way in:");
+console.log("  A null expiry is treated as 'never expires'. On the tokens");
+console.log("  table that is correct. Here it means a code that works forever.");
+console.log("");
+console.log("  An already-used code is accepted again. Anyone who sees one");
+console.log("  SMS -- a shoulder-surfer, a synced notification -- can replay it.");
+console.log("");
+console.log("  The 900th guess is treated like the first. Six digits is a");
+console.log("  million codes, but nobody needs a million tries at a code");
+console.log("  that lives five minutes if nothing is counting.");`);
+
+  createSolution("exercise-otp", {
+    exercise: `Write verifyOtp(record, attempt, config) — decide whether a submitted code lets someone in.\n\nrecord is the most recent otp_requests row for this phone_hash, or null if there is none:\n\n  { codeHash: "h:428391", attempts: 0, expiresAt: 1060000, consumedAt: null }\n\nconfig is { now, maxAttempts, hash } — the current time in ms, the guess limit, and a function that hashes a submitted code the same way the stored one was hashed.\n\nReturn { accept, reason, attemptsAfter, consumed, response }.\n\nreason is for YOUR logs: 'no_request', 'already_used', 'expired', 'too_many_attempts', 'wrong_code' or 'ok'.\n\nresponse is what the caller gets. On success, null. On EVERY failure, the exact same object:\n  { status: 400, body: { error: 'That code is not valid.' } }\n\nThe rules:\n\n1. NO RECORD means reason 'no_request', attemptsAfter 0, consumed false. This is the branch that fires for a number nobody has ever registered, so it must be indistinguishable from every other failure.\n\n2. CHECK IN THIS PRECEDENCE: already_used, then expired, then too_many_attempts, then the code comparison. The order is fixed so the same input always produces the same log line — a record can easily be expired AND used, and 'whichever branch happened to run first' is not a specification.\n\n3. A NULL expiresAt IS REFUSED, NOT HONOURED. This is the opposite of tokens.expires_at, where null means never expires. An OTP that never expires is a bug and not a policy, which is why the column is NOT NULL — so if you are holding a record with a null expiry, something is already wrong and the safe reading is 'expired'. Getting this backwards produces a code that works forever.\n\n4. EXPIRED means now >= expiresAt. A code that expires exactly now is expired; it is not still valid for one more millisecond.\n\n5. THE ATTEMPT CAP IS CHECKED BEFORE THE COMPARISON, and when it trips, attemptsAfter stays where it was. Comparing first and counting afterwards gives an attacker unlimited guesses if they stop reading the response. attempts >= maxAttempts is the test, not >.\n\n6. A WRONG CODE INCREMENTS: attemptsAfter is attempts + 1. This is the only branch that increments. Forgetting it is the same unlimited-guess bug by a different route.\n\n7. A CORRECT CODE returns accept true, reason 'ok', consumed true, response null, and attemptsAfter unchanged — a successful guess is not a failed one.\n\n8. Never mutate record or config.`,
+    hints: [
+      "Write the refusal object ONCE, at the top, and return the same one from every failing branch. If you build it per-branch you will eventually add a helpful detail to one of them, and that is precisely the leak the lesson is about.",
+      "Rule 3 is one condition, not two: refuse when expiresAt == null OR config.now >= expiresAt. Writing it as 'if expiresAt is set, and it has passed' is the bug — it is what the broken playground does.",
+      "Do the comparison last and only once. Every branch above it returns, so by the time you reach config.hash(attempt) you already know the record is usable — which is also the order that makes rule 5 fall out naturally."
+    ],
+    solution: `function verifyOtp(record, attempt, config) {
+  // One refusal, built once, returned from every failing branch.
+  const REFUSAL = {
+    status: 400,
+    body: { error: "That code is not valid." },
+  };
+  const no = (reason, attemptsAfter) => ({
+    accept: false,
+    reason,
+    attemptsAfter,
+    consumed: false,
+    response: REFUSAL,
+  });
+
+  // Rule 1: an unregistered number looks like every other failure.
+  if (!record) return no("no_request", 0);
+
+  const attempts = record.attempts;
+
+  // Rule 2, in order. Rule 7 says a success does not increment, and
+  // none of these branches increment either -- only rule 6 does.
+  if (record.consumedAt != null) return no("already_used", attempts);
+
+  // Rule 3 + 4. The null check is part of the SAME condition: a missing
+  // expiry is not "no deadline", it is a record that should not exist.
+  if (record.expiresAt == null || config.now >= record.expiresAt) {
+    return no("expired", attempts);
+  }
+
+  // Rule 5: before the comparison, and it does not grow the counter.
+  if (attempts >= config.maxAttempts) {
+    return no("too_many_attempts", attempts);
+  }
+
+  // Rule 6: the only branch that increments.
+  if (config.hash(attempt) !== record.codeHash) {
+    return no("wrong_code", attempts + 1);
+  }
+
+  // Rule 7.
+  return {
+    accept: true,
+    reason: "ok",
+    attemptsAfter: attempts,
+    consumed: true,
+    response: null,
+  };
+}`
+  });
+
+  createPlayground("pg-exercise-otp", `// Write verifyOtp(record, attempt, config) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(v) { return JSON.stringify(v); }
+
+var NOW = 1000000;
+function hash(code) { return "h:" + code; }
+// maxAttempts 5 and attempts 2 are deliberately different numbers, and
+// neither is 0 or 1 -- so an off-by-one or a swapped variable cannot pass
+// by coincidence.
+function cfg(over) {
+  var c = { now: NOW, maxAttempts: 5, hash: hash };
+  for (var k in (over || {})) c[k] = over[k];
+  return c;
+}
+function rec(over) {
+  var r = {
+    codeHash: hash("428391"),
+    attempts: 2,
+    expiresAt: NOW + 60000,
+    consumedAt: null,
+  };
+  for (var k in (over || {})) r[k] = over[k];
+  return r;
+}
+// Never dereference a result that might be missing: a mistake returning
+// undefined would throw here and abort every check below it.
+function got(record, code, config) {
+  var r = verifyOtp(record, code, config || cfg());
+  return r || {};
+}
+
+try {
+  if (typeof verifyOtp !== "function") throw new Error("not written yet");
+
+  // Rule 7 -- the happy path
+  check("the right code, in time, is accepted",
+    got(rec(), "428391").accept === true,
+    "got " + show(got(rec(), "428391").reason));
+  check("...and consumes the record",
+    got(rec(), "428391").consumed === true,
+    "consumed was " + show(got(rec(), "428391").consumed));
+  check("...and a success does not count as an attempt",
+    got(rec(), "428391").attemptsAfter === 2,
+    "got " + show(got(rec(), "428391").attemptsAfter));
+  check("...and returns no response body to the caller",
+    got(rec(), "428391").response === null,
+    "got " + show(got(rec(), "428391").response));
+
+  // Rule 6
+  check("a wrong code is refused",
+    got(rec(), "111111").accept === false, "it was accepted");
+  check("...and increments the attempt counter",
+    got(rec(), "111111").attemptsAfter === 3,
+    "got " + show(got(rec(), "111111").attemptsAfter));
+
+  // Rule 1
+  check("no record at all is refused",
+    got(null, "428391").accept === false, "it was accepted");
+  check("...with reason no_request and no attempts",
+    got(null, "428391").reason === "no_request" &&
+    got(null, "428391").attemptsAfter === 0,
+    "got " + show(got(null, "428391").reason) + " / " +
+    show(got(null, "428391").attemptsAfter));
+
+  // Rules 3 and 4 -- the headline
+  check("a null expiry is REFUSED, not treated as 'never expires'",
+    got(rec({ expiresAt: null }), "428391").accept === false,
+    "the right code was accepted against a record with no deadline");
+  check("...and is reported as expired",
+    got(rec({ expiresAt: null }), "428391").reason === "expired",
+    "got " + show(got(rec({ expiresAt: null }), "428391").reason));
+  check("a code that expired ten minutes ago is refused",
+    got(rec({ expiresAt: NOW - 600000 }), "428391").reason === "expired",
+    "got " + show(got(rec({ expiresAt: NOW - 600000 }), "428391").reason));
+  check("expiring exactly NOW is expired, not valid for one more ms",
+    got(rec({ expiresAt: NOW }), "428391").reason === "expired",
+    "got " + show(got(rec({ expiresAt: NOW }), "428391").reason));
+  check("one millisecond before expiry still works",
+    got(rec({ expiresAt: NOW + 1 }), "428391").accept === true,
+    "the code was refused while still valid");
+
+  // Rule 2 -- already used
+  check("an already-used code is refused even though it is correct",
+    got(rec({ consumedAt: NOW - 5000 }), "428391").accept === false,
+    "a replayed code was accepted");
+  check("...and reports already_used, not wrong_code",
+    got(rec({ consumedAt: NOW - 5000 }), "428391").reason === "already_used",
+    "got " + show(got(rec({ consumedAt: NOW - 5000 }), "428391").reason));
+
+  // Rule 5 -- the cap
+  check("at the cap, the correct code is still refused",
+    got(rec({ attempts: 5 }), "428391").accept === false,
+    "the cap was not enforced");
+  check("...reported as too_many_attempts",
+    got(rec({ attempts: 5 }), "428391").reason === "too_many_attempts",
+    "got " + show(got(rec({ attempts: 5 }), "428391").reason));
+  check("...and the counter does not grow past the cap",
+    got(rec({ attempts: 5 }), "111111").attemptsAfter === 5,
+    "got " + show(got(rec({ attempts: 5 }), "111111").attemptsAfter));
+  // A wrong guess at the cap must be STOPPED, not merely counted. If this
+  // says wrong_code, the comparison ran and the limit is decorative.
+  check("...and a wrong guess at the cap is stopped, not counted",
+    got(rec({ attempts: 5 }), "111111").reason === "too_many_attempts",
+    "got " + show(got(rec({ attempts: 5 }), "111111").reason));
+  check("one below the cap still gets to guess",
+    got(rec({ attempts: 4 }), "111111").reason === "wrong_code",
+    "got " + show(got(rec({ attempts: 4 }), "111111").reason));
+
+  // Rule 2 -- precedence
+  check("used AND expired reports already_used (fixed precedence)",
+    got(rec({ consumedAt: NOW - 5000, expiresAt: NOW - 600000 }), "428391").reason === "already_used",
+    "got " + show(got(rec({ consumedAt: NOW - 5000, expiresAt: NOW - 600000 }), "428391").reason));
+  check("expired AND over the cap reports expired",
+    got(rec({ expiresAt: NOW - 600000, attempts: 9 }), "428391").reason === "expired",
+    "got " + show(got(rec({ expiresAt: NOW - 600000, attempts: 9 }), "428391").reason));
+
+  // The oracle
+  var bodies = [
+    show(got(null, "428391").response),
+    show(got(rec({ consumedAt: NOW - 1 }), "428391").response),
+    show(got(rec({ expiresAt: NOW - 1 }), "428391").response),
+    show(got(rec({ attempts: 5 }), "428391").response),
+    show(got(rec(), "111111").response),
+  ];
+  check("every refusal returns the byte-identical response",
+    bodies.every(function (b) { return b === bodies[0]; }),
+    "got " + show(bodies));
+} catch (err) {
+  console.log("Self-check could not run: " + err.message);
+}
+
+// Rule 8 on its own -- a mutation bug can throw rather than return, and a
+// throw would hide every check above it if they shared a block.
+try {
+  var r8 = rec();
+  var c8 = cfg();
+  verifyOtp(r8, "111111", c8);
+  check("verifyOtp does not mutate the record",
+    r8.attempts === 2 && r8.consumedAt === null,
+    "record is now " + show(r8));
+  verifyOtp(r8, "428391", c8);
+  check("...not even on success",
+    r8.consumedAt === null,
+    "record is now " + show(r8));
+} catch (err) {
+  console.log("Mutation check could not run: " + err.message);
+}`);
+
+  createExplain("explain-b4-0001", {
+    prompt: "On the <code>tokens</code> table a null <code>expires_at</code> means <em>never expires</em>, and on <code>otp_requests</code> a null expiry must be refused. Explain why the same column name means opposite things, and what would go wrong if you carried the first habit into the second."
+  });
+
+  createSolution("exercise-1", {
+    unverifiable: "the deliverable is an Express route needing Postgres and a DLT-registered SMS provider",
+    exercise: `Build Token's sign-in routes in api/src/routes/auth.ts.\n\n1. POST /auth/request-code — take a phone number, normalise and hash it, generate a six-digit code with randomInt, store its hash with a five-minute expiry, and send it via the SMS client.\n2. POST /auth/verify-code — take a phone number and a code, load the most recent otp_requests row, run verifyOtp, and on success mark the row consumed and upsert the user.\n3. Both routes must return byte-identical responses whether or not the number is registered, and must do comparable amounts of work on both paths.\n4. Register the user on first successful verification — there is no separate signup step. A display name can be collected afterwards.\n5. PHONE_HASH_PEPPER must be validated at startup, not on first use.`,
+    hints: [
+      "Consuming the row and creating the user belong in ONE transaction. If the insert fails after the OTP is marked consumed, the user has burned a code and has no account — and the next request-code gives them a fresh code, so it self-heals, but they see an error for no reason.",
+      "Mark the row consumed with a WHERE clause that Postgres enforces, the way b2/0001 does for revoke: UPDATE otp_requests SET consumed_at = NOW() WHERE id = $1 AND consumed_at IS NULL. If it updates zero rows, another request won the race and this one must refuse.",
+      "For the user, ON CONFLICT (phone_hash) DO UPDATE SET updated_at = NOW() RETURNING id gives you the row whether it existed or not, in one statement and without a read-then-write race."
+    ],
+    solution: `// api/src/routes/auth.ts
+import { Router } from 'express';
+import { randomInt, createHash, timingSafeEqual } from 'node:crypto';
+import { z } from 'zod';
+import { pool } from '../db/pool.js';
+import { phoneHash } from '../auth/phone.js';
+import { sendOtpSms } from '../sms/client.js';
+import { verifyOtp } from '../auth/otp.js';
+
+const router = Router();
+
+const OTP_TTL_MS = 5 * 60 * 1000;
+const MAX_ATTEMPTS = 5;
+
+const PEPPER = process.env.PHONE_HASH_PEPPER;
+if (!PEPPER) throw new Error('PHONE_HASH_PEPPER is required');
+
+function hashCode(code) {
+  return createHash('sha256').update(code + PEPPER).digest('hex');
+}
+
+router.post('/auth/request-code', async (req, res, next) => {
+  try {
+    const { phone } = z.object({ phone: z.string().min(1) }).parse(req.body);
+    const hash = phoneHash(phone);
+    const code = String(randomInt(0, 1000000)).padStart(6, '0');
+
+    if (hash !== null) {
+      await pool.query(
+        \`INSERT INTO otp_requests (phone_hash, code_hash, expires_at)
+         VALUES ($1, $2, NOW() + ($3 || ' milliseconds')::interval)\`,
+        [hash, hashCode(code), String(OTP_TTL_MS)]
+      );
+      await sendOtpSms(phone, code);
+    }
+
+    // Identical for a valid number, an invalid one, and an unregistered one.
+    res.json({ data: { sent: true }, success: true });
+  } catch (err) { next(err); }
+});
+
+router.post('/auth/verify-code', async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const { phone, code } = z.object({
+      phone: z.string().min(1),
+      code: z.string().length(6),
+    }).parse(req.body);
+
+    const hash = phoneHash(phone);
+
+    await client.query('BEGIN');
+
+    // FOR UPDATE so two simultaneous submissions cannot both consume it.
+    const { rows } = hash === null ? { rows: [] } : await client.query(
+      \`SELECT id, code_hash, attempts, expires_at, consumed_at
+         FROM otp_requests
+        WHERE phone_hash = $1
+        ORDER BY created_at DESC
+        LIMIT 1
+          FOR UPDATE\`,
+      [hash]
+    );
+
+    const row = rows[0] ?? null;
+    const record = row && {
+      codeHash: row.code_hash,
+      attempts: row.attempts,
+      expiresAt: new Date(row.expires_at).getTime(),
+      consumedAt: row.consumed_at && new Date(row.consumed_at).getTime(),
+    };
+
+    const outcome = verifyOtp(record, code, {
+      now: Date.now(),
+      maxAttempts: MAX_ATTEMPTS,
+      hash: hashCode,
+    });
+
+    if (row && outcome.attemptsAfter !== row.attempts) {
+      await client.query(
+        'UPDATE otp_requests SET attempts = $2 WHERE id = $1',
+        [row.id, outcome.attemptsAfter]
+      );
+    }
+
+    if (!outcome.accept) {
+      await client.query('COMMIT');
+      // reason goes to the log, never to the client.
+      req.log?.info({ reason: outcome.reason }, 'otp refused');
+      return res
+        .status(outcome.response.status)
+        .json(outcome.response.body);
+    }
+
+    const consumed = await client.query(
+      \`UPDATE otp_requests SET consumed_at = NOW()
+        WHERE id = $1 AND consumed_at IS NULL\`,
+      [row.id]
+    );
+    if (consumed.rowCount === 0) {
+      // Another request consumed it between the SELECT and here.
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'That code is not valid.' });
+    }
+
+    const { rows: userRows } = await client.query(
+      \`INSERT INTO users (phone_hash, display_name)
+       VALUES ($1, $2)
+       ON CONFLICT (phone_hash)
+         DO UPDATE SET updated_at = NOW()
+       RETURNING id, display_name, created_at\`,
+      [hash, 'New user']
+    );
+
+    await client.query('COMMIT');
+
+    res.json({ data: { user: userRows[0] }, success: true });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    next(err);
+  } finally {
+    client.release();
+  }
+});
+
+export default router;`
+  });
+
+  createQuiz("lesson-quiz", [
+    {
+      question: "Why does Token store phone_hash rather than the phone number?",
+      options: [
+        "So the number cannot be recovered from a database dump alone",
+        "So the number can be looked up faster",
+        "Because Postgres cannot index phone numbers",
+        "To save storage space"
+      ],
+      correct: 0,
+      explanation: "A dump of the users table should not hand over a list of everyone's phone numbers. Speed is not the reason — a hash and a phone number index equally well. The hash alone is not sufficient either, which is what the next question is about."
+    },
+    {
+      question: "Why is a bare sha256 of a phone number not enough?",
+      options: [
+        "sha256 is broken and should never be used",
+        "An Indian mobile is ten digits with a known prefix, so every possible number can be hashed and compared in minutes",
+        "sha256 output is too short to be unique",
+        "Hashes can be reversed with the right library"
+      ],
+      correct: 1,
+      explanation: "A hash is only one-way when the input is unguessable. Roughly a billion candidates is minutes of computation, so given the hash you get the number back. sha256 itself is fine; the input space is the problem. That is why a server-side pepper is added — an attacker with the database still cannot start without also stealing an environment variable kept somewhere else."
+    },
+    {
+      type: "predict-output",
+      code: `const PEPPER = 'p3pp3r';\nfunction hash(input) { return 'sha256(' + input + PEPPER + ')'; }\nconsole.log(hash('9876543210'));\nconsole.log(hash('09876543210'));`,
+      answer: "sha256(9876543210p3pp3r)\nsha256(09876543210p3pp3r)",
+      explanation: "Two different hashes for the same phone number, typed two ways. This is why normalisation has to happen before hashing and is part of the stored format — a user who signs up as 9876543210 and returns as 09876543210 would otherwise have two accounts and no way to merge them."
+    },
+    {
+      type: "fill-blank",
+      code: `// Reject anything that is not a ten-digit Indian mobile\nif (!/^[6-9]\\d{___}$/.test(national)) return null;`,
+      answer: "9",
+      explanation: "The first digit is matched separately by [6-9], so nine more digits make ten in total. Indian mobile numbers begin with 6, 7, 8 or 9."
+    },
+    {
+      question: "The old login returned the same message for 'no such account' and 'wrong password'. Why was it still an oracle?",
+      options: [
+        "The HTTP status codes were different",
+        "The two paths did different amounts of work, so the response times differed by about 200ms",
+        "The message contained the email address",
+        "It logged the reason at a different level"
+      ],
+      correct: 1,
+      explanation: "No account meant one indexed SELECT and an immediate return, about a millisecond. An existing account meant a SELECT plus an argon2 verify, about 200ms. That gap is visible on a first attempt over ordinary broadband, without statistics. An early return is a disclosure — indistinguishable branches must do the same work, not merely say the same words."
+    },
+    {
+      question: "Why does the denial oracle matter more for a phone number than for a token code?",
+      options: [
+        "Phone numbers are longer",
+        "The space of phone numbers is small enough to enumerate completely, so a distinguishable response lists every user",
+        "Token codes are encrypted and phone numbers are not",
+        "Phone numbers are shared between users"
+      ],
+      correct: 1,
+      explanation: "There are only so many Indian mobile numbers. An endpoint that answers 'code sent' differently from 'no such account' turns that finite list into a directory of Token users. A token code has 31^12 possibilities, so enumeration is not a threat there in the same way — but the same rule was applied to it anyway, which is why this is the fifth layer."
+    },
+    {
+      type: "spot-the-bug",
+      code: `// line 1\nif (record.expiresAt != null && now >= record.expiresAt) {\n  return refuse('expired');\n}\nif (record.consumedAt != null) {\n  return refuse('already_used');\n}\nif (hash(attempt) !== record.codeHash) {\n  return refuse('wrong_code');\n}`,
+      bugLine: 1,
+      options: [
+        "Line 1: a record with expiresAt null is treated as never expiring, so the code works forever",
+        "Line 4: consumedAt should be checked with === null",
+        "Line 7: the comparison should use == rather than !=="
+      ],
+      correct: 0,
+      explanation: "On the tokens table a null expires_at legitimately means never expires. On otp_requests it means a row that should not exist, and the safe reading is expired. Carrying the first habit across produces a one-time code with no deadline. It is the same class of mistake as treating max_uses 0 as unlimited: the same shape of value meaning opposite things in two tables."
+    },
+    {
+      question: "Why is the attempt cap checked before the code comparison rather than after?",
+      options: [
+        "Comparison is expensive and this saves CPU",
+        "Checking afterwards lets an attacker keep guessing as long as they ignore the response",
+        "The comparison would throw if attempts were too high",
+        "It makes the log messages clearer"
+      ],
+      correct: 1,
+      explanation: "If you compare first and only then notice the cap, every request still tests a guess. An attacker who does not care what you say back gets unlimited tries. The cap has to gate the comparison, not report on it afterwards."
+    },
+    {
+      type: "predict-output",
+      code: `const attempts = 5;\nconst maxAttempts = 5;\nconsole.log('with >= :', attempts >= maxAttempts);\nconsole.log('with >  :', attempts > maxAttempts);`,
+      answer: "with >= : true\nwith >  : false",
+      explanation: "Using > instead of >= grants exactly one extra guess past the limit. It is a small leak on its own and a familiar one — the same off-by-one shape as useCount >= max_uses in b7/0001's canRedeem."
+    },
+    {
+      type: "predict-output",
+      code: `// randomInt can return small numbers\nconst value = 7;\nconsole.log(String(value));\nconsole.log(String(value).padStart(6, '0'));`,
+      answer: "7\n000007",
+      explanation: "randomInt(0, 1000000) genuinely returns 7 about one time in a million, and a code shown as '7' is both confusing to the user and a bug anywhere a length is compared. padStart is not cosmetic."
+    },
+    {
+      question: "Why use randomInt rather than Math.random for the six-digit code?",
+      options: [
+        "randomInt is faster",
+        "Math.random is not cryptographically secure and its output can be predicted from previous values",
+        "Math.random cannot produce integers",
+        "randomInt allows a maximum value"
+      ],
+      correct: 1,
+      explanation: "Math.random is a fast PRNG, not a CSPRNG — its internal state can be recovered by observing enough outputs, which makes future codes predictable. randomInt draws from the OS entropy source and rejection-samples, so there is also no modulo bias to reason about."
+    },
+    {
+      type: "which-breaks",
+      question: "Which of these SMS approaches will fail in production in India?",
+      variants: [
+        "sendOtpSms(phone, { templateId: 'TOKN_OTP_1', vars: [code] })",
+        "sendOtpSms(phone, { templateId: 'TOKN_OTP_1', vars: [code], header: 'TOKNAP' })",
+        "sendOtpSms(phone, 'Your Token code is ' + code + '. Valid 5 minutes.')"
+      ],
+      correct: 2,
+      explanation: "DLT requires the message body to match a pre-registered, approved template. A composed string does not match one, so the operator rejects it — which means it works in development against a test provider and fails for real users. The template ID and registered header are the interface; the text is not yours to write at send time."
+    },
+    {
+      question: "How long does DLT registration and template approval typically take?",
+      options: [
+        "Minutes — it is an automated signup",
+        "Weeks, which is why it should start before it is on the critical path",
+        "It is only required above a certain message volume",
+        "It is handled automatically by the SMS aggregator with no action needed"
+      ],
+      correct: 1,
+      explanation: "Entity registration, header approval and template approval are each reviewed. It is the one part of Token that cannot be compressed at the end of the project, which is why it is worth starting early even though nothing depends on it yet."
+    },
+    {
+      question: "Why does otp_requests store code_hash rather than the code?",
+      options: [
+        "To make the codes shorter",
+        "So a database dump does not expose every login in flight",
+        "Because the code is too long to store",
+        "So the code can be reused"
+      ],
+      correct: 1,
+      explanation: "It matters less than the token code, since an OTP expires in five minutes — but the cost of hashing it is one function call, and a dump should not hand over every code currently sitting in someone's SMS inbox. Same reasoning as ADR-0007, applied to a smaller secret."
+    },
+    {
+      type: "order-steps",
+      steps: [
+        "SELECT the latest otp_requests row FOR UPDATE",
+        "Run verifyOtp against the submitted code",
+        "UPDATE otp_requests SET consumed_at = NOW() WHERE consumed_at IS NULL",
+        "INSERT the user ON CONFLICT (phone_hash) DO UPDATE",
+        "COMMIT"
+      ],
+      correctOrder: [0, 1, 2, 3, 4],
+      explanation: "FOR UPDATE first, so two simultaneous submissions cannot both consume the same code. The conditional UPDATE is the second guard: if it changes zero rows, another request won the race and this one must refuse even though verifyOtp said yes. Consuming and creating the user are in one transaction so a failure cannot leave a burned code with no account."
+    },
+    {
+      question: "Why is there no separate 'register' endpoint?",
+      options: [
+        "Registration happens on the client instead",
+        "The first successful code verification creates the account — there is no password to choose, so there is nothing to register",
+        "Users must be added manually by an administrator",
+        "Registration is handled by the SMS provider"
+      ],
+      correct: 1,
+      explanation: "A signup step exists to collect a secret the user chooses. With no password there is nothing to collect, so proving the number is the whole of both signing up and signing in. The display name can be asked for afterwards, once the session exists."
+    },
+    {
+      question: "What does 'ON CONFLICT (phone_hash) DO UPDATE ... RETURNING id' buy over checking whether the user exists first?",
+      options: [
+        "It is shorter to write",
+        "It gives the row whether or not it existed, in one statement, without a read-then-write race",
+        "It avoids needing an index on phone_hash",
+        "It allows duplicate phone_hash values"
+      ],
+      correct: 1,
+      explanation: "SELECT-then-INSERT has a window where two requests both see no row and both insert, and one of them hits the unique constraint. The upsert makes it a single atomic statement. It relies on the UNIQUE constraint on phone_hash, which is what ON CONFLICT keys off."
+    },
+    {
+      type: "spot-the-bug",
+      code: `const record = await findLatestOtp(hash);\nif (!record) {\n  return res.status(400).json(REFUSAL);  // line 3\n}\nconst outcome = verifyOtp(record, code, config);`,
+      bugLine: 3,
+      options: [
+        "Line 3: the status should be 404",
+        "Line 3: returning early for an unknown number does far less work than the normal path, so the response time reveals whether the number is registered",
+        "Line 3: REFUSAL should be constructed inside the branch"
+      ],
+      correct: 1,
+      explanation: "The body is identical, which is why this looks correct. The timing is not: the unknown-number path skips the hash comparison entirely. This is exactly the defect the old password login had, with argon2 making the gap 200ms. The fix is to run the same work against a dummy record so both paths cost the same."
+    },
+    {
+      question: "Why must the refusal object be built once rather than per branch?",
+      options: [
+        "It uses less memory",
+        "Per-branch objects drift apart the first time someone adds a helpful detail to one of them",
+        "JavaScript cannot compare objects built separately",
+        "It is required for the JSON serialiser to work"
+      ],
+      correct: 1,
+      explanation: "Nothing stops five separately-built objects being identical today. The problem is next year, when one branch gains 'code expired — request a new one' because it seemed friendly. One object means the friendly detail cannot be added to only one path. This is the same structure canRedeem uses in b7/0001."
+    },
+    {
+      type: "fill-blank",
+      code: `// Consume the row only if nobody else already did\nUPDATE otp_requests SET consumed_at = NOW()\n WHERE id = $1 AND consumed_at ___ NULL;`,
+      answer: "IS",
+      explanation: "IS NULL, not = NULL — comparing anything to NULL with = yields NULL, which is not true, so the WHERE clause would match no rows and every verification would fail. The condition is what makes the consume atomic: if it updates zero rows, another request won the race."
+    },
+    {
+      question: "verifyOtp returns 'reason' as well as a response. Who is each one for?",
+      options: [
+        "Both go to the client; reason is the machine-readable form",
+        "reason goes to your logs only; the response is the single identical refusal every caller receives",
+        "reason goes to the client and the response to the logs",
+        "reason is only used in development"
+      ],
+      correct: 1,
+      explanation: "You need to know why logins are failing — a spike in too_many_attempts is an attack and a spike in expired is a slow SMS provider. The caller must not learn any of it. Splitting the two into separate fields makes the boundary explicit rather than relying on someone remembering not to forward the reason."
+    },
+    {
+      type: "predict-output",
+      code: `const consumedAt = null;\nconsole.log(consumedAt != null);\nconsole.log(consumedAt !== undefined);`,
+      answer: "false\ntrue",
+      explanation: "!= null is the one comparison that catches both null and undefined, which is why it is used for consumedAt and expiresAt. !== undefined lets null through — so a row with consumedAt null would be treated as consumed, refusing every valid code."
+    },
+    {
+      question: "A user signs up with +91 98765 43210 and later signs in with 9876543210. What must happen?",
+      options: [
+        "They reach the same account, because normalisation happens before hashing",
+        "They get two accounts, one per format",
+        "The second attempt is rejected as an invalid number",
+        "The server stores both formats and checks each"
+      ],
+      correct: 0,
+      explanation: "One number typed two ways. Normalisation strips the country code, the leading zero and any spacing before hashing, so both produce the same phone_hash. Storing both formats would mean two rows for one person and no way to merge them — and the UNIQUE constraint on phone_hash would not catch it, because the two hashes genuinely differ."
+    },
+    {
+      question: "Why is changing phoneHashInput after launch so difficult?",
+      options: [
+        "The function is used in many files",
+        "Every stored hash was produced by whatever it did on the day it ran, so a change orphans existing accounts",
+        "It is compiled into the binary",
+        "Postgres caches the results"
+      ],
+      correct: 1,
+      explanation: "The hash is the only copy of the number the server has, and it cannot be recomputed from the stored value. Widen the normalisation later and existing users hash to something new and cannot sign in; narrow it and some existing rows become unreachable. Normalisation is part of the stored format, which is the same point b2/0001 makes about codeHashInput."
+    },
+    {
+      question: "What is the accepted security cost of having no password at all?",
+      options: [
+        "Passwords could have been brute-forced, so this is strictly safer",
+        "Whoever controls the SIM controls the account, so a SIM-swap is a full account takeover",
+        "Sessions cannot be revoked without a password",
+        "The server must store the phone number in the clear"
+      ],
+      correct: 1,
+      explanation: "This is a real cost and it was accepted deliberately. It is tolerable for the account itself, where an attacker gets a token list that can be revoked and rebuilt. It is not tolerable for message history, which is why the E2EE key backup must never be recoverable by SMS alone — that constraint belongs to C5 and is recorded so it cannot be skipped."
+    }
+  ]);
+  </script>
+</body>
+</html>
