@@ -1,0 +1,932 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Publishing &amp; Fetching Public Keys — C5.2</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">C5 — End-to-End Encryption</a>
+      <span class="sep">›</span>
+      <span class="current">Publishing &amp; Fetching Public Keys</span>
+    </nav>
+
+    <h1>Publishing &amp; Fetching Public Keys</h1>
+    <div class="lesson-meta">
+      <span>C5 — Lesson 2 of 5</span>
+      <span>~45 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p><code>0001</code> made a key the server has never seen. Now the app
+      has to find out <em>which key to encrypt to</em> when the user opens a
+      conversation — and the only thing that knows is the server.</p>
+      <p><strong>That is the whole attack surface of an end-to-end encrypted
+      system.</strong> The server cannot read your messages, and it does not
+      need to: it can hand your client a key it controls, and your client will
+      encrypt to it, correctly, with no error anywhere. Everything in this
+      lesson exists because the directory has to be treated as an untrusted
+      input.</p>
+    </div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>The table, and why it is append-only</h2>
+
+    <pre><code>-- Migration: 010_device_keys.sql
+CREATE TABLE device_keys (
+  id           SERIAL      PRIMARY KEY,
+  user_id      INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  public_key   TEXT        NOT NULL,
+  key_version  INTEGER     NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- Set when a newer key supersedes this one. The row NEVER goes away.
+  retired_at   TIMESTAMPTZ,
+
+  -- One key per version per user. This is what stops a rotation racing
+  -- itself and producing two "version 3" keys.
+  UNIQUE (user_id, key_version)
+);
+
+CREATE INDEX idx_device_keys_user ON device_keys (user_id, key_version DESC);</code></pre>
+
+    <div class="callout">
+      <div class="callout-title">Never <code>UPDATE public_key</code>, never <code>DELETE</code></div>
+      <p>The obvious design is one row per user with the current key in it,
+      updated on rotation. It is smaller and it destroys information you
+      cannot recreate.</p>
+      <ul>
+        <li><strong>Old messages were sealed to old keys.</strong>
+        <code>b2/0002</code> put <code>key_version</code> on the messages
+        table for exactly this, and it only means something while the key it
+        names still has a row.</li>
+        <li><strong>A key change is a security event and needs a history.</strong>
+        "This user's key changed three times last Tuesday" is a sentence you
+        can only say if the rows are still there.</li>
+        <li><strong>Retiring is not deleting.</strong> A retired key must not
+        be offered to peers, and it must still be identifiable — which is a
+        <code>retired_at</code> timestamp, not a missing row.</li>
+      </ul>
+      <p>Same shape as <code>revoked_at</code> in <code>b2/0001</code> and
+      <code>superseded_at</code> in <code>b4/0002</code>: <strong>a state
+      change is recorded, never expressed by absence.</strong> A deleted row
+      and a row that never existed are indistinguishable, and the difference
+      is often the thing you most need to know.</p>
+    </div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Publishing</h2>
+
+    <pre><code>// api/src/routes/keys.ts
+router.post('/keys', requireAuth, async (req, res, next) =&gt; {
+  try {
+    const { publicKey } = publishSchema.parse(req.body);
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Lock the user's key history so two devices publishing at once
+      // cannot both compute the same next version.
+      const { rows } = await client.query(
+        `SELECT COALESCE(MAX(key_version), 0) AS current
+           FROM device_keys WHERE user_id = $1 FOR UPDATE`,
+        [req.user.id]
+      );
+
+      const nextVersion = rows[0].current + 1;
+
+      // Retire whatever was current. The rows stay.
+      await client.query(
+        `UPDATE device_keys SET retired_at = NOW()
+          WHERE user_id = $1 AND retired_at IS NULL`,
+        [req.user.id]
+      );
+
+      await client.query(
+        `INSERT INTO device_keys (user_id, public_key, key_version)
+         VALUES ($1, $2, $3)`,
+        [req.user.id, publicKey, nextVersion]
+      );
+
+      await client.query('COMMIT');
+      res.status(201).json({ data: { keyVersion: nextVersion }, success: true });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (err) { next(err); }
+});</code></pre>
+
+    <p><strong>The version is assigned by the server, not sent by the
+    client.</strong> A client-supplied version is a client-supplied claim, and
+    the next lesson's rollback check depends on the number only ever going up.
+    Letting a caller pick it hands them the ability to publish "version 1"
+    forever.</p>
+
+    <h2>Fetching</h2>
+
+    <pre><code>router.get('/keys/:userId', requireAuth, async (req, res, next) =&gt; {
+  try {
+    const { rows } = await pool.query(
+      `SELECT public_key, key_version
+         FROM device_keys
+        WHERE user_id = $1 AND retired_at IS NULL
+        ORDER BY key_version DESC
+        LIMIT 1`,
+      [req.params.userId]
+    );
+
+    // No key published yet. Say so plainly -- and see the callout: what
+    // the CLIENT does with this answer is the dangerous part.
+    if (!rows[0]) {
+      return res.json({ data: { publicKey: null, keyVersion: null }, success: true });
+    }
+
+    res.json({
+      data: { publicKey: rows[0].public_key, keyVersion: rows[0].key_version },
+      success: true,
+    });
+  } catch (err) { next(err); }
+});</code></pre>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>What a dishonest server can do, stated plainly</h2>
+
+    <div class="callout danger">
+      <div class="callout-title">It can hand you its own key, and nothing will break</div>
+
+      <p>The server generates a keypair, returns its public half when your
+      client asks for someone else's, and reads everything you send. Your
+      client encrypts correctly. The recipient — who gets a re-encrypted copy
+      — reads it normally. <strong>There is no error, no warning, and no
+      cryptographic failure anywhere</strong>, because nothing has failed:
+      you encrypted to exactly the key you were given.</p>
+
+      <p>This is not a flaw in this design. <strong>It is the unavoidable
+      shape of every system where a directory tells you who someone is</strong>
+      — Signal, WhatsApp and iMessage all have it, and all answer it the same
+      way. There is no protocol fix, because the problem is not in the
+      protocol: it is that "which key belongs to Ravi" is a fact about the
+      world, and a server is a poor witness to facts about the world.</p>
+
+      <p>So there are exactly two defences, and this lesson is the first:</p>
+      <ol>
+        <li><strong>Pin the key you first saw and notice when it changes.</strong>
+        A server that substitutes a key for an existing conversation has to
+        change it, and a change is visible. That is <code>classifyPeerKey</code>
+        below.</li>
+        <li><strong>Let two humans compare fingerprints out of band.</strong>
+        That is lesson 3, and it is the only thing that closes the first
+        contact.</li>
+      </ol>
+    </div>
+
+    <h3>Trust on first use, and its honest weakness</h3>
+
+    <p>The first time you fetch someone's key there is nothing to compare it
+    against. You pin what you are given and hope. <strong>That is a real
+    weakness and it should be named rather than glossed:</strong> a server
+    that wants to intercept a conversation is best off doing it before the
+    two people have ever talked, because after that any substitution shows up
+    as a change.</p>
+
+    <p>What TOFU buys is that the attack has to be <em>sustained and
+    early</em>. A server that behaves honestly and later turns malicious
+    cannot quietly start reading — it has to push a key change, which is
+    exactly the event the client is watching for.</p>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h3>Rotation increments; substitution does not</h3>
+
+    <p>This is the part that turns a vague "warn on change" into something
+    with a rule in it. A genuine rotation goes through
+    <code>POST /keys</code>, which assigns <code>MAX(key_version) + 1</code>.
+    So:</p>
+
+    <table>
+      <thead><tr><th>Fetched</th><th>Means</th><th>Client does</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Same key bytes</td>
+          <td>Nothing changed</td>
+          <td>Proceed. Versions are metadata; the bytes are the identity</td>
+        </tr>
+        <tr>
+          <td>Different key, <strong>higher</strong> version</td>
+          <td>A rotation — new device, reinstall, or a real key change</td>
+          <td><strong>Warn.</strong> Legitimate and indistinguishable from an attack, so the human decides</td>
+        </tr>
+        <tr>
+          <td>Different key, <strong>same or lower</strong> version</td>
+          <td>Not a rotation. The server is substituting or replaying</td>
+          <td><strong>Block.</strong> No honest path produces this</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>The third row is worth dwelling on. A rollback is how a server reuses a
+    key you have already retired — and <strong>you may have retired it
+    <em>because</em> it was compromised.</strong> Accepting an old key at an
+    old version is accepting the one key most likely to be in someone else's
+    hands.</p>
+
+    <!-- ───────────────────────────────────────────── -->
+    <div class="callout danger">
+      <div class="callout-title">The downgrade: "no key published" must never mean "send it in the clear"</div>
+      <p><code>GET /keys/:userId</code> can legitimately return
+      <code>publicKey: null</code> — the peer has not finished setting up.
+      There is exactly one correct response, and it is to <strong>refuse to
+      send</strong>.</p>
+      <p>The tempting alternative writes itself: <em>"we cannot encrypt, so
+      send it unencrypted and mark it somehow."</em> That converts a server
+      which cannot read your messages into a server that reads any message it
+      wants, <strong>by returning null</strong>. The strongest cryptography in
+      the world sits behind an <code>if</code> statement that the attacker
+      controls the input to.</p>
+      <p>The general rule, and it is the same one <code>0001</code> reached
+      from the other direction: <strong>when the secure path is unavailable,
+      stop — do not fall back to the insecure one.</strong> A feature that
+      degrades gracefully under attack is a feature that can be attacked into
+      degrading.</p>
+    </div>
+
+    <h3>Try it yourself — this one is broken on purpose</h3>
+
+    <p>The key check as it is usually first written, run against six things a
+    server can return. Two of them read your messages and one blocks a
+    perfectly normal new phone.</p>
+
+    <div id="playground-keys"></div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Now build it yourself</h2>
+
+    <p>The routes need Postgres. The decision the client makes about a fetched
+    key is a pure function, and it is the only thing standing between an
+    honest server and a dishonest one.</p>
+
+    <div id="exercise-keys"></div>
+    <div id="pg-exercise-keys"></div>
+
+    <h3>And the endpoints</h3>
+
+    <div id="exercise-1"></div>
+
+    <div id="explain-c5-0002"></div>
+
+    <hr>
+
+    <h2>Quiz</h2>
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0001-keys-on-the-device.html">← Keys on the Device</a>
+      <span class="disabled">Next: Verification →</span>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+  createPlayground("playground-keys", `// BROKEN ON PURPOSE. The key check as it is usually first written.
+
+function classifyPeerKey(known, fetched) {
+  if (!fetched || !fetched.publicKey) {
+    // "No key yet -- nothing to encrypt to, so send it in the clear
+    //  and let the UI mark it as unverified."
+    return { trust: "none", action: "send_plaintext" };
+  }
+  if (!known) {
+    return { trust: "first_contact", action: "pin" };
+  }
+  if (known.publicKey === fetched.publicKey) {
+    return { trust: "trusted", action: "proceed" };
+  }
+  // "The key changed -- they got a new phone. Update it quietly;
+  //  nobody wants a scary dialog every time."
+  return { trust: "changed", action: "pin" };
+}
+
+const PINNED = { publicKey: "Kx1...", keyVersion: 3, verifiedAt: 1699000000 };
+
+const cases = [
+  { what: "same key as always",     known: PINNED, fetched: { publicKey: "Kx1...", keyVersion: 3 } },
+  { what: "new phone, version 4",   known: PINNED, fetched: { publicKey: "Zq7...", keyVersion: 4 } },
+  { what: "server swaps in its own", known: PINNED, fetched: { publicKey: "EVIL.", keyVersion: 3 } },
+  { what: "replay of a retired key", known: PINNED, fetched: { publicKey: "Old..", keyVersion: 2 } },
+  { what: "peer has not set up yet", known: null,   fetched: { publicKey: null, keyVersion: null } },
+  { what: "first ever conversation", known: null,   fetched: { publicKey: "Ab9...", keyVersion: 1 } },
+];
+
+for (const c of cases) {
+  const out = classifyPeerKey(c.known, c.fetched);
+  const bad = out.action === "send_plaintext" ||
+              (out.action === "pin" && c.known !== null);
+  console.log(c.what.padEnd(26) + out.action.padEnd(16) + (bad ? "<-- READ BY THE SERVER" : ""));
+}
+
+console.log("");
+console.log("Three are wrong, and two of them hand over the conversation:");
+console.log("");
+console.log("  'send_plaintext' means the server reads any message it likes");
+console.log("  just by answering null. The whole guarantee sits behind an if");
+console.log("  statement whose input the attacker controls.");
+console.log("");
+console.log("  Silently re-pinning a changed key is the substitution attack");
+console.log("  succeeding. The one event worth warning about is the one this");
+console.log("  code handles by not mentioning it.");
+console.log("");
+console.log("  And the retired key at version 2 is accepted the same way --");
+console.log("  a key that may have been rotated away BECAUSE it leaked.");`);
+
+  createSolution("exercise-keys", {
+    exercise: `Write classifyPeerKey(known, fetched, config) — decide what the client does with a key the server just handed it.\n\nknown is what we pinned last time, or null if we have never fetched this peer's key:\n\n  { publicKey: "Kx1...", keyVersion: 3, verifiedAt: 1699000000 }\n\nverifiedAt is set only if the user compared fingerprints in person (lesson 3). It is null otherwise.\n\nfetched is what GET /keys/:userId returned: { publicKey, keyVersion }, where publicKey may be null.\n\nconfig is { isWellFormed } — a function returning true if a key string is structurally a key.\n\nReturn { trust, action, reason, verificationLost }.\n\ntrust is 'unusable', 'first_contact', 'trusted' or 'changed'.\naction is 'block', 'pin', 'proceed' or 'warn'.\nreason is 'no_key', 'malformed', 'first_use', 'unchanged', 'rotated' or 'rollback'.\n\nThe rules, in this order:\n\n1. NO KEY, OR A MALFORMED ONE, IS 'unusable' AND 'block'. reason 'no_key' when publicKey is null or absent, 'malformed' when config.isWellFormed rejects it. NEVER return an action that sends anything. A missing key is the server's cheapest possible attack: if null means "send it unencrypted", the server reads whatever it wants by answering null. When the secure path is unavailable you stop; you do not fall back.\n\n2. NOTHING KNOWN YET IS 'first_contact' AND 'pin', reason 'first_use'. This is trust on first use and it is the weakest moment in the system — but there is nothing to compare against, so pinning and watching is all that is available.\n\n3. IDENTICAL KEY BYTES ARE 'trusted' AND 'proceed', reason 'unchanged'. Compare the KEY, not the version. Versions are metadata; the bytes are the identity, and a server that changes only the version has changed nothing that matters.\n\n4. A DIFFERENT KEY AT THE SAME OR A LOWER VERSION IS 'unusable' AND 'block', reason 'rollback'. No honest path produces this: a real rotation goes through POST /keys, which assigns MAX(version) + 1, so a different key that did not increment is a substitution or a replay. Worse, a replayed old key may have been retired BECAUSE it was compromised — so this is the one key you least want to accept.\n\n5. A DIFFERENT KEY AT A HIGHER VERSION IS 'changed' AND 'warn', reason 'rotated'. This is legitimate — a new phone, a reinstall — and it is indistinguishable from an attack, so it is not yours to decide. Warn and let the human choose. Do NOT pin it silently: silent re-pinning is the substitution attack succeeding.\n\n6. verificationLost IS TRUE ONLY WHEN THE KEY CHANGED AND known.verifiedAt WAS SET. A fingerprint the user checked in a cafe last year says nothing about a key that appeared this morning. Trust does not transfer across a key change, and the UI needs to know it must ask again. It is false for every other outcome.\n\n7. Never mutate known, fetched or config.`,
+    hints: [
+      "Take the branches in the numbered order and the precedence falls out. Only ONE branch returns action 'pin', and it is rule 2 — if 'pin' appears twice in your function, the second one is the substitution attack.",
+      "Rule 1 has two reasons but one outcome. Check for a null or missing publicKey first, then run config.isWellFormed on it — doing it the other way round means passing null to a function that does not expect it.",
+      "Compute verificationLost once from the facts (did the key change, and was there a verifiedAt) rather than setting it inside each branch. Only rule 5 can produce true, but writing it as a derived value is what stops rule 4 accidentally reporting it."
+    ],
+    solution: `function classifyPeerKey(known, fetched, config) {
+  const out = (trust, action, reason, verificationLost) => ({
+    trust, action, reason, verificationLost: verificationLost === true,
+  });
+
+  // Rule 1. Null FIRST, then well-formedness -- isWellFormed should
+  // never be handed a null. And neither branch may send anything: a
+  // server that answers null must not thereby get plaintext.
+  if (!fetched || fetched.publicKey == null) {
+    return out("unusable", "block", "no_key", false);
+  }
+  if (!config.isWellFormed(fetched.publicKey)) {
+    return out("unusable", "block", "malformed", false);
+  }
+
+  // Rule 2. The only branch allowed to pin.
+  if (!known) {
+    return out("first_contact", "pin", "first_use", false);
+  }
+
+  // Rule 3. The BYTES are the identity.
+  if (known.publicKey === fetched.publicKey) {
+    return out("trusted", "proceed", "unchanged", false);
+  }
+
+  // Rule 6, derived once. Only a real change can lose verification.
+  const wasVerified = known.verifiedAt != null;
+
+  // Rule 4. A rotation increments; a substitution does not.
+  if (fetched.keyVersion <= known.keyVersion) {
+    // Deliberately NOT reporting verificationLost: nothing was
+    // accepted, so nothing was lost. The pin still stands.
+    return out("unusable", "block", "rollback", false);
+  }
+
+  // Rule 5. Legitimate and indistinguishable from an attack, so the
+  // human decides. Never pinned here.
+  return out("changed", "warn", "rotated", wasVerified);
+}`
+  });
+
+  createPlayground("pg-exercise-keys", `// Write classifyPeerKey(known, fetched, config) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(v) { return JSON.stringify(v); }
+
+// Well-formed means 8 chars here -- short enough to type, and NOT the
+// same test as "is it non-empty", so a truthiness check cannot stand in.
+function cfg() { return { isWellFormed: function (k) { return typeof k === "string" && k.length === 8; } }; }
+var KEY_A = "AAAAAAAA", KEY_B = "BBBBBBBB", KEY_OLD = "OOOOOOOO";
+// keyVersion 3 and verifiedAt are deliberately both set, and 3 is not 0
+// or 1, so an off-by-one or a falsy check cannot pass by coincidence.
+function pinned(over) {
+  var p = { publicKey: KEY_A, keyVersion: 3, verifiedAt: 1699000000 };
+  for (var k in (over || {})) p[k] = over[k];
+  return p;
+}
+function fetched(key, version) { return { publicKey: key, keyVersion: version }; }
+// A throw is a wrong answer, not a reason to stop.
+function got(known, f) {
+  try {
+    var r = classifyPeerKey(known, f, cfg());
+    return r || {};
+  } catch (e) {
+    return { trust: "threw", action: "threw", reason: "threw: " + e.message };
+  }
+}
+
+try {
+  if (typeof classifyPeerKey !== "function") throw new Error("not written yet");
+
+  // Rule 3
+  check("the same key proceeds",
+    got(pinned(), fetched(KEY_A, 3)).action === "proceed",
+    "got " + show(got(pinned(), fetched(KEY_A, 3)).action));
+  // The bytes are the identity, so a version bump alone changes nothing.
+  check("...even if only the version moved",
+    got(pinned(), fetched(KEY_A, 9)).action === "proceed",
+    "got " + show(got(pinned(), fetched(KEY_A, 9)).action) + " -- same bytes, so same identity");
+
+  // Rule 2
+  check("a first contact is pinned",
+    got(null, fetched(KEY_A, 1)).action === "pin",
+    "got " + show(got(null, fetched(KEY_A, 1)).action));
+  check("...reported as first_contact",
+    got(null, fetched(KEY_A, 1)).trust === "first_contact",
+    "got " + show(got(null, fetched(KEY_A, 1)).trust));
+
+  // Rule 1 -- the downgrade
+  check("a null key is BLOCKED, never sent in the clear",
+    got(pinned(), fetched(null, null)).action === "block",
+    "if null means plaintext, the server reads anything by answering null");
+  check("...and blocked on first contact too",
+    got(null, fetched(null, null)).action === "block",
+    "got " + show(got(null, fetched(null, null)).action));
+  check("...reported as no_key",
+    got(pinned(), fetched(null, null)).reason === "no_key",
+    "got " + show(got(pinned(), fetched(null, null)).reason));
+  check("a malformed key is blocked",
+    got(pinned(), fetched("short", 4)).action === "block",
+    "got " + show(got(pinned(), fetched("short", 4)).action));
+  check("...reported as malformed, not no_key",
+    got(pinned(), fetched("short", 4)).reason === "malformed",
+    "got " + show(got(pinned(), fetched("short", 4)).reason));
+
+  // Rule 5 -- a real rotation
+  check("a new key at a higher version warns",
+    got(pinned(), fetched(KEY_B, 4)).action === "warn",
+    "got " + show(got(pinned(), fetched(KEY_B, 4)).action));
+  check("...and is NEVER pinned silently",
+    got(pinned(), fetched(KEY_B, 4)).action !== "pin",
+    "silent re-pinning IS the substitution attack succeeding");
+  check("...reported as rotated",
+    got(pinned(), fetched(KEY_B, 4)).reason === "rotated",
+    "got " + show(got(pinned(), fetched(KEY_B, 4)).reason));
+
+  // Rule 4 -- rollback
+  check("a different key at the SAME version is blocked",
+    got(pinned(), fetched(KEY_B, 3)).action === "block",
+    "a real rotation increments, so this is not one");
+  check("...reported as rollback, not rotated",
+    got(pinned(), fetched(KEY_B, 3)).reason === "rollback",
+    "got " + show(got(pinned(), fetched(KEY_B, 3)).reason));
+  check("a retired key replayed at a LOWER version is blocked",
+    got(pinned(), fetched(KEY_OLD, 2)).action === "block",
+    "it may have been retired because it leaked");
+
+  // Rule 6 -- verification does not transfer
+  check("a key change loses a verification that existed",
+    got(pinned(), fetched(KEY_B, 4)).verificationLost === true,
+    "a fingerprint checked last year says nothing about a key from this morning");
+  check("...but not when there was no verification to lose",
+    got(pinned({ verifiedAt: null }), fetched(KEY_B, 4)).verificationLost === false,
+    "got " + show(got(pinned({ verifiedAt: null }), fetched(KEY_B, 4)).verificationLost));
+  check("an unchanged key loses nothing",
+    got(pinned(), fetched(KEY_A, 3)).verificationLost === false,
+    "got " + show(got(pinned(), fetched(KEY_A, 3)).verificationLost));
+  check("a BLOCKED rollback loses nothing either",
+    got(pinned(), fetched(KEY_B, 3)).verificationLost === false,
+    "nothing was accepted, so the existing pin and its verification still stand");
+
+  // The whole point: exactly one input may be pinned.
+  var everything = [
+    [pinned(), fetched(KEY_A, 3)], [pinned(), fetched(KEY_B, 4)],
+    [pinned(), fetched(KEY_B, 3)], [pinned(), fetched(KEY_OLD, 2)],
+    [pinned(), fetched(null, null)], [pinned(), fetched("short", 4)],
+    [null, fetched(KEY_A, 1)],
+  ];
+  var pins = everything.filter(function (p) { return got(p[0], p[1]).action === "pin"; });
+  check("exactly one case in seven may pin, and it is the first contact",
+    pins.length === 1 && pins[0][0] === null,
+    "pinned " + pins.length + " -- every extra one is a key nobody agreed to trust");
+} catch (err) {
+  console.log("Self-check could not run: " + err.message);
+}
+
+// Rule 7 on its own -- a mutation bug can throw rather than return.
+try {
+  var k7 = pinned();
+  var f7 = fetched(KEY_B, 4);
+  classifyPeerKey(k7, f7, cfg());
+  check("classifyPeerKey does not mutate the pinned record",
+    k7.publicKey === KEY_A && k7.keyVersion === 3 && k7.verifiedAt === 1699000000,
+    "known is now " + show(k7));
+  check("...or the fetched one",
+    f7.publicKey === KEY_B && f7.keyVersion === 4,
+    "fetched is now " + show(f7));
+} catch (err) {
+  console.log("Mutation check could not run: " + err.message);
+}`);
+
+  createExplain("explain-c5-0002", {
+    prompt: "Your server returns <code>publicKey: null</code> for the person you are messaging. Explain why sending the message unencrypted \"just this once, clearly marked\" would hand the server every message it ever wants."
+  });
+
+  createSolution("exercise-1", {
+    unverifiable: "the deliverable is Express routes and a migration needing Postgres",
+    exercise: `Build the key directory.\n\n1. The 010_device_keys.sql migration, append-only: retired_at rather than DELETE, and UNIQUE (user_id, key_version).\n2. POST /keys — assigns the version SERVER-SIDE as MAX(key_version) + 1, retires the previous current key, and does both in one transaction under FOR UPDATE.\n3. GET /keys/:userId — returns the newest non-retired key, or an explicit null.\n4. A client-side pin store: read and write { publicKey, keyVersion, verifiedAt } per peer, in SQLite rather than SecureStore (it is not secret, and it must survive being large).\n5. Wire classifyPeerKey into the send path so that 'block' and 'warn' both stop the message going out.`,
+    hints: [
+      "FOR UPDATE on the SELECT that computes MAX(key_version) is what stops two devices publishing simultaneously and both deciding they are version 4. The UNIQUE constraint is the backstop that turns the race into an error instead of a duplicate.",
+      "Do not let the client send keyVersion. The rollback check in classifyPeerKey only works because the number is monotonic, and a client-supplied version is a client-supplied claim.",
+      "The pin store is not secret — it holds public keys — so SQLite is right and SecureStore is wrong. SecureStore is for small secrets, and a pin per conversation is neither small in aggregate nor secret."
+    ],
+    solution: `-- api/migrations/010_device_keys.sql
+BEGIN;
+
+CREATE TABLE device_keys (
+  id           SERIAL      PRIMARY KEY,
+  user_id      INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  public_key   TEXT        NOT NULL,
+  key_version  INTEGER     NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  retired_at   TIMESTAMPTZ,
+  UNIQUE (user_id, key_version)
+);
+
+CREATE INDEX idx_device_keys_user ON device_keys (user_id, key_version DESC);
+
+COMMIT;
+
+// api/src/routes/keys.ts
+import { Router } from 'express';
+import { z } from 'zod';
+import { pool } from '../db/pool.js';
+import { requireAuth } from '../middleware/auth.js';
+
+const router = Router();
+
+const publishSchema = z.object({
+  // No keyVersion. The server assigns it; a client-supplied version is
+  // a client-supplied claim, and the rollback check depends on it only
+  // ever going up.
+  publicKey: z.string().length(44),
+});
+
+router.post('/keys', requireAuth, async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const { publicKey } = publishSchema.parse(req.body);
+
+    await client.query('BEGIN');
+
+    const { rows } = await client.query(
+      \`SELECT COALESCE(MAX(key_version), 0) AS current
+         FROM device_keys WHERE user_id = $1 FOR UPDATE\`,
+      [req.user.id]
+    );
+    const nextVersion = rows[0].current + 1;
+
+    await client.query(
+      \`UPDATE device_keys SET retired_at = NOW()
+        WHERE user_id = $1 AND retired_at IS NULL\`,
+      [req.user.id]
+    );
+
+    await client.query(
+      \`INSERT INTO device_keys (user_id, public_key, key_version)
+       VALUES ($1, $2, $3)\`,
+      [req.user.id, publicKey, nextVersion]
+    );
+
+    await client.query('COMMIT');
+    res.status(201).json({ data: { keyVersion: nextVersion }, success: true });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    next(err);
+  } finally {
+    client.release();
+  }
+});
+
+router.get('/keys/:userId', requireAuth, async (req, res, next) => {
+  try {
+    const { rows } = await pool.query(
+      \`SELECT public_key, key_version
+         FROM device_keys
+        WHERE user_id = $1 AND retired_at IS NULL
+        ORDER BY key_version DESC
+        LIMIT 1\`,
+      [req.params.userId]
+    );
+
+    res.json({
+      data: rows[0]
+        ? { publicKey: rows[0].public_key, keyVersion: rows[0].key_version }
+        : { publicKey: null, keyVersion: null },
+      success: true,
+    });
+  } catch (err) { next(err); }
+});
+
+export default router;
+
+// app/src/crypto/peer.ts -- the send path
+export async function keyForSending(peerId) {
+  const known = await loadPin(peerId);
+  const fetched = await api.get('/keys/' + peerId).then((r) => r.data);
+
+  const verdict = classifyPeerKey(known, fetched, {
+    isWellFormed: (k) => typeof k === 'string' && k.length === 44,
+  });
+
+  switch (verdict.action) {
+    case 'proceed':
+      return known.publicKey;
+
+    case 'pin':
+      await savePin(peerId, {
+        publicKey: fetched.publicKey,
+        keyVersion: fetched.keyVersion,
+        verifiedAt: null,
+      });
+      return fetched.publicKey;
+
+    case 'warn':
+      // Stops the send. The UI shows the change, offers re-verification,
+      // and only pins if the user accepts. verificationLost tells it
+      // whether to say "you verified this before" -- which is the
+      // difference between a mild notice and a serious one.
+      throw new PeerKeyChangedError(verdict);
+
+    case 'block':
+      throw new PeerKeyUnusableError(verdict);
+  }
+}`
+  });
+
+  createQuiz("lesson-quiz", [
+    {
+      question: "Why is device_keys append-only rather than one updatable row per user?",
+      options: [
+        "Postgres cannot update a TEXT column efficiently",
+        "Old messages record which key_version sealed them, and that reference only means something while the key's row still exists",
+        "It makes the table smaller",
+        "UNIQUE constraints require multiple rows"
+      ],
+      correct: 1,
+      explanation: "b2/0002 put key_version on the messages table for exactly this. Overwriting the key would leave every past message pointing at a version nobody can look up. A key change is also a security event worth having a history of — 'this key changed three times last Tuesday' is only sayable if the rows are still there."
+    },
+    {
+      question: "GET /keys/:userId returns publicKey: null. What must the client do?",
+      options: [
+        "Send the message unencrypted and mark it as unverified in the UI",
+        "Refuse to send — if null means plaintext, the server reads any message it likes by returning null",
+        "Retry until a key appears",
+        "Generate a key on the peer's behalf"
+      ],
+      correct: 1,
+      explanation: "This is the cheapest possible attack on the whole system. All the cryptography sits behind a branch whose input the attacker controls, so a graceful fallback to plaintext means there is no guarantee at all — only a guarantee the server has agreed to honour. When the secure path is unavailable, you stop."
+    },
+    {
+      type: "spot-the-bug",
+      code: `if (known.publicKey !== fetched.publicKey) {\n  // "New phone. Update the pin."\n  savePin(peerId, fetched);        // line 3\n  return fetched.publicKey;\n}`,
+      bugLine: 3,
+      options: [
+        "Line 3: savePin should be awaited",
+        "Line 3: silently re-pinning a changed key IS the substitution attack succeeding — the one event worth warning about is handled by not mentioning it",
+        "Line 3: the pin should store only the key, not the version"
+      ],
+      correct: 1,
+      explanation: "Pinning exists so that a substitution becomes visible. Code that quietly accepts whatever it is given has a pin that records history and defends nothing. A key change is legitimate often enough to be annoying and dangerous often enough to matter, which is exactly the situation where the decision belongs to the human rather than the code."
+    },
+    {
+      question: "A different key arrives at the SAME version number. What does that mean?",
+      options: [
+        "A normal rotation — versions do not always increment",
+        "No honest path produces it: POST /keys assigns MAX(version) + 1, so a different key that did not increment is a substitution or a replay",
+        "The peer published from two devices at once",
+        "The client's cached version is stale"
+      ],
+      correct: 1,
+      explanation: "The server assigns the version, and it assigns it by incrementing. So a genuine rotation always arrives with a higher number. Same-or-lower with different bytes has no legitimate explanation, which makes it one of the few things in this system that can be blocked outright rather than warned about."
+    },
+    {
+      question: "Why is replaying a retired key worse than an ordinary key change?",
+      options: [
+        "It is not worse; both are equally suspicious",
+        "A key may have been retired precisely because it was compromised, so a rollback pushes you towards the one key most likely to be in someone else's hands",
+        "Retired keys use a weaker algorithm",
+        "The retired key cannot decrypt new messages"
+      ],
+      correct: 1,
+      explanation: "Rotation is what you do after a device is lost or a key leaks. An attacker who can replay old directory responses can therefore steer you onto exactly the key they already have. This is why the rollback check compares versions rather than only asking whether the key is one you have seen before."
+    },
+    {
+      type: "predict-output",
+      code: `const known = { publicKey: 'A', keyVersion: 3 };\nconst fetched = { publicKey: 'B', keyVersion: 3 };\nconsole.log('changed:', known.publicKey !== fetched.publicKey);\nconsole.log('incremented:', fetched.keyVersion > known.keyVersion);`,
+      answer: "changed: true\nincremented: false",
+      explanation: "Changed but not incremented is the signature of a substitution. A real rotation would show true and true. Checking only the first condition — which is what most implementations do — cannot tell a rotation from an attack, which is why both comparisons are needed."
+    },
+    {
+      question: "The user verified this peer's fingerprint in person last year. The key has now changed. What happens to that verification?",
+      options: [
+        "It carries over — the person is the same person",
+        "It is lost. A fingerprint checked last year says nothing about a key that appeared this morning, and the UI must know to ask again",
+        "It carries over if the version incremented",
+        "It is stored on the server and revalidated automatically"
+      ],
+      correct: 1,
+      explanation: "Verification is a statement about a specific key, not about a person. Carrying it across a change would mean an attacker who substitutes a key inherits the green tick the user earned by meeting their friend in a cafe. This is why classifyPeerKey reports verificationLost separately from the trust level."
+    },
+    {
+      type: "fill-blank",
+      code: `// The server assigns the version. Never the client.\nconst { rows } = await client.query(\n  'SELECT COALESCE(MAX(key_version), ___) AS current FROM device_keys WHERE user_id = $1 FOR UPDATE',\n  [userId]\n);\nconst nextVersion = rows[0].current + 1;`,
+      answer: "0",
+      explanation: "COALESCE(MAX(...), 0) makes a user's first key version 1 rather than NULL + 1, which is NULL. FOR UPDATE is the other half: without it two simultaneous publishes both read the same MAX and both compute the same next version, and the UNIQUE constraint turns that into an error rather than a duplicate."
+    },
+    {
+      question: "Why must the client not send keyVersion when publishing?",
+      options: [
+        "It would make the request larger",
+        "A client-supplied version is a client-supplied claim, and the rollback check only works because the number is monotonic and server-controlled",
+        "Zod cannot validate integers",
+        "The version is derived from the key bytes"
+      ],
+      correct: 1,
+      explanation: "Every defence in this lesson rests on the version increasing. A caller who picks their own can publish 'version 1' forever, so no peer ever sees an increment, and every genuine rotation looks like a rollback. Whenever a check depends on a value's ordering, the value cannot come from the party being checked."
+    },
+    {
+      question: "What can a dishonest server do, and what can it not do?",
+      options: [
+        "It can decrypt messages directly, because it stores them",
+        "It cannot decrypt what it stores, but it can hand your client a key it controls — and your client will encrypt to it correctly, with no error anywhere",
+        "It can do neither; TLS prevents both",
+        "It can only attack new conversations, never existing ones"
+      ],
+      correct: 1,
+      explanation: "Nothing fails cryptographically, because nothing has failed — you encrypted to exactly the key you were given. This is the unavoidable shape of any system with a key directory, and Signal, WhatsApp and iMessage all share it. The two answers are pinning, so a change is visible, and out-of-band fingerprint comparison, which is lesson 3."
+    },
+    {
+      question: "What is the honest weakness of trust-on-first-use?",
+      options: [
+        "It is slow on the first message",
+        "There is nothing to compare the first key against, so an attacker is best off intercepting before the two people have ever talked",
+        "It requires the server to be trusted forever",
+        "It cannot detect key rotation"
+      ],
+      correct: 1,
+      explanation: "The first fetch is the weakest moment and should be named rather than glossed. What TOFU does buy is that the attack must be early and sustained: a server that behaves honestly and later turns malicious cannot start reading quietly, because it has to push a key change, which is the event the client is watching for."
+    },
+    {
+      type: "which-breaks",
+      question: "Which of these will fail?",
+      variants: [
+        "if (fetched.publicKey == null) return block('no_key');\nif (!isWellFormed(fetched.publicKey)) return block('malformed');",
+        "if (!isWellFormed(fetched.publicKey)) return block('malformed');\nif (fetched.publicKey == null) return block('no_key');",
+        "if (!fetched || fetched.publicKey == null) return block('no_key');\nif (!isWellFormed(fetched.publicKey)) return block('malformed');"
+      ],
+      correct: 1,
+      explanation: "Checking well-formedness first hands null to a function that expects a string. Depending on how isWellFormed is written that either throws or quietly returns false, and the second reports 'malformed' for what is actually 'no key published yet' — a very different situation with a very different message for the user. Null checks come before anything that dereferences."
+    },
+    {
+      type: "predict-output",
+      code: `// Is a version bump alone a change?\nconst known = { publicKey: 'Kx1', keyVersion: 3 };\nconst fetched = { publicKey: 'Kx1', keyVersion: 9 };\nconsole.log(known.publicKey === fetched.publicKey);`,
+      answer: "true",
+      explanation: "Same bytes, so same identity — the version moved but nothing that matters changed, and the client proceeds. Comparing versions instead of keys would warn the user about a key that is identical to the one they already trust, which trains them to dismiss the warning that matters."
+    },
+    {
+      question: "Where should the client store its pins — SecureStore or SQLite?",
+      options: [
+        "SecureStore, because keys are sensitive",
+        "SQLite: pins hold public keys, which are not secret, and there is one per conversation so it is not small either",
+        "In memory only, refetched each launch",
+        "On the server, so it survives reinstall"
+      ],
+      correct: 1,
+      explanation: "SecureStore is for small secrets — the private identity key belongs there. A public key is not secret; the whole point is that it is published. Storing pins on the server would be worse still: it hands the party you are defending against control of the record you are defending with."
+    },
+    {
+      type: "order-steps",
+      steps: [
+        "SELECT MAX(key_version) FOR UPDATE",
+        "Compute nextVersion as current + 1",
+        "UPDATE the previous current key to set retired_at",
+        "INSERT the new key row",
+        "COMMIT"
+      ],
+      correctOrder: [0, 1, 2, 3, 4],
+      explanation: "FOR UPDATE first, so two devices publishing at once serialise instead of both computing the same version. Retire before insert so there is never a moment with two non-retired keys — a fetch landing in that window would pick one arbitrarily by version ordering. All of it in one transaction, or a failure leaves a user with no current key at all."
+    },
+    {
+      question: "The client blocks on a rollback. Should verificationLost be true?",
+      options: [
+        "Yes — any key change loses verification",
+        "No. Nothing was accepted, so the existing pin and its verification still stand",
+        "Yes, to be safe",
+        "It depends on whether the version was lower or equal"
+      ],
+      correct: 1,
+      explanation: "verificationLost describes a consequence of accepting something new. A blocked rollback accepts nothing — the old pin is untouched and still verified. Reporting a loss here would make the UI tell the user to re-verify a key that never changed, which is both wrong and the kind of false alarm that teaches people to ignore real ones."
+    },
+    {
+      question: "Why does a key change warn rather than block?",
+      options: [
+        "Blocking would be more secure but is harder to implement",
+        "It is genuinely legitimate — a new phone or a reinstall — and indistinguishable from an attack, so the decision belongs to the human",
+        "Warnings are required by the app stores",
+        "Because the server can override a block"
+      ],
+      correct: 1,
+      explanation: "Blocking every rotation would break the app for anyone who changes phone; auto-accepting every rotation is the attack succeeding. Neither is available to the code, because the information that distinguishes them — did you actually get a new phone? — exists only outside the system. That is also why lesson 3 exists."
+    },
+    {
+      type: "spot-the-bug",
+      code: `router.post('/keys', requireAuth, async (req, res) => {\n  const { publicKey, keyVersion } = req.body;    // line 2\n  await pool.query(\n    'INSERT INTO device_keys (user_id, public_key, key_version) VALUES ($1, $2, $3)',\n    [req.user.id, publicKey, keyVersion]\n  );\n});`,
+      bugLine: 2,
+      options: [
+        "Line 2: the body should be validated with Zod",
+        "Line 2: taking keyVersion from the client lets a caller publish the same version forever, so no peer ever sees an increment and every real rotation looks like a rollback",
+        "Line 2: publicKey should be hashed before storing"
+      ],
+      correct: 1,
+      explanation: "Validation is also missing and is the smaller problem. The structural defect is that the version is the thing peers use to distinguish a rotation from a substitution, and here it is supplied by the party whose behaviour that check is meant to constrain. Public keys are also deliberately not hashed — they need to be handed out intact."
+    },
+    {
+      question: "Two devices publish a key at the same instant. What stops them both becoming version 4?",
+      options: [
+        "Nothing — the last write wins",
+        "FOR UPDATE serialises the read, and UNIQUE (user_id, key_version) turns any remaining race into an error rather than a duplicate",
+        "The application checks for duplicates before inserting",
+        "Postgres detects it automatically"
+      ],
+      correct: 1,
+      explanation: "Two layers, deliberately. The lock is what makes the common case correct; the constraint is what makes the uncommon case loud instead of silent. Relying on an application-level check is the read-then-write pattern that b4/0003 shows losing increments under exactly the concurrency it exists to handle."
+    },
+    {
+      question: "Why does retiring use a timestamp rather than deleting the row?",
+      options: [
+        "Deleting is slower in Postgres",
+        "A deleted row and a row that never existed are indistinguishable, and the difference is usually what you most need to know",
+        "Foreign keys prevent deletion",
+        "The row is needed for the UNIQUE constraint"
+      ],
+      correct: 1,
+      explanation: "The same principle as revoked_at in b2/0001 and superseded_at in b4/0002: a state change is recorded, never expressed by absence. Here it also keeps old key_version references on messages resolvable, so history stays decryptable by a client that still holds the old private key."
+    },
+    {
+      type: "fill-blank",
+      code: `// Only the current key is offered to peers\nSELECT public_key, key_version\n  FROM device_keys\n WHERE user_id = $1 AND retired_at ___ NULL\n ORDER BY key_version DESC\n LIMIT 1;`,
+      answer: "IS",
+      explanation: "IS NULL, not = NULL — comparing to NULL with = yields NULL, which is not true, so the query would return nothing and every peer would see 'no key published'. Which, if the client falls back to plaintext on that answer, is the downgrade attack arriving by way of a typo."
+    },
+    {
+      question: "classifyPeerKey has exactly one branch that returns 'pin'. Why does that matter?",
+      options: [
+        "It keeps the function short",
+        "Pinning is the act of deciding to trust a key, and it may only happen where there is nothing to compare against — a second pin branch is a key nobody agreed to trust",
+        "The pin store only accepts one write per session",
+        "It makes the function easier to test"
+      ],
+      correct: 1,
+      explanation: "Counting the branches that can pin is a quick structural check on the whole design, which is why the self-check asserts it directly rather than only testing individual cases. It is the same discipline as c5/0001, where exactly one input may cause a key to be generated."
+    },
+    {
+      type: "predict-output",
+      code: `const known = { publicKey: 'A', keyVersion: 3, verifiedAt: null };\nconst changed = known.publicKey !== 'B';\nconst wasVerified = known.verifiedAt != null;\nconsole.log('lost:', changed && wasVerified);`,
+      answer: "lost: false",
+      explanation: "The key changed but there was no verification to lose, so the UI should report a key change without claiming the user's earlier verification was invalidated. Deriving the flag from both facts, rather than setting it inside the change branch, is what keeps the two cases distinct."
+    },
+    {
+      question: "Which defence closes the trust-on-first-use gap?",
+      options: [
+        "Pinning the key more aggressively",
+        "Nothing in this lesson — only two humans comparing fingerprints out of band, which is lesson 3",
+        "Requiring TLS certificate pinning on the API",
+        "Fetching the key twice and comparing"
+      ],
+      correct: 1,
+      explanation: "Pinning makes later substitution visible; it cannot help at the moment there is nothing to compare against. Fetching twice asks the same untrusted source the same question. TLS proves which server you are talking to and says nothing about whether it is honest. Only information arriving through a channel the server does not control can close it."
+    },
+    {
+      question: "What does 'the bytes are the identity' mean in practice?",
+      options: [
+        "Keys should be compared as byte arrays rather than strings",
+        "The comparison that decides trust is of the key material itself; version numbers are metadata that describe the change, not the thing being trusted",
+        "The key must be stored in binary form",
+        "Identity is derived by hashing the key bytes"
+      ],
+      correct: 1,
+      explanation: "It is why an unchanged key at a bumped version proceeds, and why a changed key is a change regardless of what the version says. The version's job is narrower and specific: to distinguish a legitimate rotation from a substitution or replay, which is a question about how the change happened rather than about whether it did."
+    }
+  ]);
+  </script>
+</body>
+</html>

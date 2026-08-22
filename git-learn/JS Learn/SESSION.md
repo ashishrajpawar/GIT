@@ -1019,6 +1019,75 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
+### c5/0002 — the key directory, and the two things a rotation cannot look like (2026-08-22)
+
+M3: **`classifyPeerKey`**. 22 self-checks, 11 wrong-cases, **all passing on
+the first run** — the first lesson this session where the wrong-cases found no
+hole in the self-check. **98 track lessons, 71 verified.**
+
+Defines `device_keys`, **append-only**: `retired_at` rather than `DELETE`, and
+`UNIQUE (user_id, key_version)`. Third table in the course to record a state
+change rather than express it by absence, after `revoked_at` in `b2/0001` and
+`superseded_at` in `b4/0002`. Here it also keeps `messages.key_version`
+resolvable — that column has looked like over-engineering since `b2/0002` and
+this is what it was for.
+
+### The finding that gives the lesson its rule
+
+*"Warn when the key changes"* is the standard advice and it is not a rule —
+it cannot distinguish a new phone from a server substituting a key. The
+version makes it one:
+
+| Fetched | Means | Client |
+|---|---|---|
+| Same bytes | nothing changed | **proceed** — versions are metadata, the bytes are the identity |
+| Different key, **higher** version | a real rotation | **warn** — legitimate and indistinguishable from an attack, so the human decides |
+| Different key, **same or lower** | not a rotation | **block** — no honest path produces it |
+
+**Because the server assigns the version by incrementing, a genuine rotation
+always arrives with a higher number.** So the third row can be refused
+outright rather than warned about — and it matters, because **a replayed old
+key may have been retired precisely because it leaked.** A rollback steers you
+onto the one key most likely to be in someone else's hands.
+
+**Consequence recorded in the lesson: the client must not send
+`keyVersion`.** Every defence here rests on the number being monotonic, and a
+client-supplied version is a client-supplied claim. *When a check depends on a
+value's ordering, that value cannot come from the party being checked.*
+
+### The downgrade, which is the cheapest attack in the system
+
+`GET /keys/:userId` can legitimately return `publicKey: null`. The tempting
+handler sends the message unencrypted and marks it in the UI — which converts
+a server that cannot read your messages into one that reads whatever it likes,
+**by answering null**. All the cryptography sits behind an `if` whose input
+the attacker controls.
+
+Same rule `0001` reached from the other side: **when the secure path is
+unavailable, stop — do not fall back to the insecure one.** A feature that
+degrades gracefully under attack is a feature that can be attacked into
+degrading.
+
+### Two things stated rather than glossed
+
+- **Trust on first use is genuinely weak**, and the lesson says so: an
+  attacker is best off intercepting before two people have ever talked. What
+  TOFU buys is that the attack must be *early and sustained* — a server that
+  turns malicious later has to push a key change, which is the event the
+  client watches for.
+- **Verification does not survive a key change.** A fingerprint checked in a
+  cafe last year says nothing about a key that appeared this morning, so
+  `verificationLost` is reported separately — and deliberately **false** on a
+  blocked rollback, because nothing was accepted and the old pin still stands.
+  Telling users to re-verify a key that never changed is the false alarm that
+  teaches them to ignore real ones.
+
+**The structural check worth reusing: exactly one branch may pin.** The
+self-check asserts it directly over seven inputs rather than only testing
+cases — the same shape as `0001`'s *exactly one input may generate*. Counting
+the branches that can grant trust is a cheap read on whether a design is
+sound.
+
 ### C5 started — `0001` written, four to go (2026-08-22)
 
 **The module now exists**: `modules/c5-end-to-end-encryption/`, wired into
@@ -1351,9 +1420,10 @@ produce, in order:
    `0001` and `0002`, DLT template constraints in `0001`, cost control in
    `0003`. All three now verified; the module had **one** verified lesson
    before this session and has three now.
-3. **Write C5 — end-to-end encryption.** **`0001` done 2026-08-22**; four to
-   go. `0002` (publish/fetch) and `0003` (verification) are determined by
-   ADR-0002 and can be written directly. **`0004` (backup) and `0005`
+3. **Write C5 — end-to-end encryption.** **`0001` and `0002` done
+   2026-08-22**; three to go. **`0003` (verification) is next** and is
+   determined by ADR-0002 — safety numbers, and the canonical ordering that
+   makes both devices derive the identical one. **`0004` (backup) and `0005`
    (multi-device) need decisions first** — the ADR deliberately leaves them
    open, and `0004`'s first question already has a fixed constraint from this
    session: the key backup must not be recoverable by SMS alone.
@@ -1671,6 +1741,7 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `a11/0003` | `toCreateTokenPayload` | blank is an absence, never `''`; `maxUses: 0` and absent are opposites; an unreadable value is refused, never defaulted |
 | `a11/0002` | `auditContrast` | the sRGB gamma decode, which the usual anchors cannot catch; a pair is audited, not a colour; a value with alpha has no ratio and must be skipped, not scored |
 | `a11/0001` | `swipeOutcome` | the threshold is a *fraction* of the width, never a pixel; a flick back vetoes a committed distance; `commit` decides the gesture, never whether the action asks first |
+| `c5/0002` | `classifyPeerKey` | a missing key is blocked, never downgraded to plaintext; exactly one branch may pin; a rotation increments and a substitution does not |
 | `c5/0001` | `planKeyInit` | only `null` is a first run — `''` is a locked Keychain; a key that will not load is refused, never regenerated; length is not validity |
 | `b4/0003` | `checkLimits` | a sliding window, never a bucket that resets; the per-number limits cannot see an enumerator at all; `retryAfterMs` comes from the oldest live stamp |
 | `b4/0002` | `refreshOutcome` | an unknown token must cost nothing, because there is no family to revoke and garbage would otherwise log anyone out; a replay returns the *existing* successor, never a fresh rotation; logout is not theft |
