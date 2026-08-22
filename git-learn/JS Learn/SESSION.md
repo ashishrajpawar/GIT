@@ -1019,6 +1019,86 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
+### b4/0003 — rate limiting became a bill, and lockout was deleted rather than tuned (2026-08-22)
+
+M3: **`checkLimits`**. 18 self-checks, 11 wrong-cases. **B4 is complete** —
+69/96 verified.
+
+**The lesson's whole threat model changed.** Four of the six things it now
+lists as prevented are specific to this system, and three of them would not
+exist under a password. `/auth/request-code` is **the first endpoint in the
+course where every unthrottled request costs money** — ₹0.12–₹0.25 an SMS.
+A wasted query is free; a wasted SMS is not.
+
+That is why one limiter is not enough, and the table makes the split explicit:
+**the per-number limits protect your users and the per-IP limit protects your
+invoice.** Neither substitutes for the other, which is the *"one composite key
+defends nothing"* argument arrived at from cost rather than security.
+
+### Account lockout is gone, and the lesson already contained the reason
+
+It had `failed_login_attempts`, `locked_until`, a migration, and careful
+reasoning about how to make a dangerous mechanism less dangerous — threshold
+10 not 3, duration 30 minutes not indefinite. It also already said the
+damning thing: ***"anyone who knows your email can lock you out of your own
+account, on demand, by failing to log in."***
+
+All of it deleted. **The password decision removed the problem rather than
+mitigating it.** What replaces it is the `attempts` column on the OTP row:
+
+| | Account lockout | OTP attempt cap |
+|---|---|---|
+| Counter lives on | the **user** | the **code** |
+| Exhausting it costs the victim | their account, 30 minutes | nothing — they request another |
+| Can a stranger trigger it? | **yes**, knowing only the identifier | only against a code they cannot obtain |
+
+**The general lesson, and it is worth more than the feature: a control that
+needs careful tuning to avoid becoming a weapon is often a sign that something
+upstream is wrong.** Every knob on that design existed to manage a hazard
+created by having a long-lived, publicly addressable secret. Remove the secret
+and the knobs go with it. Not always available; when it is, it beats any
+amount of tuning.
+
+Also stated rather than assumed: **rate limits are for resources, attempt caps
+are for secrets.** A time-windowed limiter on `verify-code` would be strictly
+worse — wait out the window and you get five more guesses at the same code,
+forever.
+
+### My own self-check had three holes, and every one was a fixture defect
+
+The wrong-cases found all three. Worth recording because they are the same
+mistake in three costumes — **a fixture that cannot distinguish the right
+answer from the wrong one**:
+
+- **`retryAfterMs` was only ever checked against a one-stamp window**, where
+  oldest and newest are the same number. "Use the newest" passed cleanly.
+  Fixed with two stamps at different ages.
+- **The mutation fixture was on a *refused* path.** An implementation that
+  records the request on the way out only reaches that code when allowed, so
+  the bug was unreachable. There is now an explicit check asserting the
+  fixture is on the allowed path — the assertion about the *test* rather than
+  the code.
+- **`NOW` was 10,000,000 ms**, small enough that daily-window fixtures
+  produced **negative timestamps**, which a bucket-based implementation
+  mis-binned. Raised to a real epoch value.
+
+**And the fixed-bucket mistake needed a fixture built around a boundary.**
+A bucket and a sliding window agree at most wall-clock offsets, which is
+exactly why that bug survives testing — so the check now computes a moment
+sitting precisely on a 60-second boundary. **Choosing an arbitrary "now" would
+have passed the mistake most of the time and failed it occasionally**, which is
+worse than either.
+
+**Eighth time a wrong-case has caught a gap in the self-check beside it.**
+
+### I introduced a `render-as-authored` and the audit caught it
+
+One new explanation said *"each request is the first one that key has ever
+seen"* — about requests, not options, so the check was a false trigger. **It
+does not matter that it was a false trigger:** a flagged question renders
+unshuffled, so its keyed answer sits at the authored index. Reworded, back to
+0. That check has now earned its place twice in three days.
+
 ### b4/0002 — the grace window went from described to implemented (2026-08-22)
 
 M3: **`refreshOutcome`**. 21 self-checks, 12 wrong-cases. Was `unverifiable`
@@ -1233,7 +1313,8 @@ module contradicting itself.
 |---|---|---|
 | ~~`0001`~~ | ~~argon2 over email + password~~ | **Done 2026-08-22.** Renamed to `0001-phone-signup-otp.html`; `phone_hash` with a pepper, OTP issue/verify, the denial oracle and its timing half, DLT. M3 on `verifyOtp` |
 | ~~`0002`~~ | ~~email-keyed, 7-day refresh expiry~~ | **Done 2026-08-22.** Expiry removed, `superseded_at` split from `revoked_at`, device list added, grace window implemented. M3 on `refreshOutcome` |
-| `0003` | Rate limiting, examples keyed on email | **Gains real substance.** Three layers now decided: ~1 code per number per 60s, ~5 per number per day, and a per-IP ceiling. The daily cap is the one that bounds the bill — without it a script walking the number range costs real money whether or not anyone signs up. Per-IP alone was rejected: Indian carriers NAT huge numbers of users behind shared addresses, so a useful limit locks out real people. 35 email references |
+| ~~`0003`~~ | ~~email-keyed rate limiting + account lockout~~ | **Done 2026-08-22.** Three OTP layers, lockout deleted outright. M3 on `checkLimits`. **B4 complete** |
+| ~~old `0003` note~~ | **Gains real substance.** Three layers now decided: ~1 code per number per 60s, ~5 per number per day, and a per-IP ceiling. The daily cap is the one that bounds the bill — without it a script walking the number range costs real money whether or not anyone signs up. Per-IP alone was rejected: Indian carriers NAT huge numbers of users behind shared addresses, so a useful limit locks out real people. 35 email references |
 
 **The OTP-specific pass** — the student chose the option that includes it.
 Nothing in the course currently covers: the denial oracle in the OTP response
@@ -1507,6 +1588,7 @@ un-runnable exercise with a **per-exercise** `unverifiable` reason, add a
 | `a11/0003` | `toCreateTokenPayload` | blank is an absence, never `''`; `maxUses: 0` and absent are opposites; an unreadable value is refused, never defaulted |
 | `a11/0002` | `auditContrast` | the sRGB gamma decode, which the usual anchors cannot catch; a pair is audited, not a colour; a value with alpha has no ratio and must be skipped, not scored |
 | `a11/0001` | `swipeOutcome` | the threshold is a *fraction* of the width, never a pixel; a flick back vetoes a committed distance; `commit` decides the gesture, never whether the action asks first |
+| `b4/0003` | `checkLimits` | a sliding window, never a bucket that resets; the per-number limits cannot see an enumerator at all; `retryAfterMs` comes from the oldest live stamp |
 | `b4/0002` | `refreshOutcome` | an unknown token must cost nothing, because there is no family to revoke and garbage would otherwise log anyone out; a replay returns the *existing* successor, never a fresh rotation; logout is not theft |
 | `a11/0005` | `planRelease` | an OTA moves no numbers, because bumping the version is what stops it reaching anyone; `versionCode` never resets and `buildNumber` always does; a crypto change is plain JS and still needs a reviewed build |
 | `b4/0001` | `verifyOtp` | a null `expires_at` is refused here and honoured on `tokens`; the cap gates the comparison rather than reporting on it; every refusal is byte-identical and the reason exists only for the log |

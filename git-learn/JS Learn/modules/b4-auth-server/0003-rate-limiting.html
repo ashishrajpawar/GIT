@@ -25,18 +25,25 @@
 
     <div class="callout">
       <div class="callout-title">Why this matters for Token</div>
-      <p>Without rate limiting, an attacker can try millions of passwords per hour against your login endpoint (brute-force). They can also flood your server with requests to make it unresponsive (DoS). Rate limiting caps how many requests a single IP or account can make in a time window. Auth endpoints are the #1 attack surface — they need the strictest limits.</p>
+      <p>Token has no passwords, so there is nothing to brute-force — and rate limiting matters <em>more</em> here, not less. Sending a one-time code costs real money, and requesting one for a number you do not own is how an attacker finds out who has an account. Rate limiting is what stands between a script and both your user list and your SMS invoice. It is also the last line under the redemption endpoint, where 7.9 × 10<sup>17</sup> possible codes only means something at a bounded guessing rate.</p>
     </div>
 
     <h2>What rate limiting prevents</h2>
 
     <ul>
-      <li><strong>Brute-force attacks</strong> — trying thousands of passwords against one account</li>
-      <li><strong>Credential stuffing</strong> — testing leaked email/password pairs from other breaches</li>
-      <li><strong>Account enumeration</strong> — checking which emails are registered</li>
+      <li><strong>Cost amplification</strong> — every code request spends ₹0.12–₹0.25 of your money on someone else's behalf. This is new in this lesson and it is the one with an invoice attached</li>
+      <li><strong>Account enumeration</strong> — checking which phone numbers are registered, across a space small enough to walk end to end</li>
+      <li><strong>Code guessing</strong> — against the redemption endpoint, where the keyspace argument only holds at a limited rate</li>
+      <li><strong>Harassment</strong> — an unthrottled resend button delivers an SMS to a real phone every time someone presses it</li>
       <li><strong>API abuse</strong> — a buggy or malicious client sending thousands of requests per second</li>
       <li><strong>Denial of service</strong> — overwhelming the server so legitimate users can't connect</li>
     </ul>
+
+    <p><strong>Notice that only the last two are the usual reasons.</strong>
+    The first four are specific to what this system is, and three of them
+    would not exist if sign-in used a password. Removing passwords did not
+    remove the need for rate limiting; it changed what the limits are
+    protecting.</p>
 
     <h2>Token's rate limiting strategy</h2>
 
@@ -48,16 +55,28 @@
         <td style="padding:0.5rem;font-weight:600;">Key</td>
       </tr>
       <tr style="border-bottom:1px solid var(--gray-200);">
-        <td style="padding:0.5rem;">POST /auth/login</td>
-        <td style="padding:0.5rem;">5 attempts</td>
-        <td style="padding:0.5rem;">15 minutes</td>
-        <td style="padding:0.5rem;">IP + email</td>
+        <td style="padding:0.5rem;"><strong>POST /auth/request-code</strong></td>
+        <td style="padding:0.5rem;"><strong>1 code</strong></td>
+        <td style="padding:0.5rem;"><strong>60 seconds</strong></td>
+        <td style="padding:0.5rem;"><strong>phone_hash</strong></td>
       </tr>
       <tr style="border-bottom:1px solid var(--gray-200);">
-        <td style="padding:0.5rem;">POST /auth/register</td>
-        <td style="padding:0.5rem;">3 accounts</td>
-        <td style="padding:0.5rem;">1 hour</td>
-        <td style="padding:0.5rem;">IP</td>
+        <td style="padding:0.5rem;"><strong>POST /auth/request-code</strong></td>
+        <td style="padding:0.5rem;"><strong>5 codes</strong></td>
+        <td style="padding:0.5rem;"><strong>24 hours</strong></td>
+        <td style="padding:0.5rem;"><strong>phone_hash</strong></td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;"><strong>POST /auth/request-code</strong></td>
+        <td style="padding:0.5rem;"><strong>30 codes</strong></td>
+        <td style="padding:0.5rem;"><strong>1 hour</strong></td>
+        <td style="padding:0.5rem;"><strong>IP</strong></td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--gray-200);">
+        <td style="padding:0.5rem;">POST /auth/verify-code</td>
+        <td style="padding:0.5rem;">5 attempts</td>
+        <td style="padding:0.5rem;">per OTP</td>
+        <td style="padding:0.5rem;">the <code>attempts</code> column, not a limiter</td>
       </tr>
       <tr style="border-bottom:1px solid var(--gray-200);">
         <td style="padding:0.5rem;">POST /auth/refresh</td>
@@ -80,13 +99,76 @@
     </table>
 
     <p>
-      Read the last row again, because it is the one that is load-bearing for
-      the whole product. Every token code is one of roughly
-      7.9 × 10<sup>17</sup>, and that number is the reason guessing is
+      Read the <code>/api/redeem</code> row again, because it is the one that
+      is load-bearing for the whole product. Every token code is one of
+      roughly 7.9 × 10<sup>17</sup>, and that number is the reason guessing is
       hopeless — <em>at a given rate</em>. Ten attempts an hour is what turns
       "hopeless in theory" into "hopeless in practice". Without it, the
       arithmetic is just arithmetic.
     </p>
+
+    <div class="callout danger">
+      <div class="callout-title">Three rows for one endpoint, and the second one is your bank balance</div>
+
+      <p><code>/auth/request-code</code> is the first endpoint in this course
+      where <strong>every unthrottled request costs you money</strong>. An SMS
+      is roughly ₹0.12–₹0.25. Nothing else here has that property: a wasted
+      database query is free, and a wasted redemption attempt is free.</p>
+
+      <p>That changes what the limiter is <em>for</em>, and it is why one
+      layer is not enough:</p>
+
+      <table>
+        <thead><tr><th>Layer</th><th>Stops</th><th>Cannot stop</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>1 per number per 60s</strong></td>
+            <td>Someone hammering resend to harass one person, and the
+            accidental double-tap</td>
+            <td>One request each to a million <em>different</em> numbers.
+            Every one passes</td>
+          </tr>
+          <tr>
+            <td><strong>5 per number per day</strong></td>
+            <td>Sustained harassment of one number over hours</td>
+            <td>The same enumeration. Still one request per number</td>
+          </tr>
+          <tr>
+            <td><strong>30 per IP per hour</strong></td>
+            <td>The enumeration — one host walking the number range</td>
+            <td>A distributed attempt from many hosts</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p><strong>The per-number limits protect your users. The per-IP limit
+      protects your invoice.</strong> They are different jobs and neither
+      substitutes for the other — which is the same argument the
+      <em>"one composite key defends nothing"</em> section below makes, arrived
+      at from money rather than from security.</p>
+
+      <p>Note what the per-IP number is doing: 30 an hour is generous for a
+      human (nobody signs up thirty times) and ruinous for an enumerator, who
+      needs millions. <strong>A good limit is one that a real user cannot
+      reach and an attacker cannot afford</strong>, and the gap between those
+      two is usually enormous — which is why agonising over the exact figure
+      is wasted effort.</p>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">The verify limit is not a rate limiter, deliberately</div>
+      <p>Guessing the six-digit code is capped by the <code>attempts</code>
+      column on the OTP row, which <code>b4/0001</code>'s
+      <code>verifyOtp</code> checks. It is <strong>per-OTP, not
+      per-window</strong>, and that is the right shape: five guesses against
+      <em>this code</em>, after which the code is dead regardless of how long
+      the attacker waits.</p>
+      <p>A time-windowed limiter would be strictly worse here — wait out the
+      window and you get five more guesses at the same code, forever. The
+      counter belongs to the thing being guessed, not to the clock.
+      <strong>Rate limits are for resources; attempt caps are for
+      secrets.</strong></p>
+    </div>
 
     <h2>Implementation with express-rate-limit</h2>
 
@@ -116,39 +198,46 @@ const TOO_MANY = {
   success: false,
 };
 
-// Two limiters on login, not one. Both must pass.
+// THREE limiters on request-code, not one. All must pass.
 //
-//   by IP      - stops one host working through many accounts
-//   by email   - stops many hosts working on one account
+//   by number, 60s  - the resend button, and harassment of one person
+//   by number, 24h  - sustained harassment of one person over hours
+//   by IP,     1h   - one host walking the number range. THIS is the
+//                     one that bounds the SMS bill; the other two
+//                     protect users and would each let an enumerator
+//                     through untouched.
 //
-// A single key of `ip:email` does neither: the attacker controls both
-// halves, so changing either one buys a fresh allowance.
+// Keyed on the HASH, never the raw number: these keys go to Redis, and
+// Redis keys turn up in slow-query logs, MONITOR output and backups.
+// b4/0001's phoneHash is the same function the users table uses.
 
-export const loginByIp = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,                       // one host, all accounts
+export const codeByNumberBurst = rateLimit({
+  windowMs: 60 * 1000,
+  max: 1,
   message: TOO_MANY,
   standardHeaders: true,
   legacyHeaders: false,
-  store: store('rl:login:ip:'),
+  store: store('rl:otp:num:1m:'),
+  keyGenerator: (req) =&gt; phoneHash(req.body?.phone) ?? 'invalid',
 });
 
-export const loginByAccount = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,                        // one account, all hosts
+export const codeByNumberDaily = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000,
+  max: 5,
   message: TOO_MANY,
   standardHeaders: true,
   legacyHeaders: false,
-  store: store('rl:login:acct:'),
-  keyGenerator: (req) =&gt; String(req.body?.email || '').trim().toLowerCase(),
-  skip: (req) =&gt; !req.body?.email,   // no email: the IP limiter still applies
+  store: store('rl:otp:num:24h:'),
+  keyGenerator: (req) =&gt; phoneHash(req.body?.phone) ?? 'invalid',
 });
 
-export const registerLimiter = rateLimit({
+export const codeByIp = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 3,
+  max: 30,                       // generous for a human, ruinous for a script
   message: TOO_MANY,
-  store: store('rl:register:'),
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: store('rl:otp:ip:'),
 });
 
 export const apiLimiter = rateLimit({
@@ -172,7 +261,7 @@ export const redeemLimiter = rateLimit({
 
     <pre><code>// api/src/server.ts
 import {
-  loginByIp, loginByAccount, registerLimiter, apiLimiter, redeemLimiter
+  codeByNumberBurst, codeByNumberDaily, codeByIp, apiLimiter, redeemLimiter
 } from './middleware/rate-limit.js';
 
 // Express must know it is behind Coolify's proxy, or every request appears
@@ -182,10 +271,18 @@ app.set('trust proxy', 1);
 // General limit on all API routes
 app.use('/api', apiLimiter);
 
-// Both login limiters apply, in order. The body has to be parsed before
-// loginByAccount can read the email from it.
-app.use('/api/auth/login', loginByIp, loginByAccount);
-app.use('/api/auth/register', registerLimiter);
+// All three code limiters apply, in order. The body has to be parsed
+// before the two number-keyed ones can hash the phone out of it -- so
+// express.json() must already be mounted above this line.
+//
+// IP first, deliberately: it is the cheapest check and the one an
+// enumerator trips, so it rejects the bulk traffic before anything
+// bothers hashing a number.
+app.use('/api/auth/request-code',
+  codeByIp, codeByNumberBurst, codeByNumberDaily);
+
+// verify-code gets no limiter. Its cap is the attempts column on the OTP
+// row -- per code, not per window. See the callout above.
 app.use('/api/redeem', redeemLimiter);
 
 // Routes
@@ -202,91 +299,89 @@ RateLimit-Reset: 1700001234 // when the window resets (Unix timestamp)</code></p
 
     <p>The mobile app reads these headers to show "try again in X minutes" without guessing.</p>
 
-    <h2>Account lockout</h2>
+    <h2>Doing the same work either way</h2>
 
-    <p>Beyond rate limiting, lock accounts after repeated failures:</p>
+    <p>There is no account lockout here — see <em>"why Token no longer has
+    any"</em> below. What survives from that design, and matters more, is the
+    technique that stopped the <em>clock</em> answering a question the message
+    refused to:</p>
 
-    <pre><code>// In the login handler, track failures per account.
-const MAX_FAILURES = 10;
-const LOCKOUT_MINUTES = 30;
+    <pre><code>// One response for every way this can fail. Anything more specific tells
+// a stranger whether a number is registered on the platform.
+const SAME_ANSWER = { data: { sent: true }, success: true };
 
-// One message for every way this can fail. Anything more specific tells a
-// stranger whether an email is registered on the platform.
-const SAME_ANSWER = 'Invalid email or password';
+// A real OTP row for a number nobody owns, verified against when the
+// account does not exist. Without it, "no such user" returns in a
+// millisecond while a real number spends time hashing and inserting -
+// and the clock answers the question the response refused to.
+const DUMMY_RECORD = {
+  codeHash: hashCode('000000'),
+  attempts: 0,
+  expiresAt: Date.now() + OTP_TTL_MS,
+  consumedAt: null,
+};
 
-// A hash of a value nobody will ever type, verified against when the account
-// does not exist. Without it, "no such user" returns in a millisecond while a
-// real account spends ~100ms in argon2 - and the clock answers the question
-// the message refused to.
-const DUMMY_HASH = await argon2.hash(crypto.randomUUID());
-
-router.post('/login', async (req, res, next) =&gt; {
+router.post('/auth/verify-code', async (req, res, next) =&gt; {
   try {
-    const { email, password } = loginSchema.parse(req.body);
+    const { phone, code } = verifySchema.parse(req.body);
+    const hash = phoneHash(phone);
 
-    const { rows } = await pool.query(
-      'SELECT * FROM users WHERE email = $1', [email]
-    );
-    const user = rows[0];
+    const row = hash === null ? null : await findLatestOtp(hash);
 
-    // Always do the work, whether or not the account exists.
-    const valid = await argon2.verify(user?.password_hash ?? DUMMY_HASH, password);
+    // Always do the work, whether or not the row exists. verifyOtp is
+    // cheap, but findLatestOtp is not, and the difference is measurable.
+    const outcome = verifyOtp(row ?? DUMMY_RECORD, code, {
+      now: Date.now(), maxAttempts: MAX_ATTEMPTS, hash: hashCode,
+    });
 
-    if (!user) throw ApiError.unauthorized(SAME_ANSWER);
-
-    const locked = user.locked_until && new Date(user.locked_until) &gt; new Date();
-    if (locked || !valid) {
-      if (!locked) {
-        // Atomic: read-then-write loses increments when attempts overlap,
-        // and overlapping attempts are exactly what this counts.
-        await pool.query(
-          `UPDATE users
-              SET failed_login_attempts = failed_login_attempts + 1,
-                  locked_until = CASE
-                    WHEN failed_login_attempts + 1 &gt;= $2
-                    THEN now() + ($3 || ' minutes')::interval
-                    ELSE locked_until
-                  END
-            WHERE id = $1`,
-          [user.id, MAX_FAILURES, LOCKOUT_MINUTES]
-        );
-      }
-      throw ApiError.unauthorized(SAME_ANSWER);
+    // A dummy record can never accept: nobody knows its code. So this
+    // needs no special case for the not-found path - the branch below is
+    // reached identically either way.
+    if (!outcome.accept) {
+      req.log?.info({ reason: row ? outcome.reason : 'no_account' }, 'otp refused');
+      return res.status(400).json(REFUSAL);
     }
 
-    // Success — reset failure count
-    await pool.query(
-      'UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = $1',
-      [user.id]
-    );
-
-    // Issue tokens...
+    // ... consume, upsert, issue tokens
   } catch (err) { next(err); }
 });</code></pre>
 
     <div class="callout warning">
-      <div class="callout-title">Everything about a failed login is the same answer</div>
+      <div class="callout-title">Everything about a failed sign-in is the same answer</div>
       <p>
-        Wrong password, no such account, and locked account all return the
-        identical message, and all take roughly the same time. Telling someone
-        "account locked" is friendlier and it confirms the email is registered —
-        which is the first half of credential stuffing, and something the person
-        who owns that email never agreed to publish.
+        Wrong code, no such account, expired code and exhausted attempts all
+        return the identical response, and all take roughly the same time.
+        Telling someone "no account for that number" is friendlier and it
+        confirms the number is registered — which, on an identifier space
+        small enough to enumerate, publishes your entire user list to anyone
+        patient enough to ask.
       </p>
       <p>
         This is the same rule as the redemption page's single denial message,
-        applied to accounts instead of tokens. In both places the useful detail
-        goes to the logs, where the owner can see it and a stranger cannot.
+        applied to accounts instead of tokens. In both places the useful
+        detail goes to the logs, where the owner can see it and a stranger
+        cannot. <strong>Note the log line above records
+        <code>no_account</code> — the distinction is not lost, only
+        withheld.</strong>
       </p>
     </div>
 
-    <h2>Migration for lockout fields</h2>
-
-    <pre><code>-- 006_add_lockout_fields.sql
-BEGIN;
-ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE users ADD COLUMN locked_until TIMESTAMPTZ;
-COMMIT;</code></pre>
+    <div class="callout">
+      <div class="callout-title">The dummy record is not the whole fix</div>
+      <p>Matching the work is necessary and it is not sufficient, because
+      <strong>the two paths still differ in what they write</strong>. A real
+      number gets a row inserted and an SMS dispatched; an unknown one does
+      not. The SMS is asynchronous and off the request path, so it does not
+      show up in the response time — but the <code>INSERT</code> can.</p>
+      <p>The honest position: this closes the gap from ~200&nbsp;ms to
+      single-digit milliseconds, which defeats a remote attacker over the
+      internet and does not defeat someone measuring from the same
+      datacentre. <strong>Timing defences are a matter of degree, and it is
+      worth knowing which degree you bought</strong> rather than believing the
+      problem is gone. The rate limits above are what make the residual gap
+      unexploitable: a signal you can only read by averaging thousands of
+      requests is not much use at thirty an hour.</p>
+    </div>
 
     <hr>
 
@@ -346,21 +441,71 @@ COMMIT;</code></pre>
       thing they cannot cheaply vary, which is the host making the requests.
     </p>
 
-    <h3>Lockout, and why it is not the first line</h3>
+    <h3>Account lockout, and why Token no longer has any</h3>
 
     <p>
       Locking an account after ten failures is the classic answer and it comes
-      with a gift for attackers: <strong>anyone who knows your email can lock
-      you out of your own account, on demand, forever, by failing to log in.</strong>
-      A protection that a stranger can trigger against you is also a weapon.
+      with a gift for attackers: <strong>anyone who knows your identifier can
+      lock you out of your own account, on demand, by failing to sign in.</strong>
+      A protection a stranger can trigger against you is also a weapon. That is
+      why the usual advice is a long threshold (10, not 3) and a short duration
+      (30 minutes, not "until support unlocks it") — mitigations for a design
+      you are stuck with.
     </p>
-    <p>
-      So rate limiting is the primary defence and lockout is the backstop, with
-      a deliberately long threshold (10, not 3) and a short duration (30 minutes,
-      not "until support unlocks it"). The alternative worth knowing about is
-      exponential backoff per account — 1s, 2s, 4s, 8s — which makes automated
-      guessing impossible while never fully closing the door on the real owner.
-    </p>
+
+    <div class="callout">
+      <div class="callout-title">The password decision deleted this problem rather than mitigating it</div>
+      <p>This lesson used to carry <code>failed_login_attempts</code> and
+      <code>locked_until</code> columns on <code>users</code>, a migration to
+      add them, and the careful reasoning above about how to make a dangerous
+      mechanism less dangerous. <strong>All of it is gone, because there is no
+      password to brute-force.</strong></p>
+
+      <p>What replaces it is the <code>attempts</code> column on the OTP row,
+      and the difference is worth dwelling on:</p>
+
+      <table>
+        <thead><tr><th></th><th>Account lockout</th><th>OTP attempt cap</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Counter lives on</td>
+            <td>The <strong>user</strong></td>
+            <td>The <strong>code</strong></td>
+          </tr>
+          <tr>
+            <td>Exhausting it costs the victim</td>
+            <td>Their account, for 30 minutes</td>
+            <td>Nothing — they request another code</td>
+          </tr>
+          <tr>
+            <td>Can a stranger trigger it?</td>
+            <td><strong>Yes</strong>, knowing only the identifier</td>
+            <td>Only against a code they cannot obtain</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>An attacker who burns five guesses against your current OTP has
+      destroyed a five-minute code you were probably not using. You request
+      another. <strong>There is nothing durable for them to attack, because
+      the thing being guessed did not exist ten minutes ago and will not exist
+      in five more.</strong></p>
+
+      <p>The general lesson, and it is worth more than the feature: <strong>a
+      security control that needs careful tuning to avoid becoming a weapon is
+      often a sign that something upstream is wrong.</strong> Every knob on
+      the lockout design — threshold, duration, whether support can unlock —
+      existed to manage a hazard created by having a long-lived, publicly
+      addressable secret in the first place. Remove the secret and the knobs
+      disappear with it. That is not always available. When it is, it beats
+      any amount of tuning.</p>
+
+      <p>Note what did <em>not</em> go away: the per-number request limits
+      above. Those exist because sending an SMS costs money, which is a
+      completely different reason, and they are keyed on the number for the
+      same reason lockout was dangerous — so they are deliberately generous,
+      and hitting one costs the user a wait rather than an account.</p>
+    </div>
 
     <hr>
 
@@ -400,28 +545,42 @@ COMMIT;</code></pre>
       floods, and it has to be loose enough not to catch a shared exit.
     </p>
 
-    <h3>The lockout message and the clock both answer the question</h3>
+    <h3>The message and the clock both answer the question</h3>
 
     <p>
-      Two leaks in the original handler, and the second one survives fixing the
-      first. "Account locked, try again after 14:32" confirms the email is
-      registered — that is the obvious one. Less obvious: <code>if (!user)
-      throw</code> returns in about a millisecond, while a real account spends
-      ~100ms inside argon2. <strong>Timing answers the question the message
-      refused to.</strong> Hence verifying against a dummy hash so both paths
-      cost the same.
+      Two leaks, and the second survives fixing the first. "No account for that
+      number" confirms the number is registered — that is the obvious one. Less
+      obvious: an early <code>return</code> for an unknown number costs about a
+      millisecond, while a real one spends time on a lookup and a hash.
+      <strong>Timing answers the question the message refused to.</strong>
+      Hence the dummy record, so both paths do comparable work.
+    </p>
+    <p>
+      This is the identical defect <code>b4/0001</code> found in the old
+      password login, where argon2 made the gap ~200&nbsp;ms. <strong>It is
+      worth noticing that removing passwords made the leak smaller without
+      making it go away</strong> — the shape of the bug belongs to the
+      branching, not to the hashing.
     </p>
 
-    <h3>Counting failures with read-then-write</h3>
+    <h3>Counting attempts with read-then-write</h3>
 
-    <pre><code>const newCount = (user.failed_login_attempts || 0) + 1;   // read
-await pool.query('UPDATE users SET failed_login_attempts = $1 ...');  // write</code></pre>
+    <pre><code>const newCount = (row.attempts || 0) + 1;                       // read
+await pool.query('UPDATE otp_requests SET attempts = $1 ...');  // write</code></pre>
 
     <p>
-      Two attempts arriving together both read 4, both write 5, and one failure
-      vanishes. The counter that exists to notice a burst of attempts undercounts
-      precisely when attempts come in a burst. <code>SET x = x + 1</code> in the
+      Two attempts arriving together both read 4, both write 5, and one guess
+      vanishes. The counter that exists to notice a burst of guesses undercounts
+      precisely when guesses come in a burst. <code>SET x = x + 1</code> in the
       database is atomic; the read-modify-write in application code is not.
+    </p>
+    <p>
+      <code>b4/0001</code>'s handler avoids this a second way, by taking
+      <code>FOR UPDATE</code> on the OTP row — which serialises concurrent
+      submissions of the same code rather than merely making one statement
+      atomic. Both are needed: the row lock stops two verifications racing,
+      and the atomic increment is what makes the counter correct if anyone
+      ever writes it outside that lock.
     </p>
 
     <h3>IPv6, where an attacker owns 18 quintillion addresses</h3>
@@ -448,16 +607,20 @@ await pool.query('UPDATE users SET failed_login_attempts = $1 ...');  // write</
           <td>A hard dependency on the most important request in the system, and a decision you must make deliberately: <strong>if Redis is down, does login fail open or closed?</strong> Fail open and an outage becomes an unlimited brute-force window. Fail closed and a Redis restart logs nobody in. Token fails <em>closed</em> on auth and <em>open</em> on the general API limiter — the general one is protecting capacity, and refusing all traffic to protect capacity is just the outage arriving sooner.</td>
         </tr>
         <tr>
-          <td>Two limiters instead of one</td>
-          <td>Two Redis round trips per login, two sets of counters to reason about, and a support question that is genuinely harder to answer: "which limit did I hit?" The response is deliberately vague about that, so the logs have to say.</td>
+          <td>Three limiters instead of one</td>
+          <td>Three Redis round trips per code request, three sets of counters to reason about, and a support question that is genuinely harder to answer: "which limit did I hit?" The response is deliberately vague about that, so the logs have to say.</td>
         </tr>
         <tr>
-          <td>Constant-time login</td>
-          <td>Every login attempt with an unknown email now costs a full argon2 verification — deliberately expensive work, done on behalf of someone typing nonsense. That is a small amplification lever, and it is why the IP limiter sits in front of it.</td>
+          <td>Doing the same work either way</td>
+          <td>Every code request for a number nobody owns still costs a hash and a lookup, done on behalf of someone typing nonsense. Cheaper than the argon2 version this replaced, and still an amplification lever — which is why the IP limiter sits in front of it rather than behind.</td>
         </tr>
         <tr>
-          <td>Account lockout</td>
-          <td>A denial-of-service lever pointed at your own users, in exchange for a backstop against slow guessing. Bounded by keeping the duration short and the threshold high.</td>
+          <td>1 code per number per 60 seconds</td>
+          <td>A user whose first SMS is genuinely delayed by the carrier — which happens — cannot ask again for a minute, and will assume the app is broken. The app has to show the countdown rather than a disabled button with no explanation.</td>
+        </tr>
+        <tr>
+          <td>5 codes per number per day</td>
+          <td>A real user on bad reception can be locked out of their own account until tomorrow, with no support channel that can help, because there is no password to fall back on. This is the harshest limit here and the one most likely to need raising once there is real data.</td>
         </tr>
         <tr>
           <td><code>standardHeaders</code></td>
@@ -468,12 +631,32 @@ await pool.query('UPDATE users SET failed_login_attempts = $1 ...');  // write</
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h3>Try it yourself — this one is broken on purpose</h3>
+
+    <p>One limiter instead of three, run against a day of traffic. It stops
+    the harassment and lets the enumerator through — and the bill is printed
+    at the bottom.</p>
+
+    <div id="playground-limits"></div>
+
+    <h2>Now build it yourself</h2>
+
+    <p>The middleware needs Redis. The decision it encodes — which bucket a
+    request counts against, and which limit refuses it first — is arithmetic,
+    and getting it wrong is either a locked-out user or an invoice.</p>
+
+    <div id="exercise-limits"></div>
+    <div id="pg-exercise-limits"></div>
+
+    <h3>And the middleware</h3>
 
     <div id="exercise-1"></div>
 
+    <div id="explain-b4-0003"></div>
+
     <hr>
 
+    <h2>Quiz</h2>
     <div id="lesson-quiz"></div>
 
     <nav class="lesson-nav">
@@ -484,17 +667,266 @@ await pool.query('UPDATE users SET failed_login_attempts = $1 ...');  // write</
   </div>
 
   <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
-    createSolution("exercise-1", {
-      exercise: "Add rate limiting and account lockout to Token's auth: (1) Install express-rate-limit, (2) Create rate limiters for login (5/15min), register (3/hour), and general API (100/min), (3) Apply them to the correct routes, (4) Add account lockout after 10 failed login attempts (30 min lockout), (5) Write the migration adding lockout fields, (6) Test by sending 6 login attempts with wrong password — the 6th should be rate limited.",
+    createPlayground("playground-limits", `// BROKEN ON PURPOSE. One limiter instead of three.
+
+// "5 codes per number per day is plenty." It is -- for the attack it
+// was imagined against.
+function checkLimits(req, counters) {
+  const n = (counters.byNumber[req.phoneHash] || 0) + 1;
+  if (n > 5) return { allowed: false, hit: "number/day" };
+  counters.byNumber[req.phoneHash] = n;
+  return { allowed: true, hit: null };
+}
+
+const counters = { byNumber: {}, byIp: {} };
+const SMS_COST = 0.18;   // rupees, mid-range
+
+// Two kinds of traffic on the same day.
+const traffic = [];
+// (a) someone hammering ONE number 50 times
+for (let i = 0; i < 50; i++) {
+  traffic.push({ what: "harassment", phoneHash: "h:victim", ip: "1.2.3.4" });
+}
+// (b) an enumerator asking once each for 200,000 DIFFERENT numbers
+for (let i = 0; i < 200000; i++) {
+  traffic.push({ what: "enumeration", phoneHash: "h:" + i, ip: "5.6.7.8" });
+}
+
+let sent = 0, blocked = 0;
+const sentBy = { harassment: 0, enumeration: 0 };
+for (const req of traffic) {
+  const out = checkLimits(req, counters);
+  if (out.allowed) { sent++; sentBy[req.what]++; } else { blocked++; }
+}
+
+console.log("requests   :", traffic.length);
+console.log("blocked    :", blocked);
+console.log("SMS sent   :", sent);
+console.log("  of which harassment :", sentBy.harassment);
+console.log("  of which enumeration:", sentBy.enumeration);
+console.log("");
+console.log("bill       : Rs " + (sent * SMS_COST).toFixed(2));
+console.log("");
+console.log("The harassment was stopped after 5. Good.");
+console.log("The enumeration was not touched AT ALL -- every request is");
+console.log("the first for its number, so the per-number counter never");
+console.log("reaches 2. One limiter, one attack stopped, one paid for.");
+console.log("");
+console.log("A per-IP limit of 30/hour would have capped that second");
+console.log("column at 720 for the whole day.");`);
+
+    createSolution("exercise-limits", {
+      exercise: `Write checkLimits(req, state, config) — decide whether a code request is allowed, and which limit refused it.\n\nreq is { phoneHash, ip, now } — phoneHash may be null for a number that failed validation.\n\nstate holds the timestamps already recorded, as arrays of ms values:\n\n  { byNumber: { "h:abc": [1000, 2000] }, byIp: { "1.2.3.4": [1500] } }\n\nconfig is:\n\n  { burst: { max: 1, windowMs: 60000 },\n    daily: { max: 5, windowMs: 86400000 },\n    perIp: { max: 30, windowMs: 3600000 } }\n\nReturn { allowed, hit, retryAfterMs }.\n\nhit is null when allowed, otherwise 'ip', 'burst' or 'daily'.\n\nThe rules:\n\n1. A SLIDING WINDOW, NOT A BUCKET. A timestamp counts only if now - t < windowMs. Count the ones still inside the window and compare against max. Do NOT use a fixed bucket that resets on the hour: an attacker who knows when it resets sends everything in the two seconds either side and gets double the allowance in one burst.\n\n2. CHECK IN THIS ORDER: ip, then burst, then daily. The IP check is the cheapest and it is the one an enumerator trips, so it rejects the bulk traffic before anything looks at the number. The order also decides what hit says when several limits are exceeded at once, and 'whichever ran first' is not a specification.\n\n3. A NULL phoneHash SKIPS BOTH NUMBER LIMITS but still counts against the IP limit. A malformed number is not a number, so it has no per-number bucket — and if it escaped the IP limit too, sending garbage would be an unlimited free pass to whatever sits behind this.\n\n4. THE COMPARISON IS >= max. With burst.max of 1: one timestamp already inside the window means the next request is refused. Using > allows exactly one more than the limit says, everywhere.\n\n5. retryAfterMs IS HOW LONG UNTIL THE OLDEST RELEVANT TIMESTAMP LEAVES THE WINDOW: (oldest + windowMs) - now, for the limit that was hit. It is 0 when allowed. Getting this from the NEWEST timestamp instead tells a user to wait a full window when they may be seconds away.\n\n6. Never mutate req, state or config. Recording the request is the caller's job — this function only decides.`,
       hints: [
-        "The keyGenerator for login should combine IP + email to prevent targeting one account from multiple IPs AND prevent one IP from trying many accounts.",
-        "Make sure trust proxy is set if testing behind any proxy (including Docker).",
-        "Test: for i in {1..6}; do curl -X POST -H 'Content-Type: application/json' -d '{\"email\":\"test@example.com\",\"password\":\"wrong\"}' localhost:3000/api/auth/login; done"
+        "Write one helper that takes a list of timestamps, a window and now, and returns the ones still inside. Every limit is then the same three lines, and rule 1 cannot be got right in one place and wrong in another.",
+        "For rule 5, the oldest timestamp inside the window is the one whose expiry frees a slot. That is the FIRST element once you have filtered, since the timestamps arrive in order — but do not rely on that; take the minimum.",
+        "Rule 3 is a guard around the two number checks, not a separate branch at the top. The IP check has already run by then, which is exactly what rule 3 requires."
+      ],
+      solution: `function checkLimits(req, state, config) {
+  const now = req.now;
+
+  // Rule 1, in one place. A timestamp counts only while it is inside
+  // the window -- sliding, so there is no reset instant to game.
+  const live = (stamps, windowMs) =>
+    (stamps || []).filter((t) => now - t < windowMs);
+
+  // Rule 5. The OLDEST live stamp is the one whose expiry frees a slot.
+  const wait = (stamps, windowMs) => {
+    if (stamps.length === 0) return 0;
+    return Math.max(0, Math.min(...stamps) + windowMs - now);
+  };
+
+  const refuse = (hit, stamps, windowMs) => ({
+    allowed: false,
+    hit,
+    retryAfterMs: wait(stamps, windowMs),
+  });
+
+  // Rule 2: IP first. Cheapest, and the one an enumerator trips.
+  const ipHits = live(state.byIp[req.ip], config.perIp.windowMs);
+  if (ipHits.length >= config.perIp.max) {
+    return refuse("ip", ipHits, config.perIp.windowMs);
+  }
+
+  // Rule 3: a malformed number has no per-number bucket, but it has
+  // already been counted against the IP above.
+  if (req.phoneHash != null) {
+    const numStamps = state.byNumber[req.phoneHash];
+
+    // Rule 4: >= max, not > max.
+    const burstHits = live(numStamps, config.burst.windowMs);
+    if (burstHits.length >= config.burst.max) {
+      return refuse("burst", burstHits, config.burst.windowMs);
+    }
+
+    const dailyHits = live(numStamps, config.daily.windowMs);
+    if (dailyHits.length >= config.daily.max) {
+      return refuse("daily", dailyHits, config.daily.windowMs);
+    }
+  }
+
+  return { allowed: true, hit: null, retryAfterMs: 0 };
+}`
+    });
+
+    createPlayground("pg-exercise-limits", `// Write checkLimits(req, state, config) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(v) { return JSON.stringify(v); }
+
+var NOW = 1700000000000;
+// Windows are deliberately unequal and none is a multiple of another,
+// so a limit checked against the wrong window cannot pass by accident.
+function cfg() {
+  return {
+    burst: { max: 1, windowMs: 60000 },
+    daily: { max: 5, windowMs: 86400000 },
+    perIp: { max: 30, windowMs: 3600000 },
+  };
+}
+function req(over) {
+  var r = { phoneHash: "h:abc", ip: "1.2.3.4", now: NOW };
+  for (var k in (over || {})) r[k] = over[k];
+  return r;
+}
+function state(byNumber, byIp) {
+  return { byNumber: byNumber || {}, byIp: byIp || {} };
+}
+// n stamps, each spaced ms apart, ending age ms before NOW.
+function stamps(n, age, spacing) {
+  var out = [];
+  for (var i = 0; i < n; i++) out.push(NOW - age - i * (spacing || 0));
+  return out.reverse();
+}
+function got(r, s) {
+  var out = checkLimits(r || req(), s || state(), cfg());
+  return out || {};
+}
+
+try {
+  if (typeof checkLimits !== "function") throw new Error("not written yet");
+
+  // Nothing recorded
+  check("a first request is allowed",
+    got().allowed === true, "got " + show(got()));
+  check("...with hit null and no wait",
+    got().hit === null && got().retryAfterMs === 0, "got " + show(got()));
+
+  // Rule 4 -- burst, max 1
+  var oneRecent = state({ "h:abc": [NOW - 5000] });
+  check("a second request 5s later trips the burst limit",
+    got(req(), oneRecent).hit === "burst",
+    "got " + show(got(req(), oneRecent).hit));
+  check("...and is refused",
+    got(req(), oneRecent).allowed === false, "it was allowed");
+
+  // Rule 1 -- sliding window
+  check("the same request 61s later is allowed again",
+    got(req(), state({ "h:abc": [NOW - 61000] })).allowed === true,
+    "a stamp outside the 60s window must not count");
+  check("a stamp exactly ON the window edge has expired",
+    got(req(), state({ "h:abc": [NOW - 60000] })).allowed === true,
+    "now - t < windowMs, so 60000 is out");
+  // A sliding window must not care where the wall clock happens to fall.
+  // This moment sits exactly on a 60s boundary, which is where a fixed
+  // bucket resets and forgets a request made five seconds ago. Chosen
+  // deliberately: at most offsets the two implementations agree, which is
+  // why the bug survives testing.
+  var edge = Math.ceil(NOW / 60000) * 60000;
+  check("a 5s-old request still counts just after a minute boundary",
+    checkLimits(req({ now: edge }), state({ "h:abc": [edge - 5000] }), cfg()).hit === "burst",
+    "a fixed bucket forgets it the instant the clock ticks over; a sliding window does not");
+
+  // Rule 5 -- from the OLDEST live stamp
+  check("retryAfterMs counts down from the oldest live stamp",
+    got(req(), oneRecent).retryAfterMs === 55000,
+    "got " + show(got(req(), oneRecent).retryAfterMs) + " (60000 - 5000)");
+  // Two stamps at DIFFERENT ages, so oldest and newest disagree. With one
+  // stamp they are the same number and this check cannot see the bug.
+  var spread = state({ "h:abc": [NOW - 50000, NOW - 5000] });
+  check("...the OLDEST, not the newest, when several are live",
+    got(req(), spread).retryAfterMs === 10000,
+    "got " + show(got(req(), spread).retryAfterMs) + " -- oldest is 50s old, so 10s remain");
+
+  // Rule 4 -- daily, max 5. Five stamps old enough to clear the 60s
+  // burst window but well inside the day.
+  var fiveToday = state({ "h:abc": stamps(5, 120000, 3600000) });
+  check("the sixth code in a day trips the daily limit",
+    got(req(), fiveToday).hit === "daily",
+    "got " + show(got(req(), fiveToday).hit));
+  check("...and four today is still fine",
+    got(req(), state({ "h:abc": stamps(4, 120000, 3600000) })).allowed === true,
+    "four is under the max of five");
+
+  // Rule 2 -- order
+  var ipFull = state({ "h:abc": [NOW - 5000] }, { "1.2.3.4": stamps(30, 1000, 60000) });
+  check("when IP and burst are both exceeded, hit is 'ip'",
+    got(req(), ipFull).hit === "ip",
+    "got " + show(got(req(), ipFull).hit) + " -- IP is checked first");
+
+  // Rule 3 -- the enumeration case, and the null-hash case
+  var manyNumbers = state({}, { "5.6.7.8": stamps(30, 1000, 60000) });
+  check("an enumerator is stopped by the IP limit alone",
+    got(req({ ip: "5.6.7.8" }), manyNumbers).hit === "ip",
+    "every request is a new number, so only the IP limit can see it");
+  check("a null phoneHash skips the number limits",
+    got(req({ phoneHash: null }), state({ "h:abc": stamps(5, 120000, 3600000) })).allowed === true,
+    "there is no per-number bucket for a number that failed validation");
+  check("...but a null phoneHash STILL counts against the IP limit",
+    got(req({ phoneHash: null, ip: "5.6.7.8" }), manyNumbers).hit === "ip",
+    "otherwise sending garbage is an unlimited free pass");
+
+  // A different number is a different bucket
+  check("another number is unaffected by this one's history",
+    got(req({ phoneHash: "h:other" }), oneRecent).allowed === true,
+    "buckets must be keyed per number");
+} catch (err) {
+  console.log("Self-check could not run: " + err.message);
+}
+
+// Rule 6 on its own -- a mutation bug can throw rather than return.
+try {
+  // The stamps must be OLD enough that this request is ALLOWED -- an
+  // implementation that records on the way out only reaches that code on
+  // the allowed path, so a refused fixture cannot see the bug at all.
+  var s6 = state({ "h:abc": [NOW - 90000] }, { "1.2.3.4": [NOW - 90000] });
+  var r6 = req();
+  var c6 = cfg();
+  var out6 = checkLimits(r6, s6, c6);
+  check("the mutation fixture is on the allowed path",
+    out6 && out6.allowed === true,
+    "got " + show(out6) + " -- a refused request never reaches the recording bug");
+  check("checkLimits does not record the request itself",
+    s6.byNumber["h:abc"].length === 1 && s6.byIp["1.2.3.4"].length === 1,
+    "state is now " + show(s6));
+  check("...and does not mutate req",
+    r6.now === NOW && r6.phoneHash === "h:abc", "req is now " + show(r6));
+} catch (err) {
+  console.log("Mutation check could not run: " + err.message);
+}`);
+
+    createExplain("explain-b4-0003", {
+      prompt: "Your per-number limits are 1 per minute and 5 per day. Explain why they do nothing against someone requesting one code each for a million different numbers, and what that costs you specifically."
+    });
+
+    createSolution("exercise-1", {
+      unverifiable: "the deliverable is Express middleware needing Redis, Postgres and a running API",
+      exercise: "Add the three-layer OTP rate limiting to Token's auth: (1) Install express-rate-limit, rate-limit-redis and ioredis, (2) Create three limiters for /auth/request-code — 1 per number per 60s, 5 per number per 24h, 30 per IP per hour — plus the general API limiter (100/min) and the redeem limiter (10/hour by IP), (3) Key the number-based ones on phoneHash, never the raw number, (4) Apply them in the right ORDER, (5) Set trust proxy correctly, (6) Test: send two code requests for the same number 10 seconds apart — the second should be refused; then send 31 requests for 31 different numbers from one host — the 31st should be refused while every per-number limit is still untouched.",
+      hints: [
+        "There is no login limiter and no account lockout — there is no password. Guessing the code is capped by the attempts column on the OTP row, which is per-code rather than per-window, so it belongs in the handler and not in middleware.",
+        "Put the IP limiter FIRST. It is the cheapest check and the one an enumerator trips, so it rejects bulk traffic before anything hashes a number. Both number-keyed limiters need express.json() mounted above them, because they read the body.",
+        "Redis keys turn up in slow-query logs, MONITOR output and backups. Key on phoneHash(req.body.phone), and decide what happens when it returns null for a malformed number — a shared 'invalid' bucket is fine and is better than crashing the limiter."
       ],
       solution: `// 1. Install
 // npm install express-rate-limit rate-limit-redis ioredis
@@ -503,6 +935,7 @@ await pool.query('UPDATE users SET failed_login_attempts = $1 ...');  // write</
 import rateLimit from 'express-rate-limit';
 import RedisStore from 'rate-limit-redis';
 import Redis from 'ioredis';
+import { phoneHash } from '../auth/phone.js';
 
 const redis = new Redis(process.env.REDIS_URL);
 const TOO_MANY = { error: 'Too many attempts. Please try again later.', success: false };
@@ -512,66 +945,97 @@ const store = (prefix) => new RedisStore({
   sendCommand: (...args) => redis.call(...args),
 });
 
-// Two limiters, both applied. Neither key is one the attacker can vary
-// without running into the other.
-export const loginByIp = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,                        // loose: CGNAT means one IP is many people
+// Never the raw number: these keys reach Redis logs and backups.
+// A malformed number shares one bucket rather than crashing the limiter.
+const byNumber = (req) => phoneHash(req.body?.phone) ?? 'invalid';
+
+// Layer 1 - the resend button and the accidental double-tap.
+export const codeByNumberBurst = rateLimit({
+  windowMs: 60 * 1000,
+  max: 1,
   message: TOO_MANY,
   standardHeaders: true,
   legacyHeaders: false,
-  store: store('rl:login:ip:'),
+  store: store('rl:otp:num:1m:'),
+  keyGenerator: byNumber,
 });
 
-export const loginByAccount = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,                         // strict: this is the security-carrying one
+// Layer 2 - sustained harassment of one number over hours.
+export const codeByNumberDaily = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000,
+  max: 5,
   message: TOO_MANY,
   standardHeaders: true,
   legacyHeaders: false,
-  store: store('rl:login:acct:'),
-  keyGenerator: (req) => String(req.body?.email || '').trim().toLowerCase(),
-  skip: (req) => !req.body?.email,
+  store: store('rl:otp:num:24h:'),
+  keyGenerator: byNumber,
 });
 
-export const registerLimiter = rateLimit({
+// Layer 3 - THE ONE THAT BOUNDS THE BILL. Neither layer above sees an
+// enumerator, because one request per number passes both.
+export const codeByIp = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 3,
-  message: { error: 'Too many registrations. Try again later.', success: false },
+  max: 30,
+  message: TOO_MANY,
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: store('rl:otp:ip:'),
 });
 
 export const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 100,
   message: { error: 'Rate limit exceeded.', success: false },
+  store: store('rl:api:'),
+});
+
+// Keyed by IP only - keying by code would give an attacker a fresh
+// allowance for every code they try, which is the thing being defended.
+export const redeemLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  message: TOO_MANY,
+  store: store('rl:redeem:'),
 });
 
 // 3. Apply in server.ts:
-app.set('trust proxy', 1);            // 1, not true - true lets a client forge its IP
+app.set('trust proxy', 1);   // 1, not true - true lets a client forge its IP
+
+app.use(express.json());     // must precede the number-keyed limiters
 app.use('/api', apiLimiter);
-app.use('/api/auth/login', loginByIp, loginByAccount);
-app.use('/api/auth/register', registerLimiter);
+
+// IP first: cheapest, and it is what an enumerator trips.
+app.use('/api/auth/request-code',
+  codeByIp, codeByNumberBurst, codeByNumberDaily);
+
+// verify-code gets NO limiter. Its cap is the attempts column, per code.
 app.use('/api/redeem', redeemLimiter);
 
-// 4. Account lockout in login handler (see lesson code above).
-//    Same message for wrong password, no such account, and locked -
-//    and verify against a dummy hash when there is no user, so the
-//    response time does not answer what the message would not.
+// 4. No lockout migration, and no lockout. There is no password to
+//    brute-force, and a per-account counter is a lever a stranger can
+//    pull against your user. The OTP attempt cap lives on the code,
+//    which nobody but the owner can reach.
 
-// 5. Migration:
-// BEGIN;
-// ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER NOT NULL DEFAULT 0;
-// ALTER TABLE users ADD COLUMN locked_until TIMESTAMPTZ;
-// COMMIT;
-
-// 6. Test:
-// for i in {1..6}; do
-//   curl -s -X POST -H "Content-Type: application/json" \\
-//     -d '{"email":"test@example.com","password":"wrong"}' \\
-//     http://localhost:3000/api/auth/login | jq .error
+// 5. Test the two cases that matter, because they fail differently:
+//
+// (a) same number twice -> the 60s limiter refuses the second
+// for i in 1 2; do
+//   curl -s -o /dev/null -w "%{http_code}\\n" -X POST \\
+//     -H "Content-Type: application/json" \\
+//     -d '{"phone":"9876543210"}' localhost:3000/api/auth/request-code
 // done
-// First 5: "Invalid email or password"
-// 6th: "Too many login attempts. Try again in 15 minutes."`
+// expect: 200 then 429
+//
+// (b) 31 DIFFERENT numbers -> every per-number limit passes, and the
+//     IP limiter is the only thing that stops it. This is the test
+//     that proves layer 3 is doing a job the others cannot.
+// for i in $(seq 1 31); do
+//   curl -s -o /dev/null -w "%{http_code} " -X POST \\
+//     -H "Content-Type: application/json" \\
+//     -d "{\\"phone\\":\\"98765432$(printf %02d $i)\\"}" \\
+//     localhost:3000/api/auth/request-code
+// done
+// expect: thirty 200s, then 429`
     });
 
     createQuiz("lesson-quiz", [
@@ -696,10 +1160,10 @@ app.use('/api/redeem', redeemLimiter);
       },
       {
         type: "fill-blank",
-        question: "Reset the failed login counter when the user successfully logs in:",
-        code: "if (passwordValid) {\n  await db.query(\n    'UPDATE users SET failed_login_attempts = 0, ___ = NULL WHERE id = $1',\n    [user.id]\n  );\n}",
-        answer: "locked_until",
-        explanation: "On successful login, reset both the failure counter AND the lockout timestamp. If you only reset the counter but leave locked_until set, the account might appear locked even after the user successfully authenticates. Clean both fields to fully restore normal access."
+        question: "Consume the OTP row only if nobody else already did:",
+        code: "await db.query(\n  'UPDATE otp_requests SET consumed_at = NOW() WHERE id = $1 AND consumed_at ___ NULL',\n  [row.id]\n);",
+        answer: "IS",
+        explanation: "IS NULL, not = NULL — comparing anything to NULL with = yields NULL, which is not true, so the WHERE clause matches nothing and every verification fails. The condition is also what makes the consume atomic: if the UPDATE reports zero rows changed, another request won the race and this one must refuse even though the code was correct."
       },
       {
         type: "which-breaks",
@@ -738,10 +1202,10 @@ app.use('/api/redeem', redeemLimiter);
       },
       {
         type: "predict-output",
-        question: "An account is locked after 10 failures with a 30-minute lockout. What happens if the user tries to log in with the CORRECT password during lockout?",
-        code: "const lockedUntil = new Date('2026-08-16T14:30:00Z');\nconst now = new Date('2026-08-16T14:15:00Z');\nconst locked = lockedUntil > now;\nconsole.log('still locked:', locked);\nconsole.log('password even checked:', !locked);",
-        answer: "still locked: true\npassword even checked: false",
-        explanation: "Account lockout blocks ALL login attempts, including correct passwords. This is by design — if correct passwords bypassed lockout, an attacker would know they found the right password (the error message would change). The user must wait for the lockout to expire, ensuring the attacker can't distinguish correct from incorrect attempts."
+        question: "An OTP has had 5 failed guesses against a cap of 5. What happens when the CORRECT code arrives?",
+        code: "const attempts = 5, maxAttempts = 5;\nconst capped = attempts >= maxAttempts;\nconsole.log('refused:', capped);\nconsole.log('code even compared:', !capped);",
+        answer: "refused: true\ncode even compared: false",
+        explanation: "The cap gates the comparison rather than reporting on it afterwards — otherwise an attacker who ignores the response keeps getting guesses. Note the cost of being wrong here is small and belongs to the attacker: the victim simply requests a new code. That is the whole advantage of counting against the CODE rather than against the ACCOUNT, which is what an old-style lockout did."
       },
       {
         question: "What is the difference between credential stuffing and brute-force attacks?",
@@ -792,27 +1256,27 @@ app.use('/api/redeem', redeemLimiter);
       },
       {
         type: "spot-the-bug",
-        question: "What's the security issue in this lockout expiry logic?",
-        code: "// Check if account is locked\nconst user = await db.query('SELECT * FROM users WHERE email = $1', [email]);\nif (user.locked_until && user.locked_until > new Date()) {\n  return res.status(423).json({\n    error: `Account locked until ${user.locked_until.toISOString()}`\n  });\n}",
+        question: "What does this code-request handler leak?",
+        code: "const hash = phoneHash(req.body.phone);\nconst existing = await db.query('SELECT id FROM users WHERE phone_hash = $1', [hash]);\nif (!existing.rows[0]) {\n  return res.status(404).json({ error: 'No account for that number' });\n}\nawait sendOtp(hash);\nres.json({ sent: true });",
         options: [
           "The query should use prepared statements",
-          "Telling the attacker the EXACT unlock time lets them schedule their next attack perfectly — reveal only 'try again later'",
-          "423 is the wrong status code for rate limiting",
-          "new Date() is not reliable across time zones"
+          "It answers 'is this number registered?' for anyone who asks — across a number space small enough to walk end to end, that publishes the entire user list",
+          "404 is the wrong status code here",
+          "sendOtp should be awaited before the response"
         ],
         correct: 1,
-        explanation: "Revealing the exact unlock time (e.g. '2024-03-15T14:30:00Z') lets an attacker set a timer and resume the attack the instant lockout expires — no guessing needed. Return a vague message like 'Account temporarily locked. Try again later.' or 'Try again in approximately 30 minutes.' to introduce uncertainty."
+        explanation: "This is the denial-oracle rule for the fifth time in the course. It matters more on a phone number than anywhere else because the identifier space is enumerable: there are only so many Indian mobile numbers, so a distinguishable response turns that finite list into a directory of Token users. The endpoint must return the identical body — and take comparable time — whether or not the number is known."
       },
       {
-        question: "A lockout has expired, failed_login_attempts is still 10, and the user finally types the right password. What must the success path do — and what goes wrong if it forgets?",
+        question: "You have per-number limits of 1/minute and 5/day on /auth/request-code. A script requests one code each for a million different numbers. What stops it?",
         options: [
-          "Nothing; the expired lockout is enough on its own",
-          "Only clear locked_until — the counter is harmless once the lock has lapsed",
-          "Reset failed_login_attempts to 0 and clear locked_until; forget it and the very next typo re-locks the account instantly",
-          "Delete the row and let the user register again"
+          "The 1-per-minute limit, since a million requests exceed it",
+          "Nothing in those two limits — every request is the first for its number, so a per-IP limit is the only layer that sees this",
+          "The 5-per-day limit, once the numbers start repeating",
+          "Postgres, once the otp_requests table grows too large"
         ],
-        correct: 2,
-        explanation: "Leave the counter at 10 and the account is one mistyped character from being locked again, permanently, because every future failure is the eleventh. The success path has to wipe the slate — not just the lock, but the count that produced it."
+        correct: 1,
+        explanation: "Both per-number limits are keyed on the number, and the attacker varies the number — so every request lands on a key that has never been used before, and both limits pass untouched. This is the same reasoning as 'one composite key defends nothing', reached from the cost side: the per-number limits protect your users and the per-IP limit protects your invoice. At ₹0.12–₹0.25 an SMS, a million of them is a real bill."
       },
       {
         type: "fill-blank",
