@@ -607,6 +607,22 @@ the FCM/APNs precedent, and the distinction that keeps the rule coherent is:
 exists to protect. An OTP carries six digits to a phone the user already
 owns, once.** One authenticates entry to the product; the others replace it.
 
+**There is no password anywhere in Token** (decided 2026-08-22). The OTP *is*
+the login. The device then holds a long-lived credential in
+`expo-secure-store`, so a user proves the number once per device rather than
+once per session. `users` has no `password_hash` column, and **`b4/0001`'s
+argon2 material is being removed rather than rekeyed** — there is no secret
+left for it to hash.
+
+> **The consequence that must shape C5: whoever controls the SIM controls the
+> account.** That is the accepted cost of an OTP-only login, and it is fine
+> for the *account* — an attacker gets the token list, which is bad but
+> recoverable. It is **not** acceptable for the message history, so **the
+> E2EE key backup must never be recoverable by SMS alone.** Anything that lets
+> a fresh SIM-swapped device decrypt old messages hands the whole ADR-0002
+> guarantee to whoever ports the number. C5 designs the second factor; this
+> file only records that it needs one.
+
 Two consequences that are not "later":
 
 - **DLT registration with TRAI is required to send a transactional SMS in

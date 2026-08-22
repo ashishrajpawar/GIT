@@ -1019,8 +1019,32 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
-**Rewrite `b4-auth-server` for phone sign-in.** Three lessons, one commit
-each — the only module still teaching email.
+Four decisions were taken on 2026-08-22 (third round, below). The queue they
+produce, in order:
+
+1. **Delete the 40 legacy lessons** — self-contained, clears the audit's one
+   warning. Sweep the referrers first.
+2. **Rewrite `b4-auth-server`** — all three lessons plus an OTP pass. See
+   below; note `0001` loses its subject rather than changing its examples.
+3. **`a3/0002` M3 extraction**, then **`a2` runtime type guards**.
+
+### Rewriting `b4-auth-server` for phone + OTP
+
+**All three lessons are email-coupled, not just the first** — `0002` has 19
+references and `0003` has 35, so "fix `0001` and move on" would leave the
+module contradicting itself.
+
+| Lesson | Currently | Becomes |
+|---|---|---|
+| `0001` | `ALTER TABLE users ADD COLUMN email`, argon2 over a password, `/register` + `/login` on email | **Its subject is gone**, not adjusted. No password exists, so there is nothing to hash. Rewritten around `phone_hash` with the pepper — `b3/0001` already wrote the argument for why bare `sha256(phone)` is not enough — plus OTP issuance and verification |
+| `0002` | JWT refresh rotation, keyed on email | The rotation logic survives intact; the identity it carries changes. Mostly an audit |
+| `0003` | Rate limiting, examples keyed on email | **Gains real substance.** An unthrottled OTP endpoint is a stranger spending your SMS budget. Rate limiting stops being generic advice and becomes a bill with a number on it |
+
+**The OTP-specific pass** — the student chose the option that includes it.
+Nothing in the course currently covers: the denial oracle in the OTP response
+(fifth layer), OTP replay and expiry windows, single-use enforcement, and the
+DLT template constraint that the message text is *pre-registered* and cannot
+be composed at send time.
 
 ### Sign-in is by phone number — settled 2026-08-22
 
@@ -1127,7 +1151,39 @@ expiry disagrees with the column turns "documented precedence" into
 "enforced precedence" at the cost of one constraint. Propose it when B2 is
 next touched; do not silently implement the other option.
 
-### The TypeScript four — recommendation, not yet decided
+### Settled 2026-08-22, third round
+
+Four more put to the student with options; all four came back decided.
+
+| Question | Answer |
+|---|---|
+| **Password as well as OTP?** | **No password at all.** The OTP is the login; the device holds the credential |
+| **B4 rewrite scope** | **All three lessons, plus an OTP-specific pass** — the fullest option |
+| **TypeScript runner** | **Recommendation taken** — no runner |
+| **The 40 legacy lessons** | **Delete them.** They are in git |
+
+**The password answer removes `b4/0001`'s subject.** It is not "swap email for
+phone" — argon2, `password_hash` and the whole hashing narrative go, because
+there is no longer a user-chosen secret to hash. What replaces it is OTP
+issuance and verification over `phone_hash`.
+
+**And it hands C5 a hard constraint, recorded in `CLAUDE.md`: whoever controls
+the SIM controls the account.** Acceptable for the account — an attacker gets a
+token list, which is recoverable. **Not** acceptable for message history, so
+the E2EE key backup must never be recoverable by SMS alone. C5 designs the
+second factor; the requirement is now written down so C5 cannot quietly skip
+it.
+
+**On deleting the legacy 40.** `04` (7), `05` (9), `06` (7), `07` (7), `08`
+(9), `09` (7). Firebase's `03` went the same way on 2026-08-16 and nobody has
+missed it. Before deleting, sweep what points at them — `index.html`,
+`search-index.json`, module READMEs, and `scripts/known-issues.json` — because
+**a rename is never just the file** and a delete is a rename with no
+destination. The audit's one remaining warning is a dead link inside `07` and
+should disappear with it; if it does not, the warning was pointing somewhere
+else and that is worth knowing.
+
+### The TypeScript four — recommendation given 2026-08-22 and accepted
 
 `a2/0001`, `a2/0002`, `a2/0003`, `a3/0002`. **Do not build the runner.** The
 evidence that decides it is not about tooling:
@@ -1161,14 +1217,9 @@ merely out-of-date server will punish.
 
 ### Open questions for the student
 
-One left. It blocks nothing.
-
-1. **Is a TypeScript-aware runner worth building?** Put to the student
-   2026-08-22; they asked for a recommendation rather than picking. It is
-   written up under *The TypeScript four* above, and the recommendation is
-   **no runner** — the finding that settles it is that three of the four
-   lessons have no runtime behaviour to run, so a strip-and-run verifier
-   would execute nothing and report success.
+**None.** Everything that was open has been decided across the three rounds on
+2026-08-20, -21 and -22. Do not invent one to fill this space — if a decision
+is genuinely needed, it will surface from the work.
 
 **The lookahead question is closed. Stop asking it.** It was raised on
 2026-08-18, -20, -21 and -22 and answered "keep going" every time. Four
