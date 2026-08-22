@@ -1351,8 +1351,12 @@ produce, in order:
    `0001` and `0002`, DLT template constraints in `0001`, cost control in
    `0003`. All three now verified; the module had **one** verified lesson
    before this session and has three now.
-3. **Write C5 — end-to-end encryption**, five lessons. Decided 2026-08-22 to
-   come after B4 rather than being retro-fitted before B2.
+3. **Write C5 — end-to-end encryption.** **`0001` done 2026-08-22**; four to
+   go. `0002` (publish/fetch) and `0003` (verification) are determined by
+   ADR-0002 and can be written directly. **`0004` (backup) and `0005`
+   (multi-device) need decisions first** — the ADR deliberately leaves them
+   open, and `0004`'s first question already has a fixed constraint from this
+   session: the key backup must not be recoverable by SMS alone.
 4. **`a3/0002` M3 extraction**, then **`a2` runtime type guards**.
 5. The small `a8/0004` fix — `tokenCode` is sent over the WebSocket on every
    chat message, twice. The holder knows the code so nothing leaks to *them*,
