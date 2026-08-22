@@ -632,7 +632,8 @@ try {
     hints: [
       "Consuming the row and creating the user belong in ONE transaction. If the insert fails after the OTP is marked consumed, the user has burned a code and has no account — and the next request-code gives them a fresh code, so it self-heals, but they see an error for no reason.",
       "Mark the row consumed with a WHERE clause that Postgres enforces, the way b2/0001 does for revoke: UPDATE otp_requests SET consumed_at = NOW() WHERE id = $1 AND consumed_at IS NULL. If it updates zero rows, another request won the race and this one must refuse.",
-      "For the user, ON CONFLICT (phone_hash) DO UPDATE SET updated_at = NOW() RETURNING id gives you the row whether it existed or not, in one statement and without a read-then-write race."
+      "For the user, ON CONFLICT (phone_hash) DO UPDATE SET updated_at = NOW() RETURNING id gives you the row whether it existed or not, in one statement and without a read-then-write race.",
+      "display_name is NOT NULL and nothing has collected it yet. Insert a sentinel the client must replace, and compute needsDisplayName from the CURRENT value rather than from whether the row was just created — otherwise a user who closed the app on the name screen is never asked again and is stuck with the sentinel forever."
     ],
     solution: `// api/src/routes/auth.ts
 import { Router } from 'express';
@@ -647,6 +648,10 @@ const router = Router();
 
 const OTP_TTL_MS = 5 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
+
+// A sentinel, not a name. It must never be renderable: the client is
+// required to replace it before the app becomes usable.
+const PLACEHOLDER_NAME = '\\u0000pending';
 
 const PEPPER = process.env.PHONE_HASH_PEPPER;
 if (!PEPPER) throw new Error('PHONE_HASH_PEPPER is required');
@@ -739,18 +744,33 @@ router.post('/auth/verify-code', async (req, res, next) => {
       return res.status(400).json({ error: 'That code is not valid.' });
     }
 
+    // display_name is NOT NULL and there is no signup form to collect it,
+    // so a new row gets a placeholder and the client is told to replace it
+    // before the app is usable. Making the column nullable was rejected:
+    // every render site would then need a '?? Unnamed' fallback, which is
+    // the hazard a11/0003 found when '' was let through validation.
     const { rows: userRows } = await client.query(
       \`INSERT INTO users (phone_hash, display_name)
        VALUES ($1, $2)
        ON CONFLICT (phone_hash)
          DO UPDATE SET updated_at = NOW()
-       RETURNING id, display_name, created_at\`,
-      [hash, 'New user']
+       RETURNING id, display_name, created_at,
+                 (xmax = 0) AS is_new\`,
+      [hash, PLACEHOLDER_NAME]
     );
 
     await client.query('COMMIT');
 
-    res.json({ data: { user: userRows[0] }, success: true });
+    const user = userRows[0];
+    res.json({
+      data: {
+        user: { id: user.id, displayName: user.display_name },
+        // The client shows the name screen on this flag, not on is_new --
+        // a user who abandoned the screen last time must be asked again.
+        needsDisplayName: user.display_name === PLACEHOLDER_NAME,
+      },
+      success: true,
+    });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     next(err);

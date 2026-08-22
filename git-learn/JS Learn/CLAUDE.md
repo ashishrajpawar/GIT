@@ -621,6 +621,32 @@ left for it to hash.
 > guarantee to whoever ports the number. C5 designs the second factor; this
 > file only records that it needs one.
 
+**The session does not expire** (decided 2026-08-22). The refresh token *is*
+the device credential: minted on successful verification, kept in
+`expo-secure-store`, and valid until the user logs out or revokes that device.
+It is not re-issued on a schedule and there is no weekly re-verification.
+
+Two reasons, and the second is the one that decides it:
+
+- **A re-login SMS costs money and proves nothing.** The attacker holding the
+  phone also receives the code, so periodic re-verification buys no security
+  against the threat it appears to address.
+- **A stolen unlocked phone is `a10`'s problem, not auth's.** The biometric
+  app-lock is the control for that, and it works whether the session is an
+  hour old or a year old.
+
+`b4/0002`'s 15-minute *access* token is unchanged and still correct — short
+access, long refresh. What changed is that the refresh token no longer expires
+after 7 days, and revocation becomes **per-device** rather than time-based.
+
+**`display_name` is collected immediately after the first successful
+verification** (decided 2026-08-22), on a screen the user cannot skip. The
+column stays `NOT NULL`; making it nullable was considered and rejected,
+because every render site would then need a `?? 'Unnamed'` fallback — the
+exact hazard `a11/0003` found when `''` was allowed through validation. The
+verify-code response carries `needsDisplayName` so the client knows to show
+the screen.
+
 Two consequences that are not "later":
 
 - **DLT registration with TRAI is required to send a transactional SMS in

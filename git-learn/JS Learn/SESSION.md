@@ -1019,6 +1019,38 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
+### Settled 2026-08-22, fourth round
+
+Four more, all surfaced by the B4 work rather than carried over.
+
+| Question | Answer |
+|---|---|
+| **Session lifetime** | **Effectively forever.** The refresh token *is* the device credential |
+| **OTP rate limiting** | **Per-number, per-IP, and a daily cap** |
+| **`display_name`** | **Collected immediately after first verification**, on a screen that cannot be skipped |
+| **C5 vs B2 ordering** | **Write C5 next, after B4** |
+
+**Session.** `b4/0002`'s 7-day refresh expiry is removed; the 15-minute access
+token stays. Two reasons, and the second decides it: a re-login SMS costs money
+and **proves nothing**, since the attacker holding the phone also receives the
+code; and a stolen unlocked phone is `a10`'s biometric app-lock problem, which
+works at any session age. Revocation becomes **per-device rather than
+time-based**, which is the actual rewrite in `0002`.
+
+**`display_name` had immediate follow-through and it was my own defect.**
+`b4/0001`'s solution inserted the literal string `'New user'` — a placeholder
+that would render to real users as their name. The column stays `NOT NULL`
+(nullable was rejected: every render site would then need `?? 'Unnamed'`, the
+hazard `a11/0003` found when `''` got through validation), so the row now takes
+an unrenderable sentinel and the response carries `needsDisplayName`.
+
+**The subtlety worth keeping: the flag is computed from the current value, not
+from whether the row was just created.** `xmax = 0` tells you the row is new,
+and using *that* means a user who closed the app on the name screen is never
+asked again and keeps the sentinel forever. **"Is this their first visit" and
+"is this still unset" are different questions**, and only the second one is
+about the thing you actually care about.
+
 ### b4/0001 — rewritten as phone + OTP, and the old login's "constant-time" comment was false (2026-08-22)
 
 Renamed `0001-password-hashing-registration.html` →
@@ -1105,7 +1137,36 @@ produce, in order:
    which confirms the last one really was the dead link inside `07`.
 2. **Rewrite `b4-auth-server`** — all three lessons plus an OTP pass. See
    below; note `0001` loses its subject rather than changing its examples.
-3. **`a3/0002` M3 extraction**, then **`a2` runtime type guards**.
+3. **Write C5 — end-to-end encryption**, five lessons. Decided 2026-08-22 to
+   come after B4 rather than being retro-fitted before B2.
+4. **`a3/0002` M3 extraction**, then **`a2` runtime type guards**.
+5. The small `a8/0004` fix — `tokenCode` is sent over the WebSocket on every
+   chat message, twice. The holder knows the code so nothing leaks to *them*,
+   but it lands in server logs and Redis pub/sub payloads against ADR-0007,
+   and the holder JWT already carries `conversationId`. Not a decision, just
+   not done yet.
+
+### C5 comes after B2, and the plan says the opposite
+
+`TOKEN-TRACK.md` line 255 says C5 **"MUST precede B2"**. B2 is written and C5
+does not exist, so on the face of it the plan was violated. **It was not, and
+the reason matters:** `b2/0002` did the E2EE schema rewrite already —
+`ciphertext`, `nonce`, `key_version`, no `content` column — so B2 was written
+*E2EE-aware* without C5 existing. The dependency was real and it was satisfied
+by anticipation rather than by ordering.
+
+What is genuinely missing is everything about the keys themselves: generation,
+distribution, verification, backup and multi-device. Two things now wait on it:
+
+- **The `participants` orphan table**, one of the two known-and-blocked items,
+  whose real gate has always been C5.
+- **The SIM-swap constraint**, handed to C5 by this session's OTP decision:
+  whoever controls the SIM controls the account, so **the key backup must not
+  be recoverable by SMS alone.** It is recorded in `CLAUDE.md` and is the first
+  thing C5 has to answer.
+
+`TOKEN-TRACK.md` needs its line corrected when C5 is written — not to say C5
+came late, but to say the prerequisite was met differently than planned.
 
 ### Rewriting `b4-auth-server` for phone + OTP
 
@@ -1116,8 +1177,8 @@ module contradicting itself.
 | Lesson | Currently | Becomes |
 |---|---|---|
 | ~~`0001`~~ | ~~argon2 over email + password~~ | **Done 2026-08-22.** Renamed to `0001-phone-signup-otp.html`; `phone_hash` with a pepper, OTP issue/verify, the denial oracle and its timing half, DLT. M3 on `verifyOtp` |
-| `0002` | JWT refresh rotation, keyed on email | The rotation logic survives intact; the identity it carries changes. Mostly an audit |
-| `0003` | Rate limiting, examples keyed on email | **Gains real substance.** An unthrottled OTP endpoint is a stranger spending your SMS budget. Rate limiting stops being generic advice and becomes a bill with a number on it |
+| `0002` | JWT refresh rotation, keyed on email, **7-day refresh expiry** | Identity changes, and the 7-day expiry **goes** — the refresh token is now the device credential and does not expire. The 15-minute access token is unchanged. The real rewrite is that revocation becomes per-device rather than time-based. 19 email references to sweep |
+| `0003` | Rate limiting, examples keyed on email | **Gains real substance.** Three layers now decided: ~1 code per number per 60s, ~5 per number per day, and a per-IP ceiling. The daily cap is the one that bounds the bill — without it a script walking the number range costs real money whether or not anyone signs up. Per-IP alone was rejected: Indian carriers NAT huge numbers of users behind shared addresses, so a useful limit locks out real people. 35 email references |
 
 **The OTP-specific pass** — the student chose the option that includes it.
 Nothing in the course currently covers: the denial oracle in the OTP response
