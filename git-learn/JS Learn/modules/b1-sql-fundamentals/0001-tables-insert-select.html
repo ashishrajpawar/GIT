@@ -99,10 +99,66 @@ psql token_dev</code></pre>
     <p>Breaking this down:</p>
     <ul>
       <li><code>SERIAL PRIMARY KEY</code> — auto-incrementing integer, unique identifier for each row</li>
-      <li><code>TEXT NOT NULL</code> — text column that can't be empty (null)</li>
-      <li><code>UNIQUE</code> — no two rows can have the same value</li>
-      <li><code>DEFAULT NOW()</code> — if you don't provide a value, use the current timestamp</li>
+      <li><code>TEXT NOT NULL</code> — text column that cannot be
+      <strong>null</strong>. Note that is not the same as "cannot be empty":
+      <code>''</code> is a value, and it satisfies <code>NOT NULL</code>
+      perfectly. See the callout below</li>
+      <li><code>UNIQUE</code> — no two rows can have the same value. Nulls are
+      the exception: several rows may be null, because two nulls are not
+      known to be equal</li>
+      <li><code>DEFAULT NOW()</code> — if you <em>omit</em> the column, use the
+      current timestamp. Passing <code>null</code> explicitly is not omitting
+      it, and the default does not apply</li>
     </ul>
+
+    <div class="callout danger">
+      <div class="callout-title">Three things NULL does that catch everyone, and this page used to get the first one wrong</div>
+
+      <p>The bullet above said <em>"text column that can't be empty (null)"</em>
+      until 2026-08-23 — putting <strong>empty</strong> and <strong>null</strong>
+      in the same parenthesis, while this lesson's own quiz spends a question
+      separating them. Believe the quiz.</p>
+
+      <p>All three of these come from the same place: SQL's
+      <strong>three-valued logic</strong>. A comparison against NULL is not
+      true and not false, it is <em>unknown</em> — and each constraint decides
+      differently what to do with unknown.</p>
+
+      <table>
+        <thead><tr><th></th><th>What it rejects</th><th>What it quietly allows</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>NOT NULL</code></td>
+            <td>Only <code>NULL</code></td>
+            <td><code>''</code>, <code>'   '</code>, <code>'0'</code> — all values, all fine</td>
+          </tr>
+          <tr>
+            <td><code>UNIQUE</code></td>
+            <td>A repeated <em>value</em></td>
+            <td><strong>Any number of NULLs.</strong> Two nulls are not known to be equal, so they do not collide</td>
+          </tr>
+          <tr>
+            <td><code>CHECK (x IN (…))</code></td>
+            <td>Only a value that makes it <em>false</em></td>
+            <td><strong>NULL.</strong> <code>NULL IN (…)</code> is unknown, and a CHECK fails only on false</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p><strong>The third is the one that surprises people most: a
+      <code>CHECK</code> constraint does not imply <code>NOT NULL</code>.</strong>
+      Write <code>status TEXT CHECK (status IN ('active','paused','revoked'))</code>
+      without <code>NOT NULL</code> and a row with a null status is accepted by
+      a constraint that exists precisely to stop unrecognised statuses.</p>
+
+      <p>And the first one has already cost this course a bug downstream:
+      <code>a11/0003</code> found <code>''</code> flowing through validation
+      into a <code>NOT NULL</code> column, where it satisfied the database and
+      then rendered as nothing, because <code>issuedTo ?? 'Unnamed'</code>
+      catches <code>null</code> and not <code>''</code>. <strong>The database
+      will not reject an empty string for you. If empty is meaningless in your
+      product, that rule lives in validation, and it has to be written.</strong></p>
+    </div>
 
     <p>Now the tokens table:</p>
 
@@ -110,10 +166,11 @@ psql token_dev</code></pre>
   id          SERIAL PRIMARY KEY,
   code        TEXT NOT NULL UNIQUE,
   user_id     INTEGER NOT NULL REFERENCES users(id),
-  issued_to   TEXT NOT NULL,
+  label       TEXT NOT NULL,
   status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'revoked')),
   max_uses    INTEGER,   -- NULL means unlimited; 0 means no uses at all
   created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+  expires_at  TIMESTAMP, -- NULL means never expires
   revoked_at  TIMESTAMP
 );</code></pre>
 
@@ -169,11 +226,11 @@ INSERT INTO users (phone_hash, display_name)
 VALUES ('sha256_abc123', 'Ashish');
 
 -- Insert a token (user_id 1 = the user we just created)
-INSERT INTO tokens (code, user_id, issued_to, max_uses)
+INSERT INTO tokens (code, user_id, label, max_uses)
 VALUES ('MERC-8GH2-KP4X', 1, 'Amazon Delivery', 3);
 
 -- Insert multiple tokens at once
-INSERT INTO tokens (code, user_id, issued_to, max_uses) VALUES
+INSERT INTO tokens (code, user_id, label, max_uses) VALUES
   ('KART-4KN9-RT2M', 1, 'Flipkart', 5),
   ('RENT-2WX7-JP8N', 1, 'NoBroker Agent', 1);</code></pre>
 
@@ -185,7 +242,7 @@ INSERT INTO tokens (code, user_id, issued_to, max_uses) VALUES
 SELECT * FROM tokens;
 
 -- Get specific columns
-SELECT code, issued_to, status FROM tokens;
+SELECT code, label, status FROM tokens;
 
 -- Filter with WHERE
 SELECT * FROM tokens WHERE status = 'active';
@@ -216,7 +273,7 @@ SELECT * FROM tokens WHERE revoked_at IS NULL;      -- not revoked
 SELECT * FROM tokens WHERE revoked_at IS NOT NULL;  -- revoked
 
 -- Pattern matching
-SELECT * FROM tokens WHERE issued_to LIKE '%Delivery%';
+SELECT * FROM tokens WHERE label LIKE '%Delivery%';
 
 -- IN — match any value in a list
 SELECT * FROM tokens WHERE status IN ('active', 'paused');</code></pre>
@@ -268,9 +325,20 @@ SELECT AVG(max_uses) FROM tokens;</code></pre>
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>Now build it yourself</h2>
+
+    <p>The SQL needs a running Postgres. What the constraints <em>mean</em>
+    does not — and writing the checks out is the fastest way to stop being
+    surprised by which rows the database quietly accepts.</p>
+
+    <div id="exercise-row"></div>
+    <div id="pg-exercise-row"></div>
+
+    <h3>And the schema</h3>
 
     <div id="exercise-1"></div>
+
+    <div id="explain-b1-0001"></div>
 
     <hr>
 
@@ -284,12 +352,75 @@ SELECT AVG(max_uses) FROM tokens;</code></pre>
   </div>
 
   <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
+    createSolution("exercise-row", {
+      exercise: `Write checkRow(row, table) — decide whether Postgres would accept this INSERT, and what it would actually store.\n\nrow is the object you are inserting: { code: 'MERC-8GH2-KP4X', user_id: 1, label: 'Farm box' }.\n\ntable is { columns, rows } — the definition, and the rows already in the table.\n\nA column is { name, notNull, unique, hasDefault, defaultValue, check }:\n  notNull      true if the column is declared NOT NULL\n  unique       true if the column is declared UNIQUE\n  hasDefault   true if the column has a DEFAULT clause\n  defaultValue what that default produces\n  check        a function, or undefined. A CHECK constraint\n\nReturn { ok, stored, violations }. stored is the row as it would land in the table, with defaults filled in. violations is a list of { column, rule }, ordered by the column order in table.columns, with rule one of 'unknown_column', 'not_null', 'unique', 'check'.\n\nThe rules:\n\n1. A KEY THAT IS NOT A COLUMN IS 'unknown_column'. Postgres does not ignore it, and neither should you — a typo'd column name is the difference between storing a value and losing it silently.\n\n2. AN OMITTED COLUMN WITH A DEFAULT TAKES THE DEFAULT. An omitted column with no default becomes null. An omitted NOT NULL column with no default is 'not_null'.\n\n3. AN EXPLICIT null ON A NOT NULL COLUMN IS 'not_null' EVEN IF THE COLUMN HAS A DEFAULT. This is the one people get wrong: DEFAULT applies to a column you left OUT, not to a column you passed null for. Passing null is a decision, and the database honours it right up until the constraint refuses it.\n\n4. NOT NULL REJECTS null AND NOTHING ELSE. An empty string satisfies it. So does a string of spaces, and so does '0'. This lesson used to gloss NOT NULL as "can't be empty (null)", which puts two different facts in one parenthesis — and a11/0003 found the consequence downstream, where '' passed validation, satisfied the column, and then rendered as nothing because ?? only catches null. If empty is meaningless in your product, that rule lives in validation and has to be written.\n\n5. UNIQUE COMPARES AGAINST table.rows, AND NULL NEVER COLLIDES. Any number of rows may hold null in a unique column, because two nulls are not known to be equal. Only a repeated non-null value is 'unique'.\n\n6. A CHECK FAILS ONLY ON false. If the value is null, the check does NOT run and does NOT fail — NULL IN (...) is unknown, and a CHECK rejects only what it can prove false. The consequence is worth stating: a CHECK constraint does not imply NOT NULL, so a column with a CHECK and no NOT NULL accepts null happily, which is exactly the value the CHECK exists to exclude.\n\n7. REPORT EVERY VIOLATION, not just the first, ordered by column order. A real INSERT stops at the first one, and that is precisely why reporting them all is more useful here: fixing one at a time turns a single bad row into five round trips.\n\n8. stored IS ALWAYS RETURNED, even when ok is false — it is what WOULD be stored, and seeing it is how you notice that the value you passed is not the value that would land. Never mutate row or table.`,
+      hints: [
+        "Do rules 2 and 3 as one question with two answers: is the key PRESENT in the row? If not, defaults apply. If it is present and null, defaults do not. `'code' in row` distinguishes them; `row.code === undefined` does not.",
+        "Rules 5 and 6 are both 'null opts out of this constraint'. Write each as an early continue when the value is null, and the three-valued logic stops being something to remember.",
+        "For rule 7, collect into an array as you walk table.columns in order rather than returning early. The order falls out of the walk, so there is nothing to sort afterwards."
+      ],
+      solution: `function checkRow(row, table) {
+  const violations = [];
+  const stored = {};
+
+  // Rule 1. A typo'd column is a value you think you stored.
+  const known = new Set(table.columns.map((c) => c.name));
+  for (const key of Object.keys(row)) {
+    if (!known.has(key)) violations.push({ column: key, rule: "unknown_column" });
+  }
+
+  // Rule 7: walk in column order, collect everything.
+  for (const column of table.columns) {
+    // Rules 2 and 3 are one question with two answers, and 'in' is
+    // what tells them apart -- an explicit null is PRESENT.
+    const supplied = Object.prototype.hasOwnProperty.call(row, column.name);
+
+    let value;
+    if (supplied) {
+      value = row[column.name];
+    } else if (column.hasDefault) {
+      value = column.defaultValue;
+    } else {
+      value = null;
+    }
+
+    stored[column.name] = value;
+
+    // Rule 4. Only null. '' is a value and satisfies this perfectly.
+    if (value === null || value === undefined) {
+      if (column.notNull) violations.push({ column: column.name, rule: "not_null" });
+      // Rules 5 and 6: null opts out of both. Nothing further to check.
+      continue;
+    }
+
+    // Rule 5. Reached only for a non-null value, so nulls already in
+    // the table cannot collide with it either.
+    if (column.unique) {
+      const taken = table.rows.some((existing) => existing[column.name] === value);
+      if (taken) violations.push({ column: column.name, rule: "unique" });
+    }
+
+    // Rule 6. Only reached for a non-null value, which IS the rule --
+    // a CHECK does not imply NOT NULL.
+    if (column.check && column.check(value) === false) {
+      violations.push({ column: column.name, rule: "check" });
+    }
+  }
+
+  // Rule 8.
+  return { ok: violations.length === 0, stored, violations };
+}`
+    });
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is SQL run against a live Postgres database",
       exercise: "Write the SQL to: (1) Create the users and tokens tables as shown above, (2) Insert yourself as a user, (3) Insert 3 tokens with different statuses, (4) Write a query that finds all active tokens with more than 1 allowed use, ordered by newest first, (5) Revoke the oldest token.",
       hints: [
         "Use SERIAL PRIMARY KEY for auto-incrementing IDs.",
@@ -308,10 +439,11 @@ CREATE TABLE tokens (
   id          SERIAL PRIMARY KEY,
   code        TEXT NOT NULL UNIQUE,
   user_id     INTEGER NOT NULL REFERENCES users(id),
-  issued_to   TEXT NOT NULL,
+  label       TEXT NOT NULL,
   status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'revoked')),
   max_uses    INTEGER,   -- NULL means unlimited; 0 means no uses at all
   created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+  expires_at  TIMESTAMP, -- NULL means never expires
   revoked_at  TIMESTAMP
 );
 
@@ -320,13 +452,13 @@ INSERT INTO users (phone_hash, display_name)
 VALUES ('sha256_myphone', 'Ashish');
 
 -- 3. Insert 3 tokens (user_id = 1)
-INSERT INTO tokens (code, user_id, issued_to, max_uses, status) VALUES
+INSERT INTO tokens (code, user_id, label, max_uses, status) VALUES
   ('MERC-8GH2-KP4X', 1, 'Amazon Delivery', 3, 'active'),
   ('KART-4KN9-RT2M', 1, 'Flipkart Returns', 5, 'active'),
   ('OLD1-AAAA-BBBB', 1, 'Old Service', 1, 'paused');
 
 -- 4. Find active tokens with max_uses > 1, newest first
-SELECT code, issued_to, max_uses, created_at
+SELECT code, label, max_uses, created_at
 FROM tokens
 WHERE status = 'active' AND max_uses > 1
 ORDER BY created_at DESC;
@@ -335,6 +467,165 @@ ORDER BY created_at DESC;
 UPDATE tokens
 SET status = 'revoked', revoked_at = NOW()
 WHERE id = (SELECT id FROM tokens ORDER BY created_at ASC LIMIT 1);`
+    });
+
+    createPlayground("pg-exercise-row", `// Write checkRow(row, table) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(v) { return JSON.stringify(v); }
+
+var STATUSES = ["active", "paused", "revoked"];
+function tokensTable(rows) {
+  return {
+    columns: [
+      { name: "id", notNull: true, hasDefault: true, defaultValue: 1 },
+      { name: "code", notNull: true, unique: true },
+      { name: "user_id", notNull: true },
+      { name: "label", notNull: true },
+      // NOT NULL and a DEFAULT and a CHECK, all three, so the
+      // interactions between them are visible on one column.
+      { name: "status", notNull: true, hasDefault: true, defaultValue: "active",
+        check: function (v) { return STATUSES.indexOf(v) !== -1; } },
+      // Nullable, no default. NULL means unlimited; 0 means none.
+      { name: "max_uses" },
+      // UNIQUE and NULLABLE -- the combination where "nulls do not
+      // collide" is observable at all. The merchant's own reference
+      // for this token, when they gave one.
+      { name: "external_ref", unique: true },
+      // A CHECK with NO NOT NULL -- the surprising combination. The
+      // predicate is null-safe on purpose: a CHECK that THROWS on null
+      // would fail every test at once and hide which rule broke, and
+      // in SQL a CHECK does not throw, it simply is not false.
+      { name: "note", check: function (v) { return typeof v === "string" && v.length <= 10; } },
+      { name: "expires_at" },
+    ],
+    rows: rows || [],
+  };
+}
+function valid(over) {
+  var r = { code: "MERC-8GH2-KP4X", user_id: 1, label: "Farm box" };
+  for (var k in (over || {})) r[k] = over[k];
+  return r;
+}
+function got(row, rows) {
+  try { return checkRow(row, tokensTable(rows)) || {}; }
+  catch (e) { return { ok: false, stored: null, violations: [{ column: "threw", rule: e.message }] }; }
+}
+function rules(res) {
+  return (res.violations || []).map(function (v) { return v.column + ":" + v.rule; }).join(",");
+}
+
+try {
+  if (typeof checkRow !== "function") throw new Error("not written yet");
+
+  check("a well-formed row is accepted",
+    got(valid()).ok === true, "got " + show(got(valid()).violations));
+
+  // Rule 2 -- defaults fill omissions.
+  check("an omitted column with a DEFAULT takes the default",
+    got(valid()).stored.status === "active", "got " + show(got(valid()).stored.status));
+  check("...and an omitted nullable column with no default is null",
+    got(valid()).stored.max_uses === null, "got " + show(got(valid()).stored.max_uses));
+  check("...while an omitted NOT NULL column with no default is a violation",
+    rules(got({ code: "MERC-8GH2-KP4X", user_id: 1 })) === "label:not_null",
+    "got " + show(rules(got({ code: "MERC-8GH2-KP4X", user_id: 1 }))));
+
+  // Rule 3 -- THE subtlety. DEFAULT is for absence, not for null.
+  check("an explicit null on a NOT NULL column with a DEFAULT is still a violation",
+    rules(got(valid({ status: null }))) === "status:not_null",
+    "got " + show(rules(got(valid({ status: null })))) +
+      " -- DEFAULT applies to a column you left OUT, not one you passed null for");
+  check("...and the default is NOT silently substituted",
+    got(valid({ status: null })).stored.status === null,
+    "got " + show(got(valid({ status: null })).stored.status));
+
+  // Rule 4 -- THE headline. NOT NULL rejects null and nothing else.
+  check("an empty string satisfies NOT NULL",
+    got(valid({ label: "" })).ok === true,
+    "got " + show(got(valid({ label: "" })).violations) +
+      " -- '' is a value; the database will not reject it for you");
+  check("...and so does a string of spaces",
+    got(valid({ label: "   " })).ok === true,
+    "got " + show(got(valid({ label: "   " })).violations));
+  // On a NOT NULL column, so a falsy test has something to reject.
+  // max_uses is nullable, so 0 there proves nothing about NOT NULL.
+  check("...and 0 satisfies it on a NOT NULL numeric column",
+    got(valid({ id: 0 })).ok === true && got(valid({ id: 0 })).stored.id === 0,
+    "got " + show(got(valid({ id: 0 }))) + " -- 0 is a value, not an absence");
+  check("...and 0 survives into stored on a nullable one",
+    got(valid({ max_uses: 0 })).stored.max_uses === 0,
+    "got " + show(got(valid({ max_uses: 0 })).stored.max_uses) +
+      " -- 0 means no uses permitted, which the product must be able to express");
+
+  // Rule 5 -- UNIQUE, and the nulls that never collide.
+  var existing = [{ code: "MERC-8GH2-KP4X", max_uses: null, note: null }];
+  check("a repeated value on a UNIQUE column is a violation",
+    rules(got(valid(), existing)) === "code:unique",
+    "got " + show(rules(got(valid(), existing))));
+  check("...but a different value is fine",
+    got(valid({ code: "KART-4KN9-RT2M" }), existing).ok === true,
+    "got " + show(got(valid({ code: "KART-4KN9-RT2M" }), existing).violations));
+  // external_ref is the UNIQUE and NULLABLE column -- the only shape
+  // where "nulls do not collide" can be observed at all.
+  check("...and nulls never collide, however many there are",
+    got(valid({ external_ref: null }), [
+      { code: "A", external_ref: null }, { code: "B", external_ref: null },
+    ]).ok === true,
+    "got " + show(got(valid({ external_ref: null }), [
+      { code: "A", external_ref: null }, { code: "B", external_ref: null },
+    ]).violations) + " -- two nulls are not known to be equal, so they do not conflict");
+  check("...while a repeated non-null value on that same column does",
+    rules(got(valid({ external_ref: "PO-4471" }), [{ code: "A", external_ref: "PO-4471" }]))
+      === "external_ref:unique",
+    "the exemption is for null, not for the column");
+
+  // Rule 6 -- a CHECK fails only on false.
+  check("a value failing a CHECK is a violation",
+    rules(got(valid({ status: "archived" }))) === "status:check",
+    "got " + show(rules(got(valid({ status: "archived" })))));
+  check("...but null does not run the CHECK at all",
+    got(valid({ note: null })).ok === true,
+    "got " + show(got(valid({ note: null })).violations) +
+      " -- a CHECK constraint does not imply NOT NULL");
+  check("...while a non-null value on that same column still gets checked",
+    rules(got(valid({ note: "far too long to fit" }))) === "note:check",
+    "got " + show(rules(got(valid({ note: "far too long to fit" })))));
+
+  // Rule 1
+  check("a column that does not exist is reported",
+    rules(got(valid({ issued_to: "Farm box" }))) === "issued_to:unknown_column",
+    "got " + show(rules(got(valid({ issued_to: "Farm box" })))) +
+      " -- a typo'd column is a value you think you stored");
+
+  // Rule 7 -- all of them, in column order.
+  var messy = { code: "MERC-8GH2-KP4X", user_id: null, status: "archived", nope: 1 };
+  check("every violation is reported, not just the first",
+    (got(messy, existing).violations || []).length === 5,
+    "got " + show(rules(got(messy, existing))));
+  check("...ordered by column order, with unknown columns first",
+    rules(got(messy, existing)) === "nope:unknown_column,code:unique,user_id:not_null,label:not_null,status:check",
+    "got " + show(rules(got(messy, existing))));
+
+  // Rule 8
+  var input = valid({ status: null });
+  var snapshot = JSON.stringify(input);
+  got(input);
+  check("the input row is not mutated",
+    JSON.stringify(input) === snapshot, "defaults are filled into the RESULT, not into your object");
+  check("...and stored is returned even when the row is rejected",
+    got(valid({ label: null })).stored !== null &&
+    got(valid({ label: null })).stored.code === "MERC-8GH2-KP4X",
+    "seeing what WOULD land is how you notice it is not what you passed");
+} catch (err) {
+  console.log("Self-check could not run: " + err.message);
+}`);
+
+    createExplain("explain-b1-0001", {
+      prompt: "A column is declared <code>status TEXT CHECK (status IN ('active','paused','revoked'))</code> — with a CHECK and no NOT NULL. Explain which value it accepts that the CHECK was written to exclude, and why SQL's three-valued logic makes that the correct behaviour rather than a bug."
     });
 
     createQuiz("lesson-quiz", [
@@ -387,14 +678,14 @@ WHERE id = (SELECT id FROM tokens ORDER BY created_at ASC LIMIT 1);`
       {
         type: "predict-output",
         question: "How many rows does this INSERT add?",
-        code: "INSERT INTO tokens (code, user_id, issued_to) VALUES\n('ABCD-1111', 1, 'Ravi'),\n('EFGH-2222', 1, 'Meera'),\n('IJKL-3333', 1, 'Priya');",
+        code: "INSERT INTO tokens (code, user_id, label) VALUES\n('ABCD-1111', 1, 'Ravi'),\n('EFGH-2222', 1, 'Meera'),\n('IJKL-3333', 1, 'Priya');",
         answer: "3",
         explanation: "A single INSERT with multiple value tuples inserts one row per tuple. This is more efficient than three separate INSERTs because it's a single round-trip to the database."
       },
       {
         type: "spot-the-bug",
         question: "Why does this CREATE TABLE fail?",
-        code: "CREATE TABLE tokens (\n  id SERIAL PRIMARY KEY,\n  code TEXT UNIQUE NOT NULL,\n  user_id INTEGER REFERENCES users(id)\n  issued_to TEXT NOT NULL,\n  created_at TIMESTAMP DEFAULT NOW()\n);",
+        code: "CREATE TABLE tokens (\n  id SERIAL PRIMARY KEY,\n  code TEXT UNIQUE NOT NULL,\n  user_id INTEGER REFERENCES users(id)\n  label TEXT NOT NULL,\n  created_at TIMESTAMP DEFAULT NOW()\n);",
         options: [
           "SERIAL is not a valid type",
           "Missing comma after the user_id line",
@@ -402,12 +693,12 @@ WHERE id = (SELECT id FROM tokens ORDER BY created_at ASC LIMIT 1);`
           "DEFAULT NOW() is invalid syntax"
         ],
         correct: 1,
-        explanation: "Each column definition must be separated by a comma. The line ending with REFERENCES users(id) is missing a comma before issued_to. A single missing comma causes the entire CREATE TABLE to fail."
+        explanation: "Each column definition must be separated by a comma. The line ending with REFERENCES users(id) is missing a comma before label. A single missing comma causes the entire CREATE TABLE to fail."
       },
       {
         type: "fill-blank",
         question: "Retrieve tokens created in the last 7 days:",
-        code: "SELECT code, issued_to FROM tokens\nWHERE created_at > NOW() - ___ '7 days';",
+        code: "SELECT code, label FROM tokens\nWHERE created_at > NOW() - ___ '7 days';",
         answer: "INTERVAL",
         explanation: "INTERVAL is PostgreSQL's way of expressing time durations. NOW() - INTERVAL '7 days' gives you the timestamp exactly 7 days ago. You can use days, hours, minutes, or combinations."
       },
@@ -436,8 +727,8 @@ WHERE id = (SELECT id FROM tokens ORDER BY created_at ASC LIMIT 1);`
       {
         type: "predict-output",
         question: "What does SELECT return here?",
-        code: "SELECT issued_to FROM tokens WHERE status = 'revoked' ORDER BY created_at DESC LIMIT 1;",
-        answer: "The issued_to of the most recently created revoked token (or empty if none are revoked)",
+        code: "SELECT label FROM tokens WHERE status = 'revoked' ORDER BY created_at DESC LIMIT 1;",
+        answer: "The label of the most recently created revoked token (or empty if none are revoked)",
         explanation: "This filters to revoked tokens, sorts them newest-first (DESC), and takes only the top one. LIMIT 1 with ORDER BY gives you the 'most recent' or 'largest' pattern — very common in real queries."
       },
       {
@@ -489,12 +780,12 @@ WHERE id = (SELECT id FROM tokens ORDER BY created_at ASC LIMIT 1);`
         type: "which-breaks",
         question: "Which SELECT has invalid syntax?",
         variants: [
-          "SELECT code, issued_to FROM tokens WHERE user_id = 1;",
-          "SELECT code issued_to FROM tokens WHERE user_id = 1;",
+          "SELECT code, label FROM tokens WHERE user_id = 1;",
+          "SELECT code label FROM tokens WHERE user_id = 1;",
           "SELECT * FROM tokens WHERE user_id = 1;"
         ],
         correct: 1,
-        explanation: "When selecting multiple columns, you must separate them with commas. 'SELECT code issued_to' is interpreted as 'SELECT code AS issued_to' — aliasing code to issued_to. You'd get one column, not two, and it's likely not what you intended."
+        explanation: "When selecting multiple columns, you must separate them with commas. 'SELECT code label' is interpreted as 'SELECT code AS label' — aliasing code to label. You'd get one column, not two, and it's likely not what you intended."
       },
       {
         type: "fill-blank",
@@ -506,12 +797,12 @@ WHERE id = (SELECT id FROM tokens ORDER BY created_at ASC LIMIT 1);`
       {
         type: "spot-the-bug",
         question: "This query should find tokens issued to names starting with 'A'. What's wrong?",
-        code: "SELECT * FROM tokens WHERE issued_to LIKE 'A';",
+        code: "SELECT * FROM tokens WHERE label LIKE 'A';",
         options: [
           "LIKE needs double quotes around 'A'",
           "Missing wildcard — should be 'A%' to match names starting with A",
           "LIKE doesn't work on TEXT columns",
-          "Should use WHERE issued_to = 'A%'"
+          "Should use WHERE label = 'A%'"
         ],
         correct: 1,
         explanation: "LIKE 'A' matches only the exact string 'A'. The % wildcard means 'any characters'. LIKE 'A%' matches anything starting with A. Without the wildcard, LIKE behaves identically to =."
@@ -530,7 +821,7 @@ WHERE id = (SELECT id FROM tokens ORDER BY created_at ASC LIMIT 1);`
       {
         type: "predict-output",
         question: "What value does this return for a newly inserted token?",
-        code: "INSERT INTO tokens (code, user_id, issued_to)\nVALUES ('TEST-9999', 1, 'Unit Test')\nRETURNING id, created_at;",
+        code: "INSERT INTO tokens (code, user_id, label)\nVALUES ('TEST-9999', 1, 'Unit Test')\nRETURNING id, created_at;",
         answer: "The auto-generated id (e.g., 1) and the current timestamp",
         explanation: "RETURNING gives you back the inserted row's values in the same query. This is crucial for APIs — after inserting a token, you immediately get the id and created_at without needing a separate SELECT."
       },
@@ -543,14 +834,14 @@ WHERE id = (SELECT id FROM tokens ORDER BY created_at ASC LIMIT 1);`
       },
       {
         type: "which-breaks",
-        question: "Which statement fails if tokens has a NOT NULL constraint on issued_to?",
+        question: "Which statement fails if tokens has a NOT NULL constraint on label?",
         variants: [
-          "INSERT INTO tokens (code, user_id, issued_to) VALUES ('X', 1, 'Ashish');",
-          "INSERT INTO tokens (code, user_id, issued_to) VALUES ('Y', 1, '');",
+          "INSERT INTO tokens (code, user_id, label) VALUES ('X', 1, 'Ashish');",
+          "INSERT INTO tokens (code, user_id, label) VALUES ('Y', 1, '');",
           "INSERT INTO tokens (code, user_id) VALUES ('Z', 1);"
         ],
         correct: 2,
-        explanation: "NOT NULL rejects NULL, and an empty string is not NULL — it is a value that happens to be empty, so the insert supplying '' is accepted. The one that omits issued_to entirely leaves Postgres inserting NULL, which the constraint refuses. This gap is the reason a11/0003 argues that '' must be rejected in validation: the database will not do it for you, and '' then flows past every ?? fallback downstream."
+        explanation: "NOT NULL rejects NULL, and an empty string is not NULL — it is a value that happens to be empty, so the insert supplying '' is accepted. The one that omits label entirely leaves Postgres inserting NULL, which the constraint refuses. This gap is the reason a11/0003 argues that '' must be rejected in validation: the database will not do it for you, and '' then flows past every ?? fallback downstream."
       },
       {
         type: "spot-the-bug",

@@ -31,10 +31,55 @@ TypeScript whose code has ever run.** Nine left with no log entry:
 | ~~`a9/0002`~~ | **done 2026-08-23** — `parseTokenLink`, and it was hiding a denial oracle |
 | ~~`x2/0002`~~ | **done 2026-08-23** — `redactLogFields`, and it was teaching `tokenCode: token.code` as best practice |
 | ~~`x2/0001`~~ | **done 2026-08-23** — `firstDivergence`; a probe that never ran is not a probe that saw zero |
-| `b1/0001`, `b1/0004` | Pure SQL, and the M3 hunt has never been run over B1 |
+| `b1/0004` | Pure SQL, and the M3 hunt has never been run over B1 |
+| ~~`b1/0001`~~ | **done 2026-08-23** — `checkRow`; its `NOT NULL` gloss contradicted its own quiz |
 | ~~`b1/0002`~~ | **done 2026-08-23** — `joinRows`; its LEFT JOIN example claimed "most recent redemption" and returned all of them |
 
 Previous good state is `b9276d7`.
+
+### b1/0001 — the NOT NULL gloss contradicted the lesson's own quiz (2026-08-23)
+
+M3: **`checkRow`**. 21 self-checks, 9 wrong-cases.
+
+Its breakdown of the schema read *"`TEXT NOT NULL` — text column that can't be
+empty (null)"* — **two different facts in one parenthesis**, while the same
+lesson's quiz spends a question separating them. The rule already written down
+applies: *when a lesson's own quiz contradicts its body, believe the quiz.*
+And the consequence was already paid downstream — `a11/0003` found `''`
+passing validation, satisfying a `NOT NULL` column, then rendering as nothing
+because `?? 'Unnamed'` catches `null` and not `''`.
+
+Also `issued_to` → `label`, and **the `max_uses` callout referenced an
+`expires_at` column the table never defined** — it is now there.
+
+### Three things NULL does, and they are one thing
+
+The exercise is built on SQL's three-valued logic, because all three
+surprises come from it — a comparison against NULL is *unknown*, and each
+constraint decides differently what to do with unknown:
+
+| | Rejects | Quietly allows |
+|---|---|---|
+| `NOT NULL` | only `NULL` | `''`, `'   '`, `'0'` |
+| `UNIQUE` | a repeated **value** | any number of NULLs |
+| `CHECK (x IN …)` | only what it proves **false** | `NULL` |
+
+**The third is the one that surprises people: a `CHECK` does not imply
+`NOT NULL`**, so a column constrained to three statuses accepts a null status
+happily.
+
+### Three wrong-cases exposed three holes, and all three were fixture design
+
+Not weak cases — a fixture that could not *express* the rule being tested:
+
+- **No NOT NULL numeric column**, so the falsy-check mistake had nothing to
+  reject. `max_uses` is nullable, so `0` there proves nothing about `NOT NULL`.
+- **No nullable UNIQUE column**, so "nulls never collide" was unobservable —
+  `code` is `UNIQUE NOT NULL`. Added `external_ref`, which is the only shape
+  where the rule exists at all.
+- **A `CHECK` that threw on null** rather than returning false, so the mistake
+  that runs checks on null failed *every* assertion and hid which rule broke.
+  In SQL a CHECK does not throw; it simply is not false.
 
 ### b1/0002 — a JOIN is not a lookup, and its own example forgot that (2026-08-23)
 
