@@ -108,9 +108,9 @@ from this one git repo.
 | B3 | | 2. Express/Fastify setup | Routing, middleware, request/response lifecycle | The HTTP framework | NEW |
 | B3 | | 3. REST API design | Resources, verbs, status codes, pagination, versioning | A well-designed API for both clients to consume | NEW |
 | B3 | | 4. Input validation & error handling | zod on the server, shared schemas, consistent error format | Security boundary — never trust client input | NEW |
-| B4 | Auth (server) | 1. Password hashing & user registration | argon2/bcrypt, never plaintext, salt, timing attacks | Secure user creation | NEW |
-| B4 | | 2. JWT issuance & refresh rotation | Access token (short-lived), refresh token (rotated), revocation | Stateless auth with revocation capability | NEW |
-| B4 | | 3. Rate limiting & brute-force protection | Per-IP, per-account limits on auth endpoints | Security — auth is the #1 attack surface | NEW |
+| B4 | Auth (server) | 1. Phone sign-up & one-time codes | phone_hash with a pepper, OTP issue/verify, the denial oracle and its timing half, DLT templates | Sign-in with no password anywhere | **REWRITTEN 2026-08-22** |
+| B4 | | 2. JWT issuance & refresh rotation | Short access token, a refresh token that never expires, reuse detection, retry grace window, per-device revocation | Sessions that end by revocation, not by clock | **REWRITTEN 2026-08-22** |
+| B4 | | 3. Rate limiting | Three OTP layers (per-number burst, per-number daily, per-IP), CGNAT, IPv6. **No account lockout** — there is no password to brute-force | Bounds the SMS bill as well as the attack surface | **REWRITTEN 2026-08-22** |
 | B5 | WebSocket Server | 1. WS connection lifecycle | Upgrade, auth on connect, heartbeat, reconnect handling | All real-time features run over your WS server | Replaces Firebase real-time |
 | B5 | | 2. Message routing | Routing a message to the right socket(s), fan-out | Delivering chat messages in real time | Replaces Firestore listeners |
 | B5 | | 3. Presence & typing | Ephemeral state, Redis pub/sub (optional for v1) | Online indicators, typing bubbles | NEW |
@@ -252,7 +252,7 @@ unverified lessons against a student on lesson 5.
 | ID | Module | ~Lessons | Why here |
 |----|--------|---------|----------|
 | **C0** | Architecture & System Design | 2 | Before B1 — the whole-system view, trust boundaries, ADRs, where the seams go |
-| **C5** | End-to-End Encryption | 5 | **Before B2** — the schema stores ciphertext, so this is a prerequisite. Grown from 2 lessons: key generation, distribution, verification, backup/recovery, multi-device |
+| **C5** | End-to-End Encryption | 5 (likely 4) | **Written after B4, 2026-08-22/23** — the plan said before B2, and the dependency was met anyway because `b2/0002` did the E2EE schema rewrite up front. The prerequisite was satisfied by *anticipation* rather than by ordering. `0001`-`0003` done; `0004` is backup/recovery; `0005` was multi-device and lost its subject when the student chose one device for v1 |
 | **C1** | Testing & Quality | 5 | After B3 — test the API as it is built, not at the end |
 | **C2** | CI/CD & Release Engineering | 4 | After C1 — nothing to automate until tests exist |
 | **C3** | Trust, Safety & Abuse | 3 | After A5 — redesigned around client-side report packaging (ADR-0006), since E2EE removes server-side moderation |
@@ -285,7 +285,7 @@ Phase 3 — Foundations, re-architected
   A2  TypeScript
   X2  Debugging
   B1  SQL Fundamentals
-  C5  End-to-End Encryption               ← new, MUST precede B2
+  C5  End-to-End Encryption               ← written after B4 instead; see the note above
   B2  Schema Design                       ← REWRITE for ciphertext + partitioning
   B3  Node & HTTP Server
   C1  Testing & Quality                   ← new

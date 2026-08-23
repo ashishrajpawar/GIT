@@ -1860,8 +1860,17 @@ architecture question in architecture vocabulary.**
 
 ## Blocked on
 
-**Nothing.** ADR-0008 was the only blocker and it is settled — see *In
-progress*.
+**Nothing is blocked from starting.** `c5/0004` is unblocked and designed.
+
+**One thing needs a decision before it is written, and only that one:**
+`c5/0005` was multi-device, and the student chose **one device for v1** on
+2026-08-23, so the lesson has no product left to describe. Either reframe it as
+*"why Token is single-device and what changing it would cost"*, or drop it and
+make C5 four lessons. **Do not write it as originally planned.** Everything
+else in the queue can proceed without asking.
+
+*(ADR-0008 was the last true blocker and was settled 2026-08-20. The
+relay-egress note below is the residue of it.)*
 
 **One thing to carry to deployment, not to act on now:** relay egress is a
 certainty rather than a risk. ADR-0003 expressed the single-box ceiling in

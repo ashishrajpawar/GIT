@@ -86,6 +86,10 @@ and out of scope — nothing Firebase, Agora, Twilio or Prisma belongs below.*
 
 ---
 
-**Deliberately absent:** Firebase, Agora, Twilio, Exotel, Stream, Sendbird, Prisma.
+**Deliberately absent:** Firebase, Agora, Stream, Sendbird, Prisma, and the
+third-party comms SDKs. **One exception, decided 2026-08-22: an SMS OTP
+aggregator**, for sign-in codes only — it authenticates entry rather than
+carrying the conversation. India also requires DLT registration with TRAI,
+which has a lead time of weeks.
 All are ruled out by the architecture — see `CLAUDE.md`. If a search result
 recommends one of them, it is answering a different project's question.
