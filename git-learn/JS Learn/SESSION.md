@@ -26,7 +26,7 @@ TypeScript whose code has ever run.** Nine left with no log entry:
 
 | Lesson | What it needs |
 |---|---|
-| `a2/0003` | An M3 exercise. JSX, so the screen stays excused and the pure function beside it does not — **the last one** |
+| ~~`a2/0003`~~ | **done 2026-08-23** — `readRouteParams`; the code was in the navigation params, which get written to disk |
 | ~~`a2/0002`~~ | **done 2026-08-23** — `toUpdatePayload`; `Partial<T>` gives a field three states where the column has two |
 | ~~`a3/0002`~~ | **done 2026-08-23** — `parseListResponse`, the boundary. Its `TokenListItem` declared a `code` field and the list screen rendered it |
 | ~~`a9/0002`~~ | **done 2026-08-23** — `parseTokenLink`, and it was hiding a denial oracle |
@@ -37,6 +37,61 @@ TypeScript whose code has ever run.** Nine left with no log entry:
 | ~~`b1/0002`~~ | **done 2026-08-23** — `joinRows`; its LEFT JOIN example claimed "most recent redemption" and returned all of them |
 
 Previous good state is `b9276d7`.
+
+### The verification story is finished (2026-08-23)
+
+**Every lesson in the course has been executed at least once.** The log holds
+102 entries against 101 lessons plus one README: **84 verified, 17
+`unverifiable` with a stated reason, 1 `nothing-to-verify`.** Nothing is
+absent any more.
+
+Nine lessons went from *never attempted* to covered in this pass, and **seven
+of the nine were hiding a real defect** — which is the argument for having
+done it rather than accepting the number:
+
+| Lesson | What it was doing |
+|---|---|
+| `a2/0001` | Types carried a `code` field ADR-0007 forbids |
+| `a2/0002` | `Partial<T>` collapsing absent and null |
+| `a2/0003` | The token code in navigation params, which persist to disk |
+| `a3/0002` | `TokenListItem` declared `code`, so the list rendered `undefined` |
+| `a9/0002` | A denial oracle: 404 / 410 / 403 rendered to anyone with a link |
+| `b1/0001` | `NOT NULL` glossed as "can't be empty", against its own quiz |
+| `b1/0002` | A LEFT JOIN commented "most recent" that returns all of them |
+| `b1/0004` | Clean — the `@>` rules simply had nothing executable behind them |
+| `x2/0001` | Clean — the isolate step was sound and untestable |
+| `x2/0002` | Taught `tokenCode: token.code` as best practice, in the logging lesson |
+
+**Two of the nine were clean.** That is worth recording as honestly as the
+seven: the reflex to assume a never-executed lesson is a broken one is wrong
+about a fifth of the time, and both clean ones still gained an exercise that
+did not exist.
+
+### a2/0003 — the code was in the navigation params (2026-08-23)
+
+M3: **`readRouteParams`**. 22 self-checks, 10 wrong-cases. The last of the
+nine.
+
+`TokenDetail: { tokenCode: string }` — and navigation params are **written to
+disk**. React Navigation persists its state to restore where you were, and
+with linking configured those same params become the deep-link URL. A code
+there is a live capability in AsyncStorage *and* in a URL. It was also
+unfillable: `GET /tokens` returns no code, so
+`navigate('TokenDetail', { tokenCode: item.code })` navigated with
+`undefined`. Fourth occurrence of that field, after `a5/0003`, `a11/0001` and
+`a3/0002`.
+
+**And the part the types cannot do.** `RootStackParamList` type-checks every
+`navigate()` call *in your code* — which is real. But `route.params` has two
+other sources that never consulted it: a **deep link**, where every value is
+text parsed out of a URL, and **restored navigation state** written by an
+older build. So `route.params` is the same kind of value as `res.json()` in
+`a3/0002` — annotated, not checked.
+
+The exercise is that check, and its sharp edges are the coercions:
+`Number('')` is `0` — **a real token id** — `parseInt('7x')` is `7`, and
+`Boolean('false')` is **true**, because a non-empty string is truthy. Each one
+answers *what would this be* when the question is *is this one*.
 
 ### a2/0002 — `Partial<T>` gives a field three states, and the column has two (2026-08-23)
 
@@ -1383,7 +1438,29 @@ not just here** — see *Where a token's rules live* and *Expiry is
 | **Expiry** | **`tokens.expires_at` only.** Not a rule type. `a5/0004` still accepts `'expiry'` in its zod enum |
 | **TypeScript** | **Teach the verifier TypeScript**, so `a2/*` and `a3/0002` stop being the only lessons whose code has never run |
 
-### → Start here: the TypeScript runner
+### → Start here: pick the next body of work
+
+**The verification story is finished** — see below. Every lesson has been
+executed; the log is 84 verified, 17 `unverifiable` with a reason, 1
+`nothing-to-verify`, and **nothing is absent**.
+
+What is left, in no forced order:
+
+1. **The 17 `unverifiable` lessons.** `CLAUDE.md` warns that the reflex to
+   reach for that flag is wrong more often than it is right, and this pass
+   proved it again — nine lessons that looked unrunnable produced nine
+   exercises. A7 (4), B9 (3), X1 (3) and A10 (2) are the clusters. Each needs
+   the same move: find the plain function, excuse the rest per-exercise.
+2. **The C-modules.** C0–C4 and C6–C9, roughly 34 lessons, none written. C0 is
+   architecture and was planned to come *before* B1, so it is already out of
+   order.
+3. **`calls`, the last `known-issues.json` entry**, which needs B6 written to
+   decide what a call record persists.
+4. **The `a8/0004` fix** — `tokenCode` over the WebSocket on every chat
+   message, twice. Small, and it is the only ADR-0007 violation still on the
+   board.
+
+### The TypeScript runner (done 2026-08-23)
 
 **C5 is complete** and the rules model, the `variant` blind spot and the
 `participants` orphan all landed on 2026-08-23. **`known-issues.json` is down

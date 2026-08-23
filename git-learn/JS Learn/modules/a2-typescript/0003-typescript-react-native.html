@@ -35,18 +35,19 @@
     <pre><code>import { View, Text, Pressable } from 'react-native';
 
 interface TokenCardProps {
-  code: string;
-  issuedTo: string;
+  // A label and a state. NOT the code: GET /tokens does not return
+  // one (ADR-0007), so a prop typed to receive it is a prop that will
+  // always be undefined.
+  label: string;
   status: 'active' | 'paused' | 'revoked';
   onPress: () =&gt; void;
 }
 
-function TokenCard({ code, issuedTo, status, onPress }: TokenCardProps) {
+function TokenCard({ label, status, onPress }: TokenCardProps) {
   return (
     &lt;Pressable onPress={onPress}&gt;
       &lt;View&gt;
-        &lt;Text&gt;{code}&lt;/Text&gt;
-        &lt;Text&gt;{issuedTo}&lt;/Text&gt;
+        &lt;Text&gt;{label}&lt;/Text&gt;
         &lt;Text&gt;{status}&lt;/Text&gt;
       &lt;/View&gt;
     &lt;/Pressable&gt;
@@ -102,7 +103,7 @@ type RootStackParamList = {
   Login: undefined;              // no params
   Register: undefined;
   Main: undefined;
-  TokenDetail: { tokenCode: string };  // requires tokenCode
+  TokenDetail: { tokenId: number };    // requires tokenId, NOT the code
   CreateToken: { prefill?: string };   // optional prefill
 };
 
@@ -110,7 +111,7 @@ type RootStackParamList = {
 type TokenDetailProps = NativeStackScreenProps&lt;RootStackParamList, 'TokenDetail'&gt;;
 
 function TokenDetailScreen({ route, navigation }: TokenDetailProps) {
-  const { tokenCode } = route.params;  // TS knows this is string
+  const { tokenId } = route.params;   // TS knows this is number
 
   // navigation.navigate is typed — only valid screen names allowed:
   navigation.navigate('Main');  // OK
@@ -118,6 +119,47 @@ function TokenDetailScreen({ route, navigation }: TokenDetailProps) {
 
   return null;
 }</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">An id, not the code — and <code>route.params</code> is not checked by any of this</div>
+
+      <p><code>TokenDetail: { tokenId: number }</code> said
+      <code>{ tokenCode: string }</code> until 2026-08-23. Two separate reasons
+      it must not:</p>
+
+      <ul>
+        <li><strong>Navigation params are written to disk.</strong> React
+        Navigation persists its state so the app can restore where you were,
+        and with linking configured those params also become the deep-link URL.
+        A code in there is a live capability in AsyncStorage and in a URL —
+        both of which ADR-0007 rules out.</li>
+        <li><strong>The list has no code to pass.</strong>
+        <code>GET /tokens</code> returns none, so
+        <code>navigate('TokenDetail', { tokenCode: item.code })</code> would
+        have navigated with <code>undefined</code> — the same missing field
+        that made every row's key <code>undefined</code> in
+        <code>a3/0002</code>.</li>
+      </ul>
+
+      <p><strong>Now the part the types genuinely cannot do.</strong>
+      <code>RootStackParamList</code> makes <code>navigate()</code> calls
+      type-checked, which is real and useful — every call site in your code is
+      verified. But <code>route.params</code> arriving at the screen has two
+      other sources, and neither consulted your type:</p>
+
+      <ul>
+        <li>A <strong>deep link</strong>, where every value is a string parsed
+        out of a URL. <code>/token/7</code> gives you <code>"7"</code>, and
+        your type says <code>number</code>.</li>
+        <li><strong>Restored navigation state</strong>, written to disk by a
+        build that may be older than the one reading it — with params of a
+        shape this version no longer has.</li>
+      </ul>
+
+      <p>So <code>route.params</code> is the same kind of value as
+      <code>res.json()</code> in <code>a3/0002</code>: annotated, not checked.
+      The exercise below is the check.</p>
+    </div>
 
     <h2>Typing event handlers</h2>
 
@@ -150,16 +192,15 @@ function SearchBar() {
     <pre><code>import { FlatList, ListRenderItem } from 'react-native';
 
 interface Token {
-  code: string;
-  issuedTo: string;
+  id: number;
+  label: string;
   status: 'active' | 'paused' | 'revoked';
 }
 
 function TokenList({ tokens }: { tokens: Token[] }) {
   const renderItem: ListRenderItem&lt;Token&gt; = ({ item }) =&gt; (
     &lt;TokenCard
-      code={item.code}        // TS knows item is Token
-      issuedTo={item.issuedTo}
+      label={item.label}      // TS knows item is Token
       status={item.status}
       onPress={() =&gt; {}}
     /&gt;
@@ -169,7 +210,7 @@ function TokenList({ tokens }: { tokens: Token[] }) {
     &lt;FlatList
       data={tokens}
       renderItem={renderItem}
-      keyExtractor={(item) =&gt; item.code}
+      keyExtractor={(item) =&gt; String(item.id)}
     /&gt;
   );
 }</code></pre>
@@ -236,9 +277,20 @@ function ScreenWrapper({ title, children }: ScreenWrapperProps) {
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>Now build it yourself</h2>
+
+    <p>The screen is JSX and needs a device. The function that decides whether
+    its params are usable does not — and it is the only thing standing between
+    a typed screen and a value nothing checked.</p>
+
+    <div id="exercise-params"></div>
+    <div id="pg-exercise-params"></div>
+
+    <h3>And the screen</h3>
 
     <div id="exercise-1"></div>
+
+    <div id="explain-a2-0003"></div>
 
     <hr>
 
@@ -252,15 +304,80 @@ function ScreenWrapper({ title, children }: ScreenWrapperProps) {
   </div>
 
   <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
-    createSolution("exercise-1", {
-      exercise: "Create the typed TokenListScreen component for Token's app. It should: (1) use useState with a Token[] type for the list, (2) use useState<Token | null> for the selected token, (3) have a typed FlatList with renderItem, (4) navigate to TokenDetail with the tokenCode param on press. Define the navigation param types and the component props.",
+    createSolution("exercise-params", {
+      exercise: `Write readRouteParams(raw, spec) — check what React Navigation actually handed the screen.\n\nraw is route.params. It may be undefined (a screen declared with no params, or a deep link that supplied none), and its values may be strings even where the type says number, because a deep link is a URL and a URL is text.\n\nspec is an array of { name, type, required }, where type is 'number', 'string' or 'boolean'.\n\nReturn { ok, params, reason, field }. On success params holds the COERCED values; on failure params is {} and field names the parameter that failed.\n\nThe rules:\n\n1. raw UNDEFINED IS NOT AN ERROR when nothing is required. A screen with no required params reached with no params is the ordinary case, and it returns ok with an empty params object. Treat undefined as an empty object rather than as a failure.\n\n2. A REQUIRED PARAM THAT IS ABSENT IS 'missing'. Do not substitute a default — there is no safe id to guess, and a detail screen for a token nobody named is worse than an honest refusal.\n\n3. AN OPTIONAL PARAM THAT IS ABSENT IS SIMPLY NOT IN params. Absent is not null and not zero; the screen decides what to do without it.\n\n4. A 'number' PARAM MUST COERCE FROM A STRING, AND CAREFULLY. A deep link gives you '7', so accept it and return the number 7. But Number('') is 0, Number(' ') is 0, and parseInt('7x') is 7 — so accept only a string that is ENTIRELY digits, with an optional leading minus, and reject everything else as 'invalid'. This is a11/0003's rule at a different boundary: when a value cannot be understood, refuse it rather than substituting the permissive default, and here the permissive default is a real token id belonging to someone.\n\n5. A 'boolean' PARAM ACCEPTS ONLY THE STRINGS 'true' AND 'false', or a real boolean. Everything else is 'invalid'. The trap is that 'false' is a non-empty string and therefore truthy, so a naive coercion turns "no" into "yes" — and there is no error to notice.\n\n6. A 'string' PARAM MUST ALREADY BE A STRING. Do not call String() on a number: it would make every wrong type look right, which is the opposite of what a boundary is for.\n\n7. A PARAM NOT IN THE SPEC IS DROPPED SILENTLY. Restored navigation state can carry params written by an older build, and this version has no idea what they meant. Dropping is correct here, unlike a3/0002's forbidden fields — the difference is that nothing downstream can act on a param the screen never reads.\n\n8. THE FIRST FAILURE WINS, in spec order, and it names the field. Never mutate raw, and a refusal returns an empty params object.`,
       hints: [
-        "Define RootStackParamList with TokenList (no params) and TokenDetail (tokenCode: string).",
+        "Rule 1 is the first line: `const source = raw ?? {}`. Everything after it can then assume an object, and the 'no params at all' case stops being special.",
+        "Rule 4's test is a regex on the string form, not a Number() call: /^-?\\d+$/. Number() answers 'what would this be' and the question here is 'is this a number at all', which is why every arithmetic coercion in JavaScript is the wrong tool for validation.",
+        "Walk `spec` for the params and never walk raw's keys — rule 7 then needs no code at all, because an unknown param is simply never visited."
+      ],
+      solution: `function readRouteParams(raw, spec) {
+  const no = (reason, field) => ({ ok: false, params: {}, reason, field });
+
+  // Rule 1. undefined is the ordinary case, not a failure.
+  const source = raw === undefined || raw === null ? {} : raw;
+
+  const params = {};
+
+  // Rule 8: spec order, first failure wins. Rule 7 falls out of this
+  // loop -- an unknown param is simply never visited.
+  for (const { name, type, required } of spec) {
+    const present = Object.prototype.hasOwnProperty.call(source, name)
+      && source[name] !== undefined;
+
+    if (!present) {
+      // Rules 2 and 3.
+      if (required) return no("missing", name);
+      continue;
+    }
+
+    const value = source[name];
+
+    if (type === "number") {
+      // Rule 4. A regex, not Number(): the question is "is this a
+      // number at all", and every arithmetic coercion answers a
+      // different question. '' and ' ' both become 0; '7x' becomes 7.
+      if (typeof value === "number") {
+        if (!Number.isFinite(value)) return no("invalid", name);
+        params[name] = value;
+      } else if (typeof value === "string" && /^-?\\d+$/.test(value)) {
+        params[name] = Number(value);
+      } else {
+        return no("invalid", name);
+      }
+      continue;
+    }
+
+    if (type === "boolean") {
+      // Rule 5. 'false' is truthy, so it has to be matched literally.
+      if (typeof value === "boolean") params[name] = value;
+      else if (value === "true") params[name] = true;
+      else if (value === "false") params[name] = false;
+      else return no("invalid", name);
+      continue;
+    }
+
+    // Rule 6. No String() -- that would make every wrong type look right.
+    if (typeof value !== "string") return no("invalid", name);
+    params[name] = value;
+  }
+
+  return { ok: true, params, reason: "ok", field: null };
+}`
+    });
+
+    createSolution("exercise-1", {
+      unverifiable: "the deliverable is a typed React Native screen with navigation and a FlatList, needing a device",
+      exercise: "Create the typed TokenListScreen component for Token's app. It should: (1) use useState with a Token[] type for the list, (2) use useState<Token | null> for the selected token, (3) have a typed FlatList with renderItem, (4) navigate to TokenDetail with the tokenId param on press. Define the navigation param types and the component props.",
+      hints: [
+        "Define RootStackParamList with TokenList (no params) and TokenDetail (tokenId: number). An id, never the code -- navigation params are persisted and can be serialised into a deep link.",
         "Use NativeStackScreenProps to type the screen component's props.",
         "ListRenderItem<Token> types the renderItem function — item will be a Token."
       ],
@@ -273,7 +390,7 @@ import { Token } from '@token/shared/types';
 // Navigation param types
 type RootStackParamList = {
   TokenList: undefined;
-  TokenDetail: { tokenCode: string };
+  TokenDetail: { tokenId: number };
   CreateToken: undefined;
 };
 
@@ -291,11 +408,11 @@ export function TokenListScreen({ navigation }: Props) {
 
   const renderItem: ListRenderItem<Token> = ({ item }) => (
     <Pressable
-      onPress={() => navigation.navigate('TokenDetail', { tokenCode: item.code })}
+      onPress={() => navigation.navigate('TokenDetail', { tokenId: item.id })}
     >
       <View style={{ padding: 16, borderBottomWidth: 1, borderColor: '#e5e7eb' }}>
-        <Text style={{ fontWeight: '600' }}>{item.code}</Text>
-        <Text style={{ color: '#6b7280' }}>{item.issuedTo}</Text>
+        <Text style={{ fontWeight: '600' }}>{item.label}</Text>
+        <Text style={{ color: '#6b7280' }}>{item.status}</Text>
         <Text>{item.status}</Text>
       </View>
     </Pressable>
@@ -305,10 +422,130 @@ export function TokenListScreen({ navigation }: Props) {
     <FlatList
       data={tokens}
       renderItem={renderItem}
-      keyExtractor={(item) => item.code}
+      keyExtractor={(item) => String(item.id)}
     />
   );
 }`
+    });
+
+    createPlayground("pg-exercise-params", `// Write readRouteParams(raw, spec) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  " ) + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(v) { return JSON.stringify(v); }
+
+var DETAIL = [
+  { name: "tokenId", type: "number", required: true },
+  { name: "highlight", type: "string", required: false },
+  { name: "fromDeepLink", type: "boolean", required: false },
+];
+function got(raw, spec) {
+  try { return readRouteParams(raw, spec || DETAIL) || {}; }
+  catch (e) { return { ok: false, params: {}, reason: "threw: " + e.message, field: null }; }
+}
+
+try {
+  if (typeof readRouteParams !== "function") throw new Error("not written yet");
+
+  // The ordinary case, from a navigate() call.
+  check("a well-formed params object is accepted",
+    got({ tokenId: 7 }).ok === true && got({ tokenId: 7 }).params.tokenId === 7,
+    "got " + show(got({ tokenId: 7 })));
+
+  // Rule 4 -- THE rule. Deep links are text.
+  check("a numeric string coerces to a number",
+    got({ tokenId: "7" }).params.tokenId === 7,
+    "got " + show(got({ tokenId: "7" })) + " -- /token/7 gives you a string");
+  check("...as the number 7, not the string",
+    typeof got({ tokenId: "7" }).params.tokenId === "number",
+    "got " + typeof got({ tokenId: "7" }).params.tokenId);
+  check("an empty string is NOT zero",
+    got({ tokenId: "" }).reason === "invalid",
+    "got " + show(got({ tokenId: "" })) + " -- Number('') is 0, which is a real token id");
+  check("...and neither is whitespace",
+    got({ tokenId: "   " }).reason === "invalid",
+    "got " + show(got({ tokenId: "   " })) + " -- Number(' ') is also 0");
+  check("...and a numeric PREFIX is not a number",
+    got({ tokenId: "7x" }).reason === "invalid",
+    "got " + show(got({ tokenId: "7x" })) + " -- parseInt('7x') is 7, silently");
+  check("...nor is a float where an id is expected",
+    got({ tokenId: "7.5" }).reason === "invalid",
+    "got " + show(got({ tokenId: "7.5" })));
+  check("...nor NaN arriving as a real number",
+    got({ tokenId: NaN }).reason === "invalid",
+    "got " + show(got({ tokenId: NaN })));
+  check("a negative id still parses, being a shape question not a range one",
+    got({ tokenId: "-7" }).params.tokenId === -7,
+    "got " + show(got({ tokenId: "-7" })));
+
+  // Rule 5 -- 'false' is truthy.
+  check("the string 'false' becomes the boolean false",
+    got({ tokenId: 7, fromDeepLink: "false" }).params.fromDeepLink === false,
+    "got " + show(got({ tokenId: 7, fromDeepLink: "false" })) +
+      " -- 'false' is a non-empty string, so Boolean() makes it true");
+  check("...and 'true' becomes true",
+    got({ tokenId: 7, fromDeepLink: "true" }).params.fromDeepLink === true);
+  check("...while anything else is invalid",
+    got({ tokenId: 7, fromDeepLink: "yes" }).reason === "invalid" &&
+    got({ tokenId: 7, fromDeepLink: 1 }).reason === "invalid",
+    "got " + show([got({ tokenId: 7, fromDeepLink: "yes" }).reason, got({ tokenId: 7, fromDeepLink: 1 }).reason]));
+
+  // Rule 6 -- no String().
+  check("a number where a string is expected is invalid",
+    got({ tokenId: 7, highlight: 3 }).reason === "invalid",
+    "got " + show(got({ tokenId: 7, highlight: 3 })) +
+      " -- String() would make every wrong type look right");
+
+  // Rules 1, 2, 3 -- absent.
+  check("undefined params with nothing required is fine",
+    got(undefined, [{ name: "prefill", type: "string", required: false }]).ok === true,
+    "got " + show(got(undefined, [{ name: "prefill", type: "string", required: false }])));
+  check("...and yields an empty params object",
+    show(got(undefined, [{ name: "prefill", type: "string", required: false }]).params) === show({}));
+  check("a missing REQUIRED param is refused",
+    got(undefined).reason === "missing" && got(undefined).field === "tokenId",
+    "got " + show(got(undefined)) + " -- there is no safe id to guess");
+  check("...and so is one missing from a present object",
+    got({ highlight: "rules" }).reason === "missing",
+    "got " + show(got({ highlight: "rules" })));
+  check("a missing OPTIONAL param is simply absent",
+    got({ tokenId: 7 }).params.highlight === undefined &&
+    ("highlight" in got({ tokenId: 7 }).params) === false,
+    "got " + show(got({ tokenId: 7 }).params) + " -- absent, not null and not empty string");
+
+  // Rule 7 -- older builds wrote different params.
+  check("a param not in the spec is dropped silently",
+    got({ tokenId: 7, legacyTokenCode: "MERC-8GH2-KP4X" }).ok === true &&
+    got({ tokenId: 7, legacyTokenCode: "MERC-8GH2-KP4X" }).params.legacyTokenCode === undefined,
+    "got " + show(got({ tokenId: 7, legacyTokenCode: "MERC-8GH2-KP4X" })) +
+      " -- restored state can carry params this build never had");
+
+  // Rule 8
+  check("the first failure in spec order wins and names its field",
+    got({ tokenId: "nope", fromDeepLink: "maybe" }).field === "tokenId",
+    "got " + show(got({ tokenId: "nope", fromDeepLink: "maybe" })));
+  // The failure must come AFTER a success, or there is nothing
+  // accumulated for a leaky refusal to leak. tokenId parses, then
+  // highlight fails.
+  check("...and a refusal carries no half-answer",
+    show(got({ tokenId: 7, highlight: 3 }).params) === show({}),
+    "got " + show(got({ tokenId: 7, highlight: 3 }).params) +
+      " -- a caller rendering on params.tokenId without checking ok would get a partial answer that looks complete");
+  var input = { tokenId: "7", highlight: "rules" };
+  var snapshot = JSON.stringify(input);
+  got(input);
+  check("raw is not mutated",
+    JSON.stringify(input) === snapshot,
+    "the coercion belongs in the RESULT; navigation still owns its state");
+} catch (err) {
+  console.log("Self-check could not run: " + err.message);
+}`);
+
+    createExplain("explain-a2-0003", {
+      prompt: "<code>RootStackParamList</code> makes every <code>navigate()</code> call in your code type-checked. Explain the two ways <code>route.params</code> can still arrive at a screen holding something that type never approved — and why one of them makes the string <code>\"7\"</code> the normal case rather than an edge case."
     });
 
     createQuiz("lesson-quiz", [
@@ -322,9 +559,9 @@ export function TokenListScreen({ navigation }: Props) {
       {
         type: "predict-output",
         question: "What TypeScript error does this produce?",
-        code: "type Params = { TokenDetail: { tokenCode: string } };\n// ...\nnavigation.navigate('TokenDetail', { code: 'ABC' });",
-        answer: "Object literal may only specify known properties, and 'code' does not exist in type '{ tokenCode: string }'",
-        explanation: "The param type requires 'tokenCode' but the code passes 'code'. TypeScript catches this — in plain JS, you'd get undefined in the detail screen and spend 10 minutes debugging."
+        code: "type Params = { TokenDetail: { tokenId: number } };\n// ...\nnavigation.navigate('TokenDetail', { code: 'ABC' });",
+        answer: "Object literal may only specify known properties, and 'code' does not exist in type '{ tokenId: number }'",
+        explanation: "The param type requires 'tokenId' but the call passes 'code'. TypeScript catches this — in plain JS, you'd get undefined in the detail screen and spend 10 minutes debugging."
       },
       {
         type: "spot-the-bug",
@@ -372,9 +609,9 @@ export function TokenListScreen({ navigation }: Props) {
       {
         type: "fill-blank",
         question: "Complete the navigation param typing:",
-        code: "type RootStackParamList = {\n  TokenList: undefined;\n  TokenDetail: { tokenCode: ___ };\n};",
+        code: "type RootStackParamList = {\n  TokenList: undefined;\n  TokenDetail: { tokenId: ___ };\n};",
         answer: "string",
-        explanation: "The TokenDetail screen needs a tokenCode parameter to know which token to display. Typing it as string ensures that any navigation.navigate('TokenDetail', { tokenCode: ... }) passes a string. undefined means the screen takes no params."
+        explanation: "The TokenDetail screen needs a tokenId to know which token to display, and it is an id rather than the code for the reason ADR-0007 gives: navigation params are persisted with the navigation state and can be serialised into a deep link, so a code there is a capability written to disk. Typing it as number means any navigation.navigate('TokenDetail', { tokenId: ... }) must pass one. undefined means the screen takes no params."
       },
       {
         type: "spot-the-bug",
@@ -398,7 +635,7 @@ export function TokenListScreen({ navigation }: Props) {
           "You don't need to type them — React Navigation handles it"
         ],
         correct: 1,
-        explanation: "RouteProp<RootStackParamList, 'TokenDetail'> tells TypeScript what params this screen receives. Then route.params.tokenCode is typed as string — no casting needed, and typos are caught at compile time."
+        explanation: "RouteProp<RootStackParamList, 'TokenDetail'> tells TypeScript what params this screen receives. Then route.params.tokenId is typed as number — no casting needed, and typos are caught at compile time. Note what it does NOT give you: the params arriving at runtime may come from a deep link or from restored navigation state written by an older build, and neither of those consulted your type."
       },
       {
         type: "predict-output",
@@ -418,9 +655,9 @@ export function TokenListScreen({ navigation }: Props) {
         type: "which-breaks",
         question: "Which FlatList typing is incorrect?",
         variants: [
-          "<FlatList<Token> data={tokens} renderItem={({item}) => <Text>{item.code}</Text>} />",
-          "<FlatList data={tokens} renderItem={({item}: {item: Token}) => <Text>{item.code}</Text>} />",
-          "<FlatList data={tokens} renderItem={({item}) => <Text>{item.code}</Text>} />"
+          "<FlatList<Token> data={tokens} renderItem={({item}) => <Text>{item.label}</Text>} />",
+          "<FlatList data={tokens} renderItem={({item}: {item: Token}) => <Text>{item.label}</Text>} />",
+          "<FlatList data={tokens} renderItem={({item}) => <Text>{item.label}</Text>} />"
         ],
         correct: 2,
         explanation: "The one leaving the renderItem parameter untyped is the risk. It works when tokens is a Token[], because TypeScript infers the item type from data — and if tokens is any[], or its type has been lost somewhere upstream, item silently becomes any and every check inside the row disappears. The two that annotate the item explicitly say what they expect and fail loudly when the data stops matching."
@@ -449,15 +686,15 @@ export function TokenListScreen({ navigation }: Props) {
       {
         type: "spot-the-bug",
         question: "What's wrong with this typed component?",
-        code: "interface TokenListProps {\n  tokens: Token[];\n  onSelect: (token: Token) => void;\n}\n\nfunction TokenList({ tokens, onSelect }: TokenListProps) {\n  return (\n    <FlatList\n      data={tokens}\n      renderItem={({ item }) => (\n        <Pressable onPress={() => onSelect(item.code)}>\n          <Text>{item.code}</Text>\n        </Pressable>\n      )}\n    />\n  );\n}",
+        code: "interface TokenListProps {\n  tokens: Token[];\n  onSelect: (token: Token) => void;\n}\n\nfunction TokenList({ tokens, onSelect }: TokenListProps) {\n  return (\n    <FlatList\n      data={tokens}\n      renderItem={({ item }) => (\n        <Pressable onPress={() => onSelect(item.id)}>\n          <Text>{item.label}</Text>\n        </Pressable>\n      )}\n    />\n  );\n}",
         options: [
           "FlatList needs a keyExtractor",
-          "onSelect expects a Token but receives item.code (a string)",
+          "onSelect expects a Token but receives item.id (a number)",
           "renderItem should be a separate function",
           "Pressable doesn't accept onPress"
         ],
         correct: 1,
-        explanation: "onSelect is typed as (token: Token) => void, meaning it expects a full Token object. But the code passes item.code (a string). TypeScript catches this: Argument of type 'string' is not assignable to parameter of type 'Token'."
+        explanation: "onSelect is typed as (token: Token) => void, meaning it expects a full Token object. But the call passes item.id (a number). TypeScript catches this: Argument of type 'number' is not assignable to parameter of type 'Token'."
       },
       {
         type: "predict-output",
@@ -505,7 +742,7 @@ export function TokenListScreen({ navigation }: Props) {
         explanation: "fontSize belongs to TextStyle, not ViewStyle. Views don't have text properties. The 'as ViewStyle' assertion hides this error — without it, TypeScript would catch that fontSize isn't valid on a View. Never use type assertions to silence legitimate errors."
       },
       {
-        question: "Why type navigation params instead of just using route.params.tokenCode directly?",
+        question: "Why type navigation params instead of just using route.params.tokenId directly?",
         options: [
           "It makes the app run faster",
           "Typed params catch navigation bugs at compile time — missing params, wrong types, typos in screen names",
@@ -518,7 +755,7 @@ export function TokenListScreen({ navigation }: Props) {
       {
         type: "predict-output",
         question: "What does TypeScript infer when you use keyExtractor?",
-        code: "<FlatList<Token>\n  data={tokens}\n  keyExtractor={(item) => item.id}\n  renderItem={({item}) => <Text>{item.code}</Text>}\n/>",
+        code: "<FlatList<Token>\n  data={tokens}\n  keyExtractor={(item) => item.id}\n  renderItem={({item}) => <Text>{item.label}</Text>}\n/>",
         answer: "item in keyExtractor is inferred as Token, and item.id must be a string (keyExtractor returns string)",
         explanation: "Because FlatList is typed with <Token>, TypeScript infers item as Token in both keyExtractor and renderItem. If Token doesn't have an 'id' field of type string, TypeScript errors. keyExtractor must return a string."
       },
