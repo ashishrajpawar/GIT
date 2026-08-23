@@ -14,15 +14,15 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 101 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
 | Quiz questions (track) | 2718 |
-| Avg teaching prose per track lesson | 2070 words |
-| Lessons with a playground | 92 / 101 |
+| Avg teaching prose per track lesson | 2075 words |
+| Lessons with a playground | 93 / 101 |
 | Lessons with an exercise | 101 / 101 |
 | **Deepened** (all 3 spine sections) | 16 / 101 |
-| **Verified** (code executed) | 76 / 101 |
+| **Verified** (code executed) | 77 / 101 |
 | Ran clean but had nothing to run | 0 / 101 |
 | Errors | 0 |
 | Known and blocked | 1 |
-| Warnings | 1 |
+| Warnings | 2 |
 
 Student-completed lessons are **not** tracked here — that comes from the student
 or from `progress.js` localStorage, and is never inferred from the files.
@@ -97,7 +97,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b9-docker-deployment | 3 | 2298 | 3 | 3 | 77 | 2/3 | 0/3 |
 | c5-end-to-end-encryption | 5 | 1671 | 10 | 10 | 126 | 0/5 | 5/5 |
 | x1-git-dev-environment | 3 | 698 | 1 | 3 | 76 | 0/3 | 0/3 |
-| x2-debugging | 2 | 778 | 1 | 2 | 50 | 0/2 | 0/2 |
+| x2-debugging | 2 | 1063 | 2 | 3 | 50 | 0/2 | 1/2 |
 
 ## Integrity checks
 
@@ -108,7 +108,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Tables queried but never created | calls |
 | Broken relative links | ok |
 | search-index.json | 102 entries, 0 dead, 0 unindexed |
-| Example tokens valid under alphabet | 1 invalid |
+| Example tokens valid under alphabet | 2 invalid |
 
 ## Errors
 
@@ -123,9 +123,10 @@ so they do not hold the audit red. They are **not** resolved.
   - **why:** Call records depend on what WebRTC signalling actually needs to persist, which B6 has not settled.
   - **gate:** B6 (signalling), which has not been written. The B2 rewrite this used to name landed 2026-08-21 and did not touch call records. _(since 2026-08-18)_
 
-## Warnings (1)
+## Warnings (2)
 
 - token: "MERC-8GH2-KP4O" uses characters excluded from the alphabet (1 file(s))
+- token: "DENY-LIST" uses characters excluded from the alphabet (1 file(s))
 
 ## Per-lesson detail
 
@@ -231,4 +232,4 @@ so they do not hold the audit red. They are **not** resolved.
 | x1-git-dev-environment/0002-github-workflow.html | 719 | 7 | 0 | 1 | 25 | — | n/a |
 | x1-git-dev-environment/0003-dev-environment.html | 586 | 13 | 0 | 1 | 25 | — | n/a |
 | x2-debugging/0001-react-native-debugging.html | 831 | 9 | 1 | 1 | 25 | — | — |
-| x2-debugging/0002-nodejs-debugging.html | 724 | 8 | 0 | 1 | 25 | — | — |
+| x2-debugging/0002-nodejs-debugging.html | 1295 | 8 | 1 | 2 | 25 | — | yes |

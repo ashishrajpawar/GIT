@@ -84,10 +84,11 @@ npx nodemon --inspect api/src/server.ts</code></pre>
 console.log('token redeemed');
 console.log(error);
 
-// Good — structured, searchable, contextual
+// Good — structured, searchable, contextual, and it names an ID
+// rather than the capability itself
 console.log(JSON.stringify({
   event: 'token_redeemed',
-  tokenCode: token.code,
+  tokenId: token.id,          // NOT token.code -- see the callout
   holderIp: req.ip,
   timestamp: new Date().toISOString(),
 }));
@@ -99,7 +100,87 @@ console.error(JSON.stringify({
   stack: error.stack,
 }));</code></pre>
 
+    <div class="callout danger">
+      <div class="callout-title">This example logged the token code until 2026-08-23, and called it best practice</div>
+
+      <p>The "good" version above used to read <code>tokenCode: token.code</code>.
+      <strong>ADR-0007 forbids it outright: the code never goes in a log.</strong>
+      It was being taught as the correct habit, in the lesson whose whole
+      subject is logging — which is the worst possible place for it, because
+      this is where the habit gets formed.</p>
+
+      <p>A token code is not an identifier, it is <strong>the capability
+      itself</strong>. Anyone holding it can redeem the token. So a log line
+      containing one is a live credential sitting in a file that is, by
+      design, copied everywhere: the proxy's access log, the container's
+      stdout, whatever ships it to disk, the error tracker, and the terminal
+      of anyone who runs <code>docker logs</code>. That is why
+      <code>b2/0001</code> stores <code>code_hash</code> and
+      <code>code_enc</code> and never the code.</p>
+
+      <p><strong>Log the <code>id</code>.</strong> It identifies the row for
+      anyone who can already query the database, and it is worth nothing to
+      anyone who cannot — which is exactly the property an identifier in a log
+      should have.</p>
+
+      <p>Two more, on the same line, worth knowing about rather than
+      panicking over:</p>
+      <ul>
+        <li><code>holderIp</code> is fine <em>here</em> — <code>b2/0002</code>
+        stores it in <code>redemption_events.holder_ip</code> deliberately, so
+        the log is not disclosing anything the database is not. But note whose
+        data it is: <code>b10/0002</code> found the issuer's data export
+        shipping the <em>redeemer's</em> IP, and "a row in my table" is not the
+        same set as "my personal data".</li>
+        <li><code>stack</code> is right for a server log and wrong for a
+        response body. Sending it to the client is the mistake in the quiz
+        below, and it hands over your file layout and library versions.</li>
+      </ul>
+    </div>
+
     <p>In later lessons (B9 — Docker &amp; Deployment), you'll use a proper logging library (pino). For now, structured JSON is the habit to build.</p>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h3>Remembering not to log the code is not a strategy</h3>
+
+    <p>The fix above works exactly as long as every person who ever adds a
+    field to a log line remembers the rule. That is not a mechanism, and the
+    example on this page is the proof — the rule was written down in ADR-0007
+    and this lesson broke it anyway.</p>
+
+    <p>What works is an <strong>allow-list</strong>: name the fields that may
+    be logged, and drop everything else. The difference is what happens to the
+    field nobody thought about:</p>
+
+    <table>
+      <thead><tr><th></th><th>Deny-list</th><th>Allow-list</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>You write</td>
+          <td>"redact <code>code</code>, <code>password</code>, <code>authorization</code>"</td>
+          <td>"keep <code>event</code>, <code>tokenId</code>, <code>durationMs</code>"</td>
+        </tr>
+        <tr>
+          <td>A new field arrives</td>
+          <td><strong>Logged.</strong> It is not on the list</td>
+          <td><strong>Dropped.</strong> It is not on the list</td>
+        </tr>
+        <tr>
+          <td>You find out when</td>
+          <td>Someone reads the logs, months later</td>
+          <td>Immediately — the field you wanted is missing</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p><strong>Both lists fail; they fail in opposite directions.</strong> A
+    deny-list fails open and silently, an allow-list fails closed and
+    noisily — and "the log is missing a field" is a bug report, while "the log
+    contains a credential" is an incident. <code>b10/0001</code> reaches the
+    same conclusion from the security side, and adds the part everyone
+    forgets: <strong>your error tracker attaches request bodies by
+    default</strong>, so configuring its scrubbing is part of shipping the
+    endpoint rather than a follow-up.</p>
 
     <h2>Reading Node.js stack traces</h2>
 
@@ -222,9 +303,21 @@ function debugLog(...args: unknown[]) {
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>Now build it yourself</h2>
+
+    <p>Debugging an Express route needs a running server. The thing that
+    decides what your logs are allowed to contain does not — and it is the
+    only code on this page that stands between a token code and a file
+    everybody can read.</p>
+
+    <div id="exercise-redact"></div>
+    <div id="pg-exercise-redact"></div>
+
+    <h3>And the route</h3>
 
     <div id="exercise-1"></div>
+
+    <div id="explain-x2-0002"></div>
 
     <hr>
 
@@ -238,12 +331,104 @@ function debugLog(...args: unknown[]) {
   </div>
 
   <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
+    createSolution("exercise-redact", {
+      exercise: `Write redactLogFields(entry, config) — decide what a log line is allowed to contain.\n\nentry is the object you were about to log. config is { allow, maxDepth }, where allow is a list of DOTTED PATHS and maxDepth is how far down to walk.\n\nReturn { safe, dropped } — safe is a new object holding only the allowed values, and dropped is the sorted list of paths that were removed.\n\nThe rules:\n\n1. ALLOW-LIST, NEVER DENY-LIST. A value survives only if its path is named in config.allow. This is the entire point: a deny-list protects the fields you thought of, and the one that leaks is the field somebody adds next week. Both approaches fail — the allow-list fails closed and noisily, which turns an incident into a bug report.\n\n2. MATCH ON THE FULL PATH, NOT THE KEY NAME. 'req.ip' allows req.ip and nothing else; a key called ip somewhere else in the tree is still dropped. Matching by name is how an allow-list quietly becomes a name-based deny-list with the sign flipped.\n\n3. WALK INTO AN OBJECT ONLY IF SOMETHING BELOW IT IS ALLOWED — that is, only if some allow entry starts with that path plus a dot. If nothing below it is allowed, drop the WHOLE subtree and record just that path. Do not descend into it looking for familiar names.\n\n4. AN OBJECT WITH NOTHING ALLOWED INSIDE IT MUST NOT APPEAR AT ALL, not even as {}. An empty object in a log line says a field was there and tells you nothing about it, which is the worst of both.\n\n5. KEEP PRIMITIVES AND ARRAYS OF PRIMITIVES. A string, number, boolean or null on an allowed path is kept as-is; so is an array containing only those. An array containing an OBJECT is dropped, because you cannot allow-list what you cannot name — element two of an array has no stable path, and that is exactly where an unanticipated field hides.\n\n6. STOP AT config.maxDepth. Anything deeper is dropped. This matters more than it looks: the single most-logged object in Node is the Express request, and req.socket.server references its own connections — so a redactor with no depth limit does not leak a secret, it takes the process down with a stack overflow while logging a successful request.\n\nThe depth limit is what makes that safe, and it is enough on its own. Tracking the objects already seen on the way down is worth doing anyway, for two smaller reasons: a cycle is then reported once at the path where it closes rather than as a column of near-identical paths, and a widely-shared subtree is not walked repeatedly. Neither is a correctness guarantee, so do not treat the depth limit as the backup.\n\n7. NEVER MUTATE entry. The caller still needs the real object to do its job, and a redactor that empties the request is worse than one that leaks. Build a new object.\n\nOne more thing that falls out of the rules rather than being one: an allowed path whose key is ABSENT simply does not appear in safe. Do not emit it as undefined — JSON.stringify drops undefined values anyway, so you would be writing a key that vanishes at the moment it is serialised.`,
+      hints: [
+        "Write one helper that answers 'is anything below this path allowed?' — allow.some(p => p.startsWith(path + '.')). Rules 3 and 4 are both that question, asked before you descend and again to decide whether the result is worth keeping.",
+        "Recurse with the path as a string you extend, not as an array you push to. It makes rule 2 a single === comparison, and it means the dropped list is already in the shape you have to report.",
+        "For rule 6, pass a Set of objects already seen down the recursion. A depth limit alone does not stop a cycle if maxDepth is generous, and a cycle alone is not the only way to go too deep."
+      ],
+      solution: `function redactLogFields(entry, config) {
+  const dropped = [];
+  const allow = config.allow;
+
+  // Rules 3 and 4 are both this question.
+  const anythingBelow = (path) =>
+    allow.some((p) => p.startsWith(path + "."));
+
+  const isPrimitive = (v) =>
+    v === null || ["string", "number", "boolean"].includes(typeof v);
+
+  const walk = (value, path, depth, seen) => {
+    // Rule 6. Depth first, before anything touches the value.
+    if (depth > config.maxDepth) {
+      dropped.push(path);
+      return undefined;
+    }
+
+    if (isPrimitive(value)) {
+      // Rule 2: the FULL path, not the key name.
+      if (allow.includes(path)) return value;
+      dropped.push(path);
+      return undefined;
+    }
+
+    if (Array.isArray(value)) {
+      // Rule 5. You cannot allow-list what you cannot name.
+      if (allow.includes(path) && value.every(isPrimitive)) return value.slice();
+      dropped.push(path);
+      return undefined;
+    }
+
+    if (typeof value !== "object" || value === null) {
+      // Functions, symbols, undefined -- not serialisable, not logged.
+      dropped.push(path);
+      return undefined;
+    }
+
+    // Not a safety guard -- the depth limit above already is one. This
+    // reports a cycle once, at the path where it closes, instead of as
+    // a column of near-identical paths down to maxDepth.
+    if (seen.has(value)) {
+      dropped.push(path);
+      return undefined;
+    }
+
+    // Rule 3. Do not descend looking for familiar names.
+    if (!anythingBelow(path)) {
+      dropped.push(path);
+      return undefined;
+    }
+
+    const next = new Set(seen);
+    next.add(value);
+
+    const out = {};
+    let kept = 0;
+    for (const key of Object.keys(value)) {
+      const childPath = path ? path + "." + key : key;
+      const result = walk(value[key], childPath, depth + 1, next);
+      if (result !== undefined) {
+        out[key] = result;
+        kept++;
+      }
+    }
+
+    // Rule 4. {} says a field was here and tells you nothing about it.
+    if (kept === 0) return undefined;
+    return out;
+  };
+
+  // Rule 7: walk builds a new object throughout; entry is only read.
+  const safe = {};
+  for (const key of Object.keys(entry || {})) {
+    const result = walk(entry[key], key, 1, new Set([entry]));
+    if (result !== undefined) safe[key] = result;
+  }
+
+  return { safe, dropped: dropped.sort() };
+}`
+    });
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is an Express route debugged against a running server and a Postgres database",
       exercise: "You have an Express route that should return a token by its id, but it always returns 404. The route is: GET /api/tokens/:id. Debug it: add structured logging at each step (route hit, param extraction, DB query, result), identify the bug, and fix it.",
       hints: [
         "Log req.params first — is the code being extracted correctly?",
@@ -286,6 +471,155 @@ app.get('/api/tokens/:id', async (req, res) => {
   if (!result.rows[0]) return res.status(404).json({ error: 'Not found' });
   res.json(result.rows[0]);
 });`
+    });
+
+    createPlayground("pg-exercise-redact", `// Write redactLogFields(entry, config) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(v) { return JSON.stringify(v); }
+
+// A redeem log line as it really arrives. The code is in the body,
+// because ADR-0007 moved it there -- which is exactly what makes the
+// body the dangerous part.
+function entry(over) {
+  var e = {
+    event: "token_redeemed",
+    durationMs: 42,
+    req: {
+      method: "POST",
+      path: "/api/redeem",
+      ip: "203.0.113.5",
+      headers: { authorization: "Bearer eyJhbGciOi", "user-agent": "curl/8.4" },
+      body: { code: "MERC-8GH2-KP4X", holderName: "Ravi" },
+    },
+    // A third droppable branch, and it is here on purpose: with only
+    // two, the order they are walked in happens to REVERSE into sorted
+    // order, so an implementation that reversed instead of sorting
+    // passed. Three is the smallest fixture that can tell them apart.
+    res: { statusCode: 200, body: { conversationId: 88 } },
+  };
+  for (var k in (over || {})) e[k] = over[k];
+  return e;
+}
+var ALLOW = ["event", "durationMs", "req.method", "req.path", "req.ip"];
+function cfg(over) {
+  var c = { allow: ALLOW.slice(), maxDepth: 6 };
+  for (var k in (over || {})) c[k] = over[k];
+  return c;
+}
+function got(e, over) {
+  try {
+    var r = redactLogFields(e, cfg(over));
+    return r || {};
+  } catch (err) {
+    return { safe: null, dropped: ["threw: " + err.message] };
+  }
+}
+// Everything the redactor let through, as one string. If a secret is
+// anywhere in the output at any depth, this finds it.
+function serialised(e, over) { return JSON.stringify(got(e, over).safe); }
+
+try {
+  if (typeof redactLogFields !== "function") throw new Error("not written yet");
+
+  // THE check. Everything else is detail if this fails.
+  check("the token code does not survive, at any depth",
+    serialised(entry()).indexOf("MERC") === -1,
+    "got " + serialised(entry()));
+  check("...nor does the Authorization header",
+    serialised(entry()).indexOf("eyJhbGciOi") === -1,
+    "got " + serialised(entry()));
+  check("...nor a name nobody allow-listed",
+    serialised(entry()).indexOf("Ravi") === -1,
+    "got " + serialised(entry()));
+
+  // Rule 1 -- the allow-listed fields are actually kept.
+  check("the allowed fields all come through",
+    show(got(entry()).safe) === show({
+      event: "token_redeemed",
+      durationMs: 42,
+      req: { method: "POST", path: "/api/redeem", ip: "203.0.113.5" },
+    }),
+    "got " + show(got(entry()).safe));
+
+  // Rule 1 again, and the reason for it: a field nobody anticipated.
+  check("a field added next week is dropped without anyone updating a list",
+    serialised(entry({ recoveryPhrase: "vault ridge amber" })).indexOf("vault") === -1,
+    "got " + serialised(entry({ recoveryPhrase: "vault ridge amber" })) +
+      " -- this is the case a deny-list cannot cover");
+
+  // Rule 2 -- path, not key name.
+  check("an allowed key name elsewhere in the tree is still dropped",
+    serialised(entry({ attacker: { ip: "198.51.100.9" } })).indexOf("198.51.100.9") === -1,
+    "got " + serialised(entry({ attacker: { ip: "198.51.100.9" } })) +
+      " -- 'req.ip' allows req.ip, not every ip");
+
+  // Rule 3 -- record the subtree, do not descend into it.
+  check("a disallowed subtree is reported once, by its own path",
+    got(entry()).dropped.indexOf("req.body") !== -1 &&
+    got(entry()).dropped.indexOf("req.body.code") === -1,
+    "got " + show(got(entry()).dropped) +
+      " -- naming the leaves means walking a subtree you already refused");
+  check("...and the dropped list is sorted",
+    show(got(entry()).dropped) === show(got(entry()).dropped.slice().sort()),
+    "got " + show(got(entry()).dropped));
+
+  // Rule 4 -- nothing allowed inside means the key does not appear.
+  check("an object with nothing allowed inside it does not appear at all",
+    Object.keys(got(entry()).safe).indexOf("headers") === -1 &&
+    show(got(entry()).safe).indexOf("{}") === -1,
+    "got " + show(got(entry()).safe) + " -- {} tells you a field was there and nothing else");
+
+  // Rule 5 -- arrays.
+  check("an array of primitives on an allowed path is kept",
+    show(got(entry({ tags: ["qr", "mobile"] }), { allow: ALLOW.concat(["tags"]) }).safe.tags) ===
+      show(["qr", "mobile"]),
+    "got " + show(got(entry({ tags: ["qr", "mobile"] }), { allow: ALLOW.concat(["tags"]) }).safe.tags));
+  check("...but an array containing an object is dropped",
+    got(entry({ tags: [{ code: "MERC-8GH2-KP4X" }] }), { allow: ALLOW.concat(["tags"]) }).safe.tags === undefined,
+    "you cannot allow-list what you cannot name: element two has no stable path");
+
+  // Rule 6 -- depth, and the cycle that takes the process down.
+  check("anything deeper than maxDepth is dropped",
+    serialised(entry(), { maxDepth: 1 }).indexOf("POST") === -1,
+    "got " + serialised(entry(), { maxDepth: 1 }));
+  var cyclic = entry();
+  cyclic.req.self = cyclic.req;      // what req.socket.server really looks like
+  check("a circular reference does not hang or overflow",
+    got(cyclic).safe !== null && show(got(cyclic).dropped).indexOf("threw") === -1,
+    "got " + show(got(cyclic).dropped) +
+      " -- the most-logged object in Node is circular");
+  check("...and the allowed fields still come through around it",
+    got(cyclic).safe.req.method === "POST",
+    "got " + show(got(cyclic).safe));
+
+  // Rule 7 -- the caller still needs the real thing.
+  var original = entry();
+  var before = JSON.stringify(original);
+  got(original);
+  check("the input is not mutated",
+    JSON.stringify(original) === before,
+    "a redactor that empties the request is worse than one that leaks");
+
+  // Falls out of the rules: absent is absent, never undefined.
+  check("an allowed key that is absent simply does not appear",
+    Object.keys(got({ event: "ping" }).safe).length === 1,
+    "got " + show(got({ event: "ping" }).safe) +
+      " -- JSON.stringify drops undefined anyway, so it is a key that vanishes on serialisation");
+  check("...and the result is JSON-serialisable",
+    typeof JSON.stringify(got(entry({ fn: function () {} })).safe) === "string" &&
+    serialised(entry({ fn: function () {} })).indexOf("function") === -1,
+    "got " + serialised(entry({ fn: function () {} })));
+} catch (err) {
+  console.log("Self-check could not run: " + err.message);
+}`);
+
+    createExplain("explain-x2-0002", {
+      prompt: "This lesson taught <code>tokenCode: token.code</code> as good practice for months, in the lesson about logging, while ADR-0007 forbade it. Explain why an allow-list would have prevented that and a rule written in a document did not."
     });
 
     createQuiz("lesson-quiz", [

@@ -29,10 +29,43 @@ TypeScript whose code has ever run.** Nine left with no log entry:
 | `a2/0002`, `a2/0003` | An M3 exercise. `0003` is JSX, so the screen stays excused and the pure function beside it does not |
 | `a3/0002` | An M3 exercise; SESSION already flags the "I annotated it, so it is one" gap |
 | ~~`a9/0002`~~ | **done 2026-08-23** — `parseTokenLink`, and it was hiding a denial oracle |
-| `x2/0001`, `x2/0002` | Nothing structural — never attempted |
+| ~~`x2/0002`~~ | **done 2026-08-23** — `redactLogFields`, and it was teaching `tokenCode: token.code` as best practice |
+| `x2/0001` | Nothing structural — never attempted |
 | `b1/0001`, `b1/0002`, `b1/0004` | Pure SQL, and the M3 hunt has never been run over B1 |
 
 Previous good state is `b9276d7`.
+
+### x2/0002 — the logging lesson was teaching the code into the logs (2026-08-23)
+
+M3: **`redactLogFields`**. 17 self-checks, 9 wrong-cases.
+
+Its **"Good — structured, searchable, contextual"** example read
+`tokenCode: token.code`. ADR-0007 forbids that outright, and it was labelled
+best practice **in the lesson whose whole subject is logging** — the worst
+possible place, because that is where the habit forms. A token code is not an
+identifier, it is the capability: a log line holding one is a live credential
+in a file designed to be copied everywhere. Now logs `token.id`.
+
+**The wider point the fix produced:** remembering not to log the code is not a
+mechanism, and this lesson is the proof — the rule was written in ADR-0007 and
+the lesson broke it anyway. So the M3 is an **allow-list** redactor. Both list
+kinds fail; they fail in opposite directions. A deny-list fails open and
+silently, an allow-list fails closed and noisily — *"the log is missing a
+field"* is a bug report, *"the log contains a credential"* is an incident.
+
+### Two wrong-cases exposed a rule I had overstated, and a fixture too small
+
+- **I required a cycle guard as a safety property, and it is not one.** The
+  depth limit already makes a cycle safe — the separate no-cycle-guard
+  wrong-case could only be made to fail by *also* removing the depth limit,
+  which is how the overstatement surfaced. The rule now says so: `seen` is
+  worth keeping because it reports a cycle once at the path where it closes
+  rather than as a column of near-identical paths, and that is tidiness, not
+  a guarantee.
+- **A two-element `dropped` list reversed into sorted order**, so the
+  implementation that called `.reverse()` instead of `.sort()` passed. Three
+  droppable branches is the smallest fixture that can tell them apart, and the
+  third is now in the fixture with a comment saying why.
 
 ### a9/0002 — the deep-link screen was a code oracle (2026-08-23)
 
