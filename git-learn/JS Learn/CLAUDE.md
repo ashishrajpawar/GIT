@@ -20,13 +20,13 @@ Five steps, in order:
 
 **The audit should say `OK`.** It has since 2026-08-18, which is the first time
 in the project's history — so a red audit now means something rather than being
-the background state. If you touch `assets/` or `scripts/`, run the five suites
+the background state. If you touch `assets/` or `scripts/`, run the six suites
 too; together they take a few seconds:
 
 ```bash
 node scripts/test-quiz-shuffle.mjs      node scripts/test-dom-sandbox.mjs
 node scripts/test-check-pre-blocks.mjs  node scripts/test-playground-dom.mjs
-node scripts/test-explain.mjs
+node scripts/test-explain.mjs           node scripts/test-strip-types.mjs
 ```
 
 ### Document precedence — one fact, one home
@@ -1027,7 +1027,31 @@ node scripts/test-playground-dom.mjs   # playground.js wiring: preview, Reset,
                                        # fresh sandbox per Run, host page safety
 node scripts/test-explain.mjs          # explain.js: saving, restoring, key
                                        # collisions, storage being unavailable
+node scripts/test-strip-types.mjs      # the TypeScript fallback erases types
+                                       # and never touches JavaScript
 ```
+
+**TypeScript lessons execute too, as of 2026-08-23.** `a2/*` and `a3/0002`
+were the only lessons in the course whose code had never run — not
+`unverifiable` with a reason, *absent from the log entirely*. The runner now
+falls back to Node's native `stripTypeScriptTypes` (no dependency; this
+project has no `package.json` on purpose) via `scripts/strip-types.mjs`.
+
+**Stripping is a fallback, never the default**, and that is the entire safety
+argument: anything that parses as JavaScript is executed exactly as before, so
+this cannot change a lesson that already passes. Only source that will not
+parse gets a second reading as TypeScript. Verified by re-running all 73
+verified lessons: **zero regressions, and executable-question coverage went
+*up* by three.**
+
+Two limits, both deliberate:
+
+- **It erases types; it does not check them.** A lesson whose types are wrong
+  and whose values are right passes here. Type-checking is `tsc`'s job.
+- **JSX is not supported** — a `.tsx` file needs a different parser entry
+  point, so `stripTypes` returns the source untouched and the lesson behaves
+  as it did before. A React Native component still needs a per-exercise
+  `unverifiable` reason; **the pure function beside it does not.**
 
 **`verify-lesson.mjs` only runs what a lesson *executes*.** A plain
 `<pre><code>` block is display-only — nothing parses it — so a broken one

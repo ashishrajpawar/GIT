@@ -163,10 +163,10 @@ so they do not hold the audit red. They are **not** resolved.
 | a11-polish-publish/0004-environment-config.html | 1467 | 13 | 1 | 2 | 25 | — | yes |
 | a11-polish-publish/0005-store-submission.html | 2693 | 11 | 2 | 2 | 29 | — | yes |
 | a2-typescript/0001-types-and-interfaces.html | 733 | 9 | 1 | 1 | 26 | — | — |
-| a2-typescript/0002-generics-utility-types.html | 864 | 11 | 1 | 1 | 25 | — | n/a |
+| a2-typescript/0002-generics-utility-types.html | 864 | 11 | 1 | 1 | 25 | — | — |
 | a2-typescript/0003-typescript-react-native.html | 747 | 9 | 0 | 1 | 25 | — | — |
 | a3-api-consumption/0001-fetch-http-fundamentals.html | 689 | 8 | 2 | 2 | 29 | — | yes |
-| a3-api-consumption/0002-api-client-layer.html | 2164 | 8 | 0 | 1 | 26 | yes | n/a |
+| a3-api-consumption/0002-api-client-layer.html | 2164 | 8 | 0 | 1 | 26 | yes | — |
 | a3-api-consumption/0003-loading-empty-error-states.html | 1005 | 8 | 1 | 2 | 27 | — | yes |
 | a3-api-consumption/0004-pagination-infinite-scroll.html | 903 | 6 | 1 | 2 | 29 | — | yes |
 | a4-auth-client/0001-jwt-storage.html | 1033 | 6 | 1 | 2 | 25 | — | yes |

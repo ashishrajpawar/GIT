@@ -63,6 +63,7 @@ import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
+import { stripTypes, parsesAsJs } from "./strip-types.mjs";
 
 /* A lesson may deliberately reject a promise and attach the .catch() a tick
    later — that is a thing async code legitimately does, and 01/0009 shows it.
@@ -206,6 +207,7 @@ async function runLikePlayground(code, opts = {}) {
   process.on("unhandledRejection", onRejection);
 
   let threw = null;
+  let language = "javascript";
   try {
     const names = ["console", "__tick", "setTimeout", "clearTimeout"];
     const values = [fake, makeTicker(), setTimeoutShim, clearTimeoutShim];
@@ -213,7 +215,24 @@ async function runLikePlayground(code, opts = {}) {
       names.push("document", "window", "localStorage", "Event");
       values.push(sandbox.document, sandbox.window, sandbox.localStorage, sandbox.Event);
     }
-    new Function(...names, instrument(code))(...values);
+
+    /* TypeScript is a FALLBACK, never the default. Anything that parses as
+       JavaScript is run exactly as it always was, so this cannot change a
+       lesson that passes today — which matters, because ~90 of them do.
+       Only source that will not parse gets a second reading as TypeScript,
+       and if THAT fails too (JSX, essentially always) the original is kept
+       so the error reported is the real one rather than a parser's opinion
+       about a language the lesson is not written in. */
+    let body = instrument(code);
+    if (!parsesAsJs(body, names)) {
+      const ts = stripTypes(code);
+      if (ts.mode !== "failed") {
+        body = instrument(ts.code);
+        language = ts.mode === "transform" ? "typescript (transformed)" : "typescript";
+      }
+    }
+
+    new Function(...names, body)(...values);
 
     /* Real event-loop ordering: every microtask the synchronous pass queued
        runs before the first timer, and again after each timer callback. Get
@@ -233,7 +252,7 @@ async function runLikePlayground(code, opts = {}) {
   }
 
   if (rejection && !threw) logs.push(rejection);
-  return { logs, threw, dom: sandbox ? sandbox.serialize() : null };
+  return { logs, threw, language, dom: sandbox ? sandbox.serialize() : null };
 }
 
 /** Which playground carries a given exercise's self-check. `exercise-gen` uses
@@ -250,9 +269,10 @@ console.log("\n2. playgrounds run (deliberate breakage is expected, hangs are no
 for (const [id, pg] of Object.entries(playgrounds)) {
   if (exercisePlaygrounds.has(id)) continue; // covered by the self-check below
   const t0 = Date.now();
-  const { logs, threw } = await runLikePlayground(pg.code, pg.opts);
+  const { logs, threw, language } = await runLikePlayground(pg.code, pg.opts);
   const ms = Date.now() - t0;
-  const tag = pg.opts.dom ? " [dom]" : "";
+  const tag = (pg.opts.dom ? " [dom]" : "") +
+              (language === "javascript" ? "" : ` [${language}]`);
   if (ms > 4000) fail(`${id}: took ${ms}ms — the guard is not stopping it`);
   /* A playground that is broken on purpose throws at RUN time — a TypeError
      from a null selector, a ReferenceError from an out-of-scope variable. A
@@ -288,6 +308,17 @@ for (const [qid, qs] of Object.entries(quizzes)) {
        "3,4,2,1" when real Node gives "4,3,…" — the lesson was right and the
        verifier was wrong, which is the one failure this tool must not produce. */
     if (/process\.nextTick|setImmediate/.test(q.code)) continue;
+    /* A predict-output question whose code never calls console prints
+       nothing, so there is no output to compare an answer against. These are
+       illustrative snippets whose `answer` is a sentence — a4/0001 q0 is
+       `let accessToken: string | null = null;` and four comments, answered
+       "accessToken is null — in-memory variables don't survive app closure".
+       They were skipped by ACCIDENT until 2026-08-23: being TypeScript, they
+       failed to parse, and the SyntaxError landed in the `if (threw)` skip
+       below. Teaching the runner TypeScript removed the accident and exposed
+       the missing rule, which is the good kind of regression — the guard was
+       never there, it was being impersonated. */
+    if (!/\bconsole\s*\./.test(q.code)) continue;
 
     const { logs, threw } = await runLikePlayground(q.code, needsDom ? { dom: true, html: q.html } : {});
     if (threw) continue; // e.g. deliberately-throwing snippets
@@ -344,12 +375,13 @@ for (const [id, cfg] of Object.entries(solutions)) {
   if (!pg || !pg.code.includes(MARKER)) { fail(`${id}: no self-check found in ${pgId}`); continue; }
   const selfCheck = pg.code.split(MARKER)[1];
   const impl = stripDemo(cfg.solution);
-  const { logs, threw } = await runLikePlayground(impl + "\n" + selfCheck, pg.opts);
+  const { logs, threw, language } = await runLikePlayground(impl + "\n" + selfCheck, pg.opts);
   if (threw) { fail(`${id}: self-check threw — ${threw}`); continue; }
   const bad = logs.filter((l) => l.startsWith("FAIL"));
   const passed = logs.filter((l) => l.startsWith("PASS"));
+  const lang = language === "javascript" ? "" : ` [${language}]`;
   if (bad.length) { bad.forEach((b) => fail(`${id}: ${b}`)); }
-  else { solutionsExecuted++; ok(`${id}: all ${passed.length} checks pass`); }
+  else { solutionsExecuted++; ok(`${id}: all ${passed.length} checks pass${lang}`); }
 }
 
 // ---- 5. optional: alternatives and mistakes -------------------------------
