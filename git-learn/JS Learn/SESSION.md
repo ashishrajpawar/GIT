@@ -12,12 +12,17 @@ how far it got.
 
 ## In progress
 
-**Nothing in flight.** Working tree clean, everything committed.
+**The `variant` blind spot — half 2, rewording.** Half 1 landed; the detector
+now knows the word and the audit reports **69**, up from a 0 that meant
+nothing. Those 69 render as authored until their explanations are reworded.
 
-> **One finding is open and unowned — see *Next action*.** 61 `which-breaks`
-> explanations name a variant by letter ("Variant B uses ==") in questions that
-> **shuffle**, and the audit's position-naming detector does not know the word
-> *variant*. Found 2026-08-23 while editing `b7/0002`. Not fixed.
+- Reword each so it describes what the variant *says*, not where it sits. The
+  count in `PROGRESS.md` should fall to 0.
+- **Read the variants before unpinning any question.** An explanation naming a
+  position is sometimes the only thing stopping an all-of-the-above-shaped
+  option (`"All three…"`, which `isPositionPinned` does *not* catch) from being
+  shuffled into the middle. That is the `01/0006` q27 trap, written down.
+- Previous good state is the half-1 commit.
 
 **State as of 2026-08-23** — run `node scripts/audit.mjs` before trusting any
 of it:

@@ -258,10 +258,13 @@ function validateQuestion(q, file, i) {
   return undefined;
 }
 
-/* Mirrors explanationNamesAPosition() in assets/quiz.js. */
+/* Mirrors explanationNamesAPosition() in assets/quiz.js.
+   MUST stay in step with it: this decides what the audit REPORTS, that one
+   decides what the student SEES. They disagreed about the word `variant`
+   until 2026-08-23, and the count read 0 while 61 questions were broken. */
 const namesAPosition = (text) =>
-  /\b(?:option|answer|choice)\s+[A-D]\b/i.test(text) ||
-  /\bthe\s+(?:first|second|third|fourth|last)\s+(?:option|answer|choice|one)\b/i.test(text);
+  /\b(?:option|answer|choice|variant)\s+[A-D]\b/i.test(text) ||
+  /\bthe\s+(?:first|second|third|fourth|last)\s+(?:option|answer|choice|variant|one)\b/i.test(text);
 
 const fixedOrder = { total: 0, positions: {} };
 

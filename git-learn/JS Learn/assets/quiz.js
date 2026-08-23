@@ -431,9 +431,17 @@
          their authored order. Removing those references is follow-up work for
          the deepening pass, when the explanations are being rewritten anyway. */
 
+  /* `variant` was missing here until 2026-08-23, and it was the word that
+     mattered most: which-breaks questions call their list `variants`, so
+     "Variant B uses > instead of >=" is the phrasing anyone writes -- and
+     which-breaks shuffles too (optionDisplayOrder(q, q.variants) below).
+     61 explanations named a letter the student never saw, against 10 using
+     the three words that WERE caught. A blind spot in a check that reports
+     zero is indistinguishable from a clean course; that is what
+     test-quiz-shuffle.mjs exists to tell apart. */
   function explanationNamesAPosition(text) {
-    return /\b(?:option|answer|choice)\s+[A-D]\b/i.test(text) ||
-           /\bthe\s+(?:first|second|third|fourth|last)\s+(?:option|answer|choice|one)\b/i.test(text);
+    return /\b(?:option|answer|choice|variant)\s+[A-D]\b/i.test(text) ||
+           /\bthe\s+(?:first|second|third|fourth|last)\s+(?:option|answer|choice|variant|one)\b/i.test(text);
   }
 
   function isPositionPinned(text) {

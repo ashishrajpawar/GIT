@@ -886,10 +886,27 @@ wants it, and is never prompted.
    Two carve-outs where authored order *does* reach the student:
    - A question whose **explanation names a position** ("Option A creates…")
      renders as authored, because shuffling would contradict the explanation.
-     All 48 of these were reworded on 2026-08-18, so the audit now reports
-     `render-as-authored: 0` and every question shuffles. **Never write an
-     explanation that names an option by letter or place** — describe what the
-     option *says*. If that number rises above 0, one has crept back in.
+     48 of these were reworded on 2026-08-18 and the count went to 0.
+
+     **It read 0 because the detector was blind, not because the course was
+     clean.** It knew `option|answer|choice` and **not `variant`** — and
+     `which-breaks` calls its list `variants` and shuffles it, so "Variant B
+     uses `>` instead of `>=`" is the phrasing everyone actually writes. One
+     word was added on 2026-08-23 and the count went from 0 to **69**.
+
+     **Never write an explanation that names an option by letter or place** —
+     describe what the option *says*. The current count is in `PROGRESS.md`;
+     driving it back to 0 by rewording is open work, and until then those 69
+     render as authored. That is the deliberate trade: **a pinned question with
+     a true explanation beats a shuffled one with a false explanation**, and it
+     costs a small second-option edge on 2.6% of the quiz until they are
+     reworded.
+
+     **The lesson is about the check, not the questions.** A detector reporting
+     zero and a clean course are indistinguishable from outside, and only
+     `test-quiz-shuffle.mjs` tells them apart — which is why widening the
+     regex came with cases in both directions, the phrasings it must catch and
+     the ordinary prose it must not.
    - Options whose meaning depends on position ("All of the above", "Both…")
      are pinned last. And per the note above, `quiz.js` shuffling is exactly why
      "Both A and B" is broken wherever it sits.

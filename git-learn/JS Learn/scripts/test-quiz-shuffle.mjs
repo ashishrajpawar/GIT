@@ -123,6 +123,14 @@ for (const explanation of [
   "Option A creates a label statement",
   "The second option is the only one that compiles",
   "answer C is a red herring",
+  /* `variant` was NOT in the detector until 2026-08-23, and it was the word
+     that mattered most: which-breaks calls its list `variants` and shuffles
+     it, so this is the phrasing anyone reaches for. 61 explanations named a
+     letter the student never saw, while the audit reported 0 — a check with
+     a blind spot and a clean course look identical from outside, and these
+     three lines are the whole difference. */
+  "Variant B uses > instead of >=",
+  "the last variant is the only one that parses",
 ]) {
   let untouched = true;
   for (let i = 0; i < 200; i++) {
@@ -130,6 +138,23 @@ for (const explanation of [
     if (order.join(",") !== "0,1,2,3") { untouched = false; break; }
   }
   check(`renders as authored when the explanation says "${explanation.slice(0, 34)}…"`, untouched);
+}
+
+/* The other half of the same guarantee: the detector must not fire on
+   ordinary prose that happens to contain those words. A false positive here
+   pins a question that should shuffle, which silently restores the 63%
+   second-option exploit for that question. */
+for (const explanation of [
+  "A variant of this bug appears in b3/0004",
+  "Each option is a different way of spelling the same thing",
+  "The answer depends on which timezone the device reports",
+]) {
+  let everMoved = false;
+  for (let i = 0; i < 200; i++) {
+    if (optionDisplayOrder({ explanation }, OPTS).join(",") !== "0,1,2,3") { everMoved = true; break; }
+  }
+  check(`still shuffles when the explanation only says "${explanation.slice(0, 34)}…"`, everMoved,
+    "the detector has widened into ordinary prose and is now pinning questions that should shuffle");
 }
 
 console.log("\n3. degenerate input does not throw or reorder");
