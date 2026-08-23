@@ -12,17 +12,12 @@ how far it got.
 
 ## In progress
 
-**The `variant` blind spot — half 2, rewording.** Half 1 landed; the detector
-now knows the word and the audit reports **69**, up from a 0 that meant
-nothing. Those 69 render as authored until their explanations are reworded.
+**Nothing in flight.** Working tree clean, everything committed.
 
-- Reword each so it describes what the variant *says*, not where it sits. The
-  count in `PROGRESS.md` should fall to 0.
-- **Read the variants before unpinning any question.** An explanation naming a
-  position is sometimes the only thing stopping an all-of-the-above-shaped
-  option (`"All three…"`, which `isPositionPinned` does *not* catch) from being
-  shuffled into the middle. That is the `01/0006` q27 trap, written down.
-- Previous good state is the half-1 commit.
+> **`render-as-authored` is 0 again, and this time it means it.** All 69 were
+> reworded on 2026-08-23 across 28 lessons. Before assuming a future 0 is
+> clean, read *The `variant` blind spot* below — the number was 0 for five
+> days while 61 questions were broken.
 
 **State as of 2026-08-23** — run `node scripts/audit.mjs` before trusting any
 of it:
@@ -1061,10 +1056,27 @@ not just here** — see *Where a token's rules live* and *Expiry is
 | **Expiry** | **`tokens.expires_at` only.** Not a rule type. `a5/0004` still accepts `'expiry'` in its zod enum |
 | **TypeScript** | **Teach the verifier TypeScript**, so `a2/*` and `a3/0002` stop being the only lessons whose code has never run |
 
-### → Start here: 61 quiz explanations name a letter that is not there
+### → Start here: `c5/0005`
 
-Found 2026-08-23 while editing `b7/0002`; **not fixed, and it is the largest
-known student-facing defect in the course.**
+The rules model and the `variant` blind spot both landed on 2026-08-23. What
+remains is `c5/0005` (rewrite as *why one phone*), then the TypeScript runner.
+See *The order for the rest* below.
+
+**Also worth a unit of its own: 8 lessons have never been executed.** They
+have no `verification-log.json` entry at all — not `unverifiable`, *absent* —
+so `verify-lesson.mjs` has never run over them and nothing has checked their
+code. `a2/0001`, `a2/0003` (TypeScript, waiting on the runner),
+`a9/0002`, `b1/0001`, `b1/0002`, `b1/0004`, `x2/0001`, `x2/0002`. The
+`Verified: n/100` figure counts them as unverified, so the number is honest —
+what is not obvious is that these differ from the rest by never having been
+*attempted*.
+
+---
+
+### The `variant` blind spot — 69 explanations, and a check that read 0 (2026-08-23)
+
+Found while editing `b7/0002`. **It was the largest student-facing defect in
+the course, and the audit reported zero.**
 
 `quiz.js` shuffles `which-breaks` variants at render
 (`optionDisplayOrder(q, q.variants)`), and 61 explanations across ~25 lessons
@@ -1082,22 +1094,64 @@ label that does not exist on their screen.
 for when the question type is called `which-breaks` and the field is called
 `variants`. 10 hits use the words it does catch; **61 use the one it does not.**
 
-The fix is small and has two halves, and the first is one word:
+**Done in two halves, and the order mattered.**
 
-1. **Add `variant` to `explanationNamesAPosition()` in `assets/quiz.js` and to
-   its mirror in `scripts/audit.mjs`.** That immediately *pins* all 61 rather
-   than shuffling them, so the explanations become true again — and the audit
-   count jumps off 0, which makes them visible instead of silent. **Add the
-   case to `test-quiz-shuffle.mjs`**, because that suite is the only thing that
-   proves the detector still detects.
-2. **Then reword them**, the way the 48 were on 2026-08-18 — describe what the
-   variant *says*, not where it sits — and watch the count return to 0.
+1. **One word in two places** — `variant` added to
+   `explanationNamesAPosition()` in `assets/quiz.js` and its mirror in
+   `scripts/audit.mjs`. That *pinned* all 69 immediately, so their
+   explanations were true again within a single commit, and lifted the count
+   off 0 so they were visible. **Cases went into `test-quiz-shuffle.mjs` in
+   both directions** — the phrasings it must catch, and ordinary prose ("A
+   variant of this bug appears in b3/0004") it must not, because a false
+   positive silently pins a question that should shuffle.
+2. **Then the rewording**, 69 questions across 28 lessons. Count back to 0.
 
-**Do the halves in that order.** Pinning is safe and immediate; rewording 61
-explanations is where a key gets broken. Note the trap `CLAUDE.md` already
-records: read the variants before unpinning a question, because an explanation
-naming a position is sometimes the only thing stopping an
-all-of-the-above-shaped option from being shuffled into the middle.
+Pinning first is the point: it is safe and instant, and rewording is where a
+key gets broken. **The trade during the gap is worth naming — a pinned
+question with a true explanation beats a shuffled one with a false
+explanation**, at the cost of a small second-option edge until the words are
+fixed.
+
+### Naming the code instead of the letter made the explanations better
+
+Not merely accurate — better, because you cannot say *which* variant without
+saying what it does. The `const`-in-a-block one now points at the missing
+keyword as the entire difference between shadowing and a TypeError. The
+`setCount(count + 1)` one says which value was captured and why an increment
+disappears. Several now note that the failure is **silent**, which is the part
+a beginner needs and a letter never carried.
+
+### Three were not wording problems at all
+
+Rewording forced a reading of each question, and three turned out to be broken:
+
+- **`x2/0001` asked which technique "won't help" and keyed the most helpful
+  one.** Its explanation argued with itself — *"Wait — all three are useful!
+  … Actually variant C is the most helpful, not least."* A student who
+  understood the material was marked wrong. It now offers a technique that
+  genuinely does not help: `console.log(tokens)` on the line after
+  `setTokens(next)`, which always prints the old value and reports "not
+  updating" whether or not anything is.
+- **`a9/0002`'s keyed answer worked for the URL in the question.**
+  `Linking.parse()` returns the path without a leading slash, so the
+  `replace('t/', '')` it keyed as failing succeeds. Converted to
+  multiple-choice — the honest question was *which is fragile*, and
+  `which-breaks` prints a fixed "Which of these will fail?" that cannot ask
+  it.
+- **`b4/0003` still rate-limited on `req.body.email`**, a fortnight after B4
+  was rewritten to phone-only. A grep for `email` would not have found it,
+  because the word never appears — only the field.
+
+**That is the argument for doing this by reading rather than by regex.** A
+sed over "Variant B" would have fixed 69 strings and left all three defects.
+
+### One self-inflicted break, worth recording
+
+An unescaped pair of double quotes inside a double-quoted explanation string
+killed the entire quiz block in `01/0002`. **The listing script caught it
+instantly** — the block stopped evaluating, so the file dropped out of the
+report — which is the second time a tool that *executes* the content has
+caught something reading it would not.
 
 ### The order for the rest, and why
 

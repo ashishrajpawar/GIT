@@ -46,15 +46,15 @@ or from `progress.js` localStorage, and is never inferred from the files.
 > to shuffle a question whose explanation names an option by position ("Option A
 > creates a label statement"), because shuffling would make the explanation
 > contradict the screen. Those render exactly as authored, so clustering in them
-> is a real if small scoring edge — **30 question(s)**, distributed
-> 0=6.7%  1=66.7%  2=26.7%  3=0.0%.
+> is a real if small scoring edge — **0 question(s)**, distributed
+> 0=—  1=—  2=—  3=—.
 > Rewriting those explanations to stop naming positions is the fix, and it frees
 > them to shuffle like the rest. That is deepening-pass work.
 
 | Position | Count | Share |
 |---|---|---|
-| index 0 | 149 | 10.2% |
-| index 1 | 927 | 63.7% |
+| index 0 | 148 | 10.2% |
+| index 1 | 928 | 63.7% |
 | index 2 | 346 | 23.8% |
 | index 3 | 34 | 2.3% |
 
@@ -62,11 +62,11 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Type | Count |
 |---|---|
-| multiple-choice | 797 |
+| multiple-choice | 798 |
 | predict-output | 500 |
 | fill-blank | 459 |
 | spot-the-bug | 375 |
-| which-breaks | 284 |
+| which-breaks | 283 |
 | order-steps | 278 |
 
 ## Modules
@@ -165,9 +165,9 @@ so they do not hold the audit red. They are **not** resolved.
 | a11-polish-publish/0003-forms-validation.html | 2104 | 10 | 2 | 2 | 28 | — | yes |
 | a11-polish-publish/0004-environment-config.html | 1467 | 13 | 1 | 2 | 25 | — | yes |
 | a11-polish-publish/0005-store-submission.html | 2693 | 11 | 2 | 2 | 29 | — | yes |
-| a2-typescript/0001-types-and-interfaces.html | 733 | 9 | 1 | 1 | 26 | — | n/a |
+| a2-typescript/0001-types-and-interfaces.html | 733 | 9 | 1 | 1 | 26 | — | — |
 | a2-typescript/0002-generics-utility-types.html | 864 | 11 | 1 | 1 | 25 | — | n/a |
-| a2-typescript/0003-typescript-react-native.html | 747 | 9 | 0 | 1 | 25 | — | n/a |
+| a2-typescript/0003-typescript-react-native.html | 747 | 9 | 0 | 1 | 25 | — | — |
 | a3-api-consumption/0001-fetch-http-fundamentals.html | 689 | 8 | 2 | 2 | 29 | — | yes |
 | a3-api-consumption/0002-api-client-layer.html | 2164 | 8 | 0 | 1 | 26 | yes | n/a |
 | a3-api-consumption/0003-loading-empty-error-states.html | 1005 | 8 | 1 | 2 | 27 | — | yes |
@@ -193,8 +193,8 @@ so they do not hold the audit red. They are **not** resolved.
 | a8-redemption-web/0003-browser-webrtc-ws.html | 1768 | 8 | 2 | 2 | 29 | — | yes |
 | a8-redemption-web/0004-no-app-experience.html | 1907 | 9 | 2 | 2 | 27 | — | yes |
 | a9-deep-linking/0001-universal-links-app-links.html | 1112 | 7 | 1 | 1 | 28 | — | n/a |
-| a9-deep-linking/0002-in-app-deep-link-handling.html | 1222 | 9 | 1 | 1 | 25 | — | n/a |
-| b1-sql-fundamentals/0001-tables-insert-select.html | 1442 | 10 | 0 | 1 | 26 | — | n/a |
+| a9-deep-linking/0002-in-app-deep-link-handling.html | 1222 | 9 | 1 | 1 | 25 | — | — |
+| b1-sql-fundamentals/0001-tables-insert-select.html | 1442 | 10 | 0 | 1 | 26 | — | — |
 | b1-sql-fundamentals/0002-joins-relationships.html | 828 | 10 | 0 | 1 | 25 | — | — |
 | b1-sql-fundamentals/0003-indexes-transactions-constraints.html | 972 | 11 | 0 | 1 | 26 | — | n/a |
 | b1-sql-fundamentals/0004-postgres-specifics.html | 1051 | 8 | 0 | 1 | 26 | — | — |
@@ -229,5 +229,5 @@ so they do not hold the audit red. They are **not** resolved.
 | x1-git-dev-environment/0001-git-fundamentals.html | 790 | 9 | 1 | 1 | 26 | — | n/a |
 | x1-git-dev-environment/0002-github-workflow.html | 719 | 7 | 0 | 1 | 25 | — | n/a |
 | x1-git-dev-environment/0003-dev-environment.html | 586 | 13 | 0 | 1 | 25 | — | n/a |
-| x2-debugging/0001-react-native-debugging.html | 831 | 9 | 1 | 1 | 25 | — | n/a |
-| x2-debugging/0002-nodejs-debugging.html | 724 | 8 | 0 | 1 | 25 | — | n/a |
+| x2-debugging/0001-react-native-debugging.html | 831 | 9 | 1 | 1 | 25 | — | — |
+| x2-debugging/0002-nodejs-debugging.html | 724 | 8 | 0 | 1 | 25 | — | — |
