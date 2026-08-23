@@ -31,9 +31,43 @@ TypeScript whose code has ever run.** Nine left with no log entry:
 | ~~`a9/0002`~~ | **done 2026-08-23** — `parseTokenLink`, and it was hiding a denial oracle |
 | ~~`x2/0002`~~ | **done 2026-08-23** — `redactLogFields`, and it was teaching `tokenCode: token.code` as best practice |
 | ~~`x2/0001`~~ | **done 2026-08-23** — `firstDivergence`; a probe that never ran is not a probe that saw zero |
-| `b1/0001`, `b1/0002`, `b1/0004` | Pure SQL, and the M3 hunt has never been run over B1 |
+| `b1/0001`, `b1/0004` | Pure SQL, and the M3 hunt has never been run over B1 |
+| ~~`b1/0002`~~ | **done 2026-08-23** — `joinRows`; its LEFT JOIN example claimed "most recent redemption" and returned all of them |
 
 Previous good state is `b9276d7`.
+
+### b1/0002 — a JOIN is not a lookup, and its own example forgot that (2026-08-23)
+
+M3: **`joinRows`**. 17 self-checks, 10 wrong-cases. **The first B1 lesson ever
+executed** — the M3 hunt had never been run over that module.
+
+Its LEFT JOIN example was commented *"All tokens, plus their most recent
+redemption (if any)"* and returns **every** redemption of each. A token
+redeemed four times comes back as four rows — which is the row multiplication
+the lesson teaches two sections further down, contradicted by its own example.
+**A join reads like \"attach the matching row\" and means \"produce one row per
+matching pair\", so a query that looks like it enriches a list silently
+lengthens it.**
+
+Also `t.issued_to` → `t.label` and `r.redeemed_at` → `r.created_at`, the exact
+rename `b10/0002` found elsewhere. **`t.code` stays** — that one is the
+labelled simplification in `b1/0001`, and the callout now says so, since a
+reader landing mid-module would not otherwise know which of the three is
+deliberate.
+
+### The headline of the exercise: JavaScript and SQL disagree about null
+
+`null === null` is **true** in JavaScript; `NULL = NULL` is **unknown** in SQL.
+So a join written in JavaScript joins every orphaned row to every orphaned
+row — a cartesian product of precisely the rows that should have matched
+nothing, and it gets **bigger the more broken your data is**, which is the
+opposite of what anyone expects.
+
+One wrong-case slipped through and the fix is worth keeping: my "missing key"
+check had an absent key on the **left only**, where `undefined` never equals a
+real id, so a half-fixed null check (handles `null`, ignores `undefined`)
+passed. **It takes two absent keys to make `undefined === undefined`.** The
+fixture now has one on each side.
 
 ### x2/0001 — a probe that never ran is not a probe that saw zero (2026-08-23)
 

@@ -62,14 +62,14 @@ tokens (1) ──→ (many) messages</code></pre>
     <pre><code>-- Get tokens with their owner's display name
 SELECT
   tokens.code,
-  tokens.issued_to,
+  tokens.label,
   tokens.status,
   users.display_name AS owner_name
 FROM tokens
 INNER JOIN users ON tokens.user_id = users.id;</code></pre>
 
     <p>Result:</p>
-    <pre><code>code            | issued_to       | status | owner_name
+    <pre><code>code            | label       | status | owner_name
 ----------------+-----------------+--------+-----------
 MERC-8GH2-KP4X | Amazon Delivery | active | Ashish
 KART-4KN9-RT2M | Flipkart        | active | Ashish
@@ -81,7 +81,7 @@ RENT-2WX7-JP8N | NoBroker Agent  | paused | Ashish</code></pre>
 
     <p>Writing <code>tokens.code</code> and <code>users.display_name</code> everywhere gets verbose. Use aliases:</p>
 
-    <pre><code>SELECT t.code, t.issued_to, t.status, u.display_name
+    <pre><code>SELECT t.code, t.label, t.status, u.display_name
 FROM tokens t
 INNER JOIN users u ON t.user_id = u.id
 WHERE t.status = 'active';</code></pre>
@@ -92,16 +92,41 @@ WHERE t.status = 'active';</code></pre>
 
     <p>A LEFT JOIN returns all rows from the left table, even if there's no match in the right table (unmatched fields become NULL):</p>
 
-    <pre><code>-- All tokens, plus their most recent redemption (if any)
+    <pre><code>-- All tokens, plus EVERY redemption of each (and one row for
+-- tokens with none). Not "the most recent" -- see the note below.
 SELECT
   t.code,
-  t.issued_to,
-  r.redeemed_at,
+  t.label,
+  r.created_at,
   r.holder_name
 FROM tokens t
 LEFT JOIN redemption_events r ON r.token_id = t.id;</code></pre>
 
-    <p>Tokens that have never been redeemed still appear — their <code>redeemed_at</code> and <code>holder_name</code> will be NULL.</p>
+    <p>Tokens that have never been redeemed still appear — their <code>created_at</code> and <code>holder_name</code> will be NULL.</p>
+
+    <div class="callout warning">
+      <div class="callout-title">This query said "most recent redemption" until 2026-08-23, and it does not do that</div>
+      <p>A <code>LEFT JOIN</code> returns <strong>every</strong> matching row
+      on the right. A token redeemed four times comes back as four rows, not
+      one — which is the row multiplication this lesson teaches two sections
+      further down, contradicted by its own example.</p>
+      <p>"Most recent" needs something that picks one: <code>DISTINCT ON</code>
+      in Postgres, a window function, or a correlated subquery. The join alone
+      never narrows.</p>
+      <p><strong>The general form is the one worth carrying: a JOIN is not a
+      lookup.</strong> It reads like "attach the matching row", and it means
+      "produce one output row per matching pair" — so a query that looks like
+      it enriches a list can silently lengthen it.</p>
+      <p>Two column names in that query also drifted and were corrected the
+      same day: <code>t.issued_to</code> is <code>t.label</code>, and
+      <code>r.redeemed_at</code> is <code>r.created_at</code> — the exact
+      rename <code>b10/0002</code> found in a different module.
+      <code>t.code</code> stays, and it is a <strong>deliberate simplification
+      labelled in <code>b1/0001</code></strong>: the real table has
+      <code>code_hash</code> and <code>code_enc</code> and no plaintext column,
+      and <code>WHERE code = 'MERC-8GH2-KP4X'</code> is a far better first
+      query than <code>WHERE code_hash = '9f2a...'</code>.</p>
+    </div>
 
     <h3>When to use which join</h3>
 
@@ -115,7 +140,7 @@ LEFT JOIN redemption_events r ON r.token_id = t.id;</code></pre>
     <pre><code>-- Token detail view: token + owner + access rules
 SELECT
   t.code,
-  t.issued_to,
+  t.label,
   t.status,
   u.display_name AS owner,
   ar.rule_type,
@@ -151,7 +176,7 @@ CREATE TABLE redemption_events (
   token_id    INTEGER NOT NULL REFERENCES tokens(id),
   holder_name TEXT,
   holder_ip   TEXT,
-  redeemed_at TIMESTAMP NOT NULL DEFAULT NOW()
+  created_at  TIMESTAMP NOT NULL DEFAULT NOW()
 );</code></pre>
 
     <h2>Subqueries</h2>
@@ -159,7 +184,7 @@ CREATE TABLE redemption_events (
     <p>A query inside another query — useful when you need to filter based on computed values:</p>
 
     <pre><code>-- Find tokens that have been redeemed more than 3 times
-SELECT code, issued_to
+SELECT code, label
 FROM tokens
 WHERE id IN (
   SELECT token_id
@@ -204,9 +229,20 @@ HAVING COUNT(t.id) > 5;</code></pre>
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>Now build it yourself</h2>
+
+    <p>The queries need a running Postgres. What a join <em>means</em> does
+    not — and writing one out in JavaScript is the fastest way to stop being
+    surprised by the row count.</p>
+
+    <div id="exercise-join"></div>
+    <div id="pg-exercise-join"></div>
+
+    <h3>And the queries</h3>
 
     <div id="exercise-1"></div>
+
+    <div id="explain-b1-0002"></div>
 
     <hr>
 
@@ -220,30 +256,86 @@ HAVING COUNT(t.id) > 5;</code></pre>
   </div>
 
   <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
+    createSolution("exercise-join", {
+      exercise: `Write joinRows(left, right, config) — a JOIN, in JavaScript, so the row count stops being a surprise.\n\nleft and right are arrays of plain objects: think tokens and redemption_events.\n\nconfig is { leftKey, rightKey, kind, rightPrefix }:\n  leftKey      the property on a left row to match on, e.g. 'id'\n  rightKey     the property on a right row, e.g. 'token_id'\n  kind         'inner' or 'left'\n  rightPrefix  prepended to every right column in the output, e.g. 'r_'\n\nReturn an array of merged rows.\n\nThe rules:\n\n1. ONE OUTPUT ROW PER MATCHING PAIR. A left row with three matches produces THREE rows, not one enriched row. This is the whole reason the function is worth writing: a join reads like "attach the matching row" and means "multiply", so a query that looks like it enriches a list silently lengthens it.\n\n2. 'inner' EMITS ONLY MATCHED PAIRS. A left row with no match does not appear at all.\n\n3. 'left' EMITS EVERY LEFT ROW AT LEAST ONCE. An unmatched left row appears exactly once, with every right column present and set to null — NOT missing. A caller reading r_holder_name must get null rather than undefined, because those are different facts and only one of them means "there was no redemption".\n\n4. THE NULL-FILLED ROW HAS THE SAME COLUMNS AS A MATCHED ONE. Take the right-hand column names from the union of keys across all right rows. Two shapes coming out of one function is how a consumer ends up with a check that works for the first page and not the second.\n\n5. PREFIX EVERY RIGHT COLUMN WITH config.rightPrefix. Both tables have an id. Spreading right over left silently overwrites the left one, and the row still looks perfectly well-formed — it just belongs to the wrong entity from then on. This is what a table alias does in SQL, and it is not optional here.\n\n6. A NULL KEY MATCHES NOTHING. This is the one that catches everyone, because JavaScript and SQL disagree: null === null is TRUE in JavaScript and NULL = NULL is UNKNOWN in SQL. So a naive implementation joins every orphaned row to every other orphaned row and produces a cartesian product of exactly the rows that should have matched nothing. A left row with a null key still appears under 'left' — null-filled, matching nothing. undefined and a missing key behave the same way.\n\n7. RIGHT ROWS THAT MATCH NOTHING ARE DROPPED, in both kinds. That is what makes this a LEFT join and not a FULL one.\n\n8. PRESERVE ORDER AND DO NOT MUTATE. Left rows in their input order; within one left row, its matches in the right array's order. Build new objects.`,
+      hints: [
+        "Rule 6 first, in a tiny helper: matches(l, r) returns false if either key is null or undefined, and only then compares. Write it as a named function and rule 6 is one line that cannot be forgotten halfway down.",
+        "For rule 4, compute the right-hand column names ONCE before the loop — a Set over every key of every right row. Deriving them from the current row instead gives you a different shape per row, which is the bug rule 4 exists to prevent.",
+        "Build each output row as { ...leftRow } and then assign prefixed right columns onto it. Spreading the right row directly is rule 5's bug, and it is invisible because the result still has an id."
+      ],
+      solution: `function joinRows(left, right, config) {
+  const { leftKey, rightKey, kind, rightPrefix } = config;
+
+  // Rule 6. JavaScript says null === null; SQL says NULL = NULL is
+  // unknown. Everything else here is bookkeeping -- this is the line
+  // that makes it a JOIN rather than a groupBy on undefined.
+  const usable = (v) => v !== null && v !== undefined;
+  const matches = (l, r) =>
+    usable(l[leftKey]) && usable(r[rightKey]) && l[leftKey] === r[rightKey];
+
+  // Rule 4. Computed ONCE, from every right row, so a null-filled row
+  // has the same columns as a matched one.
+  const rightColumns = new Set();
+  for (const r of right) {
+    for (const key of Object.keys(r)) rightColumns.add(key);
+  }
+
+  const withRight = (leftRow, rightRow) => {
+    // Rule 8: a new object, never the input.
+    const out = { ...leftRow };
+    for (const key of rightColumns) {
+      // Rule 5: prefixed, so a right id cannot overwrite a left one.
+      out[rightPrefix + key] = rightRow ? rightRow[key] ?? null : null;
+    }
+    return out;
+  };
+
+  const rows = [];
+  for (const leftRow of left) {
+    // Rules 1 and 8: every match, in the right array's order.
+    const found = right.filter((rightRow) => matches(leftRow, rightRow));
+
+    if (found.length > 0) {
+      for (const rightRow of found) rows.push(withRight(leftRow, rightRow));
+    } else if (kind === "left") {
+      // Rule 3: exactly once, null-filled.
+      rows.push(withRight(leftRow, null));
+    }
+    // Rule 2: 'inner' with no match emits nothing.
+  }
+
+  // Rule 7: right rows that matched nothing were never visited.
+  return rows;
+}`
+    });
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is SQL run against a live Postgres database",
       exercise: "Write SQL queries for Token's dashboard: (1) Show all active tokens with their owner's display name, (2) Show each token with its redemption count (including tokens redeemed 0 times), (3) Find which user has the most active tokens, (4) Find tokens that have been redeemed in the last 24 hours with the holder's name.",
       hints: [
         "Query 1 uses INNER JOIN (every token has an owner).",
         "Query 2 uses LEFT JOIN + GROUP BY + COUNT — LEFT because some tokens have 0 redemptions.",
-        "Query 4 filters on redemption_events.redeemed_at > NOW() - INTERVAL '24 hours'."
+        "Query 4 filters on redemption_events.created_at > NOW() - INTERVAL '24 hours'."
       ],
       solution: `-- 1. Active tokens with owner name
-SELECT t.code, t.issued_to, t.status, u.display_name AS owner
+SELECT t.code, t.label, t.status, u.display_name AS owner
 FROM tokens t
 INNER JOIN users u ON t.user_id = u.id
 WHERE t.status = 'active'
 ORDER BY t.created_at DESC;
 
 -- 2. Each token with redemption count (including 0)
-SELECT t.code, t.issued_to, COUNT(r.id) AS redemption_count
+SELECT t.code, t.label, COUNT(r.id) AS redemption_count
 FROM tokens t
 LEFT JOIN redemption_events r ON r.token_id = t.id
-GROUP BY t.code, t.issued_to
+GROUP BY t.code, t.label
 ORDER BY redemption_count DESC;
 
 -- 3. User with the most active tokens
@@ -256,11 +348,159 @@ ORDER BY active_tokens DESC
 LIMIT 1;
 
 -- 4. Tokens redeemed in last 24 hours
-SELECT t.code, t.issued_to, r.holder_name, r.redeemed_at
+SELECT t.code, t.label, r.holder_name, r.created_at
 FROM redemption_events r
 INNER JOIN tokens t ON r.token_id = t.id
-WHERE r.redeemed_at > NOW() - INTERVAL '24 hours'
-ORDER BY r.redeemed_at DESC;`
+WHERE r.created_at > NOW() - INTERVAL '24 hours'
+ORDER BY r.created_at DESC;`
+    });
+
+    createPlayground("pg-exercise-join", `// Write joinRows(left, right, config) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(v) { return JSON.stringify(v); }
+
+// Three tokens. Farm box was redeemed TWICE -- that is the row
+// multiplication -- Plumber once, Courier never. Both tables have an
+// id, which is what makes the prefix rule testable.
+function tokens() {
+  return [
+    { id: 1, label: "Farm box" },
+    { id: 2, label: "Plumber" },
+    { id: 3, label: "Courier" },
+  ];
+}
+function redemptions() {
+  return [
+    { id: 10, token_id: 1, holder_name: "Ravi" },
+    { id: 11, token_id: 1, holder_name: "Asha" },
+    { id: 12, token_id: 2, holder_name: "Sam" },
+  ];
+}
+function cfg(over) {
+  var c = { leftKey: "id", rightKey: "token_id", kind: "left", rightPrefix: "r_" };
+  for (var k in (over || {})) c[k] = over[k];
+  return c;
+}
+function got(l, r, over) {
+  try { return joinRows(l, r, cfg(over)) || []; }
+  catch (e) { return [{ threw: e.message }]; }
+}
+function labels(rows) { return rows.map(function (x) { return x.label; }).join(","); }
+
+try {
+  if (typeof joinRows !== "function") throw new Error("not written yet");
+
+  var inner = got(tokens(), redemptions(), { kind: "inner" });
+  var leftJoin = got(tokens(), redemptions());
+
+  // Rule 1 -- THE point. A join multiplies.
+  check("an inner join of 3 tokens and 3 redemptions gives 3 rows, not 3 tokens",
+    inner.length === 3, "got " + inner.length + " rows: " + labels(inner));
+  check("...with the twice-redeemed token appearing twice",
+    labels(inner) === "Farm box,Farm box,Plumber",
+    "got " + show(labels(inner)) + " -- a join reads like 'attach' and means 'multiply'");
+
+  // Rule 2
+  check("an inner join drops the token with no redemptions",
+    labels(inner).indexOf("Courier") === -1, "got " + show(labels(inner)));
+
+  // Rule 3
+  check("a left join keeps it",
+    leftJoin.length === 4 && labels(leftJoin) === "Farm box,Farm box,Plumber,Courier",
+    "got " + leftJoin.length + " rows: " + show(labels(leftJoin)));
+  var courier = leftJoin[leftJoin.length - 1];
+  check("...exactly once",
+    leftJoin.filter(function (x) { return x.label === "Courier"; }).length === 1,
+    "got " + show(labels(leftJoin)));
+  check("...with right columns NULL, not missing",
+    courier.r_holder_name === null && "r_holder_name" in courier,
+    "got " + show(courier) +
+      " -- undefined and null are different facts, and only one means 'no redemption'");
+
+  // Rule 4 -- one shape, not two.
+  check("a null-filled row has the same columns as a matched one",
+    show(Object.keys(leftJoin[0]).sort()) === show(Object.keys(courier).sort()),
+    "matched " + show(Object.keys(leftJoin[0]).sort()) +
+      " vs unmatched " + show(Object.keys(courier).sort()));
+
+  // Rule 5 -- both tables have an id.
+  check("the left id survives the join",
+    leftJoin[0].id === 1, "got " + show(leftJoin[0]) +
+      " -- spreading right over left overwrites it, and the row still looks fine");
+  check("...and the right id is kept under the prefix",
+    leftJoin[0].r_id === 10, "got " + show(leftJoin[0]));
+
+  // Rule 6 -- where SQL and JavaScript disagree.
+  var orphanTokens = tokens().concat([{ id: null, label: "Broken token" }]);
+  var orphanEvents = redemptions().concat([
+    { id: 13, token_id: null, holder_name: "Orphan A" },
+    { id: 14, token_id: null, holder_name: "Orphan B" },
+  ]);
+  var withNulls = got(orphanTokens, orphanEvents, { kind: "inner" });
+  check("a null key matches nothing, even another null key",
+    labels(withNulls) === "Farm box,Farm box,Plumber",
+    "got " + show(labels(withNulls)) +
+      " -- null === null is TRUE in JS and NULL = NULL is UNKNOWN in SQL");
+  check("...so orphans do not multiply against each other",
+    withNulls.length === 3,
+    "got " + withNulls.length + " rows -- 1 null token x 2 null events is a cartesian product of exactly the rows that should match nothing");
+  check("...and a null-keyed left row still appears in a LEFT join, matching nothing",
+    (function () {
+      var lj = got(orphanTokens, orphanEvents);
+      var broken = lj.filter(function (x) { return x.label === "Broken token"; });
+      return broken.length === 1 && broken[0].r_holder_name === null;
+    })(),
+    "got " + show(got(orphanTokens, orphanEvents).map(function (x) { return x.label; })));
+  // A missing key on BOTH sides. With only one side missing, undefined
+  // never equals a real id and the bug hides -- it takes two absent
+  // keys to make undefined === undefined, which is how a half-fixed
+  // null check survives.
+  var keylessLeft = [{ id: 1, label: "Farm box" }, { label: "No id at all" }];
+  var keylessRight = redemptions().concat([
+    { id: 15, holder_name: "No token id" },
+    { id: 16, holder_name: "Also no token id" },
+  ]);
+  check("...and a MISSING key behaves like a null one",
+    (function () {
+      var rows = got(keylessLeft, keylessRight);
+      var orphan = rows.filter(function (x) { return x.label === "No id at all"; });
+      return rows.length === 3 && orphan.length === 1 && orphan[0].r_holder_name === null;
+    })(),
+    "got " + show(got(keylessLeft, keylessRight).map(function (x) {
+      return x.label + "/" + x.r_holder_name;
+    })) + " -- undefined === undefined is true, so two absent keys join");
+
+  // Rule 7
+  check("a right row matching nothing is dropped",
+    show(got(tokens(), redemptions().concat([{ id: 99, token_id: 999, holder_name: "Nobody" }]))
+      .map(function (x) { return x.r_holder_name; }))
+      .indexOf("Nobody") === -1,
+    "a LEFT join is not a FULL one");
+
+  // Rule 8
+  var originalLeft = tokens();
+  var snapshot = JSON.stringify(originalLeft);
+  got(originalLeft, redemptions());
+  check("the inputs are not mutated",
+    JSON.stringify(originalLeft) === snapshot,
+    "the caller still needs its own rows");
+
+  // Degenerate inputs.
+  check("an empty right side leaves a left join intact",
+    got(tokens(), []).length === 3, "got " + got(tokens(), []).length);
+  check("...and an empty left side gives no rows at all",
+    got([], redemptions()).length === 0, "got " + got([], redemptions()).length);
+} catch (err) {
+  console.log("Self-check could not run: " + err.message);
+}`);
+
+    createExplain("explain-b1-0002", {
+      prompt: "<code>null === null</code> is true in JavaScript and <code>NULL = NULL</code> is unknown in SQL. Explain what a join written in JavaScript does to a table full of rows with null foreign keys if you forget that — and why the result looks plausible rather than obviously broken."
     });
 
     createQuiz("lesson-quiz", [
