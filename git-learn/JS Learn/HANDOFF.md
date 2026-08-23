@@ -2657,3 +2657,101 @@ still taught email and argon2. B4 was rewritten on 2026-08-22; the argon2 that
 greps there is **quoted history**, shown so its 200 ms timing gap can be
 measured. The note was training the next session to delete the example that
 teaches the denial oracle.
+
+---
+
+### Session of 2026-08-23 (continued) — a7/0001, and a quiz that was right twice
+
+Picked up the recommended body of work in `SESSION.md` — the 17 lessons still
+marked `unverifiable` — and started with the A7 cluster, because `CLAUDE.md`
+carried a second open item against it: *check `a7-voice-video` still needs*
+`iceTransportPolicy: 'relay'`.
+
+**That item is closed and the answer was no.** `0001` constructs with the
+literal and states the three costs, `0005` is an entire lesson on it, and
+`0002`–`0004` never build an `RTCPeerConnection` of their own — they use the
+wrapper — so there was no second place for the policy to go missing. Worth
+recording that a flagged concern came back clean; the same check found two
+*different* defects instead.
+
+#### The finding: the lesson's quiz already knew both answers
+
+`b1/0001` established the rule that when a lesson's quiz contradicts its body
+you believe the quiz. This is the strongest case of it yet, because the quiz
+was right **twice** and neither answer had been carried across into the code
+sitting a few hundred lines above it.
+
+- A quiz explanation read *"In Token's code, we buffer incoming ICE candidates
+  if they arrive before the remote description is set."* The code did not
+  buffer: `handleRemoteIce` called `addIceCandidate` unconditionally, which
+  throws `InvalidStateError` when there is no remote description.
+- An `order-steps` explanation read *"Token should show a 'Reconnecting...' UI
+  during the disconnected state rather than immediately hanging up"*, the state
+  table documented `disconnected → connected` as recovery, and the exercise
+  said *"or 'disconnected' for too long"*. The code was
+  `if (state === 'disconnected' || state === 'failed') onHangup()`.
+
+**Three statements of the right answer surrounding one line of the wrong one.**
+The general shape is the one this course keeps meeting from the other
+direction — prose corrected, code beside it untouched — except here the prose
+was never wrong to begin with. Nobody had read the two against each other.
+
+#### Why a race is the defect that survives review
+
+The remote peer starts gathering candidates at `setLocalDescription`, which
+happens *before* it sends the offer, and both travel one WebSocket. The
+`subscribe` switch calls `this.handleRemoteOffer(payload.sdp)` without
+awaiting, so the next frame is dispatched while the offer is still three
+`await`s from being applied.
+
+Two phones on the same Wi-Fi win that race almost every time. Mobile data does
+not. **So the office network — the best one anybody tests on — is precisely the
+environment in which the bug is invisible**, and it reaches users as *"calls
+sometimes don't connect"*. And because `handleRemoteIce` is `async` and called
+without `await`, the throw became an unhandled rejection: nothing logged, no
+boundary hit, the call simply connected on fewer candidates or none.
+
+The new executable quiz question pins the interleaving rather than describing
+it — `setRemoteDescription -> iceArrives -> remoteReady`.
+
+#### The cap has a direction, and the obvious one is backwards
+
+An unbounded queue lets a peer who never sends an offer decide how much memory
+you use, so it needs a cap. But `slice(-MAX)` — keep the most recent — is what
+everyone writes, and it means **anyone can flush the working relay candidates
+out of the queue by sending 64 more**. Drop what is arriving; keep what is
+held. Both versions are bounded, which is why *"is it bounded?"* is the wrong
+question to stop at.
+
+This also produced a self-check rule worth reusing: the cap assertion is
+`=== 64`, not `<= 64`, because an implementation that buffers **nothing at all**
+also has a bounded queue and must not pass. A lenient assertion on a safety
+property will happily accept the absence of the feature.
+
+#### The two wrong-cases that earned their place
+
+Eleven were written. Nine confirm ordinary slips; two are the ones that would
+actually ship:
+
+- **Flushing the queue before the description** is not a partial fix, it is no
+  fix — identical `InvalidStateError`. It is also exactly what you write if you
+  think of a queue as a backlog to clear before handling the new arrival.
+- **Flushing on `'offer'` only.** The callee receives an offer, so their side
+  works perfectly; the caller only ever receives an *answer*, so every
+  candidate they buffered is abandoned in silence. **Debug either device on its
+  own and it looks correct** — the same read-both-sides-together move that
+  found `a8/0004`'s unsent `localId`.
+
+#### A count that turned out to be a signal
+
+`createExplain` is present in 84 lessons and `verified` stood at 84. Those are
+the same 84: **the 17 lessons without an explain prompt were exactly the 17
+still marked `unverifiable`.** Both gaps have one cause — nobody had done a
+pass over those lessons — so adding the prompt belongs inside each M3 pass
+rather than in a separate sweep later.
+
+Also fixed: the revealed solution was a comment block reading *"See the full
+TokenPeerConnection class in the lesson code above"*, against lesson invariant
+4, which requires a complete pasteable file. Replaced with the real file.
+
+**Result: 85 verified, 16 `unverifiable`.** Audit green, six suites pass.

@@ -13,12 +13,12 @@ with this one, this one is right — everything below is measured, not asserted.
 |---|---|
 | Token-track lessons | 101 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
-| Quiz questions (track) | 2718 |
-| Avg teaching prose per track lesson | 2105 words |
+| Quiz questions (track) | 2721 |
+| Avg teaching prose per track lesson | 2114 words |
 | Lessons with a playground | 98 / 101 |
 | Lessons with an exercise | 101 / 101 |
 | **Deepened** (all 3 spine sections) | 16 / 101 |
-| **Verified** (code executed) | 84 / 101 |
+| **Verified** (code executed) | 85 / 101 |
 | Ran clean but had nothing to run | 0 / 101 |
 | Errors | 0 |
 | Known and blocked | 1 |
@@ -63,7 +63,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Type | Count |
 |---|---|
 | multiple-choice | 817 |
-| predict-output | 502 |
+| predict-output | 505 |
 | fill-blank | 461 |
 | spot-the-bug | 376 |
 | which-breaks | 283 |
@@ -82,7 +82,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a4-auth-client | 3 | 1400 | 3 | 6 | 80 | 1/3 | 3/3 |
 | a5-core-token-features | 5 | 2599 | 10 | 10 | 148 | 2/5 | 5/5 |
 | a6-chat-realtime | 3 | 1912 | 6 | 6 | 78 | 0/3 | 3/3 |
-| a7-voice-video | 5 | 1279 | 6 | 6 | 138 | 0/5 | 1/5 |
+| a7-voice-video | 5 | 1449 | 7 | 7 | 141 | 0/5 | 2/5 |
 | a8-redemption-web | 4 | 1807 | 8 | 8 | 115 | 0/4 | 4/4 |
 | a9-deep-linking | 2 | 1395 | 3 | 3 | 53 | 0/2 | 1/2 |
 | b1-sql-fundamentals | 4 | 1326 | 3 | 7 | 103 | 0/4 | 3/4 |
@@ -184,7 +184,7 @@ so they do not hold the audit red. They are **not** resolved.
 | a6-chat-realtime/0001-websocket-client.html | 1749 | 10 | 2 | 2 | 26 | — | yes |
 | a6-chat-realtime/0002-message-thread-ui.html | 2161 | 10 | 2 | 2 | 26 | — | yes |
 | a6-chat-realtime/0003-typing-presence.html | 1827 | 10 | 2 | 2 | 26 | — | yes |
-| a7-voice-video/0001-webrtc-refresher.html | 1625 | 9 | 1 | 1 | 29 | — | n/a |
+| a7-voice-video/0001-webrtc-refresher.html | 2477 | 10 | 2 | 2 | 32 | — | yes |
 | a7-voice-video/0002-voice-call.html | 758 | 6 | 1 | 1 | 27 | — | n/a |
 | a7-voice-video/0003-video-call.html | 836 | 6 | 1 | 1 | 26 | — | n/a |
 | a7-voice-video/0004-incoming-calls.html | 1217 | 9 | 1 | 1 | 29 | — | n/a |

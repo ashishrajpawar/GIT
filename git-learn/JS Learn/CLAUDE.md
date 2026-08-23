@@ -867,7 +867,11 @@ wants it, and is never prompted.
   touches it: **every** call goes through TURN including two people in one room,
   relay bandwidth is the likeliest surprise on the bill, and a coturn outage
   becomes a *total* call outage rather than a degraded one. `a8/0003` is the
-  worked version; **check `a7-voice-video` still needs this** (see `SESSION.md`)
+  worked version. **`a7-voice-video` was checked on 2026-08-23 and does not
+  need the retrofit** — `0001` constructs with the literal and states the three
+  costs, `0005` is the whole lesson, and `0002`–`0004` never build an
+  `RTCPeerConnection` of their own, so there is no second place for it to go
+  missing
 
 ### Push notifications
 - FCM + APNs via Expo Notifications (the only unavoidable third party — only

@@ -187,11 +187,26 @@ interface CallOptions {
   onHangup: () =&gt; void;
 }
 
+// A peer that never sends an offer must not be able to grow the queue for
+// ever. Real negotiation produces a couple of dozen candidates at most, and
+// under relay-only policy far fewer.
+const MAX_PENDING_ICE = 64;
+
+// How long 'disconnected' is allowed to last before we treat it as over.
+// ICE recovers from ordinary network blips on its own; hanging up at the
+// first sign of one turns a two-second lift-lobby dropout into a lost call.
+const DISCONNECT_GRACE_MS = 8000;
+
 export class TokenPeerConnection {
   private pc: RTCPeerConnection | null = null;
   private localStream: MediaStream | null = null;
   private unsubscribe: (() =&gt; void) | null = null;
   private options: CallOptions;
+
+  // ICE candidates that arrived before the remote description did.
+  private pendingIce: any[] = [];
+  private remoteReady = false;
+  private disconnectTimer: ReturnType&lt;typeof setTimeout&gt; | null = null;
 
   constructor(options: CallOptions) {
     this.options = options;
@@ -225,12 +240,30 @@ export class TokenPeerConnection {
       }
     };
 
-    // Connection state monitoring
+    // Connection state monitoring.
+    //
+    // 'failed' is terminal — ICE has given up and will not retry.
+    // 'disconnected' is NOT: it means connectivity checks are currently
+    // failing, and ICE reconnects on its own most of the time. Ending the
+    // call here would drop every user who walked into a lift.
     this.pc.onconnectionstatechange = () =&gt; {
       const state = this.pc!.connectionState;
       this.options.onConnectionStateChange(state);
 
-      if (state === 'disconnected' || state === 'failed') {
+      if (state === 'disconnected') {
+        this.clearDisconnectTimer();
+        this.disconnectTimer = setTimeout(() =&gt; {
+          this.disconnectTimer = null;
+          this.options.onHangup();
+        }, DISCONNECT_GRACE_MS);
+        return;
+      }
+
+      // Recovered, or moved on to something terminal — either way the
+      // pending hangup no longer applies.
+      this.clearDisconnectTimer();
+
+      if (state === 'failed') {
         this.options.onHangup();
       }
     };
@@ -284,6 +317,9 @@ export class TokenPeerConnection {
     await this.pc!.setRemoteDescription(
       new RTCSessionDescription({ type: 'offer', sdp })
     );
+    this.remoteReady = true;
+    await this.flushPendingIce();
+
     const answer = await this.pc!.createAnswer();
     await this.pc!.setLocalDescription(answer);
     send('call:answer', {
@@ -297,11 +333,39 @@ export class TokenPeerConnection {
     await this.pc!.setRemoteDescription(
       new RTCSessionDescription({ type: 'answer', sdp })
     );
+    this.remoteReady = true;
+    await this.flushPendingIce();
   }
 
-  // Both: receive ICE candidate
+  // Both: receive ICE candidate.
+  //
+  // Candidates and the offer travel the same signalling channel, and the
+  // remote side starts gathering the moment it calls setLocalDescription —
+  // so candidates routinely arrive BEFORE the offer they belong to.
+  // addIceCandidate() with no remote description throws InvalidStateError.
+  // Buffer until there is a description to attach them to.
   private async handleRemoteIce(candidate: any) {
+    if (!this.remoteReady) {
+      // Bounded: a peer that never sends an offer must not grow this for ever.
+      if (this.pendingIce.length &lt; MAX_PENDING_ICE) {
+        this.pendingIce.push(candidate);
+      }
+      return;
+    }
     await this.pc!.addIceCandidate(new RTCIceCandidate(candidate));
+  }
+
+  private async flushPendingIce() {
+    const queued = this.pendingIce;
+    this.pendingIce = [];
+    for (const candidate of queued) {
+      // One bad candidate must not strand the rest of the queue.
+      try {
+        await this.pc!.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (err) {
+        console.warn('[webrtc] dropped a buffered candidate', err);
+      }
+    }
   }
 
   // Controls
@@ -336,11 +400,21 @@ export class TokenPeerConnection {
     this.cleanup();
   }
 
+  private clearDisconnectTimer() {
+    if (this.disconnectTimer) {
+      clearTimeout(this.disconnectTimer);
+      this.disconnectTimer = null;
+    }
+  }
+
   cleanup() {
+    this.clearDisconnectTimer();
     this.localStream?.getTracks().forEach(t =&gt; t.stop());
     this.pc?.close();
     this.pc = null;
     this.localStream = null;
+    this.pendingIce = [];
+    this.remoteReady = false;
     this.unsubscribe?.();
   }
 
@@ -348,6 +422,55 @@ export class TokenPeerConnection {
     return this.localStream;
   }
 }</code></pre>
+
+    <h2>Why the candidates have to be buffered</h2>
+
+    <p>The step in that class most likely to be written wrong is the smallest
+    one. The obvious version is a single line:</p>
+
+    <pre><code>private async handleRemoteIce(candidate: any) {
+  await this.pc!.addIceCandidate(new RTCIceCandidate(candidate));   // wrong
+}</code></pre>
+
+    <p><strong>A candidate has nowhere to go until a remote description
+    exists.</strong> <code>addIceCandidate</code> throws
+    <code>InvalidStateError</code> when <code>remoteDescription</code> is
+    <code>null</code> — a candidate describes a route to a peer the connection
+    has not yet been told about.</p>
+
+    <p>And they really do arrive first. The remote side begins gathering the
+    instant it calls <code>setLocalDescription</code>, which happens
+    <em>before</em> it sends you the offer, and both travel the same WebSocket.
+    Look again at the <code>subscribe</code> callback: it calls
+    <code>this.handleRemoteOffer(payload.sdp)</code> without awaiting it, so the
+    callback returns immediately and the next frame is dispatched while the
+    offer is still three <code>await</code>s from being applied. Every
+    <code>call:ice</code> landing in that gap hits a null remote description.</p>
+
+    <div class="callout danger">
+      <div class="callout-title">This is a race, so it works on your desk</div>
+      <p>Two devices on the same Wi-Fi negotiate in a few milliseconds and
+      usually win it. A phone on patchy mobile data does not. The bug ships
+      because the office is the best possible network — and it degrades rather
+      than breaks, so the report is <em>"calls sometimes don't connect"</em>,
+      which is the hardest sentence in a bug tracker.</p>
+      <p><code>handleRemoteIce</code> is <code>async</code> and called without
+      <code>await</code>, so the <code>InvalidStateError</code> becomes an
+      <strong>unhandled promise rejection</strong>. Nothing is logged, nothing
+      is thrown to a boundary, and the call simply connects on fewer
+      candidates — or on none.</p>
+    </div>
+
+    <p>So the fix is a queue, and it needs a bound. Buffering until a remote
+    description arrives is correct; buffering for ever is a peer you have never
+    authenticated deciding how much memory you use. <code>MAX_PENDING_ICE</code>
+    is deliberately small — relay-only policy produces a handful of candidates,
+    not hundreds.</p>
+
+    <p>Note the <code>try/catch</code> around each flushed candidate. Once the
+    queue is draining, one malformed entry must not strand the ones behind it:
+    ICE only needs <em>one</em> pair to work, so discarding a bad candidate and
+    continuing is strictly better than abandoning the rest.</p>
 
     <h2>The call flow from the client perspective</h2>
 
@@ -403,6 +526,24 @@ const localStream = await peerConnection.initialize();
 
     <p>Show appropriate UI for each state: "Connecting..." spinner, "Connected" (start timer), "Reconnecting..." (brief network blip), "Call Failed" (offer retry or give up).</p>
 
+    <div class="callout warning">
+      <div class="callout-title"><code>disconnected</code> is not
+      <code>failed</code>, and treating it as one loses calls</div>
+      <p>Read the two lines above against each other. <code>failed</code> means
+      ICE has exhausted every candidate pair and stopped — nothing further will
+      happen without a new connection. <code>disconnected</code> means
+      connectivity checks are failing <em>right now</em>, and the ICE agent is
+      still trying; it recovers on its own most of the time.</p>
+      <p>They are one keystroke apart in a condition and completely different
+      events. <code>if (state === 'disconnected' || state === 'failed')</code>
+      reads as thorough and <strong>ends the call every time somebody walks
+      into a lift</strong>. That is why the wrapper starts a timer on
+      <code>disconnected</code> and cancels it on any later transition: a blip
+      that resolves in two seconds costs the user a "Reconnecting…" label, and
+      one that lasts past <code>DISCONNECT_GRACE_MS</code> ends the call
+      properly.</p>
+    </div>
+
     <h2>Media permissions</h2>
 
     <pre><code>import { mediaDevices } from 'react-native-webrtc';
@@ -426,9 +567,21 @@ async function requestMediaPermissions(video: boolean): Promise&lt;boolean&gt; {
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>Now build it yourself</h2>
+
+    <div id="exercise-ice"></div>
+
+    <div id="pg-exercise-ice"></div>
+
+    <hr>
+
+    <h2>Then wire it into the app</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="explain-a7-0001"></div>
 
     <hr>
 
@@ -444,6 +597,7 @@ async function requestMediaPermissions(video: boolean): Promise&lt;boolean&gt; {
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -473,32 +627,480 @@ console.log('Happy path: new → connecting → connected → closed');
 console.log('Network blip: connected → disconnected → connected');
 console.log('Failure: connecting → failed → closed');`);
 
+    createSolution("exercise-ice", {
+      exercise: "Write ingestSignal(state, msg) — the part of the wrapper that decides what a signalling frame is allowed to do to the peer connection. It is a pure function, so you can test the whole negotiation race without a device.\n\nstate is { callId, remoteReady, pending, ended }. msg is { type, callId, sdp?, candidate? } where type is 'offer', 'answer', 'ice' or 'hangup'.\n\nReturn { state, apply } — the NEW state, and the ordered list of things to hand to the RTCPeerConnection. Each apply entry is one of:\n\n  { kind: 'remote-description', sdp }\n  { kind: 'ice', candidate }\n  { kind: 'hangup' }\n\nThe rules:\n\n1. A frame whose callId is not state.callId is not ours. Apply nothing and buffer nothing — a candidate from a previous call describes a route to somewhere else.\n\n2. Once state.ended is true, every later frame is ignored.\n\n3. 'ice' while remoteReady is false: buffer the candidate. Apply nothing. addIceCandidate() with no remote description throws.\n\n4. 'ice' while remoteReady is true: apply it straight away, and do not buffer it.\n\n5. 'offer' or 'answer': set remoteReady, and apply the description FOLLOWED BY every buffered candidate in arrival order. The description must come first — a candidate ahead of it is the exact throw the queue exists to prevent. Then empty the queue.\n\n6. A second description when remoteReady is already true is ignored. Re-applying one would reset a working connection, and renegotiation is not a v1 flow.\n\n7. 'hangup': apply a hangup, mark the call ended, drop the queue.\n\n8. The queue is capped at MAX_PENDING_ICE = 64. When it is full, drop the ARRIVING candidate and keep the ones already held.\n\n9. Never mutate the state you were given. Return a new object.",
+      hints: [
+        "Handle the two 'this is not ours' cases first — wrong callId, and already ended — and return early. Everything below then only deals with frames that count.",
+        "Rule 5 is one array literal: the description, then state.pending.map(...) spread after it. If you find yourself writing a loop that applies candidates and then the description, re-read which order throws.",
+        "Rule 8 says drop the arriving candidate, not the oldest one. Ask what a peer flooding you with candidates would achieve if the queue evicted from the front."
+      ],
+      solution: `const MAX_PENDING_ICE = 64;
+
+function ingestSignal(state, msg) {
+  // Returning the SAME state object for "nothing happened" is deliberate:
+  // a caller can compare by identity to know whether anything changed.
+  const unchanged = { state: state, apply: [] };
+
+  // Not our call, or a call that is already over. Not applied, not queued.
+  if (!msg || msg.callId !== state.callId) return unchanged;
+  if (state.ended) return unchanged;
+
+  if (msg.type === "hangup") {
+    return {
+      state: { ...state, ended: true, pending: [] },
+      apply: [{ kind: "hangup" }],
+    };
+  }
+
+  if (msg.type === "offer" || msg.type === "answer") {
+    // Renegotiation is not a v1 flow, and a second setRemoteDescription
+    // would tear down a connection that is already working.
+    if (state.remoteReady) return unchanged;
+
+    return {
+      state: { ...state, remoteReady: true, pending: [] },
+      // Description first, then the backlog in the order it arrived.
+      apply: [
+        { kind: "remote-description", sdp: msg.sdp },
+        ...state.pending.map((candidate) => ({ kind: "ice", candidate })),
+      ],
+    };
+  }
+
+  if (msg.type === "ice") {
+    if (state.remoteReady) {
+      return { state: state, apply: [{ kind: "ice", candidate: msg.candidate }] };
+    }
+
+    // Full. Drop what is arriving and keep what we have: the earliest
+    // candidates are the real ones, and evicting them would let anyone
+    // flush the working routes out of the queue.
+    if (state.pending.length >= MAX_PENDING_ICE) return unchanged;
+
+    return {
+      state: { ...state, pending: [...state.pending, msg.candidate] },
+      apply: [],
+    };
+  }
+
+  // Some other frame on the same channel. Not ours to act on.
+  return unchanged;
+}`
+    });
+
+    createPlayground("pg-exercise-ice", `// Write MAX_PENDING_ICE and ingestSignal(state, msg) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+
+function freshState() {
+  return { callId: "call-77", remoteReady: false, pending: [], ended: false };
+}
+function ice(id) {
+  return { type: "ice", callId: "call-77", candidate: { sdpMid: id } };
+}
+// Renders an apply list as something readable: candidates show their id,
+// everything else shows its kind.
+function ids(list) {
+  return (list || []).map(function (a) {
+    return a.kind === "ice" ? a.candidate.sdpMid : a.kind;
+  });
+}
+function same(actual, expected) {
+  return JSON.stringify(actual) === JSON.stringify(expected);
+}
+
+try {
+  if (typeof ingestSignal !== "function") throw new Error("not written yet");
+
+  try {
+    const r = ingestSignal(freshState(), ice("a"));
+    check("a candidate arriving before the description is buffered, not applied",
+          r.apply.length === 0 && r.state.pending.length === 1,
+          "apply=" + JSON.stringify(ids(r.apply)) + " pending=" + r.state.pending.length +
+          " -- addIceCandidate with no remote description throws InvalidStateError");
+  } catch (e) { check("a candidate arriving before the description is buffered, not applied", false, "threw " + e.message); }
+
+  try {
+    // THREE candidates on purpose. With two, an implementation that reverses
+    // the queue and one that preserves it are told apart only by luck.
+    let s = freshState();
+    s = ingestSignal(s, ice("a")).state;
+    s = ingestSignal(s, ice("b")).state;
+    s = ingestSignal(s, ice("c")).state;
+    const r = ingestSignal(s, { type: "offer", callId: "call-77", sdp: "SDP-1" });
+
+    check("the flush puts the remote description FIRST",
+          ids(r.apply)[0] === "remote-description",
+          "apply=" + JSON.stringify(ids(r.apply)) +
+          " -- a candidate applied ahead of the description is the exact throw the queue exists to prevent");
+
+    check("buffered candidates flush in arrival order",
+          same(ids(r.apply), ["remote-description", "a", "b", "c"]),
+          "apply=" + JSON.stringify(ids(r.apply)));
+
+    check("the applied description carries the sdp it arrived with",
+          r.apply[0] && r.apply[0].sdp === "SDP-1",
+          "got " + JSON.stringify(r.apply[0]));
+
+    check("the queue is emptied by the flush",
+          r.state.pending.length === 0,
+          "pending=" + r.state.pending.length + " -- otherwise the next description applies them a second time");
+  } catch (e) { check("the flush applies description-then-backlog in order", false, "threw " + e.message); }
+
+  try {
+    const s = { callId: "call-77", remoteReady: true, pending: [], ended: false };
+    const r = ingestSignal(s, ice("z"));
+    check("once the description is set, a candidate applies immediately",
+          same(ids(r.apply), ["z"]) && r.state.pending.length === 0,
+          "apply=" + JSON.stringify(ids(r.apply)) + " pending=" + r.state.pending.length +
+          " -- buffering after the description means it is never flushed again");
+  } catch (e) { check("once the description is set, a candidate applies immediately", false, "threw " + e.message); }
+
+  try {
+    let s = freshState();
+    s = ingestSignal(s, ice("a")).state;
+    s = ingestSignal(s, { type: "offer", callId: "call-77", sdp: "SDP-1" }).state;
+    const r = ingestSignal(s, ice("b"));
+    check("a candidate after the flush is applied alone, not alongside the old queue",
+          same(ids(r.apply), ["b"]),
+          "apply=" + JSON.stringify(ids(r.apply)));
+  } catch (e) { check("a candidate after the flush is applied alone, not alongside the old queue", false, "threw " + e.message); }
+
+  try {
+    const r = ingestSignal(freshState(), { type: "ice", callId: "call-99", candidate: { sdpMid: "x" } });
+    check("a frame for a different callId is ignored, not buffered",
+          r.apply.length === 0 && (r.state.pending || []).length === 0,
+          "apply=" + JSON.stringify(ids(r.apply)) + " pending=" + (r.state.pending || []).length +
+          " -- a candidate from another call describes a route to somewhere else entirely");
+  } catch (e) { check("a frame for a different callId is ignored, not buffered", false, "threw " + e.message); }
+
+  try {
+    const s = freshState();
+    const before = JSON.stringify(s);
+    ingestSignal(s, ice("a"));
+    check("the state you were given is not mutated",
+          JSON.stringify(s) === before,
+          "it became " + JSON.stringify(s) + " -- the caller still holds this object");
+  } catch (e) { check("the state you were given is not mutated", false, "threw " + e.message); }
+
+  try {
+    const r = ingestSignal(freshState(), { type: "hangup", callId: "call-77" });
+    check("hangup applies a hangup and ends the call",
+          same(ids(r.apply), ["hangup"]) && r.state.ended === true,
+          "apply=" + JSON.stringify(ids(r.apply)) + " ended=" + r.state.ended);
+  } catch (e) { check("hangup applies a hangup and ends the call", false, "threw " + e.message); }
+
+  try {
+    const ended = ingestSignal(freshState(), { type: "hangup", callId: "call-77" }).state;
+    const r = ingestSignal(ended, ice("a"));
+    check("a candidate arriving after hangup is dropped, not buffered",
+          r.apply.length === 0 && (r.state.pending || []).length === 0,
+          "apply=" + JSON.stringify(ids(r.apply)) + " pending=" + (r.state.pending || []).length);
+  } catch (e) { check("a candidate arriving after hangup is dropped, not buffered", false, "threw " + e.message); }
+
+  try {
+    const ended = ingestSignal(freshState(), { type: "hangup", callId: "call-77" }).state;
+    const r = ingestSignal(ended, { type: "offer", callId: "call-77", sdp: "SDP-late" });
+    check("an offer arriving after hangup is ignored",
+          r.apply.length === 0,
+          "apply=" + JSON.stringify(ids(r.apply)) + " -- the connection is closed; there is nothing to describe");
+  } catch (e) { check("an offer arriving after hangup is ignored", false, "threw " + e.message); }
+
+  try {
+    let s = freshState();
+    s = ingestSignal(s, { type: "offer", callId: "call-77", sdp: "SDP-1" }).state;
+    const r = ingestSignal(s, { type: "offer", callId: "call-77", sdp: "SDP-2" });
+    check("a second remote description is ignored",
+          r.apply.length === 0,
+          "apply=" + JSON.stringify(ids(r.apply)) +
+          " -- re-applying one resets a connection that is already working");
+  } catch (e) { check("a second remote description is ignored", false, "threw " + e.message); }
+
+  try {
+    let s = freshState();
+    s = ingestSignal(s, ice("a")).state;
+    const r = ingestSignal(s, { type: "answer", callId: "call-77", sdp: "SDP-A" });
+    check("the caller flushes on 'answer' exactly as the callee does on 'offer'",
+          same(ids(r.apply), ["remote-description", "a"]) && r.state.remoteReady === true,
+          "apply=" + JSON.stringify(ids(r.apply)) + " remoteReady=" + r.state.remoteReady +
+          " -- handling only 'offer' leaves the CALLER unable to flush anything");
+  } catch (e) { check("the caller flushes on 'answer' exactly as the callee does on 'offer'", false, "threw " + e.message); }
+
+  try {
+    const r = ingestSignal(freshState(), { type: "offer", callId: "call-77", sdp: "SDP-1" });
+    check("an offer with nothing queued applies just the description",
+          same(ids(r.apply), ["remote-description"]),
+          "apply=" + JSON.stringify(ids(r.apply)));
+  } catch (e) { check("an offer with nothing queued applies just the description", false, "threw " + e.message); }
+
+  try {
+    let s = freshState();
+    for (let i = 0; i < 200; i++) s = ingestSignal(s, ice("c" + i)).state;
+    // Deliberately an equality, not <= 64: an implementation that buffers
+    // nothing at all also has a "bounded" queue, and must not pass here.
+    check("a flood of candidates fills the queue to MAX_PENDING_ICE and stops",
+          s.pending.length === 64,
+          "pending=" + s.pending.length +
+          " -- an unbounded queue lets a peer who never sends an offer decide how much memory you use");
+    check("the cap keeps the candidates that arrived FIRST",
+          s.pending[0] && s.pending[0].sdpMid === "c0",
+          "first buffered is " + JSON.stringify(s.pending[0]) +
+          " -- evicting the oldest lets a flood push out the relay candidates that would actually have worked");
+  } catch (e) { check("the queue is bounded at MAX_PENDING_ICE", false, "threw " + e.message); }
+
+  try {
+    const r = ingestSignal(freshState(), { type: "typing", callId: "call-77" });
+    check("an unrecognised frame type is ignored",
+          r.apply.length === 0 && (r.state.pending || []).length === 0,
+          "apply=" + JSON.stringify(ids(r.apply)));
+  } catch (e) { check("an unrecognised frame type is ignored", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write ingestSignal(state, msg) above, then press Run. (" + e.message + ")");
+}`);
+
+    createExplain("explain-a7-0001", {
+      prompt: "Two devices on the office Wi-Fi connect every time; the same build drops roughly one call in five on mobile data. Explain why the missing ICE buffer produces <em>exactly</em> that pattern — and why <code>handleRemoteIce</code> being <code>async</code> and called without <code>await</code> is the reason nobody saw an error."
+    });
+
     createSolution("exercise-1", {
-      exercise: "Build the TokenPeerConnection wrapper:\n\n1. Create `app/src/webrtc/PeerConnection.ts`: wraps RTCPeerConnection with signalling integration. Handles initialize (get media, set up ICE/track listeners), createOffer (caller), handleRemoteOffer/Answer (callee), handleRemoteIce (both).\n\n2. Implement controls: toggleMute (audio track enabled), toggleVideo (video track enabled), switchCamera (front/back).\n\n3. Implement hangup: send call:hangup via WS, stop all tracks, close PC.\n\n4. Subscribe to signalling messages (call:offer, call:answer, call:ice, call:hangup) filtered by callId.\n\n5. Monitor connectionState changes and call onHangup when state becomes 'failed' or 'disconnected' for too long.\n\n6. Test: this requires EAS Build. Create a development build, then test with two devices on the same network (simplest ICE scenario).",
+      unverifiable: "the deliverable is the react-native-webrtc wrapper class, needing an EAS development build, two devices and a running TURN server",
+      exercise: "Build the TokenPeerConnection wrapper, with the ingestSignal logic you just wrote inside it:\n\n1. Create app/src/webrtc/PeerConnection.ts: wraps RTCPeerConnection with signalling integration. Handles initialize (get media, set up ICE/track listeners), createOffer (caller), handleRemoteOffer/Answer (callee), handleRemoteIce (both).\n\n2. Construct the connection with iceTransportPolicy: 'relay' as a literal — not a setting, not a variable. See ADR-0008.\n\n3. Buffer incoming ICE candidates until a remote description exists, then flush them in arrival order. Cap the queue.\n\n4. Implement controls: toggleMute (audio track enabled), toggleVideo (video track enabled), switchCamera (front/back).\n\n5. Implement hangup: send call:hangup via WS, stop all tracks, close PC.\n\n6. Subscribe to signalling messages (call:offer, call:answer, call:ice, call:hangup) filtered by callId.\n\n7. Monitor connectionState. 'failed' ends the call at once. 'disconnected' starts a grace timer instead — cancel it on any later transition, and only hang up if it expires.\n\n8. Test: this requires EAS Build. Create a development build, then test with two devices. Test on mobile data as well as Wi-Fi — the office network hides the candidate race.",
       hints: [
         "RTCPeerConnection from react-native-webrtc has the same API as the browser version.",
         "getUserMedia({ audio: true, video: false }) for voice-only. Add video: true for video calls.",
         "The callee doesn't call createOffer — they wait for call:offer via signalling, then call createAnswer.",
-        "Always call pc.close() and track.stop() on cleanup — otherwise the microphone stays active."
+        "Both handleRemoteOffer and handleRemoteAnswer have to flush the queue. If only one of them does, one side of every call silently loses its candidates.",
+        "Always call pc.close() and track.stop() on cleanup — otherwise the microphone stays active. Clear the grace timer there too, or a hangup fires after the screen has gone."
       ],
-      solution: `// See the full TokenPeerConnection class in the lesson code above.
-// Key architecture:
+      solution: `// app/src/webrtc/PeerConnection.ts
+import {
+  RTCPeerConnection,
+  RTCSessionDescription,
+  RTCIceCandidate,
+  mediaDevices,
+  MediaStream,
+} from 'react-native-webrtc';
+import { send, subscribe } from '../ws/connection';
+import { getIceServers } from './config';
 
-// Constructor: stores options (callId, type, callbacks)
-// initialize(): creates PC, gets media, adds tracks, subscribes to signalling
-// createOffer(): caller calls this after callee accepts
-// handleRemoteOffer(): auto-called when offer arrives (callee path)
-// handleRemoteAnswer(): auto-called when answer arrives (caller path)
-// handleRemoteIce(): auto-called for each ICE candidate
+// A peer that never sends an offer must not be able to grow the queue for
+// ever. Relay-only negotiation produces a handful of candidates, not hundreds.
+const MAX_PENDING_ICE = 64;
 
-// Controls:
-// toggleMute(): audioTrack.enabled = !audioTrack.enabled
-// toggleVideo(): videoTrack.enabled = !videoTrack.enabled
-// switchCamera(): videoTrack._switchCamera() (RN-specific)
+// How long 'disconnected' may last before we treat the call as over.
+const DISCONNECT_GRACE_MS = 8000;
 
-// Cleanup:
-// hangup(): send WS message + cleanup()
-// cleanup(): stop tracks, close PC, unsubscribe from signalling`
+interface CallOptions {
+  conversationId: number;
+  callId: string;
+  type: 'voice' | 'video';
+  isCaller: boolean;
+  onRemoteStream: (stream: MediaStream) => void;
+  onConnectionStateChange: (state: string) => void;
+  onHangup: () => void;
+}
+
+export class TokenPeerConnection {
+  private pc: RTCPeerConnection | null = null;
+  private localStream: MediaStream | null = null;
+  private unsubscribe: (() => void) | null = null;
+  private options: CallOptions;
+
+  private pendingIce: any[] = [];
+  private remoteReady = false;
+  private disconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(options: CallOptions) {
+    this.options = options;
+  }
+
+  async initialize() {
+    const iceServers = await getIceServers();
+
+    // Relay-only, always. ICE candidates ARE IP addresses: any non-relay
+    // path hands the holder the user's home address. See ADR-0008.
+    this.pc = new RTCPeerConnection({
+      iceServers,
+      iceTransportPolicy: 'relay',
+    });
+
+    this.pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        send('call:ice', {
+          callId: this.options.callId,
+          candidate: event.candidate.toJSON(),
+        });
+      }
+    };
+
+    this.pc.ontrack = (event) => {
+      if (event.streams[0]) {
+        this.options.onRemoteStream(event.streams[0]);
+      }
+    };
+
+    // 'failed' is terminal. 'disconnected' is not — ICE usually recovers.
+    this.pc.onconnectionstatechange = () => {
+      const state = this.pc!.connectionState;
+      this.options.onConnectionStateChange(state);
+
+      if (state === 'disconnected') {
+        this.clearDisconnectTimer();
+        this.disconnectTimer = setTimeout(() => {
+          this.disconnectTimer = null;
+          this.options.onHangup();
+        }, DISCONNECT_GRACE_MS);
+        return;
+      }
+
+      this.clearDisconnectTimer();
+
+      if (state === 'failed') {
+        this.options.onHangup();
+      }
+    };
+
+    this.localStream = await mediaDevices.getUserMedia({
+      audio: true,
+      video: this.options.type === 'video',
+    });
+
+    this.localStream.getTracks().forEach((track) => {
+      this.pc!.addTrack(track, this.localStream!);
+    });
+
+    this.unsubscribe = subscribe((type, payload) => {
+      if (payload.callId !== this.options.callId) return;
+
+      switch (type) {
+        case 'call:offer':
+          this.handleRemoteOffer(payload.sdp);
+          break;
+        case 'call:answer':
+          this.handleRemoteAnswer(payload.sdp);
+          break;
+        case 'call:ice':
+          this.handleRemoteIce(payload.candidate);
+          break;
+        case 'call:hangup':
+          this.options.onHangup();
+          break;
+      }
+    });
+
+    return this.localStream;
+  }
+
+  async createOffer() {
+    const offer = await this.pc!.createOffer({});
+    await this.pc!.setLocalDescription(offer);
+    send('call:offer', { callId: this.options.callId, sdp: offer.sdp });
+  }
+
+  private async handleRemoteOffer(sdp: string) {
+    await this.pc!.setRemoteDescription(
+      new RTCSessionDescription({ type: 'offer', sdp })
+    );
+    this.remoteReady = true;
+    await this.flushPendingIce();
+
+    const answer = await this.pc!.createAnswer();
+    await this.pc!.setLocalDescription(answer);
+    send('call:answer', { callId: this.options.callId, sdp: answer.sdp });
+  }
+
+  private async handleRemoteAnswer(sdp: string) {
+    await this.pc!.setRemoteDescription(
+      new RTCSessionDescription({ type: 'answer', sdp })
+    );
+    this.remoteReady = true;
+    await this.flushPendingIce();
+  }
+
+  // Candidates and the offer share one channel, and the remote side starts
+  // gathering before it sends the offer — so candidates arrive first.
+  // addIceCandidate() with a null remote description throws.
+  private async handleRemoteIce(candidate: any) {
+    if (!this.remoteReady) {
+      if (this.pendingIce.length < MAX_PENDING_ICE) {
+        this.pendingIce.push(candidate);
+      }
+      return;
+    }
+    await this.pc!.addIceCandidate(new RTCIceCandidate(candidate));
+  }
+
+  private async flushPendingIce() {
+    const queued = this.pendingIce;
+    this.pendingIce = [];
+    for (const candidate of queued) {
+      // ICE needs only one pair to work, so a bad candidate is discarded
+      // rather than allowed to strand the ones behind it.
+      try {
+        await this.pc!.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (err) {
+        console.warn('[webrtc] dropped a buffered candidate', err);
+      }
+    }
+  }
+
+  toggleMute(): boolean {
+    const audioTrack = this.localStream?.getAudioTracks()[0];
+    if (audioTrack) {
+      audioTrack.enabled = !audioTrack.enabled;
+      return !audioTrack.enabled; // true = muted
+    }
+    return false;
+  }
+
+  toggleVideo(): boolean {
+    const videoTrack = this.localStream?.getVideoTracks()[0];
+    if (videoTrack) {
+      videoTrack.enabled = !videoTrack.enabled;
+      return !videoTrack.enabled; // true = video off
+    }
+    return false;
+  }
+
+  async switchCamera() {
+    const videoTrack = this.localStream?.getVideoTracks()[0];
+    if (videoTrack && '_switchCamera' in videoTrack) {
+      (videoTrack as any)._switchCamera();
+    }
+  }
+
+  hangup() {
+    send('call:hangup', { callId: this.options.callId });
+    this.cleanup();
+  }
+
+  private clearDisconnectTimer() {
+    if (this.disconnectTimer) {
+      clearTimeout(this.disconnectTimer);
+      this.disconnectTimer = null;
+    }
+  }
+
+  cleanup() {
+    this.clearDisconnectTimer();
+    this.localStream?.getTracks().forEach((t) => t.stop());
+    this.pc?.close();
+    this.pc = null;
+    this.localStream = null;
+    this.pendingIce = [];
+    this.remoteReady = false;
+    this.unsubscribe?.();
+  }
+
+  getLocalStream() {
+    return this.localStream;
+  }
+}`
     });
 
     createQuiz("lesson-quiz", [
@@ -803,6 +1405,27 @@ console.log('Failure: connecting → failed → closed');`);
         ],
         correct: 0,
         explanation: "TURN servers require authentication — you must provide username and credential fields. Without them, the TURN allocation request is rejected (401 Unauthorized). Fix: { urls: 'turn:turn.tokn.app:3478', username: 'tokenUser', credential: 'secret' }. In Token, these short-lived credentials come from the API server (TURN REST API). Note what is NOT the bug: there is no STUN server here and there should not be. STUN's only product is a srflx candidate, which is exactly what a relay-only policy discards — configuring one would be dead configuration that reads like a working fallback."
+      },
+      {
+        type: "predict-output",
+        question: "The signalling switch calls handleRemoteOffer(payload.sdp) WITHOUT awaiting it, so the callback returns immediately. This models what that means for a candidate arriving right behind the offer. What prints?",
+        code: "const order = [];\n\nasync function applyOffer() {\n  order.push('setRemoteDescription');\n  await Promise.resolve();      // createAnswer, setLocalDescription...\n  order.push('remoteReady');\n}\n\napplyOffer();                   // not awaited — exactly how the switch calls it\norder.push('iceArrives');\n\nsetTimeout(() => console.log(order.join(' -> ')), 0);",
+        answer: "setRemoteDescription -> iceArrives -> remoteReady",
+        explanation: "The candidate lands in the middle. applyOffer runs synchronously up to its first await, then yields — and the very next signalling frame is dispatched while the offer is still unfinished. So 'iceArrives' happens after setRemoteDescription has been CALLED but before remoteReady is true. That gap is the whole bug: a candidate handled there hits a connection with no remote description and throws InvalidStateError. Two devices on fast Wi-Fi usually get the offer applied before any candidate arrives, which is why this passes every test done in the office."
+      },
+      {
+        type: "predict-output",
+        question: "This is the queue cap keeping the candidates that arrived first. What prints?",
+        code: "const MAX_PENDING_ICE = 64;\nconst pending = [];\n\nfor (let i = 0; i < 100; i++) {\n  if (pending.length >= MAX_PENDING_ICE) continue;   // drop the ARRIVING one\n  pending.push(i);\n}\n\nconsole.log(pending.length + ' ' + pending[0] + ' ' + pending[63]);",
+        answer: "64 0 63",
+        explanation: "The queue fills to 64 and then refuses everything after it, so it holds candidates 0 through 63 — the ones that arrived first. That is the direction you want: the earliest candidates are the real ones from the peer's first gathering round, and under relay-only policy there are only ever a handful of them. Anything arriving after 64 is either a broken peer or a deliberate flood, and neither deserves to displace a working route."
+      },
+      {
+        type: "predict-output",
+        question: "The other way to bound a queue — keep the most recent entries. With a cap of 3, what prints?",
+        code: "const MAX = 3;\nlet pending = ['relay-a', 'relay-b'];\n\n['flood-1', 'flood-2'].forEach((c) => {\n  pending = [...pending, c].slice(-MAX);\n});\n\nconsole.log(pending.join(','));",
+        answer: "relay-b,flood-1,flood-2",
+        explanation: "slice(-MAX) keeps the END of the array, so every new candidate pushes an older one out — and 'relay-a', the first real candidate the peer gathered, is gone. This is why the cap must drop what is ARRIVING rather than what is held. Both versions are bounded and only one of them survives a peer that sends rubbish: with eviction, anyone can flush your working relay candidates out of the queue just by sending more."
       }
     ]);
   </script>

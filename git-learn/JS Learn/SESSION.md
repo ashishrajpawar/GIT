@@ -19,16 +19,18 @@ how far it got.
 > files either.** Make no claims about progress at all — not in prose, not in
 > a commit message, not as a reason for prioritising anything.
 
-**Nothing in flight.** Working tree clean, everything committed, last commit
-`be3cdf4`.
+**Nothing in flight.** Working tree clean, everything committed.
+
+**Started the `unverifiable` cluster** — the recommended body of work in *Next
+action*. `a7/0001` is done; 16 to go. See below.
 
 **State as of 2026-08-23** — run `node scripts/audit.mjs` before trusting any
 of it:
 
-- **101 lessons.** Audit **green**, **0 warnings**, six suites pass.
+- **101 lessons.** Audit **green**, 2 warnings, six suites pass.
 - **Every lesson has been executed at least once.** The verification log has
-  no absent entries: 84 verified, 17 `unverifiable` with a stated reason, 1
-  `nothing-to-verify`.
+  no absent entries: **85 verified, 16 `unverifiable`** with a stated reason,
+  1 `nothing-to-verify`. `a7/0001` moved across on 2026-08-23.
 - **`known-issues.json` is down to one entry** — `calls`, gated on B6.
 - `render-as-authored` is **0**, and this time it means it (see *The `variant`
   blind spot*).
@@ -37,6 +39,87 @@ of it:
 
 **Nothing is blocked.** See *Next action* for the four candidate bodies of
 work and why the `unverifiable` cluster is the recommendation.
+
+### a7/0001 — the quiz was right and the code beside it was wrong, twice (2026-08-23)
+
+M3: **`ingestSignal`**. 18 self-checks, 11 wrong-cases, 3 executable quiz
+questions where the lesson had none. **First of the 17 `unverifiable`
+lessons**; it now reaches `verified` on the per-exercise opt-out, with only the
+`react-native-webrtc` wrapper excused.
+
+**Both defects were already contradicted by the lesson's own quiz**, which is
+the rule `b1/0001` established: *when a lesson's quiz disagrees with its body,
+believe the quiz.* This is the strongest instance of it so far, because the
+quiz was right **twice** and neither answer had been carried into the code.
+
+- **No ICE buffering.** `handleRemoteIce` called `addIceCandidate`
+  unconditionally, which throws `InvalidStateError` with no remote description
+  — while a quiz explanation in the same file read *"In Token's code, we buffer
+  incoming ICE candidates if they arrive before the remote description is
+  set."* It did not.
+- **`disconnected` was treated as `failed`.**
+  `if (state === 'disconnected' || state === 'failed') onHangup()` — while the
+  state table three sections up documents `disconnected → connected` as
+  recovery, the exercise said *"or 'disconnected' for too long"*, and an
+  `order-steps` explanation said *"Token should show a 'Reconnecting...' UI
+  during the disconnected state rather than immediately hanging up."* Three
+  statements of the right answer around one line of the wrong one.
+
+### The race is why it survived: it works on the office network
+
+The remote side starts gathering at `setLocalDescription`, which is *before* it
+sends the offer, and both travel one WebSocket. The `subscribe` switch calls
+`this.handleRemoteOffer(payload.sdp)` **without awaiting**, so the next frame is
+dispatched while the offer is still three `await`s from being applied. The new
+executable question pins the ordering exactly:
+`setRemoteDescription -> iceArrives -> remoteReady`.
+
+**And nothing logged it.** `handleRemoteIce` is `async` and called without
+`await`, so the throw became an unhandled rejection. Two phones on one Wi-Fi
+win the race; mobile data does not. **The bug reaches users as "calls sometimes
+don't connect", which is the hardest sentence in a bug tracker** — and the
+office is the best possible network, so the test that would catch it is the
+test nobody runs.
+
+### The cap has a direction, and the obvious one is backwards
+
+Buffering unboundedly hands a peer who never sends an offer control of your
+memory. But `slice(-MAX)` — keep the most recent — is the version everyone
+writes, and it means **anyone can flush your working relay candidates out of
+the queue by sending 64 more**. Drop what is *arriving*, keep what is *held*:
+the earliest candidates are the real ones from the peer's first gathering
+round, and under relay-only policy there are only ever a handful.
+
+Both directions are bounded, which is exactly why "is it bounded?" is the wrong
+question to stop at.
+
+### Two wrong-cases were worth more than the other nine
+
+- **Flushing the queue *before* the description** is not a partial fix, it is
+  no fix — it reproduces the identical `InvalidStateError`. It is also what you
+  write if you think of the queue as a backlog to clear before handling the new
+  thing.
+- **Flushing on `'offer'` only.** The callee receives an offer, so their side
+  is perfect; the caller only ever receives an *answer*, so every candidate
+  they buffered is silently abandoned. **Debug either device alone and it looks
+  correct** — the same two-sides-must-be-read-together move that found
+  `a8/0004`'s `localId`.
+
+Also: the self-check's queue-cap assertion is `=== 64`, not `<= 64`, because an
+implementation that buffers nothing at all also has a "bounded" queue and must
+not pass. All multi-trip mistakes were run individually and confirmed inherent.
+
+### Two smaller things fixed in passing
+
+- **The revealed solution was a comment block** — *"See the full
+  TokenPeerConnection class in the lesson code above"* — against lesson
+  invariant 4, which requires a complete pasteable file. It is now the real
+  file.
+- **`createExplain` was missing.** A7 `0001`–`0004` have no prompt, and the
+  count is the tell: **`createExplain` is at 84/101 and `verified` was at
+  84/101 — the 17 lessons without a prompt are exactly the 17 that were
+  `unverifiable`.** Adding it belongs to each M3 pass rather than to a separate
+  sweep.
 
 ### The ADR-0007 sweep — the last known violation was three (2026-08-23)
 
@@ -1496,11 +1579,20 @@ executed; the log is 84 verified, 17 `unverifiable` with a reason, 1
 
 What is left, in no forced order:
 
-1. **The 17 `unverifiable` lessons.** `CLAUDE.md` warns that the reflex to
-   reach for that flag is wrong more often than it is right, and this pass
-   proved it again — nine lessons that looked unrunnable produced nine
-   exercises. A7 (4), B9 (3), X1 (3) and A10 (2) are the clusters. Each needs
-   the same move: find the plain function, excuse the rest per-exercise.
+1. **The `unverifiable` lessons — started 2026-08-23, `a7/0001` done, 16 left.**
+   `CLAUDE.md` warns that the reflex to reach for that flag is wrong more often
+   than it is right, and this pass proved it again — nine lessons that looked
+   unrunnable produced nine exercises, and `a7/0001` then produced a tenth
+   plus two real defects. Remaining clusters: **A7 (3), B9 (3), X1 (3),
+   A10 (2), B6 (2)**, plus `a9/0001`, `b1/0003`, `b8/0001`. Each needs the same
+   move: find the plain function, excuse the rest per-exercise, **and add the
+   `createExplain` prompt** — the 16 without one are exactly the 16 still
+   excused.
+
+   **Next in this cluster: `a7/0002-voice-call.html`.** It uses the
+   `TokenPeerConnection` wrapper rather than building its own, so the plain
+   function is likely the call-state/duration or the mute-and-hangup
+   bookkeeping rather than anything WebRTC.
 2. **The C-modules.** C0–C4 and C6–C9, roughly 34 lessons, none written. C0 is
    architecture and was planned to come *before* B1, so it is already out of
    order.
