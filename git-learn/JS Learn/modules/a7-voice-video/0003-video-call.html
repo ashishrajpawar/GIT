@@ -68,22 +68,43 @@ import { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { RTCView, MediaStream } from 'react-native-webrtc';
 import { TokenPeerConnection } from '../webrtc/PeerConnection';
+import { send, subscribe } from '../ws/connection';
+import { videoStage } from '../call/videoStage';
 import InCallManager from 'react-native-incall-manager';
 
 export function VideoCallScreen({ route, navigation }) {
   const { callId, conversationId, isCaller, tokenLabel } = route.params;
   const [callState, setCallState] = useState('connecting');
+  const [everConnected, setEverConnected] = useState(false);
   const [localStream, setLocalStream] = useState&lt;MediaStream | null&gt;(null);
   const [remoteStream, setRemoteStream] = useState&lt;MediaStream | null&gt;(null);
   const [muted, setMuted] = useState(false);
   const [videoOff, setVideoOff] = useState(false);
   const [frontCamera, setFrontCamera] = useState(true);
+
+  // null, not false: the peer has not told us yet. An older client never
+  // will, and "unknown" must not render as "camera off".
+  const [peerVideoEnabled, setPeerVideoEnabled] = useState&lt;boolean | null&gt;(null);
+
   const pcRef = useRef&lt;TokenPeerConnection | null&gt;(null);
+  const unsubRef = useRef&lt;(() =&gt; void) | null&gt;(null);
 
   useEffect(() =&gt; {
     startCall();
     return () =&gt; cleanup();
   }, []);
+
+  useEffect(() =&gt; {
+    if (callState === 'connected') setEverConnected(true);
+  }, [callState]);
+
+  const stage = videoStage({
+    callState,
+    everConnected,
+    hasRemoteStream: remoteStream !== null,
+    peerVideoEnabled,
+    holderName: tokenLabel,
+  });
 
   async function startCall() {
     InCallManager.start({ media: 'video' });
@@ -102,6 +123,14 @@ export function VideoCallScreen({ route, navigation }) {
     const stream = await pc.initialize();
     setLocalStream(stream);
 
+    // track.enabled is a LOCAL flag. The peer receives black frames and has
+    // no way to tell them from a broken camera, so it has to be told.
+    const unsub = subscribe((type, payload) =&gt; {
+      if (payload.callId !== callId) return;
+      if (type === 'call:media') setPeerVideoEnabled(payload.videoEnabled);
+    });
+    unsubRef.current = unsub;
+
     if (isCaller) await pc.createOffer();
   }
 
@@ -113,11 +142,16 @@ export function VideoCallScreen({ route, navigation }) {
   function handleVideoToggle() {
     const isOff = pcRef.current?.toggleVideo();
     setVideoOff(isOff ?? false);
+    // Tell the other side, or they just see a black rectangle.
+    send('call:media', { callId, videoEnabled: !isOff });
   }
 
   function handleCameraFlip() {
-    pcRef.current?.switchCamera();
-    setFrontCamera(f =&gt; !f);
+    // Only flip the mirror if the camera actually switched. Flipping it
+    // regardless mirrors the preview against a camera that never moved.
+    if (pcRef.current?.switchCamera()) {
+      setFrontCamera(f =&gt; !f);
+    }
   }
 
   function handleHangup() {
@@ -126,6 +160,7 @@ export function VideoCallScreen({ route, navigation }) {
   }
 
   function cleanup() {
+    unsubRef.current?.();
     pcRef.current?.cleanup();
     InCallManager.stop();
   }
@@ -133,18 +168,22 @@ export function VideoCallScreen({ route, navigation }) {
   return (
     &lt;View style={styles.container}&gt;
       {/* Remote video — full screen */}
-      {remoteStream ? (
+      {stage.video ? (
         &lt;RTCView
-          streamURL={remoteStream.toURL()}
+          streamURL={remoteStream!.toURL()}
           style={styles.remoteVideo}
           objectFit="cover"
           zOrder={0}
         /&gt;
       ) : (
-        &lt;View style={styles.remoteVideo}&gt;
-          &lt;Text style={styles.connectingText}&gt;
-            {callState === 'connected' ? 'No video' : 'Connecting...'}
-          &lt;/Text&gt;
+        &lt;View style={styles.remoteVideo} /&gt;
+      )}
+
+      {/* The notice sits OVER the video, because during a blip we keep the
+          last frame and still have to say why it is frozen. */}
+      {stage.notice && (
+        &lt;View style={styles.noticeWrap} pointerEvents="none"&gt;
+          &lt;Text style={styles.connectingText}&gt;{stage.notice}&lt;/Text&gt;
         &lt;/View&gt;
       )}
 
@@ -190,7 +229,12 @@ export function VideoCallScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   remoteVideo: { flex: 1, backgroundColor: '#1e293b', justifyContent: 'center', alignItems: 'center' },
-  connectingText: { color: '#94a3b8', fontSize: 16 },
+  connectingText: { color: '#94a3b8', fontSize: 16, textAlign: 'center' },
+  noticeWrap: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    justifyContent: 'center', alignItems: 'center',
+    paddingHorizontal: 32,
+  },
   localVideo: {
     position: 'absolute', top: 60, right: 16,
     width: 120, height: 160,
@@ -218,18 +262,95 @@ const styles = StyleSheet.create({
   hangupText: { color: '#fff', fontSize: 12, fontWeight: '600' },
 });</code></pre>
 
+    <h2>A black rectangle is not a state</h2>
+
+    <p>The obvious way to decide what fills the screen is whether a remote
+    stream exists:</p>
+
+    <pre><code>{remoteStream ? &lt;RTCView … /&gt; : &lt;Text&gt;Connecting…&lt;/Text&gt;}   // wrong</code></pre>
+
+    <p><strong>A stream object existing is not video arriving.</strong>
+    <code>ontrack</code> fires when the track is added during negotiation,
+    which is before a single frame has been decoded. And there is a worse
+    case, which the quiz at the bottom of this page already describes: ask it
+    what the peer sees when you set <code>videoTrack.enabled = false</code> and
+    the answer is <em>a black or frozen frame</em>.</p>
+
+    <p>So when the other person turns their camera off, <code>remoteStream</code>
+    is still there, the track is still there, and <code>RTCView</code>
+    faithfully renders black. The user is looking at an unlabelled dark
+    rectangle that is indistinguishable from a dead connection, a camera
+    permission failure, and a phone in someone's pocket.</p>
+
+    <div class="callout danger">
+      <div class="callout-title"><code>enabled = false</code> is a local flag,
+      and nothing carries it across</div>
+      <p>This is the part that surprises people. Muting a track does not send
+      a message — it swaps the frames for empty ones. <strong>There is no
+      field on the receiving end that says "the far side turned this
+      off"</strong>, because at the media layer black frames from a disabled
+      camera and black frames from a camera pointed at a desk are the same
+      bytes.</p>
+      <p>If you want to show <em>"Priya turned their camera off"</em>, you have
+      to send it yourself. Hence <code>call:media</code> carrying
+      <code>{ videoEnabled }</code> over the same WebSocket that carried the
+      offer.</p>
+    </div>
+
+    <p>That extra message brings the three-state problem with it, and it is the
+    same one <code>a2/0002</code> met in <code>Partial&lt;T&gt;</code>:</p>
+
+    <table>
+      <thead>
+        <tr><th><code>peerVideoEnabled</code></th><th>Means</th><th>Show</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>true</code></td><td>they told us it is on</td><td>the video</td></tr>
+        <tr><td><code>false</code></td><td>they told us it is off</td><td>a notice naming them</td></tr>
+        <tr><td><code>null</code></td><td>they have not told us</td><td>the video</td></tr>
+      </tbody>
+    </table>
+
+    <p><strong><code>if (!peerVideoEnabled)</code> collapses the last two</strong>,
+    and the last two are opposites. An older client that never sends
+    <code>call:media</code> would have its perfectly good video replaced by
+    "they turned their camera off" for the entire call. <em>Not being told
+    something is not the same as being told no.</em></p>
+
     <h2>Camera switching</h2>
 
     <p><code>react-native-webrtc</code> provides a private <code>_switchCamera()</code> method on video tracks:</p>
 
-    <pre><code>async function switchCamera() {
+    <pre><code>function switchCamera(): boolean {
   const videoTrack = localStream?.getVideoTracks()[0];
   if (videoTrack && '_switchCamera' in videoTrack) {
     (videoTrack as any)._switchCamera();
+    return true;
   }
+  return false;   // no track: nothing switched
 }</code></pre>
 
     <p>This toggles between front and back camera without renegotiation. The remote peer sees the switch instantly — no interruption.</p>
+
+    <div class="callout warning">
+      <div class="callout-title">Return whether it happened, or the mirror
+      lies</div>
+      <p>Notice the <code>boolean</code>. The screen keeps its own
+      <code>frontCamera</code> state purely to decide
+      <code>mirror={frontCamera}</code>, and the tempting version is:</p>
+      <pre><code>pcRef.current?.switchCamera();
+setFrontCamera(f =&gt; !f);        // flips whatever happened</code></pre>
+      <p>Both the optional chain and the guard inside
+      <code>switchCamera</code> can decline to do anything — no peer
+      connection yet, or a call with no video track. The state flips anyway,
+      so the preview is now mirrored against a camera that never moved, and
+      every subsequent flip stays inverted. <strong>The fix is not to try
+      harder to switch; it is to only record what actually
+      happened.</strong></p>
+      <p>Same shape as <code>a11/0001</code>, where the row animated away
+      before the revoke request had succeeded. <strong>UI state that describes
+      the world must be set from the result, not from the intention.</strong></p>
+    </div>
 
     <h2>Video constraints</h2>
 
@@ -276,9 +397,21 @@ const stream = await mediaDevices.getUserMedia({
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>Now build it yourself</h2>
+
+    <div id="exercise-stage"></div>
+
+    <div id="pg-exercise-stage"></div>
+
+    <hr>
+
+    <h2>Then wire it into the screen</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="explain-a7-0003"></div>
 
     <hr>
 
@@ -294,6 +427,7 @@ const stream = await mediaDevices.getUserMedia({
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -314,22 +448,411 @@ console.log('PiP area:', pip.width * pip.height, 'px²');
 console.log('Screen area:', screen.width * screen.height, 'px²');
 console.log('PiP is', ((pip.width * pip.height) / (screen.width * screen.height) * 100).toFixed(1) + '% of screen');`);
 
+    createSolution("exercise-stage", {
+      exercise: "Write videoStage(view) — the one decision behind the main viewport. It answers two questions at once: do we render the remote video, and what do we tell the user.\n\nview is { callState, everConnected, hasRemoteStream, peerVideoEnabled, holderName }.\n  callState is 'new', 'connecting', 'connected', 'disconnected', 'failed' or 'closed'.\n  everConnected is whether the call has EVER reached 'connected'.\n  hasRemoteStream is whether a remote MediaStream object exists.\n  peerVideoEnabled is true, false, or null when the peer has not told us.\n  holderName is who to name in a notice.\n\nReturn { video, notice }: whether to render the RTCView, and the overlay text (null when there is nothing to say).\n\nThe rules, IN THIS ORDER — the order is most of the exercise:\n\n1. 'failed' or 'closed' -> { video: false, notice: 'Call ended' }.\n\n2. Never connected -> { video: false, notice: 'Connecting...' }.\n\n3. 'disconnected' after having connected -> keep the last frame if we have one, and say why it is frozen: { video: hasRemoteStream, notice: 'Reconnecting...' }.\n\n4. The peer told us their camera is OFF -> { video: false, notice: holderName + ' turned their camera off' }. This has to come before rule 5: they may have dropped the stream too, and 'turned their camera off' is the more useful of the two true statements.\n\n5. Connected but no remote stream yet -> { video: false, notice: 'Waiting for video...' }.\n\n6. Otherwise -> { video: true, notice: null }.\n\nTwo things that decide whether this is right:\n\n  peerVideoEnabled === null means NOT TOLD, and must show the video. Only an explicit false is a camera-off notice. An older client never sends the message at all.\n\n  A missing or empty holderName falls back to 'They', so the notice never reads ' turned their camera off'.",
+      hints: [
+        "Write it as a sequence of early returns in the rule order given. Any attempt to compute `video` and `notice` independently and combine them at the end will fight rule 3, where video is true and there is still a notice.",
+        "Rule 2 is about everConnected, not about callState === 'connected'. During a blip the call is connected in every sense the user cares about and callState says otherwise — that is the whole reason everConnected exists.",
+        "For the null case, ask what `if (!view.peerVideoEnabled)` does to a client that has never sent call:media. The answer is that it replaces their video with a notice for the entire call."
+      ],
+      solution: `function videoStage(view) {
+  const holder = view.holderName || "They";
+
+  // 1. Over is over. This outranks everything below it, including a
+  //    camera-off notice that is still technically true.
+  if (view.callState === "failed" || view.callState === "closed") {
+    return { video: false, notice: "Call ended" };
+  }
+
+  // 2. Nothing has ever arrived, so there is no last frame to keep.
+  //    everConnected, NOT callState === 'connected' — during a blip the
+  //    second one is false and this branch would be badly wrong.
+  if (!view.everConnected) {
+    return { video: false, notice: "Connecting..." };
+  }
+
+  // 3. A blip. Hold the last frame and label it, rather than replacing a
+  //    live-looking picture with a black box.
+  if (view.callState === "disconnected") {
+    return { video: view.hasRemoteStream, notice: "Reconnecting..." };
+  }
+
+  // 4. Only an explicit false. null means they never told us, and an older
+  //    client never will — treating that as "off" would hide good video.
+  if (view.peerVideoEnabled === false) {
+    return { video: false, notice: holder + " turned their camera off" };
+  }
+
+  // 5. Connected, camera not reported off, but no frames yet.
+  if (!view.hasRemoteStream) {
+    return { video: false, notice: "Waiting for video..." };
+  }
+
+  // 6. Nothing to explain.
+  return { video: true, notice: null };
+}`
+    });
+
+    createPlayground("pg-exercise-stage", `// Write videoStage(view) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+
+// Connected, streaming, peer has reported their camera ON. The ordinary good
+// case, and the base every fixture below varies from by ONE field.
+//
+// peerVideoEnabled is deliberately true rather than null here: if the base
+// case were also the not-told case, the mistake that collapses null into
+// false would trip this check instead of the one that names it.
+function view(overrides) {
+  return Object.assign({
+    callState: "connected",
+    everConnected: true,
+    hasRemoteStream: true,
+    peerVideoEnabled: true,
+    holderName: "Priya",
+  }, overrides || {});
+}
+
+try {
+  if (typeof videoStage !== "function") throw new Error("not written yet");
+
+  try {
+    const r = videoStage(view({}));
+    check("a connected call with a stream shows the video and says nothing",
+          r.video === true && r.notice === null,
+          "got " + JSON.stringify(r));
+  } catch (e) { check("a connected call with a stream shows the video and says nothing", false, "threw " + e.message); }
+
+  try {
+    // The headline. peerVideoEnabled is null because they never sent
+    // call:media -- an older build, or one that simply does not.
+    const r = videoStage(view({ peerVideoEnabled: null }));
+    check("'not told' shows the video, it is not 'camera off'",
+          r.video === true && r.notice === null,
+          "got " + JSON.stringify(r) + " -- !peerVideoEnabled would hide good video for the whole call");
+  } catch (e) { check("'not told' shows the video, it is not 'camera off'", false, "threw " + e.message); }
+
+  try {
+    const r = videoStage(view({ peerVideoEnabled: false }));
+    check("an explicit camera-off names the person instead of showing black",
+          r.video === false && r.notice === "Priya turned their camera off",
+          "got " + JSON.stringify(r) + " -- RTCView renders disabled frames as a black rectangle with no explanation");
+  } catch (e) { check("an explicit camera-off names the person instead of showing black", false, "threw " + e.message); }
+
+  try {
+    const r = videoStage(view({ peerVideoEnabled: true }));
+    check("an explicit camera-on shows the video",
+          r.video === true && r.notice === null,
+          "got " + JSON.stringify(r));
+  } catch (e) { check("an explicit camera-on shows the video", false, "threw " + e.message); }
+
+  try {
+    const r = videoStage(view({ everConnected: false, callState: "connecting", hasRemoteStream: false }));
+    check("a call that has never connected is 'Connecting...'",
+          r.video === false && r.notice === "Connecting...",
+          "got " + JSON.stringify(r));
+  } catch (e) { check("a call that has never connected is 'Connecting...'", false, "threw " + e.message); }
+
+  try {
+    // hasRemoteStream is TRUE here on purpose: the frame is still there, and
+    // holding it beats blanking the screen for eight seconds.
+    const r = videoStage(view({ callState: "disconnected" }));
+    check("a blip keeps the last frame and labels it",
+          r.video === true && r.notice === "Reconnecting...",
+          "got " + JSON.stringify(r) + " -- blanking a live-looking picture reads as a dropped call");
+  } catch (e) { check("a blip keeps the last frame and labels it", false, "threw " + e.message); }
+
+  try {
+    const r = videoStage(view({ callState: "disconnected", hasRemoteStream: false }));
+    check("a blip with no frame to hold shows no video, still 'Reconnecting...'",
+          r.video === false && r.notice === "Reconnecting...",
+          "got " + JSON.stringify(r));
+  } catch (e) { check("a blip with no frame to hold shows no video, still 'Reconnecting...'", false, "threw " + e.message); }
+
+  try {
+    // 'disconnected' BEFORE ever connecting is not a blip. Same distinction
+    // 0002 draws for the clock.
+    const r = videoStage(view({ callState: "disconnected", everConnected: false, hasRemoteStream: false }));
+    check("'disconnected' before ever connecting is still 'Connecting...'",
+          r.notice === "Connecting...",
+          "got " + JSON.stringify(r) + " -- you cannot reconnect to something you never reached");
+  } catch (e) { check("'disconnected' before ever connecting is still 'Connecting...'", false, "threw " + e.message); }
+
+  try {
+    const r = videoStage(view({ hasRemoteStream: false }));
+    check("connected with no stream yet is 'Waiting for video...'",
+          r.video === false && r.notice === "Waiting for video...",
+          "got " + JSON.stringify(r) + " -- ontrack has not fired, which is different from a camera being off");
+  } catch (e) { check("connected with no stream yet is 'Waiting for video...'", false, "threw " + e.message); }
+
+  try {
+    const r = videoStage(view({ callState: "closed" }));
+    check("a closed call is 'Call ended'",
+          r.video === false && r.notice === "Call ended",
+          "got " + JSON.stringify(r));
+  } catch (e) { check("a closed call is 'Call ended'", false, "threw " + e.message); }
+
+  try {
+    // Ended AND camera-off AND no stream, all true at once. Precedence is
+    // the whole question, and 'Call ended' is the one that matters.
+    const r = videoStage(view({ callState: "failed", peerVideoEnabled: false, hasRemoteStream: false }));
+    check("'Call ended' outranks a camera-off notice that is also true",
+          r.notice === "Call ended",
+          "got " + JSON.stringify(r) + " -- both statements are true and only one of them is useful");
+  } catch (e) { check("'Call ended' outranks a camera-off notice that is also true", false, "threw " + e.message); }
+
+  try {
+    // A blip while their camera is off: reconnecting wins, because we no
+    // longer know whether that camera state is current.
+    const r = videoStage(view({ callState: "disconnected", peerVideoEnabled: false }));
+    check("'Reconnecting...' outranks a camera-off we may no longer be sure of",
+          r.notice === "Reconnecting...",
+          "got " + JSON.stringify(r));
+  } catch (e) { check("'Reconnecting...' outranks a camera-off we may no longer be sure of", false, "threw " + e.message); }
+
+  try {
+    // A call that failed before it ever connected. Rule 1 before rule 2.
+    const r = videoStage(view({ callState: "failed", everConnected: false, hasRemoteStream: false }));
+    check("a call that failed before connecting is 'Call ended', not 'Connecting...'",
+          r.notice === "Call ended",
+          "got " + JSON.stringify(r) + " -- a spinner on a dead call waits for ever");
+  } catch (e) { check("a call that failed before connecting is 'Call ended', not 'Connecting...'", false, "threw " + e.message); }
+
+  try {
+    const r = videoStage(view({ peerVideoEnabled: false, holderName: "" }));
+    check("an empty holderName falls back to 'They'",
+          r.notice === "They turned their camera off",
+          "got " + JSON.stringify(r.notice) + " -- '' is a value that passed validation, not an absent one");
+  } catch (e) { check("an empty holderName falls back to 'They'", false, "threw " + e.message); }
+
+  try {
+    const r = videoStage(view({ peerVideoEnabled: false, holderName: undefined }));
+    check("a missing holderName falls back to 'They'",
+          r.notice === "They turned their camera off",
+          "got " + JSON.stringify(r.notice));
+  } catch (e) { check("a missing holderName falls back to 'They'", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write videoStage(view) above, then press Run. (" + e.message + ")");
+}`);
+
+    createExplain("explain-a7-0003", {
+      prompt: "The peer presses Video Off. Explain why <code>remoteStream</code> is still there, why <code>RTCView</code> shows a black rectangle rather than nothing, and why no amount of inspecting the incoming track can tell you the difference between that and a camera pointed at a desk — so what has to happen instead."
+    });
+
     createSolution("exercise-1", {
-      exercise: "Build the complete video call screen:\n\n1. Create `VideoCallScreen` with: full-screen remote RTCView, PiP local preview (120x160, top-right corner, mirrored for front camera), overlay controls.\n\n2. Controls: mute (audio), video off (hides local video + stops sending), camera flip (front/back), hangup.\n\n3. Handle 'connecting' state: show a dark background with 'Connecting...' text before remote stream arrives.\n\n4. Mirror the local preview only when the front camera is active. Un-mirror on flip.\n\n5. Use InCallManager with media: 'video' for speaker mode by default (video calls use speaker, not earpiece).\n\n6. Test: two EAS development builds on two devices. Start a video call, verify both streams display. Flip camera, mute, toggle video off.",
+      unverifiable: "the deliverable is a React Native video screen with RTCView, needing two devices with EAS development builds, cameras and a running TURN server",
+      exercise: "Build the complete video call screen, driving the viewport from the videoStage you just wrote:\n\n1. Create VideoCallScreen with: full-screen remote RTCView, PiP local preview (120x160, top-right corner, mirrored for front camera), overlay controls.\n\n2. Controls: mute (audio), video off (hides local preview + stops sending), camera flip (front/back), hangup.\n\n3. Render the viewport from videoStage, not from a ternary on callState. The notice overlays the video rather than replacing it, because a blip keeps the last frame.\n\n4. Send call:media with { videoEnabled } whenever the local video is toggled, and subscribe to the peer's. Track it as true / false / null — null until they tell you.\n\n5. Mirror the local preview only when the front camera is active, and only flip that state when switchCamera() returns true.\n\n6. Use InCallManager with media: 'video' for speaker mode by default (video calls use speaker, not earpiece).\n\n7. Unsubscribe from signalling in cleanup, alongside pc.cleanup() and InCallManager.stop().\n\n8. Test: two EAS development builds on two devices. Start a video call, verify both streams display. Flip camera, mute, and have ONE side press Video Off — the other side must read a notice naming them, not a black rectangle.",
       hints: [
         "RTCView needs streamURL={stream.toURL()} — not the stream object directly.",
         "zOrder controls layering: remote video = 0 (back), local PiP = 1 (front).",
         "_switchCamera() on the video track toggles front/back without creating a new stream.",
-        "When video is toggled off, hide the local RTCView AND set videoTrack.enabled=false (stops sending to peer)."
+        "When video is toggled off, hide the local RTCView AND set videoTrack.enabled=false (stops sending to peer) AND send call:media. The third one is the step everybody misses, and it is the only one the other person can see.",
+        "everConnected has to be its own piece of state. callState goes back to 'disconnected' during a blip, so it cannot tell you whether the call ever worked."
       ],
-      solution: `// See the full VideoCallScreen implementation above.
-// Key differences from VoiceCall:
-// 1. getUserMedia includes video: { facingMode: 'user', width: 640, height: 480 }
-// 2. RTCView renders both remote (full screen) and local (PiP) streams
-// 3. Camera flip via _switchCamera() on the video track
-// 4. Video toggle: videoTrack.enabled + hide/show local RTCView
-// 5. InCallManager.start({ media: 'video' }) uses speaker by default
-// 6. Mirror only for front camera (mirror={frontCamera})`
+      solution: `// app/src/screens/VideoCall.tsx
+import { useState, useEffect, useRef } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { RTCView, MediaStream } from 'react-native-webrtc';
+import { TokenPeerConnection } from '../webrtc/PeerConnection';
+import { send, subscribe } from '../ws/connection';
+import { videoStage } from '../call/videoStage';
+import InCallManager from 'react-native-incall-manager';
+
+export function VideoCallScreen({ route, navigation }) {
+  const { callId, conversationId, isCaller, tokenLabel } = route.params;
+
+  const [callState, setCallState] = useState('connecting');
+  const [everConnected, setEverConnected] = useState(false);
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [muted, setMuted] = useState(false);
+  const [videoOff, setVideoOff] = useState(false);
+  const [frontCamera, setFrontCamera] = useState(true);
+
+  // null, not false: the peer has not told us. An older client never will,
+  // and "unknown" must not render as "camera off".
+  const [peerVideoEnabled, setPeerVideoEnabled] = useState<boolean | null>(null);
+
+  const pcRef = useRef<TokenPeerConnection | null>(null);
+  const unsubRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    startCall();
+    return () => cleanup();
+  }, []);
+
+  // Sticky: callState drops back to 'disconnected' during a blip, so it
+  // cannot answer "has this call ever worked?".
+  useEffect(() => {
+    if (callState === 'connected') setEverConnected(true);
+  }, [callState]);
+
+  const stage = videoStage({
+    callState,
+    everConnected,
+    hasRemoteStream: remoteStream !== null,
+    peerVideoEnabled,
+    holderName: tokenLabel,
+  });
+
+  async function startCall() {
+    InCallManager.start({ media: 'video' });
+
+    const pc = new TokenPeerConnection({
+      conversationId,
+      callId,
+      type: 'video',
+      isCaller,
+      onRemoteStream: (stream) => setRemoteStream(stream),
+      onConnectionStateChange: (state) => setCallState(state),
+      onHangup: () => navigation.goBack(),
+    });
+
+    pcRef.current = pc;
+    const stream = await pc.initialize();
+    setLocalStream(stream);
+
+    unsubRef.current = subscribe((type, payload) => {
+      if (payload.callId !== callId) return;
+      if (type === 'call:media') setPeerVideoEnabled(payload.videoEnabled);
+    });
+
+    if (isCaller) await pc.createOffer();
+  }
+
+  function handleMute() {
+    const isMuted = pcRef.current?.toggleMute();
+    setMuted(isMuted ?? false);
+  }
+
+  function handleVideoToggle() {
+    const isOff = pcRef.current?.toggleVideo();
+    setVideoOff(isOff ?? false);
+    // track.enabled is local. Without this the peer just sees black.
+    send('call:media', { callId, videoEnabled: !isOff });
+  }
+
+  function handleCameraFlip() {
+    // Record what happened, not what was intended.
+    if (pcRef.current?.switchCamera()) {
+      setFrontCamera((f) => !f);
+    }
+  }
+
+  function handleHangup() {
+    pcRef.current?.hangup();
+    navigation.goBack();
+  }
+
+  function cleanup() {
+    unsubRef.current?.();
+    pcRef.current?.cleanup();
+    InCallManager.stop();
+  }
+
+  return (
+    <View style={styles.container}>
+      {stage.video ? (
+        <RTCView
+          streamURL={remoteStream!.toURL()}
+          style={styles.remoteVideo}
+          objectFit="cover"
+          zOrder={0}
+        />
+      ) : (
+        <View style={styles.remoteVideo} />
+      )}
+
+      {/* Over the video, not instead of it: during a blip we keep the last
+          frame and still have to say why it is frozen. */}
+      {stage.notice && (
+        <View style={styles.noticeWrap} pointerEvents="none">
+          <Text style={styles.connectingText}>{stage.notice}</Text>
+        </View>
+      )}
+
+      {localStream && !videoOff && (
+        <RTCView
+          streamURL={localStream.toURL()}
+          style={styles.localVideo}
+          objectFit="cover"
+          mirror={frontCamera}
+          zOrder={1}
+        />
+      )}
+
+      <View style={styles.controls}>
+        <TouchableOpacity
+          style={[styles.btn, muted && styles.btnActive]}
+          onPress={handleMute}
+        >
+          <Text style={styles.btnText}>{muted ? 'Unmute' : 'Mute'}</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.btn, videoOff && styles.btnActive]}
+          onPress={handleVideoToggle}
+        >
+          <Text style={styles.btnText}>{videoOff ? 'Video On' : 'Video Off'}</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.btn} onPress={handleCameraFlip}>
+          <Text style={styles.btnText}>Flip</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.hangupBtn} onPress={handleHangup}>
+          <Text style={styles.hangupText}>End</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#000' },
+  remoteVideo: {
+    flex: 1,
+    backgroundColor: '#1e293b',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  connectingText: { color: '#94a3b8', fontSize: 16, textAlign: 'center' },
+  noticeWrap: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    justifyContent: 'center', alignItems: 'center',
+    paddingHorizontal: 32,
+  },
+  localVideo: {
+    position: 'absolute', top: 60, right: 16,
+    width: 120, height: 160,
+    borderRadius: 12, overflow: 'hidden',
+    borderWidth: 2, borderColor: '#fff',
+  },
+  controls: {
+    position: 'absolute', bottom: 40,
+    left: 0, right: 0,
+    flexDirection: 'row', justifyContent: 'center',
+    gap: 16,
+  },
+  btn: {
+    width: 56, height: 56, borderRadius: 28,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  btnActive: { backgroundColor: 'rgba(255,255,255,0.4)' },
+  btnText: { color: '#fff', fontSize: 10, textAlign: 'center' },
+  hangupBtn: {
+    width: 56, height: 56, borderRadius: 28,
+    backgroundColor: '#ef4444',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  hangupText: { color: '#fff', fontSize: 12, fontWeight: '600' },
+});`
     });
 
     createQuiz("lesson-quiz", [
@@ -602,6 +1125,27 @@ console.log('PiP is', ((pip.width * pip.height) / (screen.width * screen.height)
         ],
         correctOrder: [0, 1, 2, 3],
         explanation: "The peer connection starts in 'new' state, moves to 'checking' as ICE candidates are gathered and tested, then 'connected' when a working path is found. Only after connection is established do media streams flow — the remote video appears last, after the network path is confirmed."
+      },
+      {
+        type: "predict-output",
+        question: "peerVideoEnabled has three states: told-on, told-off, and not-told-yet. This compares the two ways of testing it. What prints?",
+        code: "const states = [true, false, null];   // on, off, not told\n\nconst loose  = states.map((v) => !v);\nconst strict = states.map((v) => v === false);\n\nconsole.log(loose.join(',') + ' | ' + strict.join(','));",
+        answer: "false,true,true | false,true,false",
+        explanation: "Look at the third column. The strict test says false for null — not told is not the same as told-no — while the loose test says true, collapsing it into 'camera off'. That single difference is a client that never sends call:media having its perfectly good video replaced by a notice for the whole call. Same three-state trap as a2/0002's Partial<T>, where absent and null had to stay distinct, and c5/0004's gone-versus-not-fetched."
+      },
+      {
+        type: "predict-output",
+        question: "The camera-off notice needs a name to put in front of it. This compares two fallbacks against the three values holderName can actually have. What prints?",
+        code: "console.log(JSON.stringify([\n  '' || 'They',\n  '' ?? 'They',\n  null ?? 'They',\n]));",
+        answer: "[\"They\",\"\",\"They\"]",
+        explanation: "?? only falls back on null and undefined, so an empty string survives it — and the notice renders as ' turned their camera off' with a leading space and no name. || also catches '', which is what this needs. That is not a general rule that || is better: ?? exists precisely because || eats 0 and false, which is why max_uses: 0 must never go near one. Pick the operator from which falsy values are real values for that field. a11/0003 found the same '' slipping through validation and then rendering as nothing."
+      },
+      {
+        type: "predict-output",
+        question: "A call that failed while the other person had their camera off. Both rules match. This shows what the order alone decides. What prints?",
+        code: "const view = { callState: 'failed', peerVideoEnabled: false };\n\nconst cameraFirst = view.peerVideoEnabled === false\n  ? 'camera off'\n  : (view.callState === 'failed' ? 'Call ended' : 'live');\n\nconst endedFirst = view.callState === 'failed'\n  ? 'Call ended'\n  : (view.peerVideoEnabled === false ? 'camera off' : 'live');\n\nconsole.log(cameraFirst + ' / ' + endedFirst);",
+        answer: "camera off / Call ended",
+        explanation: "Every individual rule is correct in both versions, and they disagree. Both statements are even true — the call did end, and their camera was off. Only one is useful, and a screen that reports the camera never tells the user the call is over. This is why videoStage is a sequence of early returns in a fixed order rather than independent conditions combined at the end: the ordering IS the logic, and it is invisible until two conditions coincide."
       }
     ]);
   </script>

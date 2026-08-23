@@ -2851,3 +2851,103 @@ a reader could take the accumulator as endorsed**, and the callout is what
 prevents it. Rewriting them stays available if that turns out not to be enough.
 
 **Result: 86 verified, 15 `unverifiable`.** Audit green, six suites pass.
+
+---
+
+### Session of 2026-08-23 (continued) — a7/0003, and the state that cannot be observed
+
+Third of the `unverifiable` cluster. M3: `videoStage` — 15 self-checks, 10
+wrong-cases, 3 new executable quiz questions.
+
+#### The prediction was right in the wrong place, which is the useful part
+
+`SESSION.md` predicted `0003` would carry its own copy of whatever `0002` got
+wrong. It has no call clock at all, so it does not duplicate the timer — but it
+does carry the *ternary*, `callState === 'connected' ? 'No video' :
+'Connecting…'`, with the same `disconnected` blind spot on a different
+variable.
+
+Worth keeping as a heuristic: **a defect shape travels between sibling screens
+even when the feature it attached to does not.** Looking for the same *bug*
+would have missed it; looking for the same *shape* found it.
+
+#### The finding: some state has no representation to inspect
+
+The viewport was decided by whether a remote stream object exists. It always
+exists once negotiation has happened — including when the other person presses
+Video Off, because `enabled = false` disables a track rather than removing it.
+So `RTCView` renders black and the user is looking at an unlabelled dark
+rectangle indistinguishable from a dead connection, a permissions failure, or
+a phone in a pocket.
+
+**The lesson's quiz already said exactly this** — *"What does the remote peer
+see when you call `videoTrack.enabled = false`?"* → *"A black/frozen frame."*
+Third lesson in a row where the quiz holds the right answer and the code beside
+it does not act on it. The pattern is consistent enough now to state as a
+review move: **read a lesson's quiz against its code before reading either on
+its own.**
+
+The genuinely instructive part is *why* no amount of care in the receiving
+client would fix it. Muting sends no message; it swaps the frames for empty
+ones. At the media layer, black frames from a disabled camera and black frames
+from a covered lens are the same bytes. **There is nothing to inspect, so the
+information has to be sent** — `call:media` with `{ videoEnabled }`, over the
+socket that already carried the offer. Neither `0002` nor `0003` sent one.
+
+#### Three states again, for the fourth time in this course
+
+Adding the message adds `peerVideoEnabled: true | false | null`, and
+`if (!peerVideoEnabled)` collapses null into false. An older client that never
+sends `call:media` would have good video replaced by "they turned their camera
+off" for the entire call.
+
+That is now four different places the same trap has appeared — `a2/0002`'s
+`Partial<T>`, `c5/0004`'s gone-versus-not-fetched, `b1/0001`'s `NULL` versus
+`''`, and here. **Not being told something is not the same as being told no**,
+and the falsy test cannot express the difference.
+
+#### Precedence is the exercise, and it is invisible until two things coincide
+
+Six rules, and every wrong-case gets each individual rule right while producing
+the wrong screen. A call that failed while the peer's camera was off makes two
+notices simultaneously true, and only one is useful: a screen reporting the
+camera never tells the user the call is over.
+
+The order is **ended → connecting → reconnecting → camera-off → waiting →
+live**, and two placements are load-bearing without looking it. `ended` must
+sit above `connecting`, or a call that failed before ever connecting shows a
+spinner for ever. `reconnecting` must sit above `camera-off`, because during a
+blip we no longer know whether that camera state is current.
+
+This is why the function is a sequence of early returns rather than conditions
+combined at the end — and why one alternative implementation in the cases
+expresses the same order as a table walked in sequence, to prove the ordering
+is the logic rather than the syntax.
+
+#### The mirror was set from the intention rather than the result
+
+`handleCameraFlip` called `switchCamera()` and flipped `frontCamera`
+regardless. Both the optional chain and the guard inside `switchCamera` can
+decline to act, leaving the preview mirrored against a camera that never
+moved — and inverted for every flip after that. `switchCamera` in `0001` now
+returns a boolean. Same shape as `a11/0001`, where the row animated away before
+the revoke request had succeeded: **UI state describing the world must be set
+from the result, not the intention.**
+
+`0001` was re-verified after that change. It was already `verified`, so nothing
+was at risk from the log-deleting trap — but the log was checked first anyway,
+which is now the habit.
+
+#### The trip-count caught a fixture making two mistakes indistinguishable
+
+The base fixture had `peerVideoEnabled: null`, which meant **the ordinary good
+case was also the not-told case** — so the mistake that collapses null into
+false tripped the good-case check rather than the one naming it. Moving the
+base to `true` fixed it and made the null case a deliberate, isolated fixture.
+
+The same pass found a **redundant wrong-case** that changed two things at once
+and duplicated another. Replaced with the shape the lesson actually shipped: no
+camera-off rule at all. Seven of ten mistakes now trip exactly one check, and
+each of the three multi-trips is a single removed or moved rule.
+
+**Result: 87 verified, 14 `unverifiable`.** Audit green, six suites pass.

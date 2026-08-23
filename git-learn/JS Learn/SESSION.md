@@ -21,17 +21,16 @@ how far it got.
 
 **Nothing in flight.** Working tree clean, everything committed.
 
-**Started the `unverifiable` cluster** — the recommended body of work in *Next
-action*. `a7/0001` and `a7/0002` are done; 15 to go. See below.
+**Started the `unverifiable` cluster** — the recommended body of work in
+*Next action*. `a7/0001`-`0003` are done; 14 to go. See below.
 
 **State as of 2026-08-23** — run `node scripts/audit.mjs` before trusting any
 of it:
 
 - **101 lessons.** Audit **green**, 2 warnings, six suites pass.
 - **Every lesson has been executed at least once.** The verification log has
-  no absent entries: **86 verified, 15 `unverifiable`** with a stated reason,
-  1 `nothing-to-verify`. `a7/0001` and `a7/0002` moved across on
-  2026-08-23.
+  no absent entries: **87 verified, 14 `unverifiable`** with a stated reason,
+  1 `nothing-to-verify`. `a7/0001`-`0003` moved across on 2026-08-23.
 - **`known-issues.json` is down to one entry** — `calls`, gated on B6.
 - `render-as-authored` is **0**, and this time it means it (see *The `variant`
   blind spot*).
@@ -40,6 +39,84 @@ of it:
 
 **Nothing is blocked.** See *Next action* for the four candidate bodies of
 work and why the `unverifiable` cluster is the recommendation.
+
+### a7/0003 — a black rectangle is not a state (2026-08-23)
+
+M3: **`videoStage`**. 15 self-checks, 10 wrong-cases, 3 new executable quiz
+questions. Third of the `unverifiable` cluster.
+
+**The prediction held, in a place I did not expect.** `0003` has no call clock,
+so it does not duplicate `0002`'s timer — it carries the *ternary*:
+`callState === 'connected' ? 'No video' : 'Connecting…'`. Same two-way branch,
+same `disconnected` blind spot, different variable. **Worth keeping as a
+heuristic: a defect shape travels between sibling screens even when the
+feature it attached to does not.**
+
+### The finding: `enabled = false` is local, and nothing carries it across
+
+The viewport was `remoteStream ? <RTCView/> : <placeholder/>`, and **a stream
+object existing is not video arriving**. `ontrack` fires during negotiation,
+before a frame is decoded — and worse, when the peer presses Video Off the
+stream is still there with a disabled track, so `RTCView` faithfully renders
+black.
+
+**The lesson's own quiz already said so**: *"What does the remote peer see when
+you call `videoTrack.enabled = false`?"* → *"A black/frozen frame."* Third
+lesson running where the quiz knows and the code does not act on it.
+
+The part that is genuinely surprising, and is now taught: **muting a track
+sends no message.** It swaps the frames for empty ones, and at the media layer
+black frames from a disabled camera are the same bytes as black frames from a
+camera in a pocket. There is nothing to inspect. So the app must send
+`call:media` with `{ videoEnabled }` over the same socket that carried the
+offer — which neither `0002` nor `0003` did.
+
+### Which brings back the three-state problem, for the fourth time
+
+`peerVideoEnabled` is `true` / `false` / **`null` — they have not told us**,
+and `if (!peerVideoEnabled)` collapses the last two, which are opposites. An
+older client that never sends `call:media` would have perfectly good video
+replaced by "they turned their camera off" for the whole call.
+
+Same trap as `a2/0002`'s `Partial<T>`, `c5/0004`'s *gone* vs *not fetched*, and
+`b1/0001`'s `NULL` vs `''`. **Not being told something is not the same as being
+told no.**
+
+### The exercise is precedence, and precedence is invisible until two things coincide
+
+Six rules, and every wrong-case below gets each individual rule right while
+producing the wrong screen. A call that failed while their camera was off makes
+**both** notices true, and only one is useful — a screen reporting the camera
+never tells the user the call is over. That is why `videoStage` is a sequence
+of early returns rather than conditions combined at the end.
+
+The order that fell out: **ended → connecting → reconnecting → camera-off →
+waiting → live.** Two placements are load-bearing and neither is obvious:
+`ended` above `connecting`, or a call that failed before connecting spins for
+ever; and `reconnecting` above `camera-off`, because during a blip we no longer
+know whether that camera state is current.
+
+### And the mirror was set from the intention, not the result
+
+`handleCameraFlip` called `switchCamera()` and flipped `frontCamera`
+regardless. Both the optional chain and the guard inside `switchCamera` can
+decline to do anything, so the preview ends up mirrored against a camera that
+never moved — and stays inverted for every subsequent flip. `switchCamera` in
+`0001` now returns a boolean and the screen only records what happened.
+**Same shape as `a11/0001`'s row animating away before the revoke succeeded.**
+
+`0001` was re-verified after that two-line change; it was already `verified`,
+so no log entry was at risk.
+
+### The trip-count found a fixture that made two mistakes indistinguishable
+
+The base fixture had `peerVideoEnabled: null`, so *the ordinary good case was
+also the not-told case* — and the mistake that collapses null into false
+tripped the good-case check rather than the one naming it. Base moved to
+`true`, with a comment saying why. It also exposed a **redundant wrong-case**
+(two changes at once, duplicating another); replaced with the shape the lesson
+actually shipped — no camera-off rule at all. Seven of ten now trip exactly one
+check, and the three multi-trips are one removed or moved rule each.
 
 ### a7/0002 — the call clock counted ticks, and fixing 0001 made a second bug visible (2026-08-23)
 
@@ -1660,22 +1737,23 @@ executed; the log is 84 verified, 17 `unverifiable` with a reason, 1
 
 What is left, in no forced order:
 
-1. **The `unverifiable` lessons — started 2026-08-23; `a7/0001` and
-   `a7/0002` done, 15 left.**
+1. **The `unverifiable` lessons — started 2026-08-23; `a7/0001`-`0003`
+   done, 14 left.**
    `CLAUDE.md` warns that the reflex to reach for that flag is wrong more often
    than it is right, and this pass proved it again — nine lessons that looked
    unrunnable produced nine exercises, and `a7/0001` then produced a tenth
-   plus two real defects. Remaining clusters: **A7 (2), B9 (3), X1 (3),
-   A10 (2), B6 (2)**, plus `a9/0001`, `b1/0003`, `b8/0001`. Each needs the same
+   plus two real defects. Remaining clusters: **B9 (3), X1 (3), A10 (2),
+   B6 (2)**, plus `a7/0004`, `a9/0001`, `b1/0003`, `b8/0001`. Each needs the same
    move: find the plain function, excuse the rest per-exercise, **and add the
-   `createExplain` prompt** — the 15 without one are exactly the 15 still
+   `createExplain` prompt** — the 14 without one are exactly the 14 still
    excused.
 
-   **Next in this cluster: `a7/0003-video-call.html`.** Read it against
-   `0002` first: the two screens share the clock and the controls, and the
-   prediction is that `0003` carries its own copy of whatever `0002` got
-   wrong. The plain function is likely track-enable/camera-switch state or
-   the video-vs-voice branch in the InCallManager setup.
+   **Next in this cluster: `a7/0004-incoming-calls.html`**, which finishes
+   A7. Two things to carry into it. It is the ringing/accept/decline screen,
+   so the plain function is probably the incoming-call state machine — and
+   all three A7 lessons so far hid a **precedence or three-state** problem,
+   which is the shape to look for. Also check whether it needs the
+   `call:media` message `0003` introduced.
 2. **The C-modules.** C0–C4 and C6–C9, roughly 34 lessons, none written. C0 is
    architecture and was planned to come *before* B1, so it is already out of
    order.
