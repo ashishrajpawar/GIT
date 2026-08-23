@@ -14,11 +14,11 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 101 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
 | Quiz questions (track) | 2718 |
-| Avg teaching prose per track lesson | 2089 words |
-| Lessons with a playground | 96 / 101 |
+| Avg teaching prose per track lesson | 2092 words |
+| Lessons with a playground | 97 / 101 |
 | Lessons with an exercise | 101 / 101 |
 | **Deepened** (all 3 spine sections) | 16 / 101 |
-| **Verified** (code executed) | 81 / 101 |
+| **Verified** (code executed) | 82 / 101 |
 | Ran clean but had nothing to run | 0 / 101 |
 | Errors | 0 |
 | Known and blocked | 1 |
@@ -78,7 +78,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a10-device-security | 2 | 1908 | 2 | 2 | 50 | 1/2 | 0/2 |
 | a11-polish-publish | 5 | 2196 | 9 | 10 | 137 | 0/5 | 5/5 |
 | a2-typescript | 3 | 903 | 3 | 4 | 76 | 0/3 | 1/3 |
-| a3-api-consumption | 4 | 1190 | 4 | 7 | 111 | 1/4 | 3/4 |
+| a3-api-consumption | 4 | 1275 | 5 | 8 | 111 | 1/4 | 4/4 |
 | a4-auth-client | 3 | 1400 | 3 | 6 | 80 | 1/3 | 3/3 |
 | a5-core-token-features | 5 | 2599 | 10 | 10 | 148 | 2/5 | 5/5 |
 | a6-chat-realtime | 3 | 1912 | 6 | 6 | 78 | 0/3 | 3/3 |
@@ -170,7 +170,7 @@ so they do not hold the audit red. They are **not** resolved.
 | a2-typescript/0002-generics-utility-types.html | 864 | 11 | 1 | 1 | 25 | — | — |
 | a2-typescript/0003-typescript-react-native.html | 747 | 9 | 0 | 1 | 25 | — | — |
 | a3-api-consumption/0001-fetch-http-fundamentals.html | 689 | 8 | 2 | 2 | 29 | — | yes |
-| a3-api-consumption/0002-api-client-layer.html | 2164 | 8 | 0 | 1 | 26 | yes | — |
+| a3-api-consumption/0002-api-client-layer.html | 2504 | 9 | 1 | 2 | 26 | yes | yes |
 | a3-api-consumption/0003-loading-empty-error-states.html | 1005 | 8 | 1 | 2 | 27 | — | yes |
 | a3-api-consumption/0004-pagination-infinite-scroll.html | 903 | 6 | 1 | 2 | 29 | — | yes |
 | a4-auth-client/0001-jwt-storage.html | 1033 | 6 | 1 | 2 | 25 | — | yes |

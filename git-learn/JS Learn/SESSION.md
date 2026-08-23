@@ -27,7 +27,7 @@ TypeScript whose code has ever run.** Nine left with no log entry:
 | Lesson | What it needs |
 |---|---|
 | `a2/0002`, `a2/0003` | An M3 exercise. `0003` is JSX, so the screen stays excused and the pure function beside it does not |
-| `a3/0002` | An M3 exercise; SESSION already flags the "I annotated it, so it is one" gap |
+| ~~`a3/0002`~~ | **done 2026-08-23** — `parseListResponse`, the boundary. Its `TokenListItem` declared a `code` field and the list screen rendered it |
 | ~~`a9/0002`~~ | **done 2026-08-23** — `parseTokenLink`, and it was hiding a denial oracle |
 | ~~`x2/0002`~~ | **done 2026-08-23** — `redactLogFields`, and it was teaching `tokenCode: token.code` as best practice |
 | ~~`x2/0001`~~ | **done 2026-08-23** — `firstDivergence`; a probe that never ran is not a probe that saw zero |
@@ -36,6 +36,53 @@ TypeScript whose code has ever run.** Nine left with no log entry:
 | ~~`b1/0002`~~ | **done 2026-08-23** — `joinRows`; its LEFT JOIN example claimed "most recent redemption" and returned all of them |
 
 Previous good state is `b9276d7`.
+
+### a3/0002 — the type that declared the field ADR-0007 forbids (2026-08-23)
+
+M3: **`parseListResponse`**. 20 self-checks, 10 wrong-cases.
+
+**`TokenListItem` declared `code: string`** — so the list screen's
+`keyExtractor={item => item.code}` and `<Text>{item.code}</Text>` were not a
+slip, they were the type doing what it said. `GET /tokens` returns no code
+(ADR-0007), so every row rendered nothing and every key was `undefined`, which
+makes React fall back to the array index and reuse rows across positions.
+**Third occurrence of this exact defect**, after `a5/0003` and `a11/0001`.
+
+The type was wrong in three more ways: no `id` (while line 256 filters on
+`t.id`), `maxUses: number` against `null = unlimited`, and no `expiresAt`.
+
+### The lesson had no boundary at all, which is what the generics conceal
+
+`client.get<ApiResponse<Paginated<TokenListItem>>>('/tokens')` reads as a
+guarantee and is a **type assertion** over `res.json()`, which returns `any`.
+**The compiler proved things about code it could see, and the response body is
+the one value it could not.** So the M3 is the boundary: one function, at the
+point data enters, that refuses what it cannot understand.
+
+**The contrast it is built around** — and the two rules look redundant until
+you delete one:
+
+- **An unknown extra field is fine.** A server shipping a new column before
+  the app knows about it must not break every client.
+- **A field you know must never arrive is not.** `isItem` allows unknown
+  fields *by design* (`a2/0001` rule 6), so nothing else will ever catch a
+  `code`. **Tolerating what you do not know is not the same as tolerating what
+  you know is wrong.**
+
+### Two more self-check holes, and the backtick trap caught me
+
+- **`data` as a bare array** was never tested, so a check that only asks
+  `typeof raw.data === "object"` passed — and an API that drops its pagination
+  envelope is a common thing.
+- **A *missing* `success` field** was never tested, which is precisely the case
+  a falsy test lets through: `!undefined` is true and `undefined !== undefined`
+  is false.
+
+And I hit the trap `CLAUDE.md` documents: **a backtick inside a template
+literal.** Writing `` `code` `` as Markdown emphasis inside a `createSolution`
+solution string terminated it, and the parse error named an identifier three
+lines away. The rule is already written down; the file it is written in is
+where I broke it.
 
 ### b1/0004 — `@>` is not a search, and B1 is finished (2026-08-23)
 

@@ -461,9 +461,65 @@ export function refreshOnce(doRefresh: () =&gt; Promise&lt;void&gt;): Promise&lt
 
     <hr>
 
-    <h2>Exercise</h2>
+    <!-- ───────────────────────────────────────────── -->
+    <div class="callout danger">
+      <div class="callout-title">Every generic on this page is a promise you have not checked</div>
+
+      <p><code>client.get&lt;ApiResponse&lt;Paginated&lt;TokenListItem&gt;&gt;&gt;('/tokens')</code>
+      reads like a guarantee and is a <strong>type assertion</strong>.
+      Underneath, <code>res.json()</code> returns <code>any</code>, and that
+      generic renames it. Nothing at runtime looks at what actually arrived.</p>
+
+      <pre><code>const res = await client.get&lt;ApiResponse&lt;Token&gt;&gt;('/tokens/7');
+res.data.label.toUpperCase();   // TypeError: undefined</code></pre>
+
+      <p><strong>The beginner reading — <em>I said it is a Token, so it is a
+      Token</em> — is exactly backwards.</strong> The compiler proved things
+      about code it could see, and the response body is the one value in the
+      whole app it could not. What arrives is whatever the server sent: an
+      older shape, a field renamed last Tuesday, an error envelope, or
+      <code>null</code>. And the failure never surfaces here — it surfaces
+      three screens later, in code that is not wrong.</p>
+
+      <p><strong>This is the boundary.</strong> One function, at the point the
+      data enters, that checks what came back and refuses what it cannot
+      understand. Everything inside the app is then genuinely typed;
+      everything outside it was always a guess.
+      <code>a2/0001</code>'s <code>isToken</code> is the per-item half — this
+      lesson is where it gets used.</p>
+
+      <p>Two things the boundary must decide, and they pull in different
+      directions:</p>
+      <ul>
+        <li><strong>An unknown extra field is fine.</strong> A server that
+        ships a new column before the app knows about it must not break every
+        client. That is forward compatibility, and refusing it turns a routine
+        deploy into an outage.</li>
+        <li><strong>A field you know must never arrive is not fine.</strong>
+        <code>GET /tokens</code> returns no <code>code</code> — ADR-0007 — so
+        one turning up means something upstream is wrong, and rendering it
+        would put a live capability on a list screen and into a React key.
+        <strong>Tolerating what you do not know is not the same as tolerating
+        what you know is wrong.</strong></li>
+      </ul>
+    </div>
+
+    <hr>
+
+    <h2>Now build it yourself</h2>
+
+    <p>The client, the screens and the refresh queue all need a running API.
+    The boundary does not — and it is the only code here that decides whether
+    the types on the rest of the page mean anything.</p>
+
+    <div id="exercise-boundary"></div>
+    <div id="pg-exercise-boundary"></div>
+
+    <h3>And the client</h3>
 
     <div id="exercise-1"></div>
+
+    <div id="explain-a3-0002"></div>
 
     <hr>
 
@@ -477,12 +533,64 @@ export function refreshOnce(doRefresh: () =&gt; Promise&lt;void&gt;): Promise&lt
   </div>
 
   <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
+    createSolution("exercise-boundary", {
+      exercise: `Write parseListResponse(raw, config) — the boundary between what the server sent and what the app is allowed to believe.\n\nraw is whatever res.json() produced. It is genuinely unknown: an envelope, an error object, null, an array, anything.\n\nThe envelope you expect is the one this lesson defines:\n  { success: true, data: { items: [...], cursor: string | null, hasMore: boolean } }\n\nconfig is { isItem, forbiddenFields }:\n  isItem(value)     true if value is a well-formed list item (a2/0001's guard)\n  forbiddenFields   field names that must never appear on an item, e.g. ['code']\n\nReturn { ok, items, cursor, hasMore, reason }.\n\nThe rules:\n\n1. RAW MUST BE A PLAIN OBJECT WITH A data OBJECT, else reason 'not_an_envelope'. null, an array and a string all land here — and so does the JSON body of a proxy error page, which is a real thing that arrives at this function on a bad day.\n\n2. IF success IS NOT true, reason IS 'server_error'. The server said so itself; do not go looking through data for something usable.\n\n3. CHECK THE PAGE METADATA BEFORE THE ITEMS. data.cursor must be string or null — undefined or missing is 'missing_cursor', because absent means the server did not say, and reading that as "no more pages" silently truncates the list at whatever the first page happened to hold. data.hasMore must be a boolean, else 'missing_flag'.\n\n4. hasMore true WITH cursor null IS 'inconsistent_page'. You have been told there is more and given no way to ask for it. Neither field is individually wrong, which is exactly why this needs checking here rather than being discovered as a list that stops early.\n\n5. data.items MUST BE AN ARRAY, else 'items_not_an_array'.\n\n6. EVERY ITEM MUST PASS config.isItem. One bad item REFUSES THE WHOLE PAGE with 'invalid_item' — do not drop it and keep the rest. A silently shorter list is a wrong answer that looks like a right one, and if the server has changed shape you want to know at the boundary rather than three screens later. The cost is real and worth naming: one malformed row hides forty-nine good ones. That is the correct trade for a security product, and it is a trade.\n\n7. AN ITEM CARRYING A FORBIDDEN FIELD IS 'forbidden_field', even if isItem accepts it. Unknown extra fields are FINE — a server shipping a new column before the app knows about it must not break every client. But GET /tokens returns no code (ADR-0007), so one arriving means something upstream is wrong, and rendering it would put a live capability on a list screen. Tolerating what you do not know is not the same as tolerating what you know is wrong.\n\n8. AN EMPTY items ARRAY IS VALID AND IS NOT AN ERROR. ok is true, items is [], and the screen shows "no tokens yet" rather than a failure. "Nothing here" and "could not load" are different states, and a3/0003 renders them differently.\n\n9. NEVER MUTATE raw, AND A REFUSAL CARRIES NO HALF-ANSWER: items [], cursor null, hasMore false. A caller that renders items without checking ok must get nothing rather than a partial page.`,
+      hints: [
+        "Do the checks in the order the rules are numbered and return early from each. The order is the argument: a page you cannot navigate is broken regardless of what is in it, so metadata is checked before items.",
+        "Rule 7 needs its own pass over the item's keys — isItem deliberately allows unknown fields, so it will never catch a forbidden one for you. That is the whole point of them being two separate rules.",
+        "Return items as a new array (items.slice() or [...items]) even on success. Handing back the array inside raw means a caller that sorts the list in place has quietly edited the parsed response."
+      ],
+      solution: `function parseListResponse(raw, config) {
+  const no = (reason) => ({ ok: false, items: [], cursor: null, hasMore: false, reason });
+
+  const isPlainObject = (v) =>
+    v !== null && typeof v === "object" && !Array.isArray(v);
+
+  // Rule 1. null, an array, a string, a proxy error page -- all here.
+  if (!isPlainObject(raw) || !isPlainObject(raw.data)) return no("not_an_envelope");
+
+  // Rule 2. The server said it failed; believe it.
+  if (raw.success !== true) return no("server_error");
+
+  const { items, cursor, hasMore } = raw.data;
+
+  // Rule 3 -- metadata first. A page you cannot navigate is broken
+  // whatever it contains, and 'absent' is not 'no more pages'.
+  if (!(cursor === null || typeof cursor === "string")) return no("missing_cursor");
+  if (typeof hasMore !== "boolean") return no("missing_flag");
+
+  // Rule 4. Neither field is wrong on its own, which is why it has to
+  // be checked as a pair.
+  if (hasMore === true && cursor === null) return no("inconsistent_page");
+
+  // Rule 5.
+  if (!Array.isArray(items)) return no("items_not_an_array");
+
+  // Rules 6 and 7. Two passes on purpose: isItem allows unknown fields,
+  // so it will never catch a forbidden one.
+  for (const item of items) {
+    if (!config.isItem(item)) return no("invalid_item");
+  }
+  for (const item of items) {
+    for (const field of config.forbiddenFields) {
+      if (Object.prototype.hasOwnProperty.call(item, field)) return no("forbidden_field");
+    }
+  }
+
+  // Rules 8 and 9. An empty list is a success, and the array is ours.
+  return { ok: true, items: items.slice(), cursor, hasMore, reason: "ok" };
+}`
+    });
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is a fetch client, React Native screens and a refresh queue, needing a device and a running API",
       exercise: "Build Token's complete shared API client: (1) Create shared/api-client.ts with the generic typed request function, (2) Create shared/api.ts with Token-specific endpoint functions (listTokens, getToken, createToken, updateToken, revokeToken, listConversations, getMessages), (3) Create app/src/api/index.ts that configures the client for the mobile app, (4) Use it in a component to list tokens and display them.",
       hints: [
         "The generic request<T> function returns Promise<T> — TypeScript infers the exact return type at each call site.",
@@ -505,16 +613,30 @@ export interface Paginated<T> {
 }
 
 export interface TokenListItem {
-  code: string;
+  id: number;
   label: string;
   status: 'active' | 'paused' | 'revoked';
-  useCount: number;
-  maxUses: number;
   createdAt: string;
+
+  // null = never. Not optional: absent would mean the server did not
+  // say, which is a different fact from "does not expire".
+  expiresAt: string | null;
+
+  // null = unlimited, 0 = no uses permitted. Opposite meanings, and
+  // only one of them is falsy.
+  maxUses: number | null;
+
+  // Counted from conversations -- there is no use_count column. The
+  // API may still RETURN a count, and the badge needs one.
+  usedCount: number;
+
+  // NOTE what is absent: there is no code field. GET /tokens returns
+  // none (ADR-0007), because serving a list of codes would mean
+  // decrypting every row on every scroll.
 }
 
 export interface Token extends TokenListItem {
-  expiresAt: string | null;
+  pausedAt: string | null;
   revokedAt: string | null;
   rules: AccessRule[];
 }
@@ -559,16 +681,179 @@ export function TokenListScreen() {
   return (
     <FlatList
       data={tokens}
-      keyExtractor={item => item.code}
+      // item.id, NOT item.code -- GET /tokens returns no code, so
+      // keying on it gives every row the key undefined, React falls
+      // back to the array index, and removing one row re-uses the
+      // wrong component.
+      keyExtractor={item => String(item.id)}
       renderItem={({ item }) => (
         <View style={{ padding: 16 }}>
-          <Text style={{ fontWeight: '600' }}>{item.code}</Text>
-          <Text>{item.label} — {item.status}</Text>
+          <Text style={{ fontWeight: '600' }}>{item.label}</Text>
+          <Text>{item.status}</Text>
         </View>
       )}
     />
   );
 }`
+    });
+
+    createPlayground("pg-exercise-boundary", `// Write parseListResponse(raw, config) here. TypeScript is fine --
+// the types are erased before this runs, which is the lesson.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(v) { return JSON.stringify(v); }
+
+function item(over) {
+  var t = {
+    id: 7, label: "Farm box", status: "active",
+    createdAt: "2026-08-01T09:00:00.000Z",
+    expiresAt: null, maxUses: null, usedCount: 2,
+  };
+  for (var k in (over || {})) t[k] = over[k];
+  return t;
+}
+// A deliberately loose guard: it checks the fields it knows and IGNORES
+// unknown ones, exactly as a2/0001 requires. So it will never catch a
+// forbidden field, which is why that is a separate rule.
+function isItem(v) {
+  return v !== null && typeof v === "object" && !Array.isArray(v) &&
+    typeof v.id === "number" && typeof v.label === "string" &&
+    ["active", "paused", "revoked"].indexOf(v.status) !== -1;
+}
+function cfg(over) {
+  var c = { isItem: isItem, forbiddenFields: ["code"] };
+  for (var k in (over || {})) c[k] = over[k];
+  return c;
+}
+function envelope(over) {
+  var e = { success: true, data: { items: [item()], cursor: null, hasMore: false } };
+  for (var k in (over || {})) e[k] = over[k];
+  return e;
+}
+function page(over) {
+  var d = { items: [item()], cursor: null, hasMore: false };
+  for (var k in (over || {})) d[k] = over[k];
+  return { success: true, data: d };
+}
+function got(raw, over) {
+  try { return parseListResponse(raw, cfg(over)) || {}; }
+  catch (e) { return { ok: false, reason: "threw: " + e.message, items: [], cursor: null, hasMore: false }; }
+}
+
+try {
+  if (typeof parseListResponse !== "function") throw new Error("not written yet");
+
+  check("a well-formed page is accepted",
+    got(envelope()).ok === true && got(envelope()).items.length === 1,
+    "got " + show(got(envelope())));
+
+  // Rule 1 -- raw is genuinely unknown.
+  check("null is refused, not thrown on",
+    got(null).reason === "not_an_envelope", "got " + show(got(null)));
+  check("...and so is a bare array",
+    got([item()]).reason === "not_an_envelope",
+    "got " + show(got([item()])) + " -- an array is typeof 'object' too");
+  check("...and so is an envelope with no data object",
+    got({ success: true }).reason === "not_an_envelope", "got " + show(got({ success: true })));
+  // data as a BARE ARRAY -- an API that drops the pagination envelope,
+  // which is common. typeof [] is "object", so a check that only asks
+  // typeof lets this through and then destructures nothing out of it.
+  check("...and so is a data that is an array rather than a page",
+    got({ success: true, data: [item()] }).reason === "not_an_envelope",
+    "got " + show(got({ success: true, data: [item()] })));
+
+  // Rule 2
+  check("success false is a server_error",
+    got({ success: false, data: { items: [], cursor: null, hasMore: false }, error: "boom" }).reason === "server_error",
+    "do not go looking through data for something usable");
+  // Anything that is not exactly true. A MISSING success field is the
+  // one a falsy test lets through, because !undefined is true and
+  // undefined !== undefined is false.
+  check("...and so is a missing success field",
+    got({ data: { items: [item()], cursor: null, hasMore: false } }).reason === "server_error",
+    "got " + show(got({ data: { items: [item()], cursor: null, hasMore: false } })));
+  check("...and so is a success that is merely truthy",
+    got({ success: "true", data: { items: [item()], cursor: null, hasMore: false } }).reason === "server_error",
+    "the field whose job is to say whether to trust the rest must be READ, not coerced");
+
+  // Rule 3 -- metadata, and absent is not 'no more pages'.
+  check("a missing cursor is refused",
+    got(page({ cursor: undefined })).reason === "missing_cursor",
+    "got " + show(got(page({ cursor: undefined }))) +
+      " -- absent means the server did not say, which is not 'no more pages'");
+  check("...a null cursor is fine",
+    got(page({ cursor: null })).ok === true, "got " + show(got(page({ cursor: null }))));
+  check("...and a non-boolean hasMore is refused",
+    got(page({ hasMore: "yes" })).reason === "missing_flag",
+    "got " + show(got(page({ hasMore: "yes" }))));
+
+  // Rule 4 -- the pair, neither wrong alone.
+  check("hasMore true with a null cursor is inconsistent",
+    got(page({ hasMore: true, cursor: null })).reason === "inconsistent_page",
+    "told there is more, given no way to ask for it");
+  check("...while hasMore true WITH a cursor is fine",
+    got(page({ hasMore: true, cursor: "eyJpZCI6N30" })).ok === true,
+    "got " + show(got(page({ hasMore: true, cursor: "eyJpZCI6N30" }))));
+
+  // Rule 5
+  check("items that are not an array are refused",
+    got(page({ items: { 0: item() } })).reason === "items_not_an_array",
+    "got " + show(got(page({ items: { 0: item() } }))));
+
+  // Rule 6 -- refuse the page, do not drop the row.
+  check("one bad item refuses the whole page",
+    got(page({ items: [item(), item({ status: "archived" }), item({ id: 9 })] })).reason === "invalid_item",
+    "a silently shorter list is a wrong answer that looks like a right one");
+  check("...and returns no items at all",
+    got(page({ items: [item(), { nonsense: true }] })).items.length === 0,
+    "got " + show(got(page({ items: [item(), { nonsense: true }] })).items));
+
+  // Rule 7 -- the contrast that matters.
+  check("an unknown extra field is allowed",
+    got(page({ items: [item({ colour: "green" })] })).ok === true,
+    "got " + show(got(page({ items: [item({ colour: "green" })] }))) +
+      " -- a server shipping a new column must not break every client");
+  check("...but a forbidden field is not",
+    got(page({ items: [item({ code: "MERC-8GH2-KP4X" })] })).reason === "forbidden_field",
+    "GET /tokens returns no code; one arriving means something upstream is wrong");
+  check("...and isItem alone would have let it through",
+    isItem(item({ code: "MERC-8GH2-KP4X" })) === true,
+    "which is why forbidden fields are a SEPARATE rule, not the guard's job");
+
+  // Rule 8 -- nothing here is not an error.
+  check("an empty page is a success",
+    got(page({ items: [] })).ok === true && got(page({ items: [] })).items.length === 0,
+    "got " + show(got(page({ items: [] }))) +
+      " -- 'no tokens yet' and 'could not load' are different screens");
+
+  // Rule 9
+  var raw = envelope();
+  var snapshot = JSON.stringify(raw);
+  got(raw);
+  check("raw is not mutated", JSON.stringify(raw) === snapshot);
+  check("...and the returned array is a copy",
+    (function () {
+      var e = envelope();
+      var out = got(e);
+      out.items.push(item({ id: 99 }));
+      return e.data.items.length === 1;
+    })(),
+    "a caller sorting the list in place would otherwise edit the parsed response");
+  check("every refusal carries no half-answer",
+    got(page({ hasMore: "yes" })).items.length === 0 &&
+    got(page({ hasMore: "yes" })).cursor === null &&
+    got(page({ hasMore: "yes" })).hasMore === false,
+    "got " + show(got(page({ hasMore: "yes" }))));
+} catch (err) {
+  console.log("Self-check could not run: " + err.message);
+}`);
+
+    createExplain("explain-a3-0002", {
+      prompt: "The boundary accepts an item carrying an unknown extra field, and refuses one carrying <code>code</code>. Explain why those are different decisions rather than an inconsistency — and what would break, in each direction, if you made them the same."
     });
 
     createQuiz("lesson-quiz", [
