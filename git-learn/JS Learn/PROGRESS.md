@@ -46,8 +46,8 @@ or from `progress.js` localStorage, and is never inferred from the files.
 > to shuffle a question whose explanation names an option by position ("Option A
 > creates a label statement"), because shuffling would make the explanation
 > contradict the screen. Those render exactly as authored, so clustering in them
-> is a real if small scoring edge — **69 question(s)**, distributed
-> 0=5.8%  1=53.6%  2=40.6%  3=0.0%.
+> is a real if small scoring edge — **30 question(s)**, distributed
+> 0=6.7%  1=66.7%  2=26.7%  3=0.0%.
 > Rewriting those explanations to stop naming positions is the fix, and it frees
 > them to shuffle like the rest. That is deepening-pass work.
 
