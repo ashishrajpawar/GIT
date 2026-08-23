@@ -14,11 +14,11 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 101 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
 | Quiz questions (track) | 2718 |
-| Avg teaching prose per track lesson | 2062 words |
+| Avg teaching prose per track lesson | 2065 words |
 | Lessons with a playground | 92 / 101 |
 | Lessons with an exercise | 101 / 101 |
 | **Deepened** (all 3 spine sections) | 16 / 101 |
-| **Verified** (code executed) | 74 / 101 |
+| **Verified** (code executed) | 75 / 101 |
 | Ran clean but had nothing to run | 0 / 101 |
 | Errors | 0 |
 | Known and blocked | 1 |
@@ -77,7 +77,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | 02-react-native | 14 | 2641 | 39 | 14 | 355 | 0/14 | 14/14 |
 | a10-device-security | 2 | 1908 | 2 | 2 | 50 | 1/2 | 0/2 |
 | a11-polish-publish | 5 | 2196 | 9 | 10 | 137 | 0/5 | 5/5 |
-| a2-typescript | 3 | 781 | 2 | 3 | 76 | 0/3 | 0/3 |
+| a2-typescript | 3 | 903 | 3 | 4 | 76 | 0/3 | 1/3 |
 | a3-api-consumption | 4 | 1190 | 4 | 7 | 111 | 1/4 | 3/4 |
 | a4-auth-client | 3 | 1400 | 3 | 6 | 80 | 1/3 | 3/3 |
 | a5-core-token-features | 5 | 2599 | 10 | 10 | 148 | 2/5 | 5/5 |
@@ -162,7 +162,7 @@ so they do not hold the audit red. They are **not** resolved.
 | a11-polish-publish/0003-forms-validation.html | 2104 | 10 | 2 | 2 | 28 | — | yes |
 | a11-polish-publish/0004-environment-config.html | 1467 | 13 | 1 | 2 | 25 | — | yes |
 | a11-polish-publish/0005-store-submission.html | 2693 | 11 | 2 | 2 | 29 | — | yes |
-| a2-typescript/0001-types-and-interfaces.html | 733 | 9 | 1 | 1 | 26 | — | — |
+| a2-typescript/0001-types-and-interfaces.html | 1098 | 11 | 2 | 2 | 26 | — | yes |
 | a2-typescript/0002-generics-utility-types.html | 864 | 11 | 1 | 1 | 25 | — | — |
 | a2-typescript/0003-typescript-react-native.html | 747 | 9 | 0 | 1 | 25 | — | — |
 | a3-api-consumption/0001-fetch-http-fundamentals.html | 689 | 8 | 2 | 2 | 29 | — | yes |

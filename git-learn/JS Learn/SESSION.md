@@ -12,7 +12,18 @@ how far it got.
 
 ## In progress
 
-**Nothing in flight.** Working tree clean, everything committed.
+**M3 for the remaining never-executed lessons.** The runner now handles
+TypeScript and `a2/0001` is verified — **the first lesson in this course
+written in TypeScript whose code has ever run.** Seven left with no log entry:
+
+| Lesson | What it needs |
+|---|---|
+| `a2/0002`, `a2/0003` | An M3 exercise. `0003` is JSX, so the screen stays excused and the pure function beside it does not |
+| `a3/0002` | An M3 exercise; SESSION already flags the "I annotated it, so it is one" gap |
+| `a9/0002`, `x2/0001`, `x2/0002` | Nothing structural — never attempted |
+| `b1/0001`, `b1/0002`, `b1/0004` | Pure SQL, and the M3 hunt has never been run over B1 |
+
+Previous good state is `b9276d7`.
 
 > **⚠ A process trap found the hard way on 2026-08-23.** Running
 > `verify-lesson.mjs` on a lesson **without** the `--unverifiable` reason it

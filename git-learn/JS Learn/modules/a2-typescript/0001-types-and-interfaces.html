@@ -174,11 +174,72 @@ const isExpired = (expiresAt: string | null): boolean =&gt; {
 
     <p>This is called <strong>narrowing</strong>. TS narrows the type based on runtime checks you write — <code>if</code>, <code>typeof</code>, <code>in</code>, etc.</p>
 
+    <!-- ───────────────────────────────────────────── -->
+    <div class="callout danger">
+      <div class="callout-title">Every type on this page is gone at runtime, and the API does not know about any of them</div>
+
+      <p>This is the sentence the rest of the module depends on, and it is
+      easy to read past: <strong>TypeScript types are erased before your code
+      runs.</strong> There is no check left in the shipped app. The compiler
+      proved things about the code it could see, and then it deleted the
+      proof.</p>
+
+      <p>Which is fine, right up to the boundary where data arrives from
+      somewhere the compiler could not see:</p>
+
+      <pre><code>const res = await fetch('/api/tokens');
+const tokens: Token[] = await res.json();     // <-- a lie, politely accepted
+
+console.log(tokens[0].label.toUpperCase());   // TypeError: undefined</code></pre>
+
+      <p><code>res.json()</code> returns <code>any</code>. Annotating it
+      <code>Token[]</code> does not check anything — <strong>it silences the
+      one place that would have asked.</strong> The value is whatever the
+      server actually sent: an older shape, an error object, <code>null</code>,
+      a field renamed last Tuesday. The beginner's reading — <em>I said it is
+      a Token, so it is a Token</em> — is exactly backwards, and the error
+      surfaces later, somewhere else, in code that is not wrong.</p>
+
+      <p>The fix is a function that checks at runtime and <em>tells the
+      compiler what it proved</em>. That is a <strong>type predicate</strong>,
+      and its return type is the unusual part:</p>
+
+      <pre><code>function isToken(value: unknown): value is Token { … }
+
+if (isToken(data)) {
+  data.label;      // TS has narrowed it: this is a Token
+} else {
+  data.label;      // and here it is still unknown
+}</code></pre>
+
+      <p><code>value is Token</code> says: <em>if this returns true, treat the
+      argument as a Token from here on.</em> <strong>TypeScript takes your word
+      for it</strong> — the predicate is a promise the compiler cannot verify,
+      so a sloppy guard is worse than no guard, because it re-silences the
+      question while looking like the answer.</p>
+
+      <p>Start the parameter as <code>unknown</code> rather than
+      <code>any</code>. <code>any</code> lets you reach into the value while
+      you are still deciding what it is; <code>unknown</code> refuses until you
+      have checked, which is the entire point of the exercise below.</p>
+    </div>
+
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>Now build it yourself</h2>
+
+    <p>The types file is a declaration and cannot be executed. The guard
+    can — and it is the only code in this lesson that still exists after
+    compilation.</p>
+
+    <div id="exercise-guard"></div>
+    <div id="pg-exercise-guard"></div>
+
+    <h3>And the types themselves</h3>
 
     <div id="exercise-1"></div>
+
+    <div id="explain-a2-0001"></div>
 
     <hr>
 
@@ -194,6 +255,7 @@ const isExpired = (expiresAt: string | null): boolean =&gt; {
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -215,41 +277,229 @@ console.log("Type of code:", typeof token.code);        // string
 console.log("Type of maxUses:", typeof token.maxUses);  // number`);
 
     createSolution("exercise-1", {
-      exercise: "Define the TypeScript types for Token's core data model in a file called shared/types.ts. Include: a TokenStatus union type (active, paused, revoked), a Token interface (code, issuedTo, status, createdAt, revokedAt optional, maxUses), an AccessRule interface (tokenId, allowedHours with start/end, maxCallsPerDay, categories array), and a function type for a token validator that takes a Token and returns boolean.",
+      unverifiable: "the deliverable is a file of type declarations, which are erased before anything runs — which is exactly the point the guard exercise above is making",
+      exercise: "Define the TypeScript types for Token's core data model in shared/types.ts: a TokenStatus union (active, paused, revoked), a Token interface, and an AccessRule interface.\n\nThree things to get right, each of which this course has had to fix somewhere after getting it wrong:\n\n1. expiresAt and maxUses are 'string | null' and 'number | null', NOT optional with a question mark. null is a value that means something — never, and unlimited — while an absent field means the server did not tell you. Writing them as optional collapses two different facts into one.\n\n2. There is no code field. GET /tokens returns none (ADR-0007): serving a list of codes would mean decrypting every row on every scroll, and the code comes back exactly once, from POST /tokens.\n\n3. status has three values and the badge shows five. revoked, expired, exhausted, paused and active are DERIVED — a token also dies when a clock passes expiresAt, and nothing writes to the row when that happens. Give the derivation a type; do not add columns for it.",
       hints: [
-        "Use a string literal union for TokenStatus: 'active' | 'paused' | 'revoked'",
-        "Optional fields use the ? syntax: revokedAt?: string",
-        "A function type looks like: type ValidatorFn = (token: Token) => boolean"
+        "Use a string literal union for TokenStatus: 'active' | 'paused' | 'revoked'. That union is what turns an unrecognised status into a compile error instead of a string.",
+        "Prefer expiresAt: string | null over expiresAt?: string. The first says the field is always present and may mean 'never'; the second says it may be missing, which is a different fact about a different failure.",
+        "For the derived display status a function type is enough: (token: Token, usedCount: number) => TokenStatus_Displayed. The count comes from conversations, because there is no use_count column."
       ],
       solution: `// shared/types.ts
 
 export type TokenStatus = 'active' | 'paused' | 'revoked';
 
 export interface Token {
-  code: string;
-  issuedTo: string;
+  id: number;
+  label: string;
   status: TokenStatus;
   createdAt: string;
-  revokedAt?: string;
-  maxUses: number;
+
+  // null means NEVER, and it is not the same as the field being absent.
+  // new Date(null) is 1970, so test for null BEFORE parsing.
+  expiresAt: string | null;
+
+  // null means UNLIMITED. 0 means NO USES PERMITTED. Opposite meanings,
+  // and only one of them is falsy -- which is why if (token.maxUses) is
+  // wrong and token.maxUses != null is right.
+  maxUses: number | null;
+
+  // Written on transition, read via status. b2/0001 enforces the
+  // agreement with two CHECK constraints.
+  pausedAt: string | null;
+  revokedAt: string | null;
 }
+
+// NOTE what is NOT here: there is no \`code\` field. GET /tokens returns
+// none (ADR-0007), because serving a list of codes would mean decrypting
+// every row on every scroll. The code comes back exactly once, from
+// POST /tokens, and after that only from an explicit, logged request.
+
+export type TokenStatus_Displayed =
+  | 'revoked' | 'expired' | 'exhausted' | 'paused' | 'active';
+
+// Five displayed states derived from three stored ones, in that fixed
+// precedence -- a token also dies when a clock ticks past expiresAt, and
+// nothing writes to the row when that happens. See a5/0003.
+export type DisplayStatus = (token: Token, usedCount: number) => TokenStatus_Displayed;
 
 export interface AccessRule {
-  tokenId: string;
-  allowedHours: {
-    start: number; // 0-23
-    end: number;   // 0-23
-  };
-  maxCallsPerDay: number;
-  categories: string[];
+  tokenId: number;
+  ruleType: 'time_window' | 'contact_limit' | 'channel_restrict';
+  payload: Record<string, unknown>;
+  enabled: boolean;
+}`
+    });
+
+    createSolution("exercise-guard", {
+      exercise: `Write isToken(value) — the runtime check that makes a Token annotation true.\n\nIt takes an unknown (anything at all: a parsed JSON response, null, a number, an error object) and returns a boolean. In the real file its return type is the type predicate "value is Token", so a true result narrows the value for everything downstream.\n\nA Token is { id, label, status, createdAt, expiresAt, maxUses, pausedAt, revokedAt }.\n\nThe rules:\n\n1. ANYTHING THAT IS NOT A PLAIN OBJECT IS false, AND NOTHING THROWS. The input is genuinely unknown — undefined, a number, a string, an error page parsed as JSON. Two traps live here: typeof null is 'object', and so is typeof []. A guard that throws is worse than one that returns false, because the caller wrote it precisely to avoid a crash.\n\n2. id IS A number AND label IS A string.\n\n3. status MUST BE ONE OF THE THREE LITERALS. typeof status === 'string' is NOT enough, and this is the rule the whole exercise exists for: the interesting failure is a server that starts sending 'archived'. A string check waves it through, and every switch on status then falls to whatever the default happens to be.\n\n4. expiresAt AND pausedAt AND revokedAt ARE EACH string OR null. undefined is NOT acceptable — null means "never", and a missing field means the server did not tell you. Collapsing those two is how "no expiry" and "unknown expiry" become the same thing.\n\n5. maxUses IS A number OR null, AND 0 MUST PASS. null means unlimited and 0 means no uses permitted, which are opposite meanings; only one of them is falsy, so any check shaped like if (v.maxUses) rejects a valid token.\n\n6. EXTRA PROPERTIES ARE ALLOWED. A value carrying an unknown field is still a Token. This is the counterpart to rule 3, and the contrast is the lesson: an unknown FIELD is ignorable, because nothing branches on it; an unknown VALUE in a field you switch on is not, because something will. Rejecting extras also breaks every deploy where the server ships a new field before the app does.\n\nOne thing this is NOT: a validity check. isToken answers "is this the right shape", not "is this good data". An empty label is a Token — a badly named one — and refusing it here would put a product rule inside a type guard, where no caller would think to look for it.`,
+      hints: [
+        "Start by narrowing to an object you can index: typeof value === 'object' && value !== null && !Array.isArray(value). Only after that is it safe to read properties, and in real TypeScript you would cast to Record<string, unknown> to do it.",
+        "For rule 4, write one small helper — isStringOrNull(v) — and use it three times. Three copies of the same two-part condition is three chances to write one of them as != null.",
+        "For rule 5, the shape that works is v.maxUses === null || typeof v.maxUses === 'number'. Reach for a truthiness test and 0 disappears; reach for != null alone and a string sneaks through."
+      ],
+      solution: `type TokenStatus = 'active' | 'paused' | 'revoked';
+const STATUSES: TokenStatus[] = ['active', 'paused', 'revoked'];
+
+function isStringOrNull(v: unknown): boolean {
+  return v === null || typeof v === 'string';
 }
 
-export type TokenValidator = (token: Token) => boolean;
+function isToken(value: unknown): boolean {
+  // Rule 1. typeof null is 'object' and so is typeof [] -- both have to
+  // be ruled out before any property is read, or the guard throws on
+  // exactly the input it exists to handle.
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
 
-// Example usage:
-const isValid: TokenValidator = (token) => {
-  return token.status === 'active' && token.maxUses > 0;
-};`
+  const v = value as Record<string, unknown>;
+
+  // Rule 2.
+  if (typeof v.id !== 'number') return false;
+  if (typeof v.label !== 'string') return false;
+
+  // Rule 3 -- THE rule. A string check accepts 'archived' from a newer
+  // server, and every switch downstream then takes its default branch.
+  if (typeof v.status !== 'string') return false;
+  if (!STATUSES.includes(v.status as TokenStatus)) return false;
+
+  // Rule 4. undefined is not null: one means never, the other means the
+  // server did not say.
+  if (typeof v.createdAt !== 'string') return false;
+  if (!isStringOrNull(v.expiresAt)) return false;
+  if (!isStringOrNull(v.pausedAt)) return false;
+  if (!isStringOrNull(v.revokedAt)) return false;
+
+  // Rule 5. Written this way round so 0 survives.
+  if (!(v.maxUses === null || typeof v.maxUses === 'number')) return false;
+
+  // Rule 6: nothing here rejects extra properties, deliberately.
+  return true;
+}`
+    });
+
+    createPlayground("pg-exercise-guard", `// Write isToken(value) here. TypeScript is fine -- the types are
+// erased before this runs, which is the whole lesson.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(v) { return JSON.stringify(v); }
+
+// A well-formed Token. Note maxUses is 3 rather than 0 here, so the
+// zero case below is a real test and not the default.
+function tok(over) {
+  var t = {
+    id: 12,
+    label: "Farm box",
+    status: "active",
+    createdAt: "2026-08-01T09:00:00.000Z",
+    expiresAt: null,
+    maxUses: 3,
+    pausedAt: null,
+    revokedAt: null,
+  };
+  for (var k in (over || {})) t[k] = over[k];
+  return t;
+}
+function without(key) {
+  var t = tok();
+  delete t[key];
+  return t;
+}
+function got(v) {
+  try { return isToken(v); }
+  catch (e) { return "threw: " + e.message; }
+}
+
+try {
+  if (typeof isToken !== "function") throw new Error("not written yet");
+
+  check("a well-formed token passes", got(tok()) === true, "got " + show(got(tok())));
+
+  // Rule 1 -- and it must RETURN false, not throw.
+  check("null is refused, not thrown on",
+    got(null) === false,
+    "got " + show(got(null)) + " -- typeof null is 'object', so this is the one that crashes");
+  check("undefined is refused",
+    got(undefined) === false, "got " + show(got(undefined)));
+  check("an array is refused",
+    got([]) === false,
+    "got " + show(got([])) + " -- typeof [] is 'object' too");
+  // An EMPTY array is caught by accident, because it has no id either.
+  // The array that matters is the one GET /tokens actually returns, and
+  // a guard that reaches into it reports "the whole list is one token".
+  check("...including an array OF tokens",
+    got([tok(), tok({ id: 13 })]) === false,
+    "got " + show(got([tok(), tok({ id: 13 })])) + " -- this is what GET /tokens returns");
+  check("a primitive is refused",
+    got(7) === false && got("token") === false && got(true) === false,
+    "got " + show([got(7), got("token"), got(true)]));
+
+  // Rule 2
+  check("a missing id is refused", got(without("id")) === false);
+  check("an id sent as a string is refused",
+    got(tok({ id: "12" })) === false,
+    "JSON is not typed: a server that quotes its ids sends strings");
+  check("a missing label is refused", got(without("label")) === false);
+
+  // Rule 3 -- THE rule.
+  check("an unrecognised status is refused",
+    got(tok({ status: "archived" })) === false,
+    "a typeof string check waves this through, and every switch on status then takes its default");
+  check("...for every one of the three real ones, it passes",
+    got(tok({ status: "active" })) === true &&
+    got(tok({ status: "paused", pausedAt: "2026-08-02T00:00:00.000Z" })) === true &&
+    got(tok({ status: "revoked", revokedAt: "2026-08-02T00:00:00.000Z" })) === true);
+  check("...and a non-string status is refused without throwing",
+    got(tok({ status: 3 })) === false, "got " + show(got(tok({ status: 3 }))));
+  // 'archived' alone does not catch a SUBSTRING check. Reaching for
+  // 'active paused revoked'.includes(v.status) looks like a tidy way to
+  // write the list and accepts every fragment of it -- including '',
+  // because every string contains the empty string.
+  check("...and so is a status that is merely part of a real one",
+    got(tok({ status: "act" })) === false && got(tok({ status: "" })) === false,
+    "got " + show([got(tok({ status: "act" })), got(tok({ status: "" }))]) +
+      " -- membership of a list, not a substring of one");
+
+  // Rule 4 -- null and absent are different facts.
+  check("expiresAt of null passes -- null means never",
+    got(tok({ expiresAt: null })) === true);
+  check("...a real timestamp passes too",
+    got(tok({ expiresAt: "2026-12-01T00:00:00.000Z" })) === true);
+  check("...but a MISSING expiresAt is refused",
+    got(without("expiresAt")) === false,
+    "absent means the server did not say, which is not the same as 'never'");
+  check("...and the same holds for pausedAt and revokedAt",
+    got(without("pausedAt")) === false && got(without("revokedAt")) === false,
+    "got " + show([got(without("pausedAt")), got(without("revokedAt"))]));
+
+  // Rule 5 -- the falsy trap.
+  check("maxUses of 0 passes -- 0 permits no uses, which is a real state",
+    got(tok({ maxUses: 0 })) === true,
+    "got " + show(got(tok({ maxUses: 0 }))) + " -- if (v.maxUses) rejects this");
+  check("maxUses of null passes -- null means unlimited",
+    got(tok({ maxUses: null })) === true);
+  check("...a numeric string is refused",
+    got(tok({ maxUses: "3" })) === false, "got " + show(got(tok({ maxUses: "3" }))));
+
+  // Rule 6 -- forward compatibility, and the contrast with rule 3.
+  check("an unknown EXTRA field is allowed",
+    got(tok({ colour: "green", nested: { a: 1 } })) === true,
+    "nothing branches on a field you do not know about, so rejecting it only breaks the deploy where the server ships first");
+
+  // Shape, not validity.
+  check("an empty label is still a Token",
+    got(tok({ label: "" })) === true,
+    "a guard answers 'is this the right shape', not 'is this good data'");
+} catch (err) {
+  console.log("Self-check could not run: " + err.message);
+}`);
+
+    createExplain("explain-a2-0001", {
+      prompt: "<code>isToken</code> refuses an unrecognised <code>status</code> but accepts an unknown extra field. Explain why those two are treated differently, and what would break if you swapped the rules round."
     });
 
     createQuiz("lesson-quiz", [
