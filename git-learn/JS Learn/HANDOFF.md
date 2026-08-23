@@ -2755,3 +2755,99 @@ TokenPeerConnection class in the lesson code above"*, against lesson invariant
 4, which requires a complete pasteable file. Replaced with the real file.
 
 **Result: 85 verified, 16 `unverifiable`.** Audit green, six suites pass.
+
+---
+
+### Session of 2026-08-23 (continued) — a7/0002, and a clock that only worked while you watched it
+
+Second of the `unverifiable` cluster. M3: `callDisplay` — 16 self-checks, 10
+wrong-cases, 3 new executable quiz questions.
+
+#### The defect testing cannot find
+
+The call duration was `setInterval(() => setDuration(d => d + 1), 1000)`. That
+is not a measurement of time; it is a count of how many times a callback ran,
+and the two agree exactly as long as nothing stops the ticks.
+
+**iOS suspends JavaScript timers for a backgrounded app, and a voice call is
+specifically the screen the user leaves** — phone to the ear with the proximity
+sensor blanking it, a switch to Maps to read an address out, the screen locked
+while the conversation continues. A fourteen-minute call comes back reading
+four minutes. Nothing errors, the audio never stops, and the number is wrong by
+exactly the span the user was not watching, which is the span they have no way
+to check.
+
+The fix is a subtraction: stamp `connectedAt` once, compute
+`Math.floor((now - connectedAt) / 1000)`. The interval then has no arithmetic
+to get wrong — its only job is to trigger a re-render, and a tick it misses
+costs nothing because the next one recomputes from the clock.
+
+**The general form is worth more than the fix:** an accumulator is only correct
+if it observes every event, so it inherits every reason observation might stop.
+A subtraction over two timestamps has nothing to miss.
+
+#### Yesterday's fix made today's bug reachable
+
+`0001` gave `disconnected` an 8-second grace period rather than hanging up on
+it. That created a state this screen had never had to render, and the render
+was a two-way ternary on `callState === 'connected'` — so a four-minute call
+would display **"Connecting…"** and drop its timer for the duration of a blip.
+
+Both halves fail in the same direction: the screen reports that nothing has
+happened yet, on a call that is live and audible. A user who believes it hangs
+up, ending a call that was about to recover on its own.
+
+**A ternary has room for two answers and this screen has four** — never
+connected, live, momentarily lost but still counting, and over. When the states
+outnumber the branches, the extras do not vanish; they fall into whichever
+branch is the fallback, and the fallback is the one nobody chose deliberately.
+Same reasoning as `a5/0003`'s badge deriving five displayed states from three
+stored ones.
+
+Worth recording as a pattern in its own right: **fixing a state machine creates
+render obligations elsewhere.** Nothing in `0001` touched this file, and
+nothing in this file was wrong until `0001` was right.
+
+#### The lesson contained both the right and the wrong formatter
+
+The screen's `formatDuration` had no hours branch and computed minutes over the
+whole total, so an hour-and-a-quarter call read `75:30`. The playground higher
+up the same page already had the correct three-part version. That is the third
+time in two lessons that one page has held both answers — after `0001`'s two
+quiz explanations describing behaviour the code did not have.
+
+#### Counting trips per mistake earned its keep twice
+
+The routine of checking how many self-checks each wrong-case trips found two
+problems that a green run hides:
+
+- **A fixture-design coupling.** The falsy-`connectedAt` mistake was tripping
+  six checks, because the format fixtures used `connectedAt: 0` for arithmetic
+  convenience and so depended on the very behaviour a different case was
+  testing. Moving them to `1000` dropped it to one. Nine of ten mistakes now
+  trip exactly one check.
+- **A check-ordering problem.** The unpadded-minutes mistake tripped the
+  `59:59`/`1:00:00` boundary check first, because `1:00:00` also has
+  single-digit minutes. The specific check now runs before the general one.
+
+The tick-counter mistake legitimately trips twelve, and that is inherent — the
+duration comes from the wrong source, so every duration assertion fails. One
+behavioural change, twelve consequences. It is documented in the case file so a
+later reader does not try to "fix" it.
+
+#### A judgement call, flagged rather than buried
+
+The quiz has several questions built on `setDuration(d => d + 1)` — the
+functional updater, the stale closure, the missing `clearInterval`. **They are
+not wrong**, so the believe-the-quiz rule does not apply; they teach genuine
+hazards *of accumulating*, and rewriting three keyed questions is where keys
+get broken.
+
+They stay, and the lesson now names the consequence instead:
+`setNow(Date.now())` has no previous state to capture, so the stale-closure bug
+cannot be written at all, while `clearInterval` still matters because that one
+is about unmounting rather than arithmetic. **The cost of leaving them is that
+a reader could take the accumulator as endorsed**, and the callout is what
+prevents it. Rewriting them stays available if that turns out not to be enough.
+
+**Result: 86 verified, 15 `unverifiable`.** Audit green, six suites pass.

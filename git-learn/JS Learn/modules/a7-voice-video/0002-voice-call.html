@@ -35,6 +35,7 @@ import { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { TokenPeerConnection } from '../webrtc/PeerConnection';
 import { InCallManager } from 'react-native-incall-manager';
+import { callDisplay } from '../call/callDisplay';
 
 interface VoiceCallProps {
   route: { params: { callId: string; conversationId: number; isCaller: boolean; tokenLabel: string } };
@@ -46,7 +47,11 @@ export function VoiceCallScreen({ route, navigation }: VoiceCallProps) {
   const [callState, setCallState] = useState&lt;string&gt;('connecting');
   const [muted, setMuted] = useState(false);
   const [speakerOn, setSpeakerOn] = useState(false);
-  const [duration, setDuration] = useState(0);
+
+  // The moment the call first reached 'connected', not a running total.
+  const [connectedAt, setConnectedAt] = useState&lt;number | null&gt;(null);
+  const [now, setNow] = useState(() =&gt; Date.now());
+
   const pcRef = useRef&lt;TokenPeerConnection | null&gt;(null);
   const timerRef = useRef&lt;ReturnType&lt;typeof setInterval&gt; | null&gt;(null);
 
@@ -55,15 +60,24 @@ export function VoiceCallScreen({ route, navigation }: VoiceCallProps) {
     return () =&gt; cleanup();
   }, []);
 
-  // Call timer
+  // Stamp the start once, the first time we connect. A reconnection after a
+  // blip must not restart the clock — it is still the same call.
   useEffect(() =&gt; {
-    if (callState === 'connected') {
-      timerRef.current = setInterval(() =&gt; {
-        setDuration(d =&gt; d + 1);
-      }, 1000);
+    if (callState === 'connected' &amp;&amp; connectedAt === null) {
+      setConnectedAt(Date.now());
     }
+  }, [callState, connectedAt]);
+
+  // The interval only drives a re-render. It does NOT count the seconds —
+  // callDisplay subtracts two timestamps, so drift and any gap while the app
+  // was backgrounded cost nothing.
+  useEffect(() =&gt; {
+    if (connectedAt === null) return;
+    timerRef.current = setInterval(() =&gt; setNow(Date.now()), 1000);
     return () =&gt; { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [callState]);
+  }, [connectedAt]);
+
+  const display = callDisplay({ state: callState, connectedAt, endedAt: null }, now);
 
   async function startCall() {
     InCallManager.start({ media: 'audio' });
@@ -109,18 +123,19 @@ export function VoiceCallScreen({ route, navigation }: VoiceCallProps) {
     if (timerRef.current) clearInterval(timerRef.current);
   }
 
-  function formatDuration(seconds: number): string {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m}:${s.toString().padStart(2, '0')}`;
-  }
-
   return (
     &lt;View style={styles.container}&gt;
       &lt;Text style={styles.label}&gt;{tokenLabel}&lt;/Text&gt;
+
+      {/* The clock keeps running through a blip. Losing it would tell the
+          user the call they are still on has not started. */}
       &lt;Text style={styles.state}&gt;
-        {callState === 'connected' ? formatDuration(duration) : 'Connecting...'}
+        {display.phase === 'connecting' ? 'Connecting...' : display.text}
       &lt;/Text&gt;
+
+      {display.phase === 'reconnecting' &amp;&amp; (
+        &lt;Text style={styles.reconnecting}&gt;Reconnecting...&lt;/Text&gt;
+      )}
 
       &lt;View style={styles.controls}&gt;
         &lt;TouchableOpacity
@@ -144,6 +159,89 @@ export function VoiceCallScreen({ route, navigation }: VoiceCallProps) {
     &lt;/View&gt;
   );
 }</code></pre>
+
+    <h2>The call clock is a subtraction, not a counter</h2>
+
+    <p>The obvious way to show a call duration is to count seconds:</p>
+
+    <pre><code>const [duration, setDuration] = useState(0);
+
+setInterval(() =&gt; setDuration(d =&gt; d + 1), 1000);   // wrong</code></pre>
+
+    <p>That is not a measurement of time. It is a count of how many times a
+    callback happened to run, and the two agree only while nothing interferes.
+    <code>setInterval</code> drifts under load — but the real problem is
+    bigger than drift.</p>
+
+    <div class="callout danger">
+      <div class="callout-title">A voice call is the screen the user leaves</div>
+      <p>They put the phone to their ear and the proximity sensor blanks it.
+      They switch to Maps to read out an address. They lock the phone and keep
+      talking. <strong>iOS suspends JavaScript timers for a backgrounded
+      app</strong>, so the counter stops while the call carries on — and when
+      the user looks again, a fourteen-minute call reads four minutes.</p>
+      <p>Nothing errors. The audio never stopped. The one number on the screen
+      is simply wrong, and it is wrong by exactly the amount of time the user
+      was not looking, which is the amount they are least able to check.</p>
+    </div>
+
+    <p>Record <em>when</em> the call connected and subtract. Then the interval
+    has no arithmetic to get wrong — its only job is to make the component
+    re-render, and a tick it misses costs nothing, because the next one
+    recomputes from the clock.</p>
+
+    <pre><code>const seconds = Math.floor((Date.now() - connectedAt) / 1000);</code></pre>
+
+    <p><strong>Stamp <code>connectedAt</code> once</strong>, the first time the
+    state reaches <code>connected</code> — not on every transition into it.
+    That distinction is what the next section is about.</p>
+
+    <div class="callout">
+      <div class="callout-title">A whole class of bug goes away with it</div>
+      <p>Several questions below are about
+      <code>setDuration(d =&gt; d + 1)</code> — why the functional updater is
+      required, and what a stale closure does if you write
+      <code>setDuration(duration + 1)</code> instead. Those are real and worth
+      knowing, and they are hazards <em>of accumulating</em>.</p>
+      <p><code>setNow(Date.now())</code> has neither. The new value does not
+      depend on the old one, so there is no previous state to capture and
+      nothing for a stale closure to get wrong. <strong>The interval still
+      needs its <code>clearInterval</code></strong> — that one is about the
+      component unmounting, not about arithmetic, and it does not go away.</p>
+      <p>Worth noticing as a general move: the bug you cannot write is better
+      than the bug you remember not to write.</p>
+    </div>
+
+    <h2>What the screen says during a blip</h2>
+
+    <p><code>0001</code> gave <code>disconnected</code> a grace period rather
+    than hanging up on it, because ICE usually recovers. That fix created a
+    window this screen did not previously have to render: up to eight seconds
+    in which the call is live, the user is still talking, and
+    <code>callState</code> is not <code>'connected'</code>.</p>
+
+    <p>The original line handled it like this:</p>
+
+    <pre><code>{callState === 'connected' ? formatDuration(duration) : 'Connecting...'}</code></pre>
+
+    <p><strong>So a call four minutes old displays "Connecting…" and loses its
+    timer.</strong> Both halves are wrong in the same direction: it reports
+    that nothing has happened yet, on a call that has been running for
+    minutes. A user who sees it reasonably concludes the call dropped and hangs
+    up — ending a call that was about to recover on its own.</p>
+
+    <div class="callout">
+      <div class="callout-title">The general shape</div>
+      <p>A ternary on one state value has room for two answers, and this
+      screen has four: <em>never connected</em>, <em>live</em>,
+      <em>momentarily lost but still counting</em>, and <em>over</em>. When the
+      states outnumber the branches, the extra ones do not disappear — they get
+      silently folded into whichever branch is the fallback, and the fallback
+      is the one nobody chose deliberately.</p>
+      <p>Same reasoning as <code>a5/0003</code>'s badge, which derives five
+      displayed states from three stored ones. <strong>Stored state and
+      displayed state are different things.</strong></p>
+    </div>
 
     <h2>InCallManager — audio routing</h2>
 
@@ -227,6 +325,11 @@ function handleVoiceCall() {
     color: '#94a3b8',
     marginTop: 8,
   },
+  reconnecting: {
+    fontSize: 13,
+    color: '#f59e0b',
+    marginTop: 4,
+  },
   controls: {
     flexDirection: 'row',
     gap: 24,
@@ -267,9 +370,21 @@ function handleVoiceCall() {
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>Now build it yourself</h2>
+
+    <div id="exercise-clock"></div>
+
+    <div id="pg-exercise-clock"></div>
+
+    <hr>
+
+    <h2>Then wire it into the screen</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="explain-a7-0002"></div>
 
     <hr>
 
@@ -285,6 +400,7 @@ function handleVoiceCall() {
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -305,25 +421,399 @@ console.log('45 seconds:', formatDuration(45));
 console.log('3 minutes 7 seconds:', formatDuration(187));
 console.log('1 hour 5 min 30 sec:', formatDuration(3930));`);
 
+    createSolution("exercise-clock", {
+      exercise: "Write callDisplay(call, now) — everything the call screen shows about time and state, as one pure function. It takes the call and the current clock reading, so you can test a fourteen-minute call and an eight-second blip without making either happen.\n\ncall is { state, connectedAt, endedAt }.\n  state is 'new', 'connecting', 'connected', 'disconnected', 'failed' or 'closed'.\n  connectedAt is the ms timestamp when the call FIRST reached connected, or null if it never did.\n  endedAt is the ms timestamp it finished, or null.\n\nReturn { phase, seconds, text }:\n  phase — 'connecting', 'live', 'reconnecting' or 'ended'\n  seconds — whole seconds on the clock, or null if the call never connected\n  text — the formatted duration, or null when seconds is null\n\nThe rules:\n\n1. Compute the duration by SUBTRACTING timestamps. Never accept a running total from the caller — a counter stops counting when iOS suspends the app, and the call does not.\n\n2. connectedAt === null means there is no clock yet: seconds and text are both null. The phase is 'ended' if the call is over, otherwise 'connecting'.\n\n3. Careful: a timestamp of 0 is a real time. Test for null, not for falsy.\n\n4. state 'connected' is phase 'live'.\n\n5. state 'disconnected' AFTER connecting is phase 'reconnecting', and the clock KEEPS RUNNING — it is still the same call. Before ever connecting it is still 'connecting'; you cannot reconnect to something you never reached.\n\n6. 'failed' and 'closed' are phase 'ended', and the clock FREEZES at endedAt rather than following now. If endedAt is null, fall back to now.\n\n7. Format as M:SS, and H:MM:SS once there is an hour. Pad minutes only when hours are shown; always pad seconds.\n\n8. Never return a negative duration. Clocks go backwards.",
+      hints: [
+        "Work out the ended case and the no-clock case first — they are the two that return early, and rule 6 has to be decided before you know which timestamp to subtract from.",
+        "Rule 3 is the one that bites. `if (call.connectedAt)` treats midnight on 1 January 1970 as 'never connected', and more importantly it is the same falsy-check habit that makes `max_uses: 0` mean unlimited.",
+        "For the format, get the total seconds first, then derive hours, minutes and seconds from it. Deciding whether to show hours is a separate question from computing them."
+      ],
+      solution: `function formatDuration(totalSeconds) {
+  // Clamp first: a clock that has gone backwards should read 0:00, not -1:-5.
+  const total = Math.max(0, Math.floor(totalSeconds));
+
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+
+  // Minutes are padded only when there is an hour in front of them.
+  if (h > 0) {
+    return h + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+  }
+  return m + ":" + String(s).padStart(2, "0");
+}
+
+function callDisplay(call, now) {
+  const ended = call.state === "failed" || call.state === "closed";
+
+  // No clock yet. A call that failed before connecting is over, but it still
+  // has no duration to show.
+  //
+  // == null, NOT a falsy test: connectedAt of 0 is a real timestamp, and the
+  // falsy version would report a live call as still connecting.
+  if (call.connectedAt == null) {
+    return { phase: ended ? "ended" : "connecting", seconds: null, text: null };
+  }
+
+  // Once the call is over the clock stops where it stopped. Following 'now'
+  // would keep a finished call ticking on the summary screen.
+  const stopAt = ended ? (call.endedAt == null ? now : call.endedAt) : now;
+
+  // The whole point: a subtraction, so time that passed while the JS thread
+  // was suspended is still counted.
+  const seconds = Math.max(0, Math.floor((stopAt - call.connectedAt) / 1000));
+
+  let phase;
+  if (ended) {
+    phase = "ended";
+  } else if (call.state === "disconnected") {
+    // Still the same call, so the clock is not reset and not hidden.
+    phase = "reconnecting";
+  } else {
+    phase = "live";
+  }
+
+  return { phase: phase, seconds: seconds, text: formatDuration(seconds) };
+}`
+    });
+
+    createPlayground("pg-exercise-clock", `// Write formatDuration(totalSeconds) and callDisplay(call, now) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+
+// connectedAt is deliberately 1000 rather than 0 in most fixtures so that a
+// missing subtraction shows up, and \`ticks\` is deliberately SHORT: it models
+// the setInterval counter after the app spent time in the background, which
+// is exactly the number a wrong implementation would happily report.
+function live(overrides) {
+  return Object.assign(
+    { state: "connected", connectedAt: 1000, endedAt: null, ticks: 12 },
+    overrides || {}
+  );
+}
+
+try {
+  if (typeof callDisplay !== "function") throw new Error("not written yet");
+
+  try {
+    const r = callDisplay({ state: "connecting", connectedAt: null, endedAt: null }, 500000);
+    check("a call that has not connected has no clock",
+          r.phase === "connecting" && r.seconds === null && r.text === null,
+          "got " + JSON.stringify(r));
+  } catch (e) { check("a call that has not connected has no clock", false, "threw " + e.message); }
+
+  try {
+    const r = callDisplay(live({}), 188000);
+    check("a live call reads the wall clock, not a tick count",
+          r.phase === "live" && r.seconds === 187 && r.text === "3:07",
+          "got " + JSON.stringify(r) + " -- 12 would mean you read call.ticks; 187 is the time that actually passed");
+  } catch (e) { check("a live call reads the wall clock, not a tick count", false, "threw " + e.message); }
+
+  try {
+    // connectedAt === 0 is midnight on 1 Jan 1970 and a perfectly real
+    // timestamp. A falsy check calls this call "still connecting".
+    const r = callDisplay(live({ connectedAt: 0 }), 45000);
+    check("connectedAt of 0 is a timestamp, not 'never connected'",
+          r.phase === "live" && r.seconds === 45 && r.text === "0:45",
+          "got " + JSON.stringify(r) + " -- test for null, not for falsy");
+  } catch (e) { check("connectedAt of 0 is a timestamp, not 'never connected'", false, "threw " + e.message); }
+
+  try {
+    const r = callDisplay(live({ state: "disconnected" }), 188000);
+    check("a blip is 'reconnecting', not 'connecting'",
+          r.phase === "reconnecting",
+          "got phase " + JSON.stringify(r.phase) + " -- the call connected three minutes ago");
+    check("the clock keeps running through a blip",
+          r.seconds === 187 && r.text === "3:07",
+          "got " + JSON.stringify(r) + " -- losing the timer tells the user a live call never started");
+  } catch (e) { check("a blip is 'reconnecting' and keeps its clock", false, "threw " + e.message); }
+
+  try {
+    const r = callDisplay({ state: "disconnected", connectedAt: null, endedAt: null }, 90000);
+    check("'disconnected' before ever connecting is still 'connecting'",
+          r.phase === "connecting" && r.seconds === null,
+          "got " + JSON.stringify(r) + " -- you cannot reconnect to something you never reached");
+  } catch (e) { check("'disconnected' before ever connecting is still 'connecting'", false, "threw " + e.message); }
+
+  try {
+    // 'now' is deliberately far past endedAt. A frozen clock reads 99;
+    // one that follows now reads 998.
+    const r = callDisplay({ state: "closed", connectedAt: 1000, endedAt: 100000 }, 999000);
+    check("an ended call freezes its clock at endedAt",
+          r.phase === "ended" && r.seconds === 99 && r.text === "1:39",
+          "got " + JSON.stringify(r) + " -- 998 means the summary keeps ticking after the call is over");
+  } catch (e) { check("an ended call freezes its clock at endedAt", false, "threw " + e.message); }
+
+  try {
+    const r = callDisplay({ state: "failed", connectedAt: null, endedAt: 5000 }, 9000);
+    check("a call that failed before connecting is 'ended' with no duration",
+          r.phase === "ended" && r.seconds === null && r.text === null,
+          "got " + JSON.stringify(r));
+  } catch (e) { check("a call that failed before connecting is 'ended' with no duration", false, "threw " + e.message); }
+
+  try {
+    const r = callDisplay({ state: "closed", connectedAt: 1000, endedAt: null }, 61000);
+    check("an ended call with no endedAt falls back to now",
+          r.seconds === 60 && r.text === "1:00",
+          "got " + JSON.stringify(r));
+  } catch (e) { check("an ended call with no endedAt falls back to now", false, "threw " + e.message); }
+
+  try {
+    // The gap is the whole test: two readings of the SAME call, 300s apart.
+    // An accumulator that missed every tick in between reports no change.
+    const a = callDisplay(live({}), 100000);
+    const b = callDisplay(live({}), 400000);
+    check("300 seconds of suspended app is still 300 seconds of call",
+          b.seconds - a.seconds === 300,
+          "went from " + a.seconds + " to " + b.seconds +
+          " -- a subtraction cannot lose time it never had to observe");
+  } catch (e) { check("300 seconds of suspended app is still 300 seconds of call", false, "threw " + e.message); }
+
+  try {
+    // 1:15:30 -- two-digit minutes on purpose, so that padding is NOT what
+    // this check is testing. The padding case below uses single digits.
+    const r = callDisplay(live({}), 4531000);
+    check("an hour-long call shows hours",
+          r.text === "1:15:30",
+          "got " + JSON.stringify(r.text) + " -- without an hours branch this reads 75:30");
+  } catch (e) { check("an hour-long call shows hours", false, "threw " + e.message); }
+
+  try {
+    // 1:01:05 -- single-digit minutes AND seconds, so a missing pad on
+    // either one is visible. 1:1:5 is the failure this catches.
+    //
+    // This runs BEFORE the boundary check below on purpose: 1:00:00 also has
+    // single-digit minutes, so it would trip first and report the padding
+    // bug under the wrong name.
+    const r = callDisplay(live({}), 3666000);
+    check("minutes are padded once hours are shown",
+          r.text === "1:01:05",
+          "got " + JSON.stringify(r.text));
+  } catch (e) { check("minutes are padded once hours are shown", false, "threw " + e.message); }
+
+  try {
+    const under = callDisplay(live({}), 3600000);
+    const over = callDisplay(live({}), 3601000);
+    check("59:59 is the last minute-form and 1:00:00 is the first hour-form",
+          under.text === "59:59" && over.text === "1:00:00",
+          "got " + JSON.stringify(under.text) + " then " + JSON.stringify(over.text));
+  } catch (e) { check("59:59 is the last minute-form and 1:00:00 is the first hour-form", false, "threw " + e.message); }
+
+  try {
+    const r = callDisplay(live({}), 8000);
+    check("seconds are padded below ten",
+          r.text === "0:07",
+          "got " + JSON.stringify(r.text) + " -- 0:7 is not a clock");
+  } catch (e) { check("seconds are padded below ten", false, "threw " + e.message); }
+
+  try {
+    const r = callDisplay(live({}), 2999);
+    check("a part-second is truncated, not rounded",
+          r.seconds === 1,
+          "got " + r.seconds + " -- rounding makes the clock show 2 before two seconds have passed");
+  } catch (e) { check("a part-second is truncated, not rounded", false, "threw " + e.message); }
+
+  try {
+    // now BEFORE connectedAt: an NTP correction mid-call does this.
+    const r = callDisplay(live({ connectedAt: 500000 }), 100000);
+    check("a backwards clock reads 0:00, never a negative duration",
+          r.seconds === 0 && r.text === "0:00",
+          "got " + JSON.stringify(r) + " -- -400 formats as something like -7:-40");
+  } catch (e) { check("a backwards clock reads 0:00, never a negative duration", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write callDisplay(call, now) above, then press Run. (" + e.message + ")");
+}`);
+
+    createExplain("explain-a7-0002", {
+      prompt: "The call timer was <code>setInterval(() =&gt; setDuration(d =&gt; d + 1), 1000)</code>, and it is wrong in a way that a test on your desk cannot show. Explain what the user has to do for it to go wrong, why nothing errors when it does — and why replacing it with a subtraction means a missed tick no longer costs anything."
+    });
+
     createSolution("exercise-1", {
-      exercise: "Build the complete voice call screen:\n\n1. Create `VoiceCallScreen` with: connection state display ('Connecting...' / timer), mute button, speaker toggle, hangup button.\n\n2. Integrate TokenPeerConnection: initialize on mount, createOffer if caller, cleanup on unmount.\n\n3. Add InCallManager: start audio session, earpiece by default, speaker toggle, proximity sensor.\n\n4. Add call timer: start counting when connectionState becomes 'connected', display as M:SS.\n\n5. Handle hangup from both sides: local hangup (button press) sends call:hangup and navigates back. Remote hangup (received via WS) triggers onHangup callback.\n\n6. Test: requires two devices with EAS development builds. Start a call from one, accept on the other, verify audio flows both ways.",
+      unverifiable: "the deliverable is a React Native call screen needing InCallManager, two devices with EAS development builds and a running TURN server",
+      exercise: "Build the complete voice call screen, using the callDisplay you just wrote:\n\n1. Create VoiceCallScreen with: state display, mute button, speaker toggle, hangup button.\n\n2. Integrate TokenPeerConnection: initialize on mount, createOffer if caller, cleanup on unmount.\n\n3. Add InCallManager: start audio session, earpiece by default, speaker toggle, proximity sensor.\n\n4. Stamp connectedAt ONCE, the first time callState reaches 'connected'. A reconnection after a blip must not restart the clock.\n\n5. Run a 1-second interval whose only job is to re-render. It must not accumulate the duration — callDisplay computes that from the timestamps.\n\n6. Render all four phases: 'Connecting...', the running clock, the clock plus a Reconnecting notice, and the ended state. Do not use a two-way ternary on callState.\n\n7. Handle hangup from both sides: local hangup sends call:hangup and navigates back; remote hangup arrives via WS and triggers onHangup.\n\n8. Test: requires two devices with EAS development builds. Start a call, then BACKGROUND the app for a minute and come back — the duration must have advanced by a minute.",
       hints: [
         "InCallManager.start({ media: 'audio' }) switches to phone call audio mode. Always call InCallManager.stop() on cleanup.",
-        "The call timer starts when callState === 'connected', not when the screen opens. Use setInterval with 1-second ticks.",
+        "The `connectedAt === null` guard in the stamping effect is what makes it happen once. Without it, every transition back into 'connected' resets the call to 0:00.",
         "audioTrack.enabled = false mutes (sends silence). audioTrack.stop() permanently ends the track — don't use stop() for mute.",
         "Cleanup must happen in useEffect's return AND in handleHangup — cover both navigation back and screen unmount."
       ],
-      solution: `// See the full VoiceCallScreen implementation in the lesson code above.
-// Key patterns:
+      solution: `// app/src/screens/VoiceCall.tsx
+import { useState, useEffect, useRef } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { TokenPeerConnection } from '../webrtc/PeerConnection';
+import { InCallManager } from 'react-native-incall-manager';
+import { callDisplay } from '../call/callDisplay';
 
-// State: callState, muted, speakerOn, duration
-// Ref: pcRef (TokenPeerConnection), timerRef (interval)
-// Mount: startCall() → InCallManager.start, new TokenPeerConnection, initialize, createOffer if caller
-// Timer: useEffect watching callState === 'connected' → setInterval
-// Mute: pcRef.current.toggleMute() → audioTrack.enabled toggle
-// Speaker: InCallManager.setForceSpeakerphoneOn(bool)
-// Hangup: pcRef.current.hangup(), navigation.goBack()
-// Cleanup: pcRef.current.cleanup(), InCallManager.stop(), clearInterval`
+interface VoiceCallProps {
+  route: {
+    params: {
+      callId: string;
+      conversationId: number;
+      isCaller: boolean;
+      tokenLabel: string;
+    };
+  };
+  navigation: any;
+}
+
+export function VoiceCallScreen({ route, navigation }: VoiceCallProps) {
+  const { callId, conversationId, isCaller, tokenLabel } = route.params;
+
+  const [callState, setCallState] = useState<string>('connecting');
+  const [muted, setMuted] = useState(false);
+  const [speakerOn, setSpeakerOn] = useState(false);
+
+  // When the call connected — not how long it has been running.
+  const [connectedAt, setConnectedAt] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+
+  const pcRef = useRef<TokenPeerConnection | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    startCall();
+    return () => cleanup();
+  }, []);
+
+  // Stamped once. The null guard is what stops a reconnection after a blip
+  // resetting the call to 0:00.
+  useEffect(() => {
+    if (callState === 'connected' && connectedAt === null) {
+      setConnectedAt(Date.now());
+    }
+  }, [callState, connectedAt]);
+
+  // Drives re-renders only. It does not count — a tick missed while the app
+  // is backgrounded costs nothing, because the next one recomputes from the
+  // clock.
+  useEffect(() => {
+    if (connectedAt === null) return;
+    timerRef.current = setInterval(() => setNow(Date.now()), 1000);
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [connectedAt]);
+
+  const display = callDisplay(
+    { state: callState, connectedAt, endedAt: null },
+    now
+  );
+
+  async function startCall() {
+    InCallManager.start({ media: 'audio' });
+    InCallManager.setForceSpeakerphoneOn(false);
+    InCallManager.setProximity(true);
+
+    const pc = new TokenPeerConnection({
+      conversationId,
+      callId,
+      type: 'voice',
+      isCaller,
+      onRemoteStream: () => {},  // audio plays automatically
+      onConnectionStateChange: (state) => setCallState(state),
+      onHangup: () => navigation.goBack(),
+    });
+
+    pcRef.current = pc;
+    await pc.initialize();
+
+    if (isCaller) {
+      await pc.createOffer();
+    }
+  }
+
+  function handleMute() {
+    const isMuted = pcRef.current?.toggleMute();
+    setMuted(isMuted ?? false);
+  }
+
+  function handleSpeaker() {
+    const newState = !speakerOn;
+    InCallManager.setForceSpeakerphoneOn(newState);
+    setSpeakerOn(newState);
+  }
+
+  function handleHangup() {
+    pcRef.current?.hangup();
+    navigation.goBack();
+  }
+
+  function cleanup() {
+    pcRef.current?.cleanup();
+    InCallManager.stop();
+    if (timerRef.current) clearInterval(timerRef.current);
+  }
+
+  return (
+    <View style={styles.container}>
+      <Text style={styles.label}>{tokenLabel}</Text>
+
+      <Text style={styles.state}>
+        {display.phase === 'connecting' ? 'Connecting...' : display.text}
+      </Text>
+
+      {display.phase === 'reconnecting' && (
+        <Text style={styles.reconnecting}>Reconnecting...</Text>
+      )}
+
+      <View style={styles.controls}>
+        <TouchableOpacity
+          style={[styles.controlBtn, muted && styles.controlActive]}
+          onPress={handleMute}
+        >
+          <Text style={styles.controlText}>{muted ? 'Unmute' : 'Mute'}</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.hangupBtn} onPress={handleHangup}>
+          <Text style={styles.hangupText}>End</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.controlBtn, speakerOn && styles.controlActive]}
+          onPress={handleSpeaker}
+        >
+          <Text style={styles.controlText}>{speakerOn ? 'Earpiece' : 'Speaker'}</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#1e293b',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 80,
+  },
+  label: { fontSize: 24, fontWeight: '600', color: '#fff' },
+  state: { fontSize: 16, color: '#94a3b8', marginTop: 8 },
+  reconnecting: { fontSize: 13, color: '#f59e0b', marginTop: 4 },
+  controls: { flexDirection: 'row', gap: 24, alignItems: 'center' },
+  controlBtn: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#334155',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  controlActive: { backgroundColor: '#475569' },
+  controlText: { color: '#fff', fontSize: 11, marginTop: 2 },
+  hangupBtn: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#ef4444',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  hangupText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+});`
     });
 
     createQuiz("lesson-quiz", [
@@ -610,6 +1100,27 @@ console.log('1 hour 5 min 30 sec:', formatDuration(3930));`);
         code: "async function startCall() {\n  InCallManager.start({ media: '___' });\n  InCallManager.setForceSpeakerphoneOn(false);\n  // ... create peer connection\n}",
         answer: "audio",
         explanation: "InCallManager.start({ media: 'audio' }) tells the system this is a voice call — route to earpiece, enable proximity sensor, acquire audio focus. For video calls you'd pass 'video' which defaults to speaker output. The media parameter determines the initial audio routing behaviour."
+      },
+      {
+        type: "predict-output",
+        question: "The user locks the phone and keeps talking for ten minutes. iOS suspends JS timers, so no tick fires. This compares what each design reports when they look again. What prints?",
+        code: "const connectedAt = 1000;\nconst now = connectedAt + 600000;   // ten minutes later\n\nlet ticks = 0;                     // no tick fired while suspended\n\nconsole.log(ticks + ' vs ' + Math.floor((now - connectedAt) / 1000));",
+        answer: "0 vs 600",
+        explanation: "The counter reports 0 because a counter can only report what it observed, and it observed nothing. The subtraction reports 600 because it does not need to have been watching — the two timestamps carry the whole answer. Nothing errored in either case; one of them is simply wrong by exactly the time the user was away. This is the argument for the whole design: an interval that only triggers a re-render can miss every tick and still be correct on the next one."
+      },
+      {
+        type: "predict-output",
+        question: "The shipped formatter computed minutes over the whole total. This is a call of 1 hour, 15 minutes and 30 seconds. What prints?",
+        code: "const total = 4530;\n\nconst shipped = Math.floor(total / 60);          // minutes over everything\nconst correct = Math.floor((total % 3600) / 60); // minutes within the hour\n\nconsole.log(shipped + ' ' + correct);",
+        answer: "75 15",
+        explanation: "Without an hours branch the minutes just keep climbing, so an hour-and-a-quarter call reads 75:30. The playground higher up this page already had the correct three-part formatter — the screen simply never used it. Note the two are not alternatives you pick between: you need `% 3600` for the minutes AND a branch that decides whether to print the hours, and dropping either one is visible only on calls longer than an hour, which are the ones nobody tests."
+      },
+      {
+        type: "predict-output",
+        question: "An NTP correction moves the clock backwards mid-call, so `now` ends up before `connectedAt`. Without a clamp, what does the formatter print?",
+        code: "function formatDuration(total) {\n  const m = Math.floor(total / 60);\n  const s = total % 60;\n  return m + ':' + String(s).padStart(2, '0');\n}\n\nconsole.log(formatDuration(-400));",
+        answer: "-7:-40",
+        explanation: "Two separate surprises combine. Math.floor(-6.67) is -7, because floor rounds towards negative infinity rather than towards zero — so the minutes are more negative than you would expect. And JavaScript's % keeps the sign of the left operand, so -400 % 60 is -40, not 20. padStart then does nothing because '-40' is already three characters. Clamping with Math.max(0, ...) before any of the arithmetic is what stops all of it."
       }
     ]);
   </script>

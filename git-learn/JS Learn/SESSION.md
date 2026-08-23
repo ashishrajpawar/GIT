@@ -22,15 +22,16 @@ how far it got.
 **Nothing in flight.** Working tree clean, everything committed.
 
 **Started the `unverifiable` cluster** — the recommended body of work in *Next
-action*. `a7/0001` is done; 16 to go. See below.
+action*. `a7/0001` and `a7/0002` are done; 15 to go. See below.
 
 **State as of 2026-08-23** — run `node scripts/audit.mjs` before trusting any
 of it:
 
 - **101 lessons.** Audit **green**, 2 warnings, six suites pass.
 - **Every lesson has been executed at least once.** The verification log has
-  no absent entries: **85 verified, 16 `unverifiable`** with a stated reason,
-  1 `nothing-to-verify`. `a7/0001` moved across on 2026-08-23.
+  no absent entries: **86 verified, 15 `unverifiable`** with a stated reason,
+  1 `nothing-to-verify`. `a7/0001` and `a7/0002` moved across on
+  2026-08-23.
 - **`known-issues.json` is down to one entry** — `calls`, gated on B6.
 - `render-as-authored` is **0**, and this time it means it (see *The `variant`
   blind spot*).
@@ -39,6 +40,86 @@ of it:
 
 **Nothing is blocked.** See *Next action* for the four candidate bodies of
 work and why the `unverifiable` cluster is the recommendation.
+
+### a7/0002 — the call clock counted ticks, and fixing 0001 made a second bug visible (2026-08-23)
+
+M3: **`callDisplay`**. 16 self-checks, 10 wrong-cases, 3 new executable quiz
+questions. Second of the `unverifiable` cluster.
+
+**The clock was `setInterval(() => setDuration(d => d + 1), 1000)`** — a count
+of how many times a callback ran, which equals elapsed time only while nothing
+stops the ticks. **iOS suspends JS timers for a backgrounded app, and a voice
+call is *specifically* the screen the user leaves**: phone to the ear with the
+proximity sensor blanking it, switching to Maps to read out an address, locking
+the screen and carrying on talking. A fourteen-minute call comes back reading
+four.
+
+Nothing errors, the audio never stops, and **the number is wrong by exactly the
+interval the user was not watching** — which is the interval they are least
+able to check. The fix is to stamp `connectedAt` once and subtract, so the
+interval's only job is to trigger a re-render and a missed tick costs nothing.
+
+### Fixing 0001 is what made the second defect reachable
+
+`0001` gave `disconnected` an 8-second grace period instead of hanging up. That
+created a window this screen had never had to render — and the render was:
+
+```
+{callState === 'connected' ? formatDuration(duration) : 'Connecting...'}
+```
+
+**So a four-minute call displays "Connecting…" and loses its timer.** Both
+halves point the same way: it reports that nothing has happened yet, on a call
+that is still live. A user who believes it hangs up — ending a call that was
+about to recover on its own.
+
+**Worth carrying: a ternary has room for two answers and this screen has
+four** — never connected, live, momentarily lost but still counting, over. When
+the states outnumber the branches the extras do not disappear; they land in
+whichever branch is the fallback, and the fallback is the one nobody chose.
+Same shape as `a5/0003`'s badge deriving five displayed states from three
+stored ones.
+
+### The formatter was wrong in the lesson and right in its own playground
+
+The screen's `formatDuration` had no hours branch **and** computed minutes over
+the whole total, so 1h15m read `75:30`. The playground higher up the same page
+already had the correct three-part formatter. **Third instance this session of
+one lesson holding both the right and the wrong version of the same thing**,
+after `0001`'s two quiz explanations.
+
+### A fixture-design defect the trip-count caught
+
+Counting how many checks each mistake trips found one that was **6**: the
+falsy-`connectedAt` mistake was breaking every format check too, because I had
+written those fixtures with `connectedAt: 0` for arithmetic convenience. They
+had no business depending on the falsy behaviour. Moving them to `1000` dropped
+it to 1, and **nine of the ten mistakes now trip exactly one check.**
+
+The same count found a check ordering problem: the unpadded-minutes mistake was
+tripping the `59:59`/`1:00:00` boundary check first, because `1:00:00` also has
+single-digit minutes. The specific check now runs before the boundary one, with
+a comment saying why.
+
+**The one that legitimately trips 12 is the tick-counter**, and that is
+inherent: the duration is read from the wrong source, so every assertion about
+a duration fails. One change, twelve consequences — recorded in the case file
+so nobody "fixes" it later.
+
+### A decision worth flagging: the existing interval questions stay
+
+The quiz has several questions built on `setDuration(d => d + 1)` — the
+functional updater, the stale closure, the missing `clearInterval`. They are
+**not wrong**, so the believe-the-quiz rule does not apply; they teach real
+hazards *of accumulating*.
+
+Rather than rewrite three keyed questions for marginal gain, the lesson now
+names the consequence directly: `setNow(Date.now())` has no previous state to
+capture, so the stale-closure hazard cannot be written at all, while
+`clearInterval` still matters because that one is about unmounting rather than
+arithmetic. **The cost of leaving them: a reader could take the accumulator as
+endorsed.** The callout is what prevents that, and rewriting the questions
+remains available if it turns out not to.
 
 ### a7/0001 — the quiz was right and the code beside it was wrong, twice (2026-08-23)
 
@@ -1579,20 +1660,22 @@ executed; the log is 84 verified, 17 `unverifiable` with a reason, 1
 
 What is left, in no forced order:
 
-1. **The `unverifiable` lessons — started 2026-08-23, `a7/0001` done, 16 left.**
+1. **The `unverifiable` lessons — started 2026-08-23; `a7/0001` and
+   `a7/0002` done, 15 left.**
    `CLAUDE.md` warns that the reflex to reach for that flag is wrong more often
    than it is right, and this pass proved it again — nine lessons that looked
    unrunnable produced nine exercises, and `a7/0001` then produced a tenth
-   plus two real defects. Remaining clusters: **A7 (3), B9 (3), X1 (3),
+   plus two real defects. Remaining clusters: **A7 (2), B9 (3), X1 (3),
    A10 (2), B6 (2)**, plus `a9/0001`, `b1/0003`, `b8/0001`. Each needs the same
    move: find the plain function, excuse the rest per-exercise, **and add the
-   `createExplain` prompt** — the 16 without one are exactly the 16 still
+   `createExplain` prompt** — the 15 without one are exactly the 15 still
    excused.
 
-   **Next in this cluster: `a7/0002-voice-call.html`.** It uses the
-   `TokenPeerConnection` wrapper rather than building its own, so the plain
-   function is likely the call-state/duration or the mute-and-hangup
-   bookkeeping rather than anything WebRTC.
+   **Next in this cluster: `a7/0003-video-call.html`.** Read it against
+   `0002` first: the two screens share the clock and the controls, and the
+   prediction is that `0003` carries its own copy of whatever `0002` got
+   wrong. The plain function is likely track-enable/camera-switch state or
+   the video-vs-voice branch in the InCallManager setup.
 2. **The C-modules.** C0–C4 and C6–C9, roughly 34 lessons, none written. C0 is
    architecture and was planned to come *before* B1, so it is already out of
    order.
