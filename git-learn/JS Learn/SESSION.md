@@ -38,6 +38,56 @@ TypeScript whose code has ever run.** Nine left with no log entry:
 
 Previous good state is `b9276d7`.
 
+### The ADR-0007 sweep — the last known violation was three (2026-08-23)
+
+Going to fix `a8/0004`'s `tokenCode` over the WebSocket, I swept the course
+for the same shape. It was not one violation, it was **three lessons**, and
+the worst was not the one on the list.
+
+**`a8/0004`** sent `{ text, tokenCode: code }` on every chat message. The
+holder already knows the code — they typed it — **which is exactly why it
+survived review**. The problem is everywhere the message goes next: the socket
+server's log, the Redis pub/sub payload that fans it across nodes, and any
+error thrown with the frame attached. And the server never needed it: the
+holder JWT is `{ conversationId, tokenId, holderName }`, so the connection
+knew its conversation before the first message. **Re-sending an identifier the
+connection already carries is how a credential ends up somewhere nobody
+designed.**
+
+**It also had `a6/0002`'s bug.** `b5/0002` echoes `localId` back *unchanged*
+so the client can find its optimistic bubble; this page generated
+`'local-' + Date.now()`, stored it, and **never sent it** — so the ack arrived
+with nothing to match and the message stayed "sending" for ever. Fixed on
+mobile in August; this is the same bug in the web client, found by reading the
+two sides against each other rather than either alone.
+
+**`b9/0003` was the bad one, and it is the production logging lesson.** Its
+redemption handler broke three rules simultaneously: the code read from
+`req.params` (a path reaches the proxy log before your handler runs), the code
+written to **four** log lines, and `404` for not-found against `410` for
+revoked — the oracle again, sixth layer. Plus five sample log lines and a quiz
+answer carrying codes.
+
+**The interesting part of that fix is the first log line, because it is the one
+with nothing in it.** At *"redemption attempt"* the token has not been found,
+so there is no id to record — and the pull towards writing *something*
+identifying is precisely how the code got there. `requestId` is enough.
+
+**`x2/0001`** had the same navigation-params defect as `a2/0003`, plus
+`console.warn('Token about to expire:', token.code)` in the lesson that
+teaches console methods.
+
+### The trap I documented, and then walked into
+
+Running `verify-lesson.mjs` on `b9/0003` without `--unverifiable` **deleted its
+log entry** — the exact hazard written into this file after it happened to
+`b6/0001` earlier the same day. Recovered from `git show HEAD:` and re-run with
+its original reason.
+
+**Writing the trap down did not stop me walking into it**, because the reflex
+that causes it — verify after editing — is the correct reflex. The only real
+fix is to check the log first, which is now the sentence in that warning.
+
 ### The verification story is finished (2026-08-23)
 
 **Every lesson in the course has been executed at least once.** The log holds
@@ -1456,9 +1506,8 @@ What is left, in no forced order:
    order.
 3. **`calls`, the last `known-issues.json` entry**, which needs B6 written to
    decide what a call record persists.
-4. **The `a8/0004` fix** — `tokenCode` over the WebSocket on every chat
-   message, twice. Small, and it is the only ADR-0007 violation still on the
-   board.
+4. ~~The `a8/0004` fix~~ — **done 2026-08-23, and it was not the only one.**
+   See below.
 
 ### The TypeScript runner (done 2026-08-23)
 

@@ -14,7 +14,7 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 101 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
 | Quiz questions (track) | 2718 |
-| Avg teaching prose per track lesson | 2098 words |
+| Avg teaching prose per track lesson | 2105 words |
 | Lessons with a playground | 98 / 101 |
 | Lessons with an exercise | 101 / 101 |
 | **Deepened** (all 3 spine sections) | 16 / 101 |
@@ -83,7 +83,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a5-core-token-features | 5 | 2599 | 10 | 10 | 148 | 2/5 | 5/5 |
 | a6-chat-realtime | 3 | 1912 | 6 | 6 | 78 | 0/3 | 3/3 |
 | a7-voice-video | 5 | 1279 | 6 | 6 | 138 | 0/5 | 1/5 |
-| a8-redemption-web | 4 | 1722 | 8 | 8 | 115 | 0/4 | 4/4 |
+| a8-redemption-web | 4 | 1807 | 8 | 8 | 115 | 0/4 | 4/4 |
 | a9-deep-linking | 2 | 1395 | 3 | 3 | 53 | 0/2 | 1/2 |
 | b1-sql-fundamentals | 4 | 1326 | 3 | 7 | 103 | 0/4 | 3/4 |
 | b10-security-compliance | 2 | 3984 | 5 | 4 | 53 | 1/2 | 2/2 |
@@ -94,10 +94,10 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b6-webrtc-signalling | 2 | 2052 | 2 | 2 | 52 | 1/2 | 0/2 |
 | b7-token-engine | 3 | 3451 | 7 | 6 | 78 | 3/3 | 3/3 |
 | b8-push-notifications | 1 | 1420 | 1 | 1 | 25 | 0/1 | 0/1 |
-| b9-docker-deployment | 3 | 2298 | 3 | 3 | 77 | 2/3 | 0/3 |
+| b9-docker-deployment | 3 | 2439 | 3 | 3 | 77 | 2/3 | 0/3 |
 | c5-end-to-end-encryption | 5 | 1671 | 10 | 10 | 126 | 0/5 | 5/5 |
 | x1-git-dev-environment | 3 | 698 | 1 | 3 | 76 | 0/3 | 0/3 |
-| x2-debugging | 2 | 1241 | 3 | 4 | 50 | 0/2 | 2/2 |
+| x2-debugging | 2 | 1242 | 3 | 4 | 50 | 0/2 | 2/2 |
 
 ## Integrity checks
 
@@ -192,7 +192,7 @@ so they do not hold the audit red. They are **not** resolved.
 | a8-redemption-web/0001-vite-react-setup.html | 991 | 12 | 2 | 2 | 29 | — | yes |
 | a8-redemption-web/0002-token-redemption-flow.html | 2223 | 6 | 2 | 2 | 30 | — | yes |
 | a8-redemption-web/0003-browser-webrtc-ws.html | 1768 | 8 | 2 | 2 | 29 | — | yes |
-| a8-redemption-web/0004-no-app-experience.html | 1907 | 9 | 2 | 2 | 27 | — | yes |
+| a8-redemption-web/0004-no-app-experience.html | 2244 | 9 | 2 | 2 | 27 | — | yes |
 | a9-deep-linking/0001-universal-links-app-links.html | 1112 | 7 | 1 | 1 | 28 | — | n/a |
 | a9-deep-linking/0002-in-app-deep-link-handling.html | 1678 | 10 | 2 | 2 | 25 | — | yes |
 | b1-sql-fundamentals/0001-tables-insert-select.html | 1816 | 10 | 1 | 2 | 26 | — | yes |
@@ -222,7 +222,7 @@ so they do not hold the audit red. They are **not** resolved.
 | b8-push-notifications/0001-fcm-apns-expo.html | 1420 | 11 | 1 | 1 | 25 | — | n/a |
 | b9-docker-deployment/0001-docker-fundamentals.html | 2403 | 13 | 1 | 1 | 26 | yes | n/a |
 | b9-docker-deployment/0002-coolify-setup.html | 2663 | 12 | 1 | 1 | 26 | yes | n/a |
-| b9-docker-deployment/0003-logs-backups-monitoring.html | 1827 | 17 | 1 | 1 | 25 | — | n/a |
+| b9-docker-deployment/0003-logs-backups-monitoring.html | 2252 | 17 | 1 | 1 | 25 | — | n/a |
 | c5-end-to-end-encryption/0001-keys-on-the-device.html | 1371 | 5 | 2 | 2 | 26 | — | yes |
 | c5-end-to-end-encryption/0002-publishing-fetching-keys.html | 1782 | 3 | 2 | 2 | 25 | — | yes |
 | c5-end-to-end-encryption/0003-verification-safety-numbers.html | 1462 | 4 | 2 | 2 | 25 | — | yes |
@@ -231,5 +231,5 @@ so they do not hold the audit red. They are **not** resolved.
 | x1-git-dev-environment/0001-git-fundamentals.html | 790 | 9 | 1 | 1 | 26 | — | n/a |
 | x1-git-dev-environment/0002-github-workflow.html | 719 | 7 | 0 | 1 | 25 | — | n/a |
 | x1-git-dev-environment/0003-dev-environment.html | 586 | 13 | 0 | 1 | 25 | — | n/a |
-| x2-debugging/0001-react-native-debugging.html | 1186 | 11 | 2 | 2 | 25 | — | yes |
+| x2-debugging/0001-react-native-debugging.html | 1188 | 11 | 2 | 2 | 25 | — | yes |
 | x2-debugging/0002-nodejs-debugging.html | 1295 | 8 | 1 | 2 | 25 | — | yes |

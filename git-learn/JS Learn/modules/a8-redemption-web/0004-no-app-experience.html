@@ -90,17 +90,22 @@ export function ChatPage() {
     e.preventDefault();
     if (!input.trim() || !wsClient.current) return;
 
+    // localId, and NO tokenCode. See the callout below.
+    const localId = 'local-' + Date.now();
+
     wsClient.current.send('chat-message', {
       text: input.trim(),
-      tokenCode: code,
+      localId,
     });
 
-    // Optimistic: add to local state immediately
+    // Optimistic: add to local state immediately, keyed by the same
+    // localId the server will echo back, so the ack can find it.
     setMessages(prev =&gt; [...prev, {
-      id: 'local-' + Date.now(),
+      id: localId,
       text: input.trim(),
       sender: 'holder',
       timestamp: new Date().toISOString(),
+      status: 'sending',
     }]);
 
     setInput('');
@@ -162,6 +167,44 @@ export function ChatPage() {
     &lt;/div&gt;
   );
 }</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">Two things that changed in that send, and both were shipped wrong</div>
+
+      <p>Until 2026-08-23 the payload was
+      <code>{ text, tokenCode: code }</code>, on <strong>every message</strong>.</p>
+
+      <p><strong>The holder already knows the code — they typed it — so nothing
+      leaks to <em>them</em>.</strong> That is exactly why it survived review.
+      The problem is everywhere the message goes afterwards: the socket
+      server's request log, the Redis pub/sub payload that fans it out to
+      other nodes, and any error the handler throws with the frame attached.
+      ADR-0007 says the code never goes in a log, and this put one in several,
+      once per keystroke-ful of chat.</p>
+
+      <p><strong>And the server never needed it.</strong> The socket is already
+      authenticated — <code>b7/0001</code>'s holder JWT is
+      <code>{ conversationId, tokenId, holderName }</code>, so the connection
+      knows which conversation it belongs to before the first message arrives.
+      A code in the body is a second, weaker answer to a question already
+      settled at connect time. <strong>Re-sending an identifier the connection
+      already carries is how a credential ends up somewhere nobody
+      designed.</strong></p>
+
+      <p>The second change is the <code>localId</code>, and it is a plain bug
+      rather than a leak. <code>b5/0002</code> echoes <code>localId</code> back
+      <em>unchanged</em> in its ack, precisely so the client can find the
+      optimistic bubble it drew. This page generated
+      <code>'local-' + Date.now()</code>, put it in local state, and
+      <strong>never sent it</strong> — so the ack arrived with nothing to match
+      and the message stayed in its sending state for ever.</p>
+
+      <p><code>a6/0002</code> had the same defect on the mobile side and it was
+      fixed there in August; this is the same bug in the web client, found by
+      reading the two sides against each other rather than either alone.
+      <strong>An optimistic update and its acknowledgement have to agree on an
+      identifier that the client chooses and the server merely repeats.</strong></p>
+    </div>
 
     <h2>Voice and video calls in the browser</h2>
 
@@ -735,12 +778,14 @@ export function ChatPage() {
   function send(e: React.FormEvent) {
     e.preventDefault();
     if (!input.trim()) return;
-    wsClient.current?.send('chat-message', { text: input.trim(), tokenCode: code });
+    const localId = 'local-' + Date.now();
+    wsClient.current?.send('chat-message', { text: input.trim(), localId });
     setMessages(prev => [...prev, {
-      id: 'local-' + Date.now(),
+      id: localId,
       text: input.trim(),
       sender: 'holder',
       timestamp: new Date().toISOString(),
+      status: 'sending',
     }]);
     setInput('');
   }

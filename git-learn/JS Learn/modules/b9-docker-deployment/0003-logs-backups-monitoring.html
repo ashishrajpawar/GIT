@@ -36,7 +36,7 @@ console.log("User 42 redeemed token MERC-8GH2 at 2024-03-15T10:30:00Z");
   "level": "info",
   "msg": "token redeemed",
   "userId": 42,
-  "tokenCode": "MERC-8GH2",
+  "tokenId": 42,
   "timestamp": "2024-03-15T10:30:00.123Z",
   "requestId": "req-abc-123",
   "duration_ms": 45
@@ -118,33 +118,83 @@ export const requestLogger = pinoHttp({
 import { Request, Response } from 'express';
 
 export async function redeemToken(req: Request, res: Response) {
-  const { code } = req.params;
+  // POST /api/redeem, with the code in the BODY. Never req.params:
+  // a path reaches the proxy access log, browser history, Referer and
+  // crash reports before your handler ever sees it (ADR-0007).
+  const { code } = req.body;
 
-  // req.log is added by pino-http — it includes requestId automatically
-  req.log.info({ tokenCode: code }, 'token redemption attempt');
+  // req.log is added by pino-http — it includes requestId automatically.
+  // NOTE what is NOT in this line. There is nothing to identify the
+  // attempt by yet, and wanting one is exactly the pressure that puts
+  // a capability into a log file.
+  req.log.info('token redemption attempt');
 
   try {
-    const token = await findTokenByCode(code);
+    const token = await findTokenByCodeHash(codeHashInput(code));
 
-    if (!token) {
-      req.log.warn({ tokenCode: code }, 'token not found');
-      return res.status(404).json({ error: 'token not found' });
-    }
-
-    if (token.revoked_at) {
-      req.log.warn({ tokenCode: code, revokedAt: token.revoked_at }, 'revoked token redemption attempt');
-      return res.status(410).json({ error: 'token revoked' });
+    // ONE refusal, one shape. b7/0001: a code that never existed and a
+    // code revoked yesterday must be indistinguishable from outside,
+    // or the error handler gives back the keyspace the code cost.
+    if (!token || token.revoked_at || hasExpired(token)) {
+      // The real reason goes in the LOG, where it is useful to you and
+      // invisible to whoever is guessing. tokenId is null when there
+      // was no token -- which is itself the finding.
+      req.log.warn(
+        { tokenId: token?.id ?? null, refusal: refusalReason(token) },
+        'redemption refused'
+      );
+      return res.status(404).json({ error: 'not available' });
     }
 
     const event = await createRedemptionEvent(token.id, req.ip);
-    req.log.info({ tokenId: token.id, eventId: event.id }, 'token redeemed successfully');
+    req.log.info({ tokenId: token.id, eventId: event.id }, 'token redeemed');
 
     res.json({ success: true, conversationId: event.conversation_id });
   } catch (err) {
-    req.log.error({ err, tokenCode: code }, 'token redemption failed');
+    req.log.error({ err }, 'token redemption failed');
     res.status(500).json({ error: 'internal error' });
   }
 }</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">This handler broke three rules at once, and it is the logging lesson</div>
+
+      <p>Until 2026-08-23 it read the code from <code>req.params</code>, logged
+      it on <strong>four</strong> separate lines, and answered <code>404</code>
+      for "no such token" and <code>410</code> for "revoked". Each of those is
+      forbidden somewhere else in this course, and all three were here
+      together — in the lesson that teaches production logging, which is the
+      worst place for any of them.</p>
+
+      <ul>
+        <li><strong>The code was in the path.</strong> ADR-0007 puts it in a
+        POST body precisely because a path reaches the proxy access log before
+        your code runs. Logging carefully in the handler is pointless if nginx
+        already wrote it.</li>
+        <li><strong>The code was in four log lines.</strong> A token code is
+        not an identifier, it is the capability — so those lines are live
+        credentials in a file designed to be copied to a log aggregator.
+        <code>x2/0002</code> makes the same argument from the debugging side.</li>
+        <li><strong>404 and 410 are a code oracle.</strong> A 404 means keep
+        guessing, a 410 means you found one. Sixth layer, after
+        <code>b7/0001</code>, <code>a8/0002</code>, <code>b3/0004</code>,
+        <code>b4/0001</code> and <code>a9/0002</code>.</li>
+      </ul>
+
+      <p><strong>The interesting part is the first log line, because it is the
+      one with nothing in it.</strong> At that point the token has not been
+      found, so there is no <code>tokenId</code> to record — and the pull
+      towards writing <em>something</em> identifying is exactly how the code
+      got there. The honest answer is that <code>requestId</code> is enough:
+      it ties this line to the refusal that follows, which does carry an id
+      when there is one.</p>
+
+      <p>And <code>tokenId: null</code> in the refusal is not a gap. It says
+      <em>no token matched</em>, which is a different finding from <em>this
+      token was refused</em> — the same distinction <code>c5/0004</code> draws
+      between gone and not-fetched, kept where the operator can see it and the
+      caller cannot.</p>
+    </div>
 
     <h3>Log Levels</h3>
     <table>
@@ -466,12 +516,12 @@ setInterval(async () => {
     <script>
         createPlayground("playground-1", `// Simulate analyzing structured logs
 const logs = [
-  { level: "info", msg: "token redeemed", tokenCode: "MERC-8GH2", requestId: "req-001", duration_ms: 45 },
-  { level: "warn", msg: "revoked token attempt", tokenCode: "XPRD-4KN9", requestId: "req-002", duration_ms: 12 },
-  { level: "info", msg: "token redeemed", tokenCode: "CAFE-2BN7", requestId: "req-003", duration_ms: 1250 },
+  { level: "info", msg: "token redeemed", tokenId: 42, requestId: "req-001", duration_ms: 45 },
+  { level: "warn", msg: "redemption refused", tokenId: 43, refusal: "revoked", requestId: "req-002", duration_ms: 12 },
+  { level: "info", msg: "token redeemed", tokenId: 44, requestId: "req-003", duration_ms: 1250 },
   { level: "error", msg: "database timeout", requestId: "req-004", duration_ms: 5000 },
-  { level: "info", msg: "token issued", tokenCode: "NEWT-6HJ3", requestId: "req-005", duration_ms: 89 },
-  { level: "info", msg: "token redeemed", tokenCode: "DECK-4AB2", requestId: "req-006", duration_ms: 52 },
+  { level: "info", msg: "token issued", tokenId: 45, requestId: "req-005", duration_ms: 89 },
+  { level: "info", msg: "token redeemed", tokenId: 46, requestId: "req-006", duration_ms: 52 },
   { level: "warn", msg: "slow request detected", requestId: "req-003", duration_ms: 1250 },
 ];
 
@@ -698,8 +748,8 @@ export default router;
             {
                 type: "predict-output",
                 question: "What does pino output for this child logger?",
-                code: "const pino = require('pino');\nconst logger = pino({ level: 'info' });\nconst child = logger.child({ service: 'token-engine' });\nchild.info({ tokenCode: 'MERC-8GH2' }, 'token issued');\n// What fields appear in the JSON output?",
-                answer: "level, time, service, tokenCode, msg",
+                code: "const pino = require('pino');\nconst logger = pino({ level: 'info' });\nconst child = logger.child({ service: 'token-engine' });\nchild.info({ tokenId: 42 }, 'token issued');\n// What fields appear in the JSON output?",
+                answer: "level, time, service, tokenId, msg",
                 explanation: "Child loggers inherit the parent's configuration and merge their bound context (service: 'token-engine') into every log line. The msg field comes from the second argument to .info()."
             },
             {
