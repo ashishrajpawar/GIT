@@ -26,7 +26,8 @@ TypeScript whose code has ever run.** Nine left with no log entry:
 
 | Lesson | What it needs |
 |---|---|
-| `a2/0002`, `a2/0003` | An M3 exercise. `0003` is JSX, so the screen stays excused and the pure function beside it does not |
+| `a2/0003` | An M3 exercise. JSX, so the screen stays excused and the pure function beside it does not — **the last one** |
+| ~~`a2/0002`~~ | **done 2026-08-23** — `toUpdatePayload`; `Partial<T>` gives a field three states where the column has two |
 | ~~`a3/0002`~~ | **done 2026-08-23** — `parseListResponse`, the boundary. Its `TokenListItem` declared a `code` field and the list screen rendered it |
 | ~~`a9/0002`~~ | **done 2026-08-23** — `parseTokenLink`, and it was hiding a denial oracle |
 | ~~`x2/0002`~~ | **done 2026-08-23** — `redactLogFields`, and it was teaching `tokenCode: token.code` as best practice |
@@ -36,6 +37,46 @@ TypeScript whose code has ever run.** Nine left with no log entry:
 | ~~`b1/0002`~~ | **done 2026-08-23** — `joinRows`; its LEFT JOIN example claimed "most recent redemption" and returned all of them |
 
 Previous good state is `b9276d7`.
+
+### a2/0002 — `Partial<T>` gives a field three states, and the column has two (2026-08-23)
+
+M3: **`toUpdatePayload`**. 16 self-checks, 9 wrong-cases.
+
+`Partial<Token>` turns `maxUses: number | null` into `maxUses?: number | null`,
+and the extra state **is** the meaning of a PATCH:
+
+| Sent | Server must |
+|---|---|
+| `{}` — absent | leave it alone; this edit is not about that field |
+| `{ maxUses: null }` | set it to unlimited — null is the value the user just chose |
+| `{ maxUses: 5 }` | set it to five |
+
+**Collapse the first two and "unlimited" becomes unsendable.** A client
+building its body with `if (value != null)` can set a limit and never remove
+one: the user unticks the box, presses Save, the request succeeds, and the
+limit is still there. Nothing errors, so it is reported as *"saving doesn't
+work sometimes"*.
+
+**`?` means the key may be absent; `| null` means the value may be null. They
+are different questions, and `Partial<T>` only answers the first.** Same
+distinction as `c5/0004`'s *gone* vs *not fetched* and `b1/0001`'s `NULL` vs
+`''`, now with a name in the type system.
+
+Also `issuedTo` → `label` (17 occurrences) and `maxUses: number` → `| null`,
+which left **three stale type strings in quiz answers** — none executable, so
+nothing would have caught them.
+
+### The wrong-case that hid inside the thing it was describing
+
+The mistake that treats `undefined` as a value builds
+`{ label: 'Veg box', maxUses: undefined, expiresAt: undefined }` — and
+**`JSON.stringify` drops keys whose value is `undefined`**, so it serialises
+identically to the correct payload. My check compared stringified output, so
+it passed.
+
+That is precisely why sending `undefined` is dangerous rather than harmless,
+and precisely why a check that stringifies cannot see it. The check now
+compares **keys**.
 
 ### a3/0002 — the type that declared the field ADR-0007 forbids (2026-08-23)
 

@@ -127,9 +127,9 @@ async function fetchPaginated&lt;T&gt;(
     <pre><code>interface Token {
   id: number;
   code: string;          // present ONLY in the reply to POST /tokens
-  issuedTo: string;
+  label: string;
   status: 'active' | 'paused' | 'revoked';
-  maxUses: number;
+  maxUses: number | null;   // null = unlimited, 0 = none
 }
 
 // When updating a token, you only send the fields that changed:
@@ -138,12 +138,45 @@ type TokenUpdate = Partial&lt;Token&gt;;
 // This is valid — only updating one field:
 const update: TokenUpdate = { status: 'paused' };</code></pre>
 
+    <div class="callout danger">
+      <div class="callout-title"><code>Partial&lt;T&gt;</code> makes fields optional, and optional is not nullable</div>
+
+      <p><code>Partial&lt;Token&gt;</code> turns <code>maxUses: number | null</code>
+      into <code>maxUses?: number | null</code> — which now has
+      <strong>three</strong> states where the column had two, and the extra one
+      is the whole point of a PATCH:</p>
+
+      <table>
+        <thead><tr><th>What you send</th><th>What the server must do</th></tr></thead>
+        <tbody>
+          <tr><td><code>{ }</code> — <code>maxUses</code> absent</td><td><strong>Leave it alone.</strong> This edit is not about that field</td></tr>
+          <tr><td><code>{ maxUses: null }</code></td><td><strong>Set it to unlimited.</strong> null is a value, and it is the one the user just chose</td></tr>
+          <tr><td><code>{ maxUses: 5 }</code></td><td>Set it to five</td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Collapse the first two and "unlimited" becomes
+      unsendable.</strong> A client that builds its PATCH body by dropping
+      empty values — <code>if (value) body[key] = value</code>, or the slightly
+      better-looking <code>if (value != null)</code> — can set a limit and can
+      never remove one. The user unticks "limit uses", presses Save, the
+      request succeeds, and the limit is still there. Nothing errors, so the
+      bug is reported as "saving doesn't work sometimes".</p>
+
+      <p>This is the same distinction <code>c5/0004</code> drew between <em>gone</em>
+      and <em>not fetched</em>, and <code>b1/0001</code> between <code>NULL</code>
+      and <code>''</code>. Here it has a name in the type system:
+      <strong><code>?</code> means the key may be absent;
+      <code>| null</code> means the value may be null. They are different
+      questions and <code>Partial&lt;T&gt;</code> only answers the first.</strong></p>
+    </div>
+
     <h3>Pick&lt;T, Keys&gt; — select specific fields</h3>
 
     <pre><code>// The token list screen only needs these fields:
-type TokenListItem = Pick&lt;Token, 'id' | 'issuedTo' | 'status'&gt;;
+type TokenListItem = Pick&lt;Token, 'id' | 'label' | 'status'&gt;;
 
-// Equivalent to: { id: number; issuedTo: string; status: TokenStatus }</code></pre>
+// Equivalent to: { id: number; label: string; status: TokenStatus }</code></pre>
 
     <div class="callout">
       <div class="callout-title">Notice which field is <em>not</em> picked</div>
@@ -168,7 +201,7 @@ type TokenListItem = Pick&lt;Token, 'id' | 'issuedTo' | 'status'&gt;;
     <pre><code>// When creating a token, the server generates 'code' — don't include it:
 type CreateTokenInput = Omit&lt;Token, 'code' | 'status'&gt;;
 
-// Equivalent to: { issuedTo: string; maxUses: number }</code></pre>
+// Equivalent to: { label: string; maxUses: number | null }</code></pre>
 
     <h3>Record&lt;K, V&gt; — typed dictionaries</h3>
 
@@ -209,9 +242,21 @@ function handleResponse(status: HttpStatus) {
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>Now build it yourself</h2>
+
+    <p>The types file is declarations and is erased before anything runs. What
+    survives compilation is the function that builds the object those types
+    describe — and <code>Partial&lt;T&gt;</code> is a promise about a shape that
+    something has to actually construct.</p>
+
+    <div id="exercise-patch"></div>
+    <div id="pg-exercise-patch"></div>
+
+    <h3>And the types</h3>
 
     <div id="exercise-1"></div>
+
+    <div id="explain-a2-0002"></div>
 
     <hr>
 
@@ -227,6 +272,7 @@ function handleResponse(status: HttpStatus) {
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -240,7 +286,7 @@ function apiResponse(data, success, error) {
 
 // Token endpoint
 const tokenRes = apiResponse(
-  { code: 'MERC-8GH2', issuedTo: 'Amazon', status: 'active' },
+  { code: 'MERC-8GH2', label: 'Amazon', status: 'active' },
   true
 );
 
@@ -253,12 +299,58 @@ const msgRes = apiResponse(
 console.log("Token response:", JSON.stringify(tokenRes, null, 2));
 console.log("Message response:", JSON.stringify(msgRes, null, 2));`);
 
+    createSolution("exercise-patch", {
+      exercise: `Write toUpdatePayload(before, after, config) — build the PATCH body, which is Partial<T> at runtime.\n\nbefore is the token as it was loaded. after is the token as the form now holds it. config is { editable }, the field names this endpoint permits changing.\n\nReturn { payload, refused, changed }. payload is the object to send; refused lists field names that were altered but may not be; changed says whether there is anything to send at all.\n\nThe rules:\n\n1. ONLY FIELDS IN config.editable ARE EVER CONSIDERED. id, createdAt and usedCount are facts about the token, not settings on it.\n\n2. A FIELD IS INCLUDED ONLY IF IT DIFFERS FROM before. That is what makes this a PATCH rather than a PUT — sending every field back overwrites whatever a second device changed between your read and your write, with values you read before it did.\n\n3. undefined IN after MEANS "NOT BEING EDITED" and is never included, whatever before holds. The form did not touch this field.\n\n4. null IN after IS A VALUE AND MUST BE SENT when before was not null. This is the rule the whole exercise exists for: maxUses null means unlimited, so dropping nulls from the payload makes "remove the limit" unsendable. The user unticks the box, presses Save, the request succeeds, and the limit is still there — and nothing errors, so it gets reported as "saving doesn't work sometimes".\n\n5. A FIELD PRESENT IN after BUT NOT IN config.editable IS 'refused' — named in the refused list, never in the payload. Silently dropping it lets the screen believe it saved something it did not, which is worse than refusing: the user sees the new value on screen until the next reload.\n\n6. COMPARE STRUCTURALLY, NOT BY REFERENCE. Two arrays with the same contents are equal for this purpose. A === comparison says an untouched rules array has changed, so every save rewrites it — needless writes, and each one is a chance to clobber a concurrent edit with data you did not change.\n\n7. changed IS false WHEN THE PAYLOAD IS EMPTY, and the caller is expected to skip the request entirely. An empty PATCH is a round trip that changes nothing and still moves updated_at.\n\n8. NEVER MUTATE before OR after. The form still needs its own state.`,
+      hints: [
+        "Rules 3 and 4 are one line apart and opposite. Test for undefined FIRST and skip; then everything remaining, including null, is a value to compare. Reach for `if (value == null) continue` and you have merged the two cases the exercise is about.",
+        "For rule 6, JSON.stringify on both sides is enough here and worth knowing the limit of: it is order-sensitive, so two objects with the same keys in a different order compare as different. For a payload built from a form that is fine, and for arbitrary data it is not.",
+        "Walk config.editable for the payload, and walk Object.keys(after) separately for the refusals. One loop cannot do both, because the two questions are asked of different sets of keys."
+      ],
+      solution: `function toUpdatePayload(before, after, config) {
+  const payload = {};
+  const refused = [];
+
+  // Rule 6. Order-sensitive, which is acceptable for a form payload
+  // and worth knowing before reusing this on arbitrary data.
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+  // Rules 1-4: the payload comes from the EDITABLE set.
+  for (const field of config.editable) {
+    const next = after[field];
+
+    // Rule 3. Not being edited. Checked before anything compares,
+    // because undefined against a value is a difference and would
+    // otherwise be sent as a change nobody made.
+    if (next === undefined) continue;
+
+    // Rule 4. null falls through to here on purpose -- it is a value,
+    // and it is the one that means "unlimited".
+    if (!same(before[field], next)) {
+      payload[field] = next;
+    }
+  }
+
+  // Rule 5: the refusals come from what the CALLER sent, which is a
+  // different set of keys, so it needs its own pass.
+  for (const field of Object.keys(after)) {
+    if (after[field] === undefined) continue;
+    if (config.editable.includes(field)) continue;
+    if (same(before[field], after[field])) continue;
+    refused.push(field);
+  }
+
+  // Rule 7. Nothing to send is a result, not a failure.
+  return { payload, refused, changed: Object.keys(payload).length > 0 };
+}`
+    });
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is a file of type declarations, which are erased before anything runs",
       exercise: "Build Token's API type system in shared/api-types.ts. Create: (1) a generic ApiResponse<T> with data, success, error fields; (2) a generic Paginated<T> with items, cursor, hasMore; (3) CreateTokenInput using Omit to exclude server-generated fields (code, status, createdAt); (4) TokenUpdate using Partial; (5) a TokenListItem using Pick with only the fields needed for the list screen.",
       hints: [
         "Start with the base Token interface, then derive the others using utility types.",
         "CreateTokenInput = Omit<Token, 'code' | 'status' | 'createdAt'> — the server generates these.",
-        "The list screen needs: code, issuedTo, status — use Pick to select just those."
+        "The list screen needs: code, label, status — use Pick to select just those."
       ],
       solution: `// shared/api-types.ts
 import { Token, TokenStatus, AccessRule } from './types';
@@ -283,19 +375,146 @@ export interface Paginated<T> {
 export type CreateTokenInput = Omit<Token, 'code' | 'status' | 'createdAt'>;
 
 // PATCH /tokens/:id — partial updates
-export type TokenUpdate = Partial<Pick<Token, 'issuedTo' | 'status' | 'maxUses'>>;
+export type TokenUpdate = Partial<Pick<Token, 'label' | 'status' | 'maxUses'>>;
 
 // GET /tokens — list view only needs these fields.
 // NOTE: no 'code'. ADR-0007 says the list returns no code field at all —
 // serving one would mean AES-decrypting every row on every scroll, and it
 // would put a pile of live capabilities in a response nobody needs them in.
 // The code is returned exactly once, from POST /tokens.
-export type TokenListItem = Pick<Token, 'id' | 'issuedTo' | 'status'>;
+export type TokenListItem = Pick<Token, 'id' | 'label' | 'status'>;
 
 // Composed response types:
 export type TokenResponse = ApiResponse<Token>;
 export type TokenListResponse = ApiResponse<Paginated<TokenListItem>>;
 export type RuleListResponse = ApiResponse<AccessRule[]>;`
+    });
+
+    createPlayground("pg-exercise-patch", `// Write toUpdatePayload(before, after, config) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(v) { return JSON.stringify(v); }
+
+// maxUses starts at 5 rather than null, so "set it to unlimited" is a
+// real change to detect and not the value it already had.
+function before(over) {
+  var t = {
+    id: 7, label: "Farm box", status: "active",
+    maxUses: 5, expiresAt: null,
+    createdAt: "2026-08-01T09:00:00.000Z", usedCount: 2,
+    rules: [{ ruleType: "time_window", enabled: true }],
+  };
+  for (var k in (over || {})) t[k] = over[k];
+  return t;
+}
+var EDITABLE = ["label", "maxUses", "expiresAt", "rules"];
+function cfg(over) {
+  var c = { editable: EDITABLE.slice() };
+  for (var k in (over || {})) c[k] = over[k];
+  return c;
+}
+function got(after, over, base) {
+  try { return toUpdatePayload(base || before(), after, cfg(over)) || {}; }
+  catch (e) { return { payload: null, refused: ["threw: " + e.message], changed: false }; }
+}
+// after as the FORM holds it: every editable field present, unchanged
+// ones carrying their current value.
+function form(over) {
+  var f = { label: "Farm box", maxUses: 5, expiresAt: null, rules: [{ ruleType: "time_window", enabled: true }] };
+  for (var k in (over || {})) f[k] = over[k];
+  return f;
+}
+
+try {
+  if (typeof toUpdatePayload !== "function") throw new Error("not written yet");
+
+  // Rules 2 and 7 -- nothing edited is a result.
+  check("an untouched form produces an empty payload",
+    show(got(form()).payload) === show({}) && got(form()).changed === false,
+    "got " + show(got(form())) + " -- an empty PATCH still moves updated_at");
+
+  // Rule 2
+  check("only the changed field is sent",
+    show(got(form({ label: "Veg box" })).payload) === show({ label: "Veg box" }),
+    "got " + show(got(form({ label: "Veg box" })).payload) +
+      " -- sending everything back overwrites what another device changed");
+  check("...and changed is true",
+    got(form({ label: "Veg box" })).changed === true);
+
+  // Rule 4 -- THE rule.
+  check("setting maxUses to null IS sent",
+    show(got(form({ maxUses: null })).payload) === show({ maxUses: null }),
+    "got " + show(got(form({ maxUses: null })).payload) +
+      " -- drop nulls and 'remove the limit' becomes unsendable");
+  check("...and 0 is sent too, being a real limit",
+    show(got(form({ maxUses: 0 })).payload) === show({ maxUses: 0 }),
+    "got " + show(got(form({ maxUses: 0 })).payload));
+  check("...while null unchanged is not sent",
+    show(got(form({ expiresAt: null })).payload) === show({}),
+    "got " + show(got(form({ expiresAt: null })).payload) + " -- it was already null");
+  check("...and a null replacing a value IS sent",
+    show(got(form({ expiresAt: null }), {}, before({ expiresAt: "2026-12-01" })).payload)
+      === show({ expiresAt: null }),
+    "got " + show(got(form({ expiresAt: null }), {}, before({ expiresAt: "2026-12-01" })).payload));
+
+  // Rule 3 -- absent is not null.
+  // Compare KEYS, not the stringified payload. JSON.stringify drops a
+  // key whose value is undefined, so a payload of
+  // { label: 'Veg box', maxUses: undefined } serialises identically to
+  // { label: 'Veg box' } -- which is exactly why sending undefined is
+  // dangerous rather than harmless, and exactly why a check that
+  // stringifies cannot see it.
+  check("a field the form did not touch is never sent",
+    show(Object.keys(got({ label: "Veg box" }).payload)) === show(["label"]),
+    "got keys " + show(Object.keys(got({ label: "Veg box" }).payload)) +
+      " -- maxUses is absent, so it is not being edited");
+  check("...even when before holds a value",
+    show(got({ maxUses: undefined }).payload) === show({}),
+    "got " + show(got({ maxUses: undefined }).payload) +
+      " -- undefined means 'not edited'; null would mean 'set to unlimited'");
+
+  // Rule 6 -- structural, not reference.
+  check("an equal-but-not-identical array is not a change",
+    show(got(form({ rules: [{ ruleType: "time_window", enabled: true }] })).payload) === show({}),
+    "got " + show(got(form({ rules: [{ ruleType: "time_window", enabled: true }] })).payload) +
+      " -- === on arrays rewrites the rules on every single save");
+  check("...but a genuinely different array is",
+    got(form({ rules: [{ ruleType: "contact_limit", enabled: true }] })).changed === true,
+    "got " + show(got(form({ rules: [{ ruleType: "contact_limit", enabled: true }] })).payload));
+
+  // Rules 1 and 5 -- refused, not dropped.
+  check("changing a non-editable field is refused",
+    show(got(form({ status: "revoked" })).refused) === show(["status"]),
+    "got " + show(got(form({ status: "revoked" }))) +
+      " -- status changes through revoke/pause, not through PATCH");
+  check("...and never reaches the payload",
+    got(form({ status: "revoked" })).payload.status === undefined,
+    "got " + show(got(form({ status: "revoked" })).payload));
+  check("...while sending a non-editable field UNCHANGED is not a refusal",
+    show(got(form({ status: "active" })).refused) === show([]),
+    "got " + show(got(form({ status: "active" })).refused) +
+      " -- the form echoing a value it did not alter is not an attempt to change it");
+  check("...and an unknown field is refused too",
+    show(got(form({ colour: "green" })).refused) === show(["colour"]),
+    "got " + show(got(form({ colour: "green" })).refused));
+
+  // Rule 8
+  var b = before();
+  var a = form({ label: "Veg box" });
+  var snapshot = JSON.stringify([b, a]);
+  got(a, {}, b);
+  check("neither input is mutated",
+    JSON.stringify([b, a]) === snapshot, "the form still needs its own state");
+} catch (err) {
+  console.log("Self-check could not run: " + err.message);
+}`);
+
+    createExplain("explain-a2-0002", {
+      prompt: "In a <code>Partial&lt;Token&gt;</code> payload, omitting <code>maxUses</code> and sending <code>maxUses: null</code> are different instructions to the server. Explain what each one means, and what a user can no longer do if the client collapses them with <code>if (value != null)</code>."
     });
 
     createQuiz("lesson-quiz", [
@@ -327,7 +546,7 @@ export type RuleListResponse = ApiResponse<AccessRule[]>;`
         explanation: "Returning 'any' defeats the purpose of TypeScript. The correct signature is: function getProperty<T, K extends keyof T>(obj: T, key: K): T[K] — this way the return type is specific to the key you pass."
       },
       {
-        question: "When would you use Omit<Token, 'code'> vs Pick<Token, 'issuedTo' | 'maxUses'>?",
+        question: "When would you use Omit<Token, 'code'> vs Pick<Token, 'label' | 'maxUses'>?",
         options: [
           "They're the same thing — use either",
           "Omit when you want MOST fields minus a few; Pick when you want only SPECIFIC fields",
@@ -352,9 +571,9 @@ export type RuleListResponse = ApiResponse<AccessRule[]>;`
       {
         type: "predict-output",
         question: "What is the resulting type of Partial<Token>?",
-        code: "interface Token {\n  code: string;\n  issuedTo: string;\n  maxUses: number;\n}\n\ntype OptionalToken = Partial<Token>;",
-        answer: "{ code?: string; issuedTo?: string; maxUses?: number } — all fields become optional",
-        explanation: "Partial<T> makes every property optional (adds ? to each field). Useful for update operations where you only send the fields that changed: updateToken(id, { maxUses: 10 }) without needing to provide code and issuedTo."
+        code: "interface Token {\n  code: string;\n  label: string;\n  maxUses: number | null;   // null = unlimited, 0 = none\n}\n\ntype OptionalToken = Partial<Token>;",
+        answer: "{ code?: string; label?: string; maxUses?: number | null } — every field becomes optional, and note that optional is not the same as nullable: maxUses may now be ABSENT (do not change it) or null (unlimited), which are different instructions to the server",
+        explanation: "Partial<T> makes every property optional (adds ? to each field). Useful for update operations where you only send the fields that changed: updateToken(id, { maxUses: 10 }) without needing to provide code and label."
       },
       {
         type: "fill-blank",
@@ -366,8 +585,8 @@ export type RuleListResponse = ApiResponse<AccessRule[]>;`
       {
         type: "predict-output",
         question: "What does Omit<Token, 'code'> produce?",
-        code: "interface Token {\n  code: string;\n  issuedTo: string;\n  maxUses: number;\n  status: TokenStatus;\n}\n\ntype TokenWithoutCode = Omit<Token, 'code'>;",
-        answer: "{ issuedTo: string; maxUses: number; status: TokenStatus } — everything except code",
+        code: "interface Token {\n  code: string;\n  label: string;\n  maxUses: number | null;   // null = unlimited, 0 = none\n  status: TokenStatus;\n}\n\ntype TokenWithoutCode = Omit<Token, 'code'>;",
+        answer: "{ label: string; maxUses: number | null; status: TokenStatus } — everything except code",
         explanation: "Omit<T, K> creates a new type with all properties of T except those listed in K. It's the inverse of Pick — useful when you want most fields but need to exclude a few (like the server-generated code)."
       },
       {
@@ -499,15 +718,15 @@ export type RuleListResponse = ApiResponse<AccessRule[]>;`
       {
         type: "spot-the-bug",
         question: "What's wrong with this use of Pick?",
-        code: "type TokenSummary = Pick<Token, 'code' | 'status'>;\n\nconst summary: TokenSummary = {\n  code: 'MERC-8GH2',\n  status: 'active',\n  issuedTo: 'Shop'\n};",
+        code: "type TokenSummary = Pick<Token, 'code' | 'status'>;\n\nconst summary: TokenSummary = {\n  code: 'MERC-8GH2',\n  status: 'active',\n  label: 'Shop'\n};",
         options: [
           "Pick doesn't work with interfaces",
-          "Object literal may only specify known properties — issuedTo is not in TokenSummary",
+          "Object literal may only specify known properties — label is not in TokenSummary",
           "status should be a boolean",
           "Pick needs three type arguments"
         ],
         correct: 1,
-        explanation: "Pick<Token, 'code' | 'status'> only includes code and status. Adding issuedTo to the object literal is an excess property — TypeScript rejects it. This ensures you don't accidentally include data that shouldn't be in a summary view."
+        explanation: "Pick<Token, 'code' | 'status'> only includes code and status. Adding label to the object literal is an excess property — TypeScript rejects it. This ensures you don't accidentally include data that shouldn't be in a summary view."
       },
       {
         type: "fill-blank",
