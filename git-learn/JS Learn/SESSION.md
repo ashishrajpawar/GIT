@@ -12,9 +12,30 @@ how far it got.
 
 ## In progress
 
-**Nothing.** Working tree clean. **66/96 verified**, audit green, five suites
-pass. **M3 is finished** — all 37 lessons. **B2, B3, B7, B10 and A11 complete.**
-Known-and-blocked is **2**.
+**Nothing in flight.** Working tree clean, everything committed.
+
+**State as of 2026-08-23** — run `node scripts/audit.mjs` before trusting any
+of it:
+
+- **99 track lessons, 72 verified.** Audit **green**, **0 warnings**, five
+  suites pass.
+- **Known-and-blocked is 2** — `participants` (gated on C5) and `calls` (gated
+  on B6). Both still legitimately gated.
+- **M3 is finished**, all 37 lessons. `--unverifiable` was used zero times.
+- **Complete:** B2, B3, B4, B7, B10, A11. **C5 is 3 of 5.**
+- The 40 legacy pre-pivot lessons (modules `04`–`09`) were **deleted** on
+  2026-08-22. In git history if ever wanted.
+
+**The next unit is `c5/0004`** — see *Next action*. It is unblocked and the
+design is decided; nothing is waiting on the student except one small call
+about `c5/0005`.
+
+> **Eleven decisions were taken across 2026-08-22/23**, several of which
+> reversed things the course had been teaching for months — phone sign-in with
+> no password, sessions that never expire, silent key-change acceptance, and
+> the backup split. **They are recorded in `CLAUDE.md`, not just here.** If a
+> lesson seems to contradict one, `CLAUDE.md` wins and the lesson is the bug.
+> `HANDOFF.md` has the reasoning behind each.
 
 ### a11/0005 — the store declaration named data Token has never had (2026-08-22)
 
@@ -1018,6 +1039,41 @@ an `ExpiryPayload` rule carrying `expires_at`, and `0003` reads a
 storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
+
+### → Start here: `c5/0004`, backup &amp; recovery
+
+**Unblocked, designed, nothing waiting on the student.** Write it to the split
+decided 2026-08-23 (below, and in `CLAUDE.md`):
+
+- Signing in with the phone number restores the **token list, labels, rules,
+  expiry, max uses, redemption history, conversation list, timestamps, display
+  name and avatar** — all server-side, none encrypted to a user key. Nothing to
+  write down.
+- **A 12-word recovery phrase, offered at sign-up and skippable**, unlocks
+  message **bodies** only. Skip it and you lose old message text on a new
+  device, and nothing else.
+- The phrase must **never** be recoverable by SMS, or a SIM-swap takes the
+  history with the account.
+
+**M3 candidate worth considering:** the restore-planning function — given what
+came back from the server and whether a phrase was supplied, decide what is
+recoverable and what is permanently gone. The interesting edges are that a
+missing phrase is *not* an error (most users will skip), and that "gone" and
+"not yet fetched" must never be collapsed.
+
+**Then one small call from the student:** `c5/0005` was multi-device, and they
+chose **one device for v1**, so it has no product to describe. Either rewrite it
+as *"why Token is single-device, and what it would cost to change"* — genuinely
+useful, since that answer shapes the whole key model — or **drop it and make C5
+four lessons.** Do not write it as planned.
+
+**After C5:** `a3/0002`'s M3 extraction, `a2`'s runtime type guards, and the
+small `a8/0004` fix (`tokenCode` sent over the WebSocket on every chat message,
+twice — the holder knows the code so nothing leaks to *them*, but it lands in
+server logs and Redis pub/sub against ADR-0007, and the holder JWT already
+carries `conversationId`). None of these is blocked.
+
+---
 
 ### Settled 2026-08-23 — key backup, multi-device, and the key-change UX
 

@@ -2271,6 +2271,212 @@ nobody has memorised.
 Status: `a11/0002` `unverifiable → verified`. **64/96.** Two M3 lessons left,
 both in A11.
 
+### Session of 2026-08-22/23 — M3 finished, B4 rewritten, C5 begun, and eleven decisions
+
+The longest session so far, and the one where the course stopped being repaired
+and started being extended. Counts are in `PROGRESS.md`; what follows is why.
+
+#### M3 finished — 37 lessons, and a prediction that was wrong every single time
+
+`a11/0001` and `a11/0005` closed it. The headline for the whole exercise is a
+number: **`--unverifiable` was reached for zero times across all of M3**, and
+the prediction that a lesson "has nothing runnable in it" was wrong **15 times
+out of 15**. That reflex has now been retired in `SESSION.md` rather than just
+having its tally updated, because a heuristic that is never right is not a
+heuristic.
+
+**`a11/0001` — an animation is a claim.** The lesson said a token is *"revoked
+immediately with a satisfying animation"*, and the code meant it: the card
+animated to `-SCREEN_WIDTH` and called `onRevoke` from the completion callback.
+Two defects. A gesture is not consent — `b2/0001` comments `revoked_at` as "set
+once, never cleared" and `b7/0003` makes revoked terminal, so an accidental
+swipe permanently destroys a capability with no undo for either party. And the
+row was destroyed before the work succeeded: if the request fails, the card is
+gone and the token is still live.
+
+The generalisation is the useful part. **An exit animation is a claim that
+something happened.** `exiting={FadeOut}` belongs to the list re-reading real
+server state, never to the gesture ending. The test: *if the request fails, does
+the screen still say it worked?*
+
+**`a11/0005` — the store listing declared data Token has never had.** Four
+places named an **email address**, including Google Data Safety and iOS App
+Privacy, which are binding declarations. `b2/0001`'s `users` table is
+`phone_hash`, `display_name`, `avatar_url`. Declaring data you do not collect is
+embarrassing; failing to declare data you do collect is what removes an app.
+
+It also never mentioned `runtimeVersion`, in the only lesson that ships updates
+— so the gate deciding *who receives an update* was invisible. Bump `version`
+for a JS-only OTA and it reaches **zero users** while the publish succeeds and
+the dashboard goes green.
+
+#### Eleven decisions, in four rounds
+
+The student asked three separate times to be given every open decision with
+options. That format worked far better than prose questions, and the pattern
+from 2026-08-20 held: **concrete costs get answers, architecture vocabulary does
+not.** The full list lives in `SESSION.md`; the ones that changed the product:
+
+**Sign-in is the phone number, and there is no password anywhere.** This was the
+load-bearing one. It made `b4-auth-server` the only module contradicting the
+docs, and `b4/0001` did not get adjusted — **it lost its subject**. argon2 and
+`password_hash` went entirely, because there is no user-chosen secret left to
+hash.
+
+**SMS OTP through an aggregator was accepted as a third party**, on the FCM/APNs
+precedent. The distinction that keeps the rule coherent is recorded in
+`CLAUDE.md`: the banned comms SDKs would carry the conversation, which is what
+E2EE exists to protect, while an OTP carries six digits to a phone the user
+already owns, once. Two consequences with lead times were written down rather
+than discovered later — **DLT registration with TRAI is weeks of paperwork**,
+and an OTP flow is a denial oracle by construction.
+
+**Sessions never expire.** The refresh token *is* the device credential. A
+re-login SMS costs money and proves nothing, since the attacker holding the
+phone also receives the code.
+
+**The 40 legacy pre-pivot lessons were deleted.** They had been carried as
+"partially salvageable" since the pivot and nobody ever salvaged any of it. They
+turned out to be entirely orphaned already — `index.html` linked to none of
+them, `search-index.json` held zero entries. **Warnings went 1 → 0, the first
+zero-warning audit in the project's history**, because the last one was a dead
+link inside `07`.
+
+#### B4 rewritten end to end, and a comment that was a lie
+
+All three lessons, because all three were email-coupled — `0002` had 19
+references and `0003` had 35, so fixing only the first would have left the
+module contradicting itself.
+
+**The find in `b4/0001` was a `// Constant-time response` comment over code that
+was not.** The message really was identical on both paths; the *work* was not.
+No account is one indexed `SELECT` at ~1 ms; an existing account is that plus an
+argon2 verify at ~200 ms — visible by eye, on a first attempt, over ordinary
+broadband. And a section titled *Timing attacks* sat three screens below,
+explaining the concept in terms of string comparison, while the login leaked by
+a margin four orders of magnitude larger.
+
+**An early return is a disclosure.** Branches that must be indistinguishable
+have to *do the same work*, not merely say the same words.
+
+`b4/0002` turned out to be the opposite problem: a genuinely good lesson where
+none of it executed, and one section that said *"nobody has a perfect answer…
+decide it deliberately"* about the retry grace window — which is fine for prose
+and wrong for a lesson to leave as prose. Implementing it produced the two
+subtleties that are now the exercise: **a replay must return the existing
+successor, not rotate again** (rotating forks the chain, so the *next* genuine
+refresh is reported as theft — the failure surfaces one request after the bug),
+and **the window is measured from `superseded_at`, not creation.**
+
+It also split `revoked_at` from `superseded_at`. Both make a row unusable and
+they mean opposite things: rotated-away is probably a retry, deliberately-killed
+is not and must never revoke the family. **One name covering two events is a bug
+waiting for the second event to happen.**
+
+`b4/0003` had its threat model replaced rather than its examples. `request-code`
+is the first endpoint in the course where **every unthrottled request costs
+money**, and that is why one limiter is not enough: the per-number limits protect
+your users and the per-IP limit protects your invoice.
+
+**And account lockout was deleted rather than tuned.** The lesson had the
+columns, the migration, and careful reasoning about threshold and duration — and
+it already contained the damning sentence: *"anyone who knows your email can lock
+you out of your own account, on demand, by failing to log in."* The password
+decision removed that problem instead of mitigating it. **A control that needs
+careful tuning to avoid becoming a weapon is often a sign that something upstream
+is wrong.**
+
+#### C5 created — three of five lessons
+
+The module did not exist. `TOKEN-TRACK.md` says C5 **must precede B2**, and B2
+was written first — but the dependency was met anyway, because `b2/0002` did the
+E2EE schema rewrite up front. **The prerequisite was satisfied by anticipation
+rather than by ordering**, which is worth recording so nobody "fixes" the plan by
+concluding a rule was broken.
+
+`0001` is about a key that will not load being **refused, never regenerated**.
+The tempting version is three lines shorter, reads as robust, and silently
+destroys every conversation the user has ever had. The specific line: `!stored`
+is true for `''`, and `''` is what a locked Keychain returns — so the destructive
+branch fires on the code path that runs most often, opening the app from a
+notification. **Fifth appearance of the permissive-default rule**, after
+`b7/0002`, `a5/0005`, `b3/0001` and `a11/0003`, and the lesson tabulates all
+five because the tell is identical every time.
+
+`0002` gives "warn on key change" an actual rule. Because the server assigns the
+key version by incrementing, **a genuine rotation always arrives higher** — so a
+different key at the same or a lower version has no honest explanation and can be
+blocked outright. It matters because a replayed old key may have been retired
+*because* it leaked.
+
+`0003` is a one-line bug with a disproportionate failure mode: `hash(myKey +
+theirKey)` gives each device a different answer, so **verification does not fail
+as "unavailable", it fails as "you are being attacked"** — to every user, every
+time, until support tells people to ignore the screen. A feature that cries wolf
+gets worked around, and the workaround is the damage.
+
+#### The backup decision, and one place I overstated the case
+
+The student's first answer was *"log in with the same number and data is auto
+restored"*, with no passphrase. That cannot be built without removing E2EE: for
+data to return from a phone number alone the server must be able to release the
+key, which means it can release it to itself.
+
+It was put back once with the cost spelled out, and **the split came out of
+checking rather than arguing.** The token list, labels, rules, redemption
+history, conversation list and profile are all server-side and not encrypted to
+a user key — so they restore from an OTP with nothing written down. Only message
+*bodies* need the 12-word phrase. **That was not a compromise invented to end a
+disagreement; it is what the schema already was, and nobody had looked.**
+
+On key changes the student chose silent acceptance, having read the consequence,
+and that stands. **I had called E2EE-plus-silent-acceptance "incoherent" and that
+was wrong** — it is a real posture, and the correction is now in `CLAUDE.md`:
+
+> Token is end-to-end encrypted **against a server that stores and does not
+> attack.** It is not protected against one that actively substitutes a key.
+
+iMessage was exactly this until Contact Key Verification in 2023, and the store
+declaration stays true. What must not be written is *"nobody can intercept your
+messages"*.
+
+**The decision cost four lines.** `classifyPeerKey` did not change at all — it
+still returns `warn`, because a key change *is* a key change. Only the caller's
+policy moved, from throwing to pinning and logging. Both lessons re-verified
+untouched, **including the assertion that the function never pins silently**,
+because it still does not. That a reversal of a security feature's user-facing
+behaviour was a four-line edit rather than a rewrite of a function and its eleven
+wrong-cases is the whole argument for keeping classification and policy apart.
+
+#### What the wrong-cases caught this session
+
+Eleven separate holes in self-checks I had just written. Three recur often
+enough to be worth naming:
+
+- **A throw is not a failure, it is a stop.** A mistake that reaches
+  `null.length` aborts every check below it and the runner scores it as *passed
+  everything* — which reads as a broken verifier. The fix is a `got()` helper
+  that catches and returns a sentinel so a throw becomes a **wrong answer**. This
+  trap is written down under *Verifying a lesson* and it still caught me three
+  times.
+- **A fixture that varies something the bug does not depend on.** `b4/0003`'s
+  `retryAfterMs` was only ever tested against a one-stamp window, where oldest
+  and newest are the same number. `c5/0003` compared key pairs whose sorted-
+  smaller keys differed, so an implementation hashing only one key passed.
+- **A check that cannot fail is not a weak check, it is noise.** `c5/0003`
+  asserted a function did not reorder the caller's array — but the function takes
+  two strings. Unfalsifiable, reporting PASS forever, making the suite look more
+  thorough than it was. **When you write an assertion, ask what input would make
+  it fail.**
+
+Also: `render-as-authored` went from 0 to 1 **twice in three days**, both times
+while writing fresh quiz content quickly, and both times the audit caught it on
+the next run. Once it was even a false trigger — the phrase was about requests,
+not options — and it still mattered, because a flagged question renders
+unshuffled. The habit that check guards against is evidently not automatic yet.
+
+---
+
 ### Watch out when editing this file from a shell
 
 Backticks in a `python -c` string get evaluated by bash *before* Python sees
