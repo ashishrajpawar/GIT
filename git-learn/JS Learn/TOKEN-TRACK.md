@@ -18,10 +18,14 @@
 > 2. **B2 and B5 need rewriting, not deepening.** E2EE lands in v1, so the
 >    messaging schema stores ciphertext; and the WebSocket layer is multi-node
 >    from the start rather than single-node-then-fixed.
-> 3. **B2.2 under-delivered.** The row below promises "conversations, messages,
->    participants, read_receipts" and the lesson creates only the first two.
->    `participants`, `deletion_queue`, and `calls` are queried by later lessons
->    and created by none — run `node scripts/audit.mjs` for the live list.
+> 3. **B2.2 under-delivered — and two of the three orphans are now closed.**
+>    The row below promises "conversations, messages, participants,
+>    read_receipts" and the lesson creates only the first two.
+>    `deletion_queue` was **defined** once `b10/0002` settled the erasure
+>    policy; `participants` was **deleted** by `c5/0005`, because a conversation
+>    has exactly two parties and the holder is not a user, so half of every row
+>    could never have been filled in. Only **`calls`** remains, gated on B6.
+>    Run `node scripts/audit.mjs` for the live list.
 > 4. **The timeline was for an MVP by someone who already codes.** With E2EE in
 >    v1 and a scale-out architecture, the realistic figure is **12–18 months and
 >    ~145 lessons**, not the 3–4 months below.
@@ -252,7 +256,7 @@ unverified lessons against a student on lesson 5.
 | ID | Module | ~Lessons | Why here |
 |----|--------|---------|----------|
 | **C0** | Architecture & System Design | 2 | Before B1 — the whole-system view, trust boundaries, ADRs, where the seams go |
-| **C5** | End-to-End Encryption | 5 (likely 4) | **Written after B4, 2026-08-22/23** — the plan said before B2, and the dependency was met anyway because `b2/0002` did the E2EE schema rewrite up front. The prerequisite was satisfied by *anticipation* rather than by ordering. `0001`-`0004` done; `0005` was multi-device and lost its subject when the student chose one device for v1, so it is either rewritten as *why single-device, and what changing it would cost* or dropped — the one open question in the course, and the `participants` orphan is decided with it |
+| **C5** | End-to-End Encryption | 5 | **COMPLETE, 2026-08-22/23.** Written after B4 — the plan said before B2, and the dependency was met anyway because `b2/0002` did the E2EE schema rewrite up front, so the prerequisite was satisfied by *anticipation* rather than by ordering. `0005` was planned as multi-device and became *why Token is one phone, and what a second would cost* when the student chose one device for v1; it also resolved the `participants` orphan, by deletion |
 | **C1** | Testing & Quality | 5 | After B3 — test the API as it is built, not at the end |
 | **C2** | CI/CD & Release Engineering | 4 | After C1 — nothing to automate until tests exist |
 | **C3** | Trust, Safety & Abuse | 3 | After A5 — redesigned around client-side report packaging (ADR-0006), since E2EE removes server-side moderation |

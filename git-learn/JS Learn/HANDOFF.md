@@ -2484,3 +2484,176 @@ them. Rewriting §8 that way spliced ~2KB of `git help` output into the document
 Write the replacement text to a file with an editor tool, then splice it with a
 script that reads that file — never inline prose containing backticks into a
 shell argument.
+
+---
+
+### Session of 2026-08-23 — C5 finished, the rules model settled, and every lesson executed
+
+The longest session so far, and it divides into four bodies of work. The
+through-line is that **almost every defect found was a contradiction between
+two files that were each internally consistent** — which is the shape this
+project keeps producing and the only reliable way to find it is to read one
+file against another.
+
+#### C5 finished, and `participants` resolved by deletion
+
+`c5/0004` (backup) and `c5/0005` (single-device) close the module.
+
+The best finding in `0004` cost nothing: read `b2/0002`'s columns and ask which
+the server can read. Exactly one cannot — `messages.ciphertext`. So *"what
+needs the recovery phrase"* was never a product trade-off to argue about; it
+was settled the morning someone decided which columns stay outside the
+ciphertext, and nobody had gone back and looked. **The general move is cheap
+and worth repeating: list what is encrypted, and the backup requirement is
+whatever is left.** Design the flow first and you protect a token list the
+server hands over anyway.
+
+`0005` was planned as multi-device and lost its subject when the student chose
+one phone. **Costing the feature turned out to be worth more than building
+it**, and the argument that decides it is one row of a table: sharing an
+identity key across devices changes nothing downstream and means you cannot
+untrust one device, because the key *is* the identity.
+
+That lesson also closed the `participants` orphan — **by deletion**. The
+decisive detail is not that Token lacks group chat: **the holder is not a
+user.** `conversations` identifies them by `holder_session_id` with no
+`user_id`, so a `(user_id, conversation_id)` junction had a column that could
+never be filled in for half of every row. The three orphan tables ended three
+different ways — one defined once a policy existed, one still waiting on an
+unwritten module, one describing a product not being built. **Treating all
+three as "write the missing table" would have produced one useful table, one
+guess, and one that is always exactly two rows with an impossible column.**
+
+#### The rules model — what looked like a preference was a live break
+
+The question put to the student was "rows or a JSONB column?". The answer was
+rows, and the reason it mattered was not the one in the question:
+**`b7/0002` ran `SELECT rules FROM tokens` against a column `b2/0001` has never
+created.** The vocabularies had drifted with it — the schema's `CHECK`
+permitted `call_limit`, `category`, `cooldown` while the engine evaluated
+`contact_limit`, `channel_restrict`. Three lessons, three vocabularies, only
+`time_window` common to all three. **The database would have rejected every
+rule the product creates.**
+
+Rows won on a point worth keeping: not the join cost, which is trivial, but
+that **`rule_type` becomes a constrained column, so a rule type nothing can
+evaluate is refused at the `INSERT`** — and `b7/0002` had already shipped the
+defect that prevents.
+
+Moving to rows then introduced a failure the column could not have, and it is
+worth more than the change that caused it. **An inner join returns zero rows
+for a token with *no rules*, and zero rows is how the engine recognises "token
+not found".** So the obvious join refuses every unrestricted token — most of
+them — reporting not-found for a token that is right there. Putting `enabled`
+in the `WHERE` instead of the `ON` does the same to a token whose only rule is
+switched off. **Deny-by-default makes both silent and total.**
+
+A fourth `access_rules` design turned up in `b1/0002` afterwards — columns
+instead of rows, plus `0 = unlimited`. **The vocabulary sweep missed it because
+it greps clean**: the file never says `call_limit`, because its design has no
+`rule_type` at all. *A vocabulary sweep finds files using the wrong words, not
+files using a wrong shape.*
+
+#### The `variant` blind spot — a check reporting zero, and a broken course
+
+The audit had said `render-as-authored: 0` since 2026-08-18, and everyone
+including `CLAUDE.md` read that as clean. It was a blind spot.
+`explanationNamesAPosition()` knew `option|answer|choice` and **not
+`variant`** — and `which-breaks` calls its list `variants` and shuffles it, so
+*"Variant B uses `>` instead of `>=`"* is the phrasing everyone writes. **69
+explanations named a letter the student never saw.**
+
+Fixed in two halves, and the order mattered: one word in two places *pinned*
+all 69 so their explanations were true again within a single commit and the
+count became visible; then the rewording brought it back to 0 honestly. The
+test suite got cases in **both** directions — the phrasings it must catch and
+the ordinary prose it must not — because a false positive silently pins a
+question that should shuffle.
+
+**Rewording by reading rather than by regex found three questions that were
+actually broken**, including one that asked which technique "won't help" and
+keyed the most helpful one, with an explanation that argued with itself. A
+`sed` would have fixed 69 strings and left all three.
+
+#### Every lesson has now been executed
+
+Nine lessons had *no verification-log entry at all* — never attempted, not
+excused. Closing that list required teaching the runner TypeScript, which was
+done as a **fallback rather than a default**: anything that parses as
+JavaScript is executed exactly as before, so the change cannot alter a passing
+lesson. Proven rather than asserted, by re-running all 73 verified lessons
+against a captured baseline — zero regressions, and coverage went *up* by
+three.
+
+That change broke exactly one thing, and it was **a guard that had never
+existed**. `a4/0001` q0 is four comments and a TypeScript declaration, answered
+with a sentence; it was skipped *by accident*, because being TypeScript it
+failed to parse and the SyntaxError landed in the `if (threw)` skip. Teaching
+the runner TypeScript removed the accident and exposed the gap. **The guard was
+not missing, it was being impersonated.**
+
+Seven of the nine lessons were hiding a real defect — a denial oracle in
+`a9/0002`, the token code taught into the logs in `x2/0002`, a `LEFT JOIN`
+commented "most recent" that returns all of them, a `NOT NULL` gloss
+contradicting its own quiz. **Two were clean**, and that is worth recording as
+honestly as the seven.
+
+#### What the wrong-cases caught this time, including three that were not mistakes
+
+The wrong-case mechanism found a gap in the self-check written beside it
+**eight or nine separate times**, and it remains the only thing that does. But
+the more interesting result is the other direction: **three wrong-cases turned
+out not to be mistakes at all.**
+
+- Mapping `O`→`0` and `I`/`L`→`1` in a token code is a **no-op**, because
+  every character it maps *from* is excluded and every character it maps *to*
+  is excluded too. That is not luck — **the excluded set is closed under
+  confusion**, which is the property that makes it worth having.
+- `doc[key] !== undefined` instead of `hasOwnProperty`: JSON has no
+  `undefined`, so the two are equivalent for every input.
+- A required cycle guard that was not a safety property — the depth limit
+  already makes a cycle safe, and the case could only be made to fail by
+  *also* removing the depth limit.
+
+**A case that passes everything is either a hole in the self-check or a mistake
+that is not one, and the only way to tell is to look.**
+
+Three more were fixture problems rather than weak cases — a fixture that could
+not *express* the rule being tested. No NOT NULL numeric column, so a falsy
+check had nothing to reject. No nullable UNIQUE column, so "nulls never
+collide" was unobservable. A two-element `dropped` list that *reverses into
+sorted order*, so `.reverse()` passed where `.sort()` was required.
+
+And one hid inside the thing it described: the mistake that sends `undefined`
+in a PATCH body builds an object that **`JSON.stringify` serialises identically
+to the correct one**, because stringify drops undefined values. The check had
+to compare keys. That is precisely why sending `undefined` is dangerous rather
+than harmless.
+
+#### Two traps walked into, both already written down
+
+- **A backtick inside a template literal.** Writing `` `code` `` as Markdown
+  emphasis inside a `createSolution` string terminated it, and the parse error
+  named an identifier three lines away. The rule is in `CLAUDE.md`; the file it
+  is written in is where I broke it.
+- **Running `verify-lesson.mjs` without `--unverifiable` deletes the log
+  entry.** It happened to `b6/0001`, was written into `SESSION.md` the same
+  morning, and then happened again to `b9/0003` hours later. **Writing it down
+  did not stop it, because the reflex that causes it — verify after editing —
+  is the correct reflex.** The warning now carries the check that actually
+  prevents it: read the log first.
+
+#### Process changes the student asked for
+
+Approvals were removed in three steps across the session, ending with `Bash`
+allowed wholesale (deny list intact, `sudo` added as a floor). Then: **stop
+asking for decisions at all.** What replaces it is stricter — decide on the
+evidence, write it where the decision lives, state the cost of the rejected
+option, and flag it in the report. **An unflagged assumption is worse than a
+question**, and stopping is no longer available.
+
+`CLAUDE.md` also had a stale warning corrected: it claimed `b4-auth-server`
+still taught email and argon2. B4 was rewritten on 2026-08-22; the argon2 that
+greps there is **quoted history**, shown so its 200 ms timing gap can be
+measured. The note was training the next session to delete the example that
+teaches the denial oracle.

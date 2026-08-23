@@ -71,6 +71,30 @@ localStorage.
 
 ### Working discipline
 
+> **Do not stop to ask.** Standing instruction, 2026-08-23: no approval
+> prompts, and no putting choices to the student mid-task. Two rounds of
+> questions were answered that day and the third was declined outright.
+>
+> What replaces asking is **stricter, not looser**: make the call on the
+> evidence in the repo, write it where the decision lives (`CLAUDE.md` for a
+> rule, an ADR for anything with alternatives worth preserving), **state the
+> cost of the option you rejected** so it can be reversed on evidence, and
+> **flag it plainly in the session report**. A decision recorded with its cost
+> can be overturned; one recorded without can only be reargued.
+>
+> **An unflagged assumption is worse than a question.** Stopping is now
+> impossible, so the only remaining failure mode is a decision buried where
+> nobody sees it.
+>
+> **Still stop for** anything irreversible or outward-facing — pushing to a
+> remote, deleting what git cannot recover, anything leaving the machine.
+>
+> **Two permanently closed questions:** the lookahead one, and *where the
+> student is in the course*. On the second, the rule below still stands and is
+> now the whole rule — **never infer progress from the files either.** Make no
+> claim about it at all, in prose, in a commit message, or as a reason for
+> prioritising anything.
+
 - **Write-ahead:** update `SESSION.md` *before* starting a unit of work, not after
 - **Commit per unit** — one lesson, one script, one fix. Maximum loss from an
   abrupt stop is one unit
@@ -524,6 +548,34 @@ summarised here rather than left in the ADR:
 - **Codes never go in a log.** The redeem body is the sensitive part precisely
   because the code was moved there. Log an allow-list of fields, and configure
   the error tracker's scrubbing — it attaches request bodies by default.
+
+  **Swept 2026-08-23, and it was three lessons, not one.** `x2/0002` taught
+  `tokenCode: token.code` as *good practice* in the lesson about logging;
+  `b9/0003`'s handler put it in four log lines **and** read it from
+  `req.params` **and** answered 404-vs-410; `a8/0004` sent it over the
+  WebSocket on every chat message. **Log the `id`** — it identifies the row for
+  anyone who can already query the database and is worth nothing to anyone who
+  cannot, which is the property an identifier in a log should have.
+
+  Two rules that fell out and are worth keeping:
+
+  - **Re-sending an identifier the connection already carries is how a
+    credential ends up somewhere nobody designed.** The holder JWT is
+    `{ conversationId, tokenId, holderName }`, so a socket knows its
+    conversation before the first message; a code in the body was a second,
+    weaker answer to a settled question — and it reached the socket log and the
+    Redis pub/sub payload.
+  - **The dangerous log line is the one with nothing to put in it.** At
+    *"redemption attempt"* the token has not been found, so there is no id —
+    and the pull towards writing *something* identifying is exactly how the
+    code got there. `requestId` is enough.
+
+- **`item.code` on a list is a four-time defect.** `a5/0003`, `a11/0001`,
+  `a3/0002` and `a2/0003` all rendered, keyed or navigated on it. `GET /tokens`
+  returns no `code`, so it is `undefined` every time — and `key={undefined}`
+  makes React fall back to the array index, so rows get reused across
+  positions. **A type that declares `code` is the root cause, not the screen
+  that reads it**: fix `TokenListItem`, and the screens stop being able to.
 - **The code is returned exactly once**, in the response to `POST /tokens`.
   Everything else shows the label and the state. Showing it again is a separate,
   logged request. In particular `GET /tokens` returns **no `code` field at all** —
@@ -1118,6 +1170,31 @@ image picker is a payload filter, and the Expo setup lesson has `eas.json`
 profile inheritance in it. `--unverifiable` was never used once. The reflex to
 reach for it is wrong more often than it is right — and the function you find by
 resisting it is usually the part of the lesson worth testing.
+
+**Proven again on 2026-08-23.** Nine lessons had *no log entry at all* — never
+attempted, not excused — and every one produced a working exercise. **Seven of
+the nine were hiding a real defect**, including a denial oracle in `a9/0002`
+and `x2/0002` teaching the token code into the logs. Two were clean, and that
+is worth recording as honestly as the seven: the reflex to assume an
+unexecuted lesson is a broken one is wrong about a fifth of the time.
+
+> ### ⚠ Running the verifier without `--unverifiable` DELETES the log entry
+>
+> A failing run deletes, and a lesson that needs the flag fails without it. So
+> the ordinary reflex — *edit a lesson, verify it* — silently destroys the
+> record for all 17 excused lessons. **It happened twice on 2026-08-23**
+> (`b6/0001`, then `b9/0003`), the second time hours after the warning was
+> written down, because the reflex that causes it is the correct reflex.
+>
+> **Check the log before verifying a lesson you did not just write:**
+>
+> ```bash
+> node -e "console.log(require('./scripts/verification-log.json')['modules/…/….html'])"
+> ```
+>
+> If it says `unverifiable`, pass that exact reason back. To recover a deleted
+> entry: `git show HEAD:"…/scripts/verification-log.json"`, read the reason,
+> re-run with it.
 
 **Lessons whose solution genuinely cannot run here** — an Express route needing
 Postgres, a React Native screen needing a device, a Dockerfile needing a VPS —

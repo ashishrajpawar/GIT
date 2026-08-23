@@ -19,24 +19,24 @@ how far it got.
 > files either.** Make no claims about progress at all — not in prose, not in
 > a commit message, not as a reason for prioritising anything.
 
-**M3 for the remaining never-executed lessons.** Chosen by the student on
-2026-08-23 over writing the C-modules. The runner now handles TypeScript and
-`a2/0001` is verified — **the first lesson in this course written in
-TypeScript whose code has ever run.** Nine left with no log entry:
+**Nothing in flight.** Working tree clean, everything committed, last commit
+`be3cdf4`.
 
-| Lesson | What it needs |
-|---|---|
-| ~~`a2/0003`~~ | **done 2026-08-23** — `readRouteParams`; the code was in the navigation params, which get written to disk |
-| ~~`a2/0002`~~ | **done 2026-08-23** — `toUpdatePayload`; `Partial<T>` gives a field three states where the column has two |
-| ~~`a3/0002`~~ | **done 2026-08-23** — `parseListResponse`, the boundary. Its `TokenListItem` declared a `code` field and the list screen rendered it |
-| ~~`a9/0002`~~ | **done 2026-08-23** — `parseTokenLink`, and it was hiding a denial oracle |
-| ~~`x2/0002`~~ | **done 2026-08-23** — `redactLogFields`, and it was teaching `tokenCode: token.code` as best practice |
-| ~~`x2/0001`~~ | **done 2026-08-23** — `firstDivergence`; a probe that never ran is not a probe that saw zero |
-| ~~`b1/0004`~~ | **done 2026-08-23** — `jsonbContains`; `@>` is not a search |
-| ~~`b1/0001`~~ | **done 2026-08-23** — `checkRow`; its `NOT NULL` gloss contradicted its own quiz |
-| ~~`b1/0002`~~ | **done 2026-08-23** — `joinRows`; its LEFT JOIN example claimed "most recent redemption" and returned all of them |
+**State as of 2026-08-23** — run `node scripts/audit.mjs` before trusting any
+of it:
 
-Previous good state is `b9276d7`.
+- **101 lessons.** Audit **green**, **0 warnings**, six suites pass.
+- **Every lesson has been executed at least once.** The verification log has
+  no absent entries: 84 verified, 17 `unverifiable` with a stated reason, 1
+  `nothing-to-verify`.
+- **`known-issues.json` is down to one entry** — `calls`, gated on B6.
+- `render-as-authored` is **0**, and this time it means it (see *The `variant`
+  blind spot*).
+- **Complete modules:** 01, 02, A2, A3, A4, B1, B2, B3, B4, B7, B10, A11, C5,
+  X1, X2.
+
+**Nothing is blocked.** See *Next action* for the four candidate bodies of
+work and why the `unverifiable` cluster is the recommendation.
 
 ### The ADR-0007 sweep — the last known violation was three (2026-08-23)
 
