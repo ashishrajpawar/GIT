@@ -69,10 +69,14 @@ function parseTokenUrl(url: string): string | null {
   // parsed = { scheme: 'https', hostname: 'tokn.app', path: 't/MERC-8GH2-KP4X', ... }
   // or parsed = { scheme: 'tokn', hostname: null, path: 't/MERC-8GH2-KP4X', ... }
 
-  // Extract token code from the path
+  // Extract token code from the path.
+  //
+  // slice(2), NOT replace('t/', ''). replace with a string argument
+  // removes the FIRST match ANYWHERE -- it is a search, not a prefix
+  // strip -- so a path of 'settings/t/abc' would lose the wrong two
+  // characters and still return something that looks like a code.
   if (parsed.path?.startsWith('t/')) {
-    const tokenCode = parsed.path.replace('t/', '');
-    return tokenCode || null;
+    return parsed.path.slice(2) || null;
   }
 
   return null;
@@ -184,23 +188,65 @@ export function TokenRedeemScreen() {
     <p>A deep link might carry a token code that is invalid, expired, or revoked. You need graceful error handling:</p>
 
     <pre><code>// app/src/screens/TokenRedeemScreen.tsx
-function TokenError({ code, message }: { code: string; message: string }) {
+
+// ONE screen for every unusable outcome. The reason is recorded for
+// your own metrics and is never rendered and never sent.
+function TokenUnavailable({ reason }: { reason: UnusableReason }) {
+  trackRedeemOutcome(reason);   // local only
+
   return (
     &lt;View style={styles.errorContainer}&gt;
-      &lt;Text style={styles.errorTitle}&gt;Token unavailable&lt;/Text&gt;
-      &lt;Text style={styles.errorCode}&gt;{code}&lt;/Text&gt;
-      &lt;Text style={styles.errorMessage}&gt;{message}&lt;/Text&gt;
+      &lt;Text style={styles.errorTitle}&gt;Link unavailable&lt;/Text&gt;
+      &lt;Text style={styles.errorMessage}&gt;
+        This link is not valid, or is no longer active.
+      &lt;/Text&gt;
       &lt;TouchableOpacity onPress={() =&gt; navigation.navigate('Main')}&gt;
         &lt;Text&gt;Go to home screen&lt;/Text&gt;
       &lt;/TouchableOpacity&gt;
     &lt;/View&gt;
   );
-}
+}</code></pre>
 
-// API responses to handle:
-// 404 — token code doesn't exist
+    <div class="callout danger">
+      <div class="callout-title">This screen used to say which kind of unavailable, and that is a code oracle</div>
+
+      <p>Until 2026-08-23 the code above rendered the HTTP status and a
+      specific message, against a list of three:</p>
+
+      <pre><code>// 404 — token code doesn't exist
 // 410 — token was revoked (Gone)
 // 403 — token has reached max uses</code></pre>
+
+      <p>Read that as an attacker rather than as a user. <strong>Anyone can
+      open a deep link, and this screen answers a question about a code they
+      did not have to prove anything to ask.</strong> A 404 means <em>keep
+      guessing, that one is not real</em>; a 410 means <em>you found one</em>.
+      That turns "guess a working code" into "guess a code that exists", which
+      is a far cheaper problem — and the keyspace argument in
+      <code>b7/0001</code> computes ~25,000 years <em>on the assumption that
+      each guess teaches the attacker nothing</em>.</p>
+
+      <p><code>b7/0001</code> already states the rule: <strong>one status code
+      and one message for every refusal</strong>, because you cannot spend
+      25,000 years of keyspace on security and then hand some of it back at
+      the error handler. <code>a8/0002</code> is the worked version on the web
+      page — one screen for not-found, expired, revoked, paused and maxed,
+      with the distinction kept internally for metrics.</p>
+
+      <p><strong>This is the sixth layer the same rule has had to be applied
+      at</strong>, after <code>b7/0001</code>'s endpoint,
+      <code>a8/0002</code>'s page, <code>b3/0004</code>'s error handler,
+      <code>b4/0001</code>'s login and the OTP flow. Each one looked like a
+      different problem at the time. The tell is always the same: a refusal
+      that is trying to be helpful to someone who has not proved who they
+      are.</p>
+
+      <p>The cost is real and worth stating plainly: a holder whose token
+      genuinely expired sees "not valid or no longer active" and cannot tell
+      which. <strong>The issuer can see the true state of every token they
+      own</strong>, on a screen that required them to log in. The person who
+      cannot be told is the person who has not proved they should know.</p>
+    </div>
 
     <h2>Auth gate for deep links</h2>
 
@@ -300,18 +346,31 @@ console.log(parsed);
 //   - Shows token info, lets holder communicate
 
 // 5. Error cases:
-//   - 404 → "This token doesn't exist"
-//   - 410 → "This token has been revoked"
-//   - 403 → "This token has reached its usage limit"
-//   - Not authed → save link, show login, then redirect</code></pre>
+//   - Any unusable outcome -> ONE screen, one sentence:
+//     "This link is not valid, or is no longer active."
+//     The server already answers identically for all of them
+//     (b7/0001); the app must not reintroduce the difference.
+//     Record the real reason locally for metrics. Never render it.
+//   - Not authed -> save link, show login, then redirect</code></pre>
 
     <div id="playground-1"></div>
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>Now build it yourself</h2>
+
+    <p>The navigation config and the screens need a device. The parsing does
+    not — and it is the part that decides whether the app opens the right
+    conversation, opens the wrong one, or sends a malformed code to the API.</p>
+
+    <div id="exercise-link"></div>
+    <div id="pg-exercise-link"></div>
+
+    <h3>And the wiring</h3>
 
     <div id="exercise-1"></div>
+
+    <div id="explain-a9-0002"></div>
 
     <hr>
 
@@ -327,6 +386,7 @@ console.log(parsed);
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -376,7 +436,68 @@ parseLinkingUrl('https://tokn.app/about');
 console.log("\\n=== Empty token code ===");
 parseLinkingUrl('https://tokn.app/t/');`);
 
+    createSolution("exercise-link", {
+      exercise: `Write parseTokenLink(url, config) — turn whatever the OS hands the app into a token code, or refuse it.\n\nA deep link arrives as either https://tokn.app/t/CODE (a Universal Link) or tokn://t/CODE (the custom scheme, used in development). It may carry a query string, and it is typed by humans often enough that case and stray whitespace are ordinary rather than exceptional.\n\nconfig is { hosts, scheme, alphabet, groups, groupSize }:\n  hosts       the https hostnames this app answers for, e.g. ['tokn.app']\n  scheme      the custom scheme, e.g. 'tokn'\n  alphabet    the 31 characters a code may contain\n  groups      how many groups a code has (3)\n  groupSize   how many characters per group (4)\n\nReturn { code, reason } — code is the canonical undashed uppercase code, or null.\nreason is 'ok', 'not_a_token_link', or 'malformed_code'.\n\nThe rules:\n\n1. ACCEPT BOTH FORMS, AND ONLY THOSE. An https URL counts only if its host is in config.hosts — https://evil.example/t/CODE is not your link, and treating it as one means a page you do not control chooses which conversation the app opens. A custom-scheme URL counts only if its scheme matches. Anything else is 'not_a_token_link'.\n\n2. THE PATH MUST BE THE TOKEN PATH. Match the /t/ segment as a PREFIX of the path, not as a substring anywhere in it. This is the one the lesson above got wrong for months: replace('t/', '') removes the first match wherever it sits, so a path like settings/t/abc loses the wrong two characters and still returns something code-shaped.\n\n3. STRIP THE QUERY AND FRAGMENT. tokn.app/t/CODE?ref=qr is the same link as tokn.app/t/CODE. A code with ?ref=qr glued to the end fails validation, which reports a malformed code when the real problem is a URL nobody trimmed.\n\n4. CANONICALISE BEFORE VALIDATING: uppercase, and remove spaces and hyphens. MERC-8GH2-KP4X, merc8gh2kp4x and MERC 8GH2 KP4X are the same code typed three ways, and codeHashInput on the server does exactly this — so a client that validates the dashed form and sends it undashed disagrees with itself.\n\n5. REJECT ANY CHARACTER OUTSIDE config.alphabet, and do NOT be helpful about it. The alphabet excludes 0, O, 1, I and L precisely because they are misread, so a code containing one was mistyped. Mapping O to 0 guesses at what the human meant and produces a hash for a token that was never issued.\n\n6. THE LENGTH MUST BE EXACTLY groups × groupSize. Not fewer, not more.\n\n7. A LINK THAT IS OURS BUT CARRIES A BAD CODE IS 'malformed_code', NOT 'not_a_token_link'. They are different findings: one means this link was never for us, the other means it was for us and something is wrong with it. Only the second is worth telling the user about, and only the first should be handed on to the OS.`,
+      hints: [
+        "Do the host and scheme check first and separately from the code check. Rule 7 depends on knowing you got that far — collapse them and you cannot tell 'not our link' from 'our link, bad code'.",
+        "For rule 2, compare against the prefix explicitly: path === 't' is not a token link, and path.startsWith('t/') is. Reach for indexOf or replace and you have written a search where you meant a prefix.",
+        "Rules 4, 5 and 6 are codeHashInput from b2/0001 in a different file. Canonicalise first, then test the alphabet, then test the length — validating before stripping the hyphens means rejecting every code a human typed the way it is printed."
+      ],
+      solution: `function parseTokenLink(url, config) {
+  const no = (reason) => ({ code: null, reason });
+
+  if (typeof url !== "string" || url.length === 0) return no("not_a_token_link");
+
+  // Rule 1. Both accepted forms, and nothing else. The host check is
+  // the security-relevant half: without it, any site can hand this app
+  // a link and choose which conversation it opens.
+  let path = null;
+  const httpsMatch = /^https:\\/\\/([^/?#]+)(\\/.*)?$/i.exec(url);
+  const schemeMatch = new RegExp("^" + config.scheme + ":\\\\/\\\\/(.*)$", "i").exec(url);
+
+  if (httpsMatch) {
+    const host = httpsMatch[1].toLowerCase();
+    // includes, NOT endsWith. 'nottokn.app'.endsWith('tokn.app') is
+    // true, and a suffix test hands link-opening to anyone who can
+    // register a domain ending in yours.
+    if (!config.hosts.includes(host)) return no("not_a_token_link");
+    path = (httpsMatch[2] || "").replace(/^\\//, "");
+  } else if (schemeMatch) {
+    path = schemeMatch[1];
+  } else {
+    return no("not_a_token_link");
+  }
+
+  // Rule 3. Query and fragment are not part of the code.
+  path = path.split("?")[0].split("#")[0];
+
+  // Rule 2. A PREFIX, not a search. 'settings/t/abc' is not our path.
+  if (!path.startsWith("t/")) return no("not_a_token_link");
+
+  const raw = path.slice(2);
+
+  // From here on the link IS ours, so every failure is malformed_code.
+  // Rule 4.
+  const canonical = raw.replace(/[\\s-]/g, "").toUpperCase();
+
+  // Rule 5. Refuse; do not map O to 0. An excluded character means the
+  // code was mistyped, and guessing produces a hash for a token that
+  // was never issued.
+  for (const ch of canonical) {
+    if (!config.alphabet.includes(ch)) return no("malformed_code");
+  }
+
+  // Rule 6.
+  if (canonical.length !== config.groups * config.groupSize) {
+    return no("malformed_code");
+  }
+
+  return { code: canonical, reason: "ok" };
+}`
+    });
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is React Navigation config plus a React Native screen talking to a running API, needing a device",
       exercise: "Implement the complete deep linking setup for the Token app: (1) Create the linkingConfig object with prefixes and screen mapping for /t/:code, (2) Write a TokenRedeemScreen that reads the code param, fetches from the API, and handles loading/error/success states, (3) Handle the auth gate — if the user is not logged in when the deep link arrives, save it and redirect after login.",
       hints: [
         "The linking config needs prefixes for both https://tokn.app and the tokn:// custom scheme.",
@@ -554,6 +675,151 @@ export function RootNavigator() {
     </NavigationContainer>
   );
 }`
+    });
+
+    createPlayground("pg-exercise-link", `// Write parseTokenLink(url, config) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(v) { return JSON.stringify(v); }
+
+var ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+function cfg(over) {
+  var c = {
+    hosts: ["tokn.app"],
+    scheme: "tokn",
+    alphabet: ALPHABET,
+    groups: 3,
+    groupSize: 4,
+  };
+  for (var k in (over || {})) c[k] = over[k];
+  return c;
+}
+function got(url, over) {
+  try {
+    var r = parseTokenLink(url, cfg(over));
+    return r || {};
+  } catch (e) {
+    return { code: null, reason: "threw: " + e.message };
+  }
+}
+function codeOf(url, over) { return got(url, over).code; }
+function whyOf(url, over) { return got(url, over).reason; }
+
+var CODE = "MERC8GH2KP4X";
+
+try {
+  if (typeof parseTokenLink !== "function") throw new Error("not written yet");
+
+  // Rule 1 -- both accepted forms.
+  check("a universal link yields the code",
+    codeOf("https://tokn.app/t/MERC-8GH2-KP4X") === CODE,
+    "got " + show(codeOf("https://tokn.app/t/MERC-8GH2-KP4X")));
+  check("the custom scheme yields the same code",
+    codeOf("tokn://t/MERC-8GH2-KP4X") === CODE,
+    "got " + show(codeOf("tokn://t/MERC-8GH2-KP4X")));
+
+  // Rule 1 -- and NOTHING else. This is the security-relevant half.
+  check("an https link from another host is not our link",
+    whyOf("https://evil.example/t/MERC-8GH2-KP4X") === "not_a_token_link",
+    "got " + show(got("https://evil.example/t/MERC-8GH2-KP4X")) +
+      " -- otherwise any site can choose which conversation the app opens");
+  check("...and neither is another app's scheme",
+    whyOf("othr://t/MERC-8GH2-KP4X") === "not_a_token_link",
+    "got " + show(got("othr://t/MERC-8GH2-KP4X")));
+  check("...nor a host that merely ends with ours",
+    whyOf("https://nottokn.app/t/MERC-8GH2-KP4X") === "not_a_token_link",
+    "got " + show(got("https://nottokn.app/t/MERC-8GH2-KP4X")) +
+      " -- endsWith('tokn.app') is not a host check");
+
+  // Rule 2 -- prefix, not search. The bug this lesson shipped.
+  check("a non-token path on our host is not a token link",
+    whyOf("https://tokn.app/about") === "not_a_token_link",
+    "got " + show(got("https://tokn.app/about")));
+  check("...and neither is a /t/ buried further along the path",
+    whyOf("https://tokn.app/settings/t/MERC-8GH2-KP4X") === "not_a_token_link",
+    "got " + show(got("https://tokn.app/settings/t/MERC-8GH2-KP4X")) +
+      " -- replace('t/','') strips the first match wherever it sits");
+  check("...and a bare /t is not one either",
+    whyOf("https://tokn.app/t") === "not_a_token_link",
+    "got " + show(got("https://tokn.app/t")));
+
+  // Rule 3 -- query and fragment.
+  check("a query string is not part of the code",
+    codeOf("https://tokn.app/t/MERC-8GH2-KP4X?ref=qr") === CODE,
+    "got " + show(codeOf("https://tokn.app/t/MERC-8GH2-KP4X?ref=qr")));
+  check("...and neither is a fragment",
+    codeOf("https://tokn.app/t/MERC-8GH2-KP4X#top") === CODE,
+    "got " + show(codeOf("https://tokn.app/t/MERC-8GH2-KP4X#top")));
+
+  // Rule 4 -- three spellings of one code.
+  check("an undashed code is the same code",
+    codeOf("https://tokn.app/t/MERC8GH2KP4X") === CODE);
+  check("...as is a lowercase one",
+    codeOf("https://tokn.app/t/merc-8gh2-kp4x") === CODE,
+    "got " + show(codeOf("https://tokn.app/t/merc-8gh2-kp4x")));
+  check("...and one typed with spaces",
+    codeOf("tokn://t/MERC 8GH2 KP4X") === CODE,
+    "got " + show(codeOf("tokn://t/MERC 8GH2 KP4X")));
+
+  // Rule 5 -- excluded characters are refused, not remapped.
+  check("a code containing an excluded letter is refused",
+    codeOf("https://tokn.app/t/MERC-8GH2-KP4O") === null,
+    "got " + show(codeOf("https://tokn.app/t/MERC-8GH2-KP4O")) +
+      " -- O is not in the alphabet, and it must not be read as 0");
+  // The dangerous shape: an excluded character in a THIRTEEN-character
+  // string. Strip it instead of refusing and you are left with twelve
+  // valid characters -- a real code, belonging to somebody else.
+  // Refusing gives the user an error; stripping gives them a stranger's
+  // conversation.
+  check("...and an excluded character is not quietly dropped",
+    codeOf("https://tokn.app/t/MERC-8GH2-KP4OX") !== CODE,
+    "got " + show(codeOf("https://tokn.app/t/MERC-8GH2-KP4OX")) +
+      " -- dropping the O leaves a DIFFERENT valid code");
+  check("...nor is punctuation accepted",
+    codeOf("https://tokn.app/t/MERC_8GH2_KP4X") === null,
+    "got " + show(codeOf("https://tokn.app/t/MERC_8GH2_KP4X")) +
+      " -- only spaces and hyphens are stripped");
+
+  // Rule 6 -- exact length.
+  check("eleven characters is not a code",
+    codeOf("https://tokn.app/t/MERC-8GH2-KP4") === null,
+    "got " + show(codeOf("https://tokn.app/t/MERC-8GH2-KP4")));
+  check("thirteen characters is not a code either",
+    codeOf("https://tokn.app/t/MERC-8GH2-KP4XY") === null,
+    "got " + show(codeOf("https://tokn.app/t/MERC-8GH2-KP4XY")) +
+      " -- do not truncate to the first twelve");
+
+  // Rule 7 -- two different findings.
+  check("our link with a bad code is malformed_code, not not_a_token_link",
+    whyOf("https://tokn.app/t/MERC-8GH2-KP4O") === "malformed_code",
+    "got " + show(whyOf("https://tokn.app/t/MERC-8GH2-KP4O")) +
+      " -- one means the link was never for us, the other that it was");
+  check("...and a good link reports ok",
+    whyOf("tokn://t/MERC-8GH2-KP4X") === "ok",
+    "got " + show(whyOf("tokn://t/MERC-8GH2-KP4X")));
+
+  // Junk in, no crash out.
+  check("junk input is refused without throwing",
+    whyOf("") === "not_a_token_link" &&
+    whyOf("not a url at all") === "not_a_token_link" &&
+    whyOf(null) === "not_a_token_link",
+    "got " + show([whyOf(""), whyOf("not a url at all"), whyOf(null)]));
+
+  // Every refusal carries no half-answer.
+  check("every refusal returns a null code",
+    codeOf("https://tokn.app/about") === null &&
+    codeOf("https://tokn.app/t/MERC-8GH2-KP4O") === null,
+    "got " + show([codeOf("https://tokn.app/about"), codeOf("https://tokn.app/t/MERC-8GH2-KP4O")]));
+} catch (err) {
+  console.log("Self-check could not run: " + err.message);
+}`);
+
+    createExplain("explain-a9-0002", {
+      prompt: "<code>parseTokenLink</code> reports <code>not_a_token_link</code> and <code>malformed_code</code> separately, but the screen shows the same sentence for every unusable token. Explain why those two facts are not in conflict — what each distinction is for, and who is allowed to see it."
     });
 
     createQuiz("lesson-quiz", [

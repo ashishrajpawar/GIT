@@ -14,15 +14,15 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 101 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
 | Quiz questions (track) | 2718 |
-| Avg teaching prose per track lesson | 2065 words |
+| Avg teaching prose per track lesson | 2070 words |
 | Lessons with a playground | 92 / 101 |
 | Lessons with an exercise | 101 / 101 |
 | **Deepened** (all 3 spine sections) | 16 / 101 |
-| **Verified** (code executed) | 75 / 101 |
+| **Verified** (code executed) | 76 / 101 |
 | Ran clean but had nothing to run | 0 / 101 |
 | Errors | 0 |
 | Known and blocked | 1 |
-| Warnings | 0 |
+| Warnings | 1 |
 
 Student-completed lessons are **not** tracked here — that comes from the student
 or from `progress.js` localStorage, and is never inferred from the files.
@@ -84,7 +84,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a6-chat-realtime | 3 | 1912 | 6 | 6 | 78 | 0/3 | 3/3 |
 | a7-voice-video | 5 | 1279 | 6 | 6 | 138 | 0/5 | 1/5 |
 | a8-redemption-web | 4 | 1722 | 8 | 8 | 115 | 0/4 | 4/4 |
-| a9-deep-linking | 2 | 1167 | 2 | 2 | 53 | 0/2 | 0/2 |
+| a9-deep-linking | 2 | 1395 | 3 | 3 | 53 | 0/2 | 1/2 |
 | b1-sql-fundamentals | 4 | 1082 | 0 | 4 | 103 | 0/4 | 0/4 |
 | b10-security-compliance | 2 | 3984 | 5 | 4 | 53 | 1/2 | 2/2 |
 | b2-schema-design | 3 | 2363 | 3 | 6 | 82 | 0/3 | 3/3 |
@@ -108,7 +108,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Tables queried but never created | calls |
 | Broken relative links | ok |
 | search-index.json | 102 entries, 0 dead, 0 unindexed |
-| Example tokens valid under alphabet | ok |
+| Example tokens valid under alphabet | 1 invalid |
 
 ## Errors
 
@@ -123,6 +123,9 @@ so they do not hold the audit red. They are **not** resolved.
   - **why:** Call records depend on what WebRTC signalling actually needs to persist, which B6 has not settled.
   - **gate:** B6 (signalling), which has not been written. The B2 rewrite this used to name landed 2026-08-21 and did not touch call records. _(since 2026-08-18)_
 
+## Warnings (1)
+
+- token: "MERC-8GH2-KP4O" uses characters excluded from the alphabet (1 file(s))
 
 ## Per-lesson detail
 
@@ -190,7 +193,7 @@ so they do not hold the audit red. They are **not** resolved.
 | a8-redemption-web/0003-browser-webrtc-ws.html | 1768 | 8 | 2 | 2 | 29 | — | yes |
 | a8-redemption-web/0004-no-app-experience.html | 1907 | 9 | 2 | 2 | 27 | — | yes |
 | a9-deep-linking/0001-universal-links-app-links.html | 1112 | 7 | 1 | 1 | 28 | — | n/a |
-| a9-deep-linking/0002-in-app-deep-link-handling.html | 1222 | 9 | 1 | 1 | 25 | — | — |
+| a9-deep-linking/0002-in-app-deep-link-handling.html | 1678 | 10 | 2 | 2 | 25 | — | yes |
 | b1-sql-fundamentals/0001-tables-insert-select.html | 1442 | 10 | 0 | 1 | 26 | — | — |
 | b1-sql-fundamentals/0002-joins-relationships.html | 863 | 10 | 0 | 1 | 25 | — | — |
 | b1-sql-fundamentals/0003-indexes-transactions-constraints.html | 972 | 11 | 0 | 1 | 26 | — | n/a |

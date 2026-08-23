@@ -12,18 +12,58 @@ how far it got.
 
 ## In progress
 
-**M3 for the remaining never-executed lessons.** The runner now handles
-TypeScript and `a2/0001` is verified — **the first lesson in this course
-written in TypeScript whose code has ever run.** Seven left with no log entry:
+> **Do not ask the student where they are in the course.** Asked 2026-08-23
+> and declined: *"dont ask as it wont affect your work or plan."* That closes
+> it the way the lookahead question was closed. **`CLAUDE.md`'s other rule
+> still stands and is now the whole rule: never *infer* progress from the
+> files either.** Make no claims about progress at all — not in prose, not in
+> a commit message, not as a reason for prioritising anything.
+
+**M3 for the remaining never-executed lessons.** Chosen by the student on
+2026-08-23 over writing the C-modules. The runner now handles TypeScript and
+`a2/0001` is verified — **the first lesson in this course written in
+TypeScript whose code has ever run.** Nine left with no log entry:
 
 | Lesson | What it needs |
 |---|---|
 | `a2/0002`, `a2/0003` | An M3 exercise. `0003` is JSX, so the screen stays excused and the pure function beside it does not |
 | `a3/0002` | An M3 exercise; SESSION already flags the "I annotated it, so it is one" gap |
-| `a9/0002`, `x2/0001`, `x2/0002` | Nothing structural — never attempted |
+| ~~`a9/0002`~~ | **done 2026-08-23** — `parseTokenLink`, and it was hiding a denial oracle |
+| `x2/0001`, `x2/0002` | Nothing structural — never attempted |
 | `b1/0001`, `b1/0002`, `b1/0004` | Pure SQL, and the M3 hunt has never been run over B1 |
 
 Previous good state is `b9276d7`.
+
+### a9/0002 — the deep-link screen was a code oracle (2026-08-23)
+
+M3: **`parseTokenLink`**. 22 self-checks, 11 wrong-cases.
+
+**The lesson taught three distinguishable failures** — 404 *doesn't exist*,
+410 *revoked*, 403 *max uses* — and rendered the difference on screen. Anyone
+can open a deep link, so that answers a question about a code nobody had to
+prove anything to ask: a 404 means *keep guessing*, a 410 means *you found
+one*. **`b7/0001` states the rule outright** — one status and one message for
+every refusal — and `a8/0002` is the worked version, one screen for all five
+unusable outcomes with the distinction kept for metrics. **Sixth layer.**
+
+Its `parseTokenUrl` also had the unanchored `replace('t/', '')` — the bug the
+lesson's own prose describes correctly, in the code the student copies. Same
+shape as `a5/0004` and `b10/0002`: **prose corrected, code beside it
+untouched.**
+
+### Three wrong-cases were wrong, and one of them was not a mistake at all
+
+- **Mapping `O`→`0` and `I`/`L`→`1` is a no-op.** Every character it maps
+  *from* is excluded and every character it maps *to* is excluded, so the code
+  is refused either way. That is not luck — **the excluded set is closed under
+  confusion**, which is the property that makes it worth having. Replaced with
+  the genuinely dangerous version: *stripping* unknown characters, where
+  `MERC-8GH2-KP4OX` loses its `O` and becomes a different **valid** code
+  belonging to somebody else.
+- **My solution stripped the query twice**, so the wrong-case that removed one
+  strip changed nothing. Dead code in a revealed solution is its own defect;
+  the origin regex now keeps the query and the path step removes it.
+- One `expect` named a check that a neighbouring rule fires first.
 
 > **⚠ A process trap found the hard way on 2026-08-23.** Running
 > `verify-lesson.mjs` on a lesson **without** the `--unverifiable` reason it
