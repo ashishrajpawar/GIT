@@ -1038,31 +1038,44 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
-### → Ask the student one question: what happens to `c5/0005`?
+### Four decisions were taken 2026-08-23 (round 2), and nothing is blocked
 
-**This is the only blocked item in the course.** `c5/0005` was planned as
-multi-device, and the student chose **one device for v1** on 2026-08-23, so it
-has no product left to describe. Two options, and the first is the
-recommendation:
+All four came back as the recommendation. **They are recorded in `CLAUDE.md`,
+not just here** — see *Where a token's rules live* and *Expiry is
+`tokens.expires_at`*.
 
-1. **Rewrite it as *"why Token is single-device, and what changing it would
-   cost"*.** Genuinely useful rather than a consolation prize — that answer
-   shapes the whole key model, and it is where the `participants` orphan
-   finally gets decided. `0004` already sets it up: the backup blob is a
-   *set* of key versions, and a second device is the same question asked
-   about space instead of time.
-2. **Drop it and make C5 four lessons.**
+| Question | Answer |
+|---|---|
+| **`c5/0005`** | **Rewrite as *"why one phone, and what a second would cost"***. Decides `participants` with it — expect a deletion |
+| **Rules storage** | **`access_rules` rows.** `b7/0002` reads a `tokens.rules` column `b2/0001` does not create, and `b7/0002` is the one that is wrong |
+| **Expiry** | **`tokens.expires_at` only.** Not a rule type. `a5/0004` still accepts `'expiry'` in its zod enum |
+| **TypeScript** | **Teach the verifier TypeScript**, so `a2/*` and `a3/0002` stop being the only lessons whose code has never run |
 
-**Do not write it as originally planned.** And note what option 1 unblocks:
-`participants` has been gated on this module since it was first written, and
-a single-device product may not need a membership table at all — so the
-answer there may be a deletion rather than a definition.
+### The order to do them in, and why
 
-**Everything else is unblocked:** `a3/0002`'s M3 extraction, `a2`'s runtime
-type guards, and the small `a8/0004` fix (`tokenCode` sent over the WebSocket
-on every chat message, twice — the holder knows the code so nothing leaks to
-*them*, but it lands in server logs and Redis pub/sub against ADR-0007, and the
-holder JWT already carries `conversationId`).
+1. **The rules model** — `b7/0002` and `a5/0004` together. Both decisions land
+   in the same two files, and this is the only item that is a **live
+   contradiction rather than a gap**: the engine queries a column that does not
+   exist, so one of those two lessons is teaching code that cannot run.
+   `b7/0002`'s `evaluateRuleSet` M3 and its wrong-cases will need re-verifying;
+   `KNOWN_RULES` is already correct and must stay.
+2. **`c5/0005`** — finishes C5 and closes the `participants` gate, which is one
+   of only two entries left in `known-issues.json`.
+3. **The TypeScript runner** — tooling, so it is the one that can wait. It is
+   also the one that pays off across the whole course rather than in one place.
+
+**Also unblocked and small:** the `a8/0004` fix (`tokenCode` sent over the
+WebSocket on every chat message, twice — the holder knows the code so nothing
+leaks to *them*, but it lands in server logs and Redis pub/sub against
+ADR-0007, and the holder JWT already carries `conversationId`).
+
+### One correction to `CLAUDE.md`, made the same day
+
+**Its warning that `b4-auth-server` still teaches email and argon2 was
+stale.** B4 was rewritten on 2026-08-22 and agrees with `b2/0001`. The argon2
+that greps in `b4/0001` is **quoted history** — the old password login, shown
+so its ~200 ms timing gap can be measured. A grep hit is not a contradiction;
+read the paragraph around it.
 
 ---
 

@@ -450,9 +450,13 @@ messages must respect it:
 - No server-side search — search runs on-device over the SQLite cache
 - No server-side content moderation — see ADR-0006, abuse handling works from
   user-submitted reports (with signatures proving authorship) and metadata
-- Multi-device needs explicit key sharing; there is no server copy to sync
+- **Token is one device per account in v1** (decided 2026-08-23). Multi-device
+  needs explicit key sharing, because there is no server copy to sync from —
+  and that is a whole product surface, not a setting. `c5/0005` is the lesson
+  that argues the cost; do not design as though a second device is coming
 - Key backup and recovery is a **v1 feature**, not a later nicety — and it must
-  not be a server-held copy of the key, or the guarantee is theatre
+  not be a server-held copy of the key, or the guarantee is theatre. See
+  *Key backup* below, and `c5/0004` for the built version
 
 **2. Built to scale out, deployed on one box** (ADR-0003). The architecture
 assumes N replicas; the deployment runs one until traffic says otherwise.
@@ -565,6 +569,37 @@ summarised here rather than left in the ADR:
   and the second constraint would reject the row otherwise. **The state
   machine's exclusivity is a database fact, not a convention.** See `b2/0001`.
 
+- **A token's rules live in `access_rules` rows, never in a `tokens.rules`
+  JSONB column** (decided 2026-08-23, after `b7/0002` spent months reading a
+  column `b2/0001` does not create). One row per rule: `rule_type TEXT` plus a
+  `payload JSONB`.
+
+  The deciding argument is not the join cost, which is trivial against
+  `idx_rules_token_id`. It is that **`rule_type` becomes a constrained column
+  and the database can refuse a rule the engine cannot evaluate.** `b7/0002`
+  already shipped the defect this prevents — an unknown rule type falling
+  through to `allowed` — and a bare JSONB blob has no layer at which that is
+  catchable before it is stored. The payload stays JSONB because each rule
+  type has different fields; the *type* does not get that latitude.
+
+  Second reason, the same one that made the key directory append-only: rows
+  give a rule change a history. "What could this token do last Tuesday" is a
+  question with an answer only if the old row still exists.
+
+- **Expiry is `tokens.expires_at` and is not a rule type** (decided
+  2026-08-23). `a5/0004` carried an `ExpiryPayload` rule *and* read the column,
+  which meant the badge would have had to consult two places and know which
+  wins. One field, one answer. `b7/0002`'s `KNOWN_RULES` was already right —
+  `channel_restrict`, `time_window`, `contact_limit`, and no `expiry`.
+
+  **The general form, which this course keeps meeting: a value modelled in two
+  places needs a written precedence order at every read site, and every site
+  that forgets is a token that looks live and is not.** Cheaper to have one
+  place. Same reasoning as `status` versus `paused_at`/`revoked_at` above —
+  except that duplication is *made safe by a database constraint*, and this one
+  had nothing enforcing agreement at all. **Duplication is tolerable only when
+  something refuses to let the copies disagree.**
+
 - **There is no `use_count` column** (decided the same day). The number of uses
   is counted from `conversations`. A stored counter is a second copy of a fact
   and every way it drifts — a transaction that fails after incrementing, a
@@ -591,12 +626,13 @@ and chose the phone. So `users` has **no `email` column and never will** —
 which matches the out-of-scope list below, and means one identifier is stored
 rather than two.
 
-> **`b4-auth-server` contradicts this and has not been rewritten yet.** All
-> three of its lessons teach `ALTER TABLE users ADD COLUMN email`, an
-> argon2 `password_hash`, and `/register` + `/login` keyed on email. That is
-> the *only* place in the course still doing so, it predates the decision, and
-> **`b2/0001` is right where `b4` is wrong.** Do not "reconcile" them by
-> adding an email column to the schema. See `SESSION.md`.
+> **`b4-auth-server` was rewritten and now agrees** (2026-08-22; this note
+> said otherwise until 2026-08-23 and was stale). It no longer adds an `email`
+> column or an argon2 `password_hash`. The argon2 that remains in `b4/0001` is
+> **quoted history**: the old password login is shown so its ~200 ms timing gap
+> can be measured, which is what teaches the denial oracle. Do not "fix" it by
+> deleting the example, and do not read a grep hit for `argon2` as a
+> contradiction — read the surrounding paragraph.
 
 **The number is proved by SMS OTP through an aggregator** (decided
 2026-08-22). This is a deliberate addition to the third-party list, made on
