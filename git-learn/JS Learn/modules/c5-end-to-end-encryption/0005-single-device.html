@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Single-Device, and What a Second Would Cost — C5.5</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">C5 — End-to-End Encryption</a>
+      <span class="sep">›</span>
+      <span class="current">Single-Device</span>
+    </nav>
+
+    <h1>Single-Device, and What a Second Would Cost</h1>
+    <div class="lesson-meta">
+      <span>C5 — Lesson 5 of 5</span>
+      <span>~45 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p><strong>Token v1 is one phone per account</strong> (decided
+      2026-08-23). This lesson was planned as <em>how to build multi-device</em>
+      and is instead about why it is not being built — which is more useful,
+      because the reasoning decides things you are about to build anyway.</p>
+      <p>The short version: under ADR-0002 the server holds no key, so a second
+      device is not a setting. It is a <strong>key distribution problem</strong>,
+      and it reaches the message schema, the send path, the sync path and the
+      recovery flow. <em>Not yet</em> is a legitimate answer; <em>we'll add it
+      later</em> without knowing the price is not.</p>
+    </div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Why it is not a setting</h2>
+
+    <p>Everything else in Token comes back from a phone number, because it is
+    server-side and unencrypted — <code>0004</code> made that case in detail.
+    The private key is the exception, and <code>0001</code> put it in the
+    Keychain with <code>WHEN_UNLOCKED_THIS_DEVICE_ONLY</code>, which
+    deliberately excludes it from iCloud, from Google backup, and from every
+    other mechanism that would carry it to a second device on its own.</p>
+
+    <p>That was the right call and it is exactly what makes this hard.
+    <strong>There is nothing to sync from.</strong> A second device has to
+    obtain a key some other way, and there are only two ways.</p>
+
+    <table>
+      <thead><tr><th></th><th>A — share one identity</th><th>B — a key per device</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>How</td>
+          <td>Device 1 transfers its private key to device 2 over a channel the server cannot read — a QR code scanned in person</td>
+          <td>Device 2 generates its own keypair and publishes it to the directory from <code>0002</code>, as another row for the same user</td>
+        </tr>
+        <tr>
+          <td>The directory</td>
+          <td>Unchanged. One public key per user</td>
+          <td>Many keys per user, each with its own version and <code>retired_at</code></td>
+        </tr>
+        <tr>
+          <td>Sending a message</td>
+          <td>Unchanged. Encrypt once</td>
+          <td><strong>Encrypt once per device, on both sides</strong> — see below</td>
+        </tr>
+        <tr>
+          <td>Losing device 2</td>
+          <td>Rotate the shared identity, on every device you still have</td>
+          <td>Retire that one key. The others are untouched</td>
+        </tr>
+        <tr>
+          <td>The real cost</td>
+          <td>The private key now exists in two places, and a compromise of either is a compromise of the identity. There is no way to say <em>that</em> device is no longer trusted</td>
+          <td>Message fan-out, a schema change, and a sync path — all described below</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p><strong>A is cheap and wrong.</strong> It looks attractive because
+    nothing downstream changes, and it gives up the one property that makes
+    per-device keys worth having: the ability to revoke <em>a device</em>
+    rather than an identity. A stolen tablet you cannot individually untrust is
+    a stolen identity. B is what Signal does, and B is what the rest of this
+    lesson costs out.</p>
+
+    <!-- ───────────────────────────────────────────── -->
+    <div class="callout danger">
+      <div class="callout-title">The cost is fan-out, and it lands on the message table</div>
+
+      <p><code>b2/0002</code> stores one row per message:
+      <code>ciphertext</code>, <code>nonce</code>, <code>key_version</code>.
+      That shape assumes <strong>one recipient key</strong>.</p>
+
+      <p>Under per-device keys there is no single ciphertext. A message to
+      someone with three devices is three ciphertexts, sealed to three
+      different public keys, and the server — which cannot read any of them —
+      must store and route all three. So the row becomes a row per
+      <em>envelope</em>:</p>
+
+      <pre><code>-- What multi-device would require. NOT the v1 schema.
+CREATE TABLE message_envelopes (
+  message_id  INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  device_id   INTEGER NOT NULL REFERENCES device_keys(id),
+  ciphertext  BYTEA   NOT NULL,
+  nonce       BYTEA   NOT NULL,
+  PRIMARY KEY (message_id, device_id)
+);</code></pre>
+
+      <p>Read that against <code>b2/0002</code>'s partitioning and the cost is
+      not the table, it is the multiplier: <strong>message volume is now
+      messages × devices</strong>, on a table already partitioned by time
+      because it was expected to be the largest one in the system.</p>
+
+      <p>And the fan-out is on <em>both</em> sides. Your own other devices need
+      a copy of what <em>you</em> sent, or your sent messages are missing from
+      the conversation everywhere except the phone you typed them on. That is
+      the part everyone forgets, and it is the exercise below.</p>
+    </div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Three more things that stop being simple</h2>
+
+    <ul>
+      <li><strong>A new device starts empty.</strong> It cannot decrypt
+      anything sent before its key existed, because those envelopes were sealed
+      to keys it does not have. So "add a device" needs a history transfer from
+      an existing device — a second protocol, over a channel the server cannot
+      read, for a mailbox that may be years long.</li>
+
+      <li><strong>The device list is a race.</strong> You fetch someone's
+      devices, compose a message, and send. If they added a device in between,
+      that device gets no envelope and silently never sees the message. There
+      is no error — you sent successfully to the devices you knew about.
+      <code>planEnvelopes</code> below refuses a list that is too old rather
+      than pretending a stale answer is a current one.</li>
+
+      <li><strong>Every trust decision multiplies.</strong>
+      <code>0003</code>'s safety number binds two keys. With three devices each
+      side that is nine pairs, and the number changes whenever anyone adds a
+      device. Signal solves this with a per-<em>identity</em> key that signs
+      per-device keys; that is a third layer this course has not built.</li>
+    </ul>
+
+    <!-- ───────────────────────────────────────────── -->
+    <div class="callout warning">
+      <div class="callout-title">The redemption page is not a second device</div>
+      <p>The obvious objection: <code>a8</code> has holders talking to Token
+      through a browser, so multi-device clearly already works.</p>
+      <p>It does not, and the distinction matters. The browser is the
+      <strong>other party</strong> to a conversation, not another device of
+      your account. It holds the <em>holder's</em> key for that one
+      conversation, and <code>b2/0002</code> is explicit that a holder is not a
+      user at all — <code>conversations</code> identifies them by
+      <code>holder_session_id</code>, and there is no <code>user_id</code>
+      anywhere on that side.</p>
+      <p><strong>Two parties to a conversation is not the same shape as two
+      devices for one party.</strong> The first is what Token is; the second is
+      what this lesson is declining to build.</p>
+    </div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>So <code>participants</code> is deleted, not designed</h2>
+
+    <p>A <code>participants</code> table — <code>(user_id,
+    conversation_id)</code>, the classic many-to-many junction — has been
+    queried by one lesson and created by none since the schema was first
+    written. It has been blocked on this module for weeks. **It is now
+    resolved by deletion**, and the argument is worth following because it
+    generalises.</p>
+
+    <p><strong>A junction table exists to record a membership that can
+    vary.</strong> In Token, nothing varies:</p>
+
+    <ul>
+      <li>A conversation has exactly <strong>two</strong> parties, and
+      <code>conversations.token_id</code> already determines both — the token's
+      owner on one side, the holder of that conversation on the other.</li>
+      <li>There are no group conversations, so a party set never grows.</li>
+      <li><strong>The holder is not a user and has no
+      <code>user_id</code></strong>, so half of every row in that table could
+      never have been filled in. The junction shape assumed both parties were
+      users, and in Token only one of them ever is.</li>
+      <li>Per-device fan-out was the last thing that might have needed a
+      membership set, and this lesson is why it is not being built.</li>
+    </ul>
+
+    <p>The correct ownership query walks the relationship that actually
+    exists — message, to conversation, to token, to owner:</p>
+
+    <pre><code>-- Read messages in a conversation this user owns the token for.
+SELECT m.*
+  FROM messages m
+  JOIN conversations c ON c.id = m.conversation_id
+  JOIN tokens t        ON t.id = c.token_id
+ WHERE m.conversation_id = $1
+   AND t.user_id = $2;</code></pre>
+
+    <p><strong>The general form: an orphan table is sometimes a feature that
+    was never decided, not a schema that was never written.</strong> Three
+    tables were parked as "queried but never created" and the three ended
+    differently — <code>deletion_queue</code> was defined once a policy existed
+    (<code>b10/0002</code>), <code>calls</code> is still waiting on B6, and this
+    one turned out to describe a product Token is not building. Writing it
+    anyway would have produced a table that is always exactly two rows, one of
+    which cannot be filled in.</p>
+
+    <h3>Try it yourself — this one is broken on purpose</h3>
+
+    <p>The envelope planner as it is usually first written, run against four
+    situations a two-device user meets in their first week.</p>
+
+    <div id="playground-fanout"></div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Now build it yourself</h2>
+
+    <p>You are not building multi-device. You are <strong>costing it</strong>,
+    and this function is the cheapest honest way to see the price: it is the
+    part that has to be right before a single message can be sent, and it is
+    pure.</p>
+
+    <div id="exercise-fanout"></div>
+    <div id="pg-exercise-fanout"></div>
+
+    <h3>And the decision record</h3>
+
+    <div id="exercise-1"></div>
+
+    <div id="explain-c5-0005"></div>
+
+    <hr>
+
+    <h2>Quiz</h2>
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0004-backup-recovery.html">← Backup &amp; Recovery</a>
+      <a href="./README.html">C5 complete — module home →</a>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+  createPlayground("playground-fanout", `// BROKEN ON PURPOSE. The envelope planner as it is usually first written.
+
+function planEnvelopes(recipient, self) {
+  // "Seal it to everyone they can read it on."
+  return recipient.devices.map(d => ({ deviceId: d.deviceId, publicKey: d.publicKey }));
+}
+
+const NOW = 1_700_000_000_000;
+
+const CASES = [
+  { name: "Ravi has one phone; you have a phone and a tablet",
+    recipient: { fetchedAt: NOW - 1000, devices: [
+      { deviceId: "ravi-phone", publicKey: "K1", retiredAt: null },
+    ]},
+    self: { thisDeviceId: "my-phone", devices: [
+      { deviceId: "my-phone",  publicKey: "K2", retiredAt: null },
+      { deviceId: "my-tablet", publicKey: "K3", retiredAt: null },
+    ]},
+    truth: "3 envelopes: Ravi's phone, AND your tablet -- or your own tablet never sees what you sent" },
+
+  { name: "Ravi retired his old phone last month",
+    recipient: { fetchedAt: NOW - 1000, devices: [
+      { deviceId: "ravi-old",   publicKey: "K9", retiredAt: NOW - 2_600_000_000 },
+      { deviceId: "ravi-phone", publicKey: "K1", retiredAt: null },
+    ]},
+    self: { thisDeviceId: "my-phone", devices: [
+      { deviceId: "my-phone", publicKey: "K2", retiredAt: null },
+    ]},
+    truth: "1 envelope. Sealing to a retired key is sealing to the key most likely to be in someone else's hands" },
+
+  { name: "you fetched Ravi's device list 40 minutes ago",
+    recipient: { fetchedAt: NOW - 2_400_000, devices: [
+      { deviceId: "ravi-phone", publicKey: "K1", retiredAt: null },
+    ]},
+    self: { thisDeviceId: "my-phone", devices: [
+      { deviceId: "my-phone", publicKey: "K2", retiredAt: null },
+    ]},
+    truth: "REFUSE and refetch. Ravi may have added a device since, and it would silently get nothing" },
+
+  { name: "Ravi is mid-reinstall and has no active device",
+    recipient: { fetchedAt: NOW - 1000, devices: [] },
+    self: { thisDeviceId: "my-phone", devices: [
+      { deviceId: "my-phone", publicKey: "K2", retiredAt: null },
+    ]},
+    truth: "REFUSE. Zero envelopes is a message encrypted to nobody, and it looks exactly like a sent one" },
+];
+
+for (const c of CASES) {
+  const got = planEnvelopes(c.recipient, c.self);
+  console.log("case  :", c.name);
+  console.log("  gives:", got.length, "envelope(s) ->", got.map(e => e.deviceId).join(", ") || "(none)");
+  console.log("  needs:", c.truth);
+  console.log("");
+}
+
+console.log("Every one of the four is wrong, and none of them errors.");
+console.log("");
+console.log("Case 1 is the one that ships. It works -- Ravi gets the message,");
+console.log("the send succeeds, nothing warns. Weeks later you pick up the");
+console.log("tablet and your own half of every conversation is missing, and");
+console.log("it is unrecoverable, because nobody kept a copy you can read.");
+console.log("");
+console.log("Case 4 is the quiet catastrophe: an empty list mapped over is an");
+console.log("empty list, so the message is sealed to nobody and reported as");
+console.log("sent. Deny-by-default means an empty result is a refusal, never");
+console.log("an answer.");`);
+
+  createSolution("exercise-fanout", {
+    exercise: `Write planEnvelopes(recipient, self, config) — every device key a single message must be sealed to.\n\nrecipient is { fetchedAt, devices } — what the directory returned for the person you are writing to, and WHEN it was fetched.\nself is { thisDeviceId, devices } — your own devices, including the one you are typing on.\n\nA device is { deviceId, publicKey, keyVersion, retiredAt }. retiredAt is null for an active device and a timestamp for a retired one.\n\nconfig is { now, maxListAgeMs, isWellFormed }.\n\nReturn { envelopes, reason, canRetry }, where an envelope is { deviceId, publicKey, keyVersion }.\n\nThe rules:\n\n1. IF THE RECIPIENT LIST IS OLDER THAN config.maxListAgeMs, return no envelopes with reason 'stale_device_list' and canRetry true. Check this FIRST, before filtering anything: a list too old to trust cannot be filtered into trustworthiness, and a device added since the fetch is invisible to you — it receives no envelope and its owner never learns a message existed. Exactly maxListAgeMs old is still fresh; older than it is not.\n\n2. A DEVICE WITH A NON-NULL retiredAt GETS NO ENVELOPE, on either side. c5/0002 makes the argument: a key is often retired BECAUSE it was compromised, so the retired one is the key most likely to be in someone else's hands.\n\n3. IF ANY KEY THAT WOULD OTHERWISE RECEIVE AN ENVELOPE IS MALFORMED, refuse the whole send with reason 'malformed_key' and canRetry false. Do NOT skip it and carry on. Skipping silently drops a device the recipient is still using, and the send reports success.\n\n4. THE RECIPIENT MUST HAVE AT LEAST ONE ACTIVE DEVICE. If not, return no envelopes with reason 'no_recipient_devices' and canRetry false. Zero envelopes is not a small send, it is a message encrypted to nobody — and mapping over an empty list produces exactly that, with no error anywhere.\n\n5. INCLUDE EVERY ONE OF YOUR OWN DEVICES EXCEPT THE ONE SENDING. This is the rule that gets left out. The sending device already has the plaintext and needs no envelope; every OTHER device of yours needs one or your sent messages are missing there — permanently, because no copy exists that they can read.\n\n6. HAVING NO OTHER DEVICES OF YOUR OWN IS FINE, and is the single-device case. Note the asymmetry with rule 4: an empty recipient list is a refusal and an empty self list is an ordinary Tuesday. They are different questions that happen to produce the same-looking empty array.\n\n7. SORT THE ENVELOPES BY deviceId. The set is what matters, and a stable order makes the output comparable between runs — which is what lets a test say 'these two sends produced the same envelopes' at all.\n\n8. envelopes IS NON-EMPTY EXACTLY WHEN reason IS 'ok'. Every refusal returns an empty array, so a caller that renders envelopes without checking reason shows nothing rather than a partial fan-out.`,
+    hints: [
+      "Rule 1 first, and literally first — before you touch either device list. Filtering a stale list gives you a clean-looking answer to a question you should not have asked.",
+      "Build one array from two sources: the recipient's active devices, and your own active devices with thisDeviceId excluded. Then check the recipient half is non-empty BEFORE combining, because rule 4 is about the recipient and your own devices must not accidentally satisfy it.",
+      "For rule 3, validate after filtering out retired devices. A malformed key on a device nobody is sealing to is not a reason to refuse a send — the rule is about keys that would otherwise receive an envelope."
+    ],
+    solution: `function planEnvelopes(recipient, self, config) {
+  const no = (reason, canRetry) => ({ envelopes: [], reason, canRetry });
+  const active = (list) => (list || []).filter((d) => d.retiredAt === null || d.retiredAt === undefined);
+
+  // Rule 1: FIRST. A list too old to trust cannot be filtered into
+  // trustworthiness. Exactly maxListAgeMs is still fresh.
+  if (config.now - recipient.fetchedAt > config.maxListAgeMs) {
+    return no("stale_device_list", true);
+  }
+
+  // Rule 2, applied on both sides.
+  const theirs = active(recipient.devices);
+
+  // Rule 4: checked on the RECIPIENT half alone, before mixing in mine.
+  if (theirs.length === 0) {
+    return no("no_recipient_devices", false);
+  }
+
+  // Rule 5: every device of mine EXCEPT the one holding the plaintext.
+  // Rule 6: none is a perfectly ordinary answer.
+  const mine = active(self.devices).filter((d) => d.deviceId !== self.thisDeviceId);
+
+  const all = theirs.concat(mine);
+
+  // Rule 3: refuse, do not skip. Only keys that would receive an
+  // envelope are checked -- a retired device with a corrupt key is
+  // nobody's problem.
+  if (all.some((d) => !config.isWellFormed(d.publicKey))) {
+    return no("malformed_key", false);
+  }
+
+  // Rule 7.
+  const envelopes = all
+    .map((d) => ({ deviceId: d.deviceId, publicKey: d.publicKey, keyVersion: d.keyVersion }))
+    .sort((a, b) => (a.deviceId < b.deviceId ? -1 : a.deviceId > b.deviceId ? 1 : 0));
+
+  return { envelopes, reason: "ok", canRetry: false };
+}`
+  });
+
+  createPlayground("pg-exercise-fanout", `// Write planEnvelopes(recipient, self, config) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(v) { return JSON.stringify(v); }
+
+var NOW = 1700000000000;
+var MAX_AGE = 300000;   // five minutes
+
+// Device ids are chosen so ALPHABETICAL order differs from the order
+// they are concatenated in (recipient first, then mine). "a-tablet"
+// sorts before "r-phone", so an unsorted implementation is visible.
+function dev(id, key, retiredAt) {
+  return { deviceId: id, publicKey: key, keyVersion: 3, retiredAt: retiredAt === undefined ? null : retiredAt };
+}
+function cfg(over) {
+  var c = {
+    now: NOW,
+    maxListAgeMs: MAX_AGE,
+    isWellFormed: function (k) { return typeof k === "string" && k.length === 4; },
+  };
+  for (var k in (over || {})) c[k] = over[k];
+  return c;
+}
+function got(recipient, self, over) {
+  try {
+    var r = planEnvelopes(recipient, self, cfg(over));
+    return r || {};
+  } catch (e) {
+    return { envelopes: [], reason: "threw: " + e.message, canRetry: false };
+  }
+}
+function ids(res) {
+  return (res.envelopes || []).map(function (e) { return e.deviceId; }).join(",");
+}
+// The ordinary case: they have one phone, I have a phone and a tablet.
+function them(over) {
+  var r = { fetchedAt: NOW - 1000, devices: [dev("r-phone", "KKK1")] };
+  for (var k in (over || {})) r[k] = over[k];
+  return r;
+}
+function me(over) {
+  var s = { thisDeviceId: "m-phone", devices: [dev("m-phone", "KKK2"), dev("a-tablet", "KKK3")] };
+  for (var k in (over || {})) s[k] = over[k];
+  return s;
+}
+
+try {
+  if (typeof planEnvelopes !== "function") throw new Error("not written yet");
+
+  // Rule 5 -- THE check. Everything else is detail if this fails.
+  check("my own OTHER device gets an envelope",
+    ids(got(them(), me())).indexOf("a-tablet") !== -1,
+    "got " + show(ids(got(them(), me()))) +
+      " -- without it, my sent messages are missing on my tablet, permanently");
+  check("...and the device I am sending FROM does not",
+    ids(got(them(), me())).indexOf("m-phone") === -1,
+    "got " + show(ids(got(them(), me()))) + " -- it already has the plaintext");
+  check("...alongside the recipient's device",
+    ids(got(them(), me())).indexOf("r-phone") !== -1,
+    "got " + show(ids(got(them(), me()))));
+
+  // Rule 7 -- sorted, and the fixture makes unsorted visible.
+  check("envelopes come back sorted by deviceId",
+    ids(got(them(), me())) === "a-tablet,r-phone",
+    "got " + show(ids(got(them(), me()))));
+  check("...carrying publicKey and keyVersion, not just an id",
+    got(them(), me()).envelopes.every(function (e) {
+      return typeof e.publicKey === "string" && typeof e.keyVersion === "number";
+    }),
+    "got " + show(got(them(), me()).envelopes));
+
+  // Rule 6 -- one device of my own is not a refusal.
+  check("having no other device of my own is fine, not an error",
+    got(them(), me({ devices: [dev("m-phone", "KKK2")] })).reason === "ok" &&
+    ids(got(them(), me({ devices: [dev("m-phone", "KKK2")] }))) === "r-phone",
+    "got " + show(got(them(), me({ devices: [dev("m-phone", "KKK2")] }))));
+
+  // Rule 2 -- retired devices, both sides.
+  check("a retired device of THEIRS gets no envelope",
+    ids(got(them({ devices: [dev("r-old", "KKK9", NOW - 99), dev("r-phone", "KKK1")] }), me()))
+      .indexOf("r-old") === -1,
+    "a retired key is the one most likely to be in someone else's hands");
+  check("...and so does a retired device of MINE",
+    ids(got(them(), me({ devices: [dev("m-phone", "KKK2"), dev("a-tablet", "KKK3", NOW - 99)] })))
+      .indexOf("a-tablet") === -1,
+    "got " + show(ids(got(them(), me({ devices: [dev("m-phone", "KKK2"), dev("a-tablet", "KKK3", NOW - 99)] })))));
+
+  // Rule 4 -- zero recipients is a refusal, not a small send.
+  check("no active recipient device produces NO envelopes",
+    got(them({ devices: [] }), me()).envelopes.length === 0,
+    "got " + show(got(them({ devices: [] }), me()).envelopes));
+  check("...reported as no_recipient_devices, and not retryable",
+    got(them({ devices: [] }), me()).reason === "no_recipient_devices" &&
+    got(them({ devices: [] }), me()).canRetry === false,
+    "got " + show(got(them({ devices: [] }), me())));
+  check("...and my own devices do not satisfy it",
+    got(them({ devices: [dev("r-old", "KKK9", NOW - 99)] }), me()).reason === "no_recipient_devices",
+    "all their devices are retired, so there is no recipient -- mine do not count");
+
+  // Rule 1 -- staleness, checked first and on the right boundary.
+  check("a device list older than maxListAgeMs is refused",
+    got(them({ fetchedAt: NOW - MAX_AGE - 1 }), me()).reason === "stale_device_list",
+    "got " + show(got(them({ fetchedAt: NOW - MAX_AGE - 1 }), me()).reason));
+  check("...and it is retryable, because refetching fixes it",
+    got(them({ fetchedAt: NOW - MAX_AGE - 1 }), me()).canRetry === true,
+    "got " + show(got(them({ fetchedAt: NOW - MAX_AGE - 1 }), me())));
+  check("exactly maxListAgeMs old is still fresh",
+    got(them({ fetchedAt: NOW - MAX_AGE }), me()).reason === "ok",
+    "the boundary is the last fresh moment, not the first stale one");
+  // A stale list that ALSO has no active devices must report staleness:
+  // we never got far enough to know whether they have a device.
+  check("staleness is decided before the device list is even looked at",
+    got(them({ fetchedAt: NOW - MAX_AGE - 1, devices: [] }), me()).reason === "stale_device_list",
+    "got " + show(got(them({ fetchedAt: NOW - MAX_AGE - 1, devices: [] }), me()).reason));
+
+  // Rule 3 -- refuse, do not skip.
+  check("a malformed key refuses the whole send",
+    got(them({ devices: [dev("r-phone", "KKK1"), dev("r-pad", "nope-too-long")] }), me()).reason === "malformed_key",
+    "skipping it would silently drop a device they are still using");
+  check("...but a malformed key on a RETIRED device is nobody's problem",
+    got(them({ devices: [dev("r-phone", "KKK1"), dev("r-old", "nope-too-long", NOW - 99)] }), me()).reason === "ok",
+    "the rule is about keys that would otherwise receive an envelope");
+
+  // Rule 8 -- refusals carry no half-answer.
+  check("every refusal returns an empty envelopes array",
+    got(them({ devices: [] }), me()).envelopes.length === 0 &&
+    got(them({ fetchedAt: NOW - MAX_AGE - 1 }), me()).envelopes.length === 0 &&
+    got(them({ devices: [dev("r-phone", "bad")] }), me()).envelopes.length === 0,
+    "a partial fan-out rendered as a complete one is worse than nothing");
+} catch (err) {
+  console.log("Self-check could not run: " + err.message);
+}`);
+
+  createExplain("explain-c5-0005", {
+    prompt: "Your own second device needs an envelope for every message <em>you</em> send. Explain why leaving that out is unrecoverable rather than merely annoying — and why the send that caused it reported success."
+  });
+
+  createSolution("exercise-1", {
+    unverifiable: "the deliverable is an ADR and a schema migration in the token repo, not runnable code",
+    exercise: `Write the decision record, in token/docs/adr/. It is the deliverable of this lesson, and it is what stops the question being reargued from scratch every few months.\n\n1. State the decision: one device per account for v1, with per-device keys as the design if it changes. Say that sharing one identity across devices was considered and rejected, and why — you cannot untrust a device whose key is the identity.\n\n2. Cost it concretely rather than in adjectives. The message table gains an envelopes table and message volume becomes messages times devices; a new device cannot read anything sent before it existed, so 'add a device' needs a history transfer protocol; the device list is a race, so a send must refuse a stale list; and safety numbers multiply, which needs the identity-key-signs-device-keys layer this course has not built.\n\n3. Record what would change our mind, with a number where you can. 'Users ask for it' is not a trigger; 'more than N support requests about tablets in a quarter' is.\n\n4. Delete the participants table from the schema plan, and say in the ADR why: a conversation has exactly two parties, conversations.token_id determines both, and the holder is not a user so half of every row could never have been filled in.\n\n5. Fix the one query that used it. Message ownership walks messages to conversations to tokens to user_id — see the SQL above — and that chain is not a workaround, it is the relationship that actually exists.`,
+    hints: [
+      "Write the rejected option before the chosen one. An ADR that only argues for what was picked is a press release; the value is entirely in the alternative and its cost, because that is what a future session needs in order to disagree with you properly.",
+      "For point 3, the trigger has to be observable without a rewrite. 'When we support tablets' is circular. A count of support requests, or a named customer segment, can actually be checked against.",
+      "For point 5, grep before you assume it is one query. b1/0002 also teaches participants as its junction-table example — which is fine as generic SQL, and misleading when it names a Token table that does not exist."
+    ],
+    solution: `# ADR-0009: One device per account in v1
+
+## Status
+Accepted, 2026-08-23.
+
+## Context
+
+ADR-0002 puts message content beyond the server's reach, and c5/0001 stores
+the private key with WHEN_UNLOCKED_THIS_DEVICE_ONLY. Together those mean
+there is no server-side copy of the key and no platform backup carrying it,
+so a second device cannot obtain a key by syncing. It has to be given one.
+
+## Decision
+
+**One device per account for v1.** If that changes, it changes to
+**per-device keys** (option B below), not to a shared identity.
+
+## Options considered
+
+### A — share one identity key across devices
+Transfer the private key device-to-device over a channel the server cannot
+read. The directory, the send path and the message schema are all unchanged.
+
+**Rejected.** The key then exists in two places and there is no way to
+untrust one of them: revoking a stolen tablet means rotating the identity on
+every device you still hold. A device you cannot individually revoke is not a
+device, it is a second copy of you.
+
+### B — a key per device (the design if this changes)
+Each device generates and publishes its own keypair as another row in
+device_keys for the same user.
+
+**Costs, stated so they are not rediscovered:**
+
+| | Cost |
+|---|---|
+| Message storage | One ciphertext per recipient device, on both sides. A message_envelopes table, and volume becomes messages x devices on the table b2/0002 already partitions by time |
+| New device | Starts empty. It cannot decrypt anything sealed before its key existed, so adding a device needs a history transfer protocol over a channel the server cannot read |
+| Sending | The device list is a race. A device added between fetch and send silently receives nothing, so a send must refuse a list older than a threshold rather than trust it |
+| Verification | c5/0003's safety number binds two keys. Three devices each side is nine pairs, changing whenever anyone adds a device. Needs an identity key that signs device keys — a layer this course has not built |
+
+## Consequences
+
+- The **participants table is deleted from the schema plan.** A conversation
+  has exactly two parties and conversations.token_id determines both; the
+  holder is not a user and has no user_id, so half of every row could never
+  have been filled in. Per-device fan-out was the last thing that might have
+  needed a membership set.
+- Message ownership is checked by walking messages -> conversations ->
+  tokens -> user_id. b10/0001's query is corrected accordingly.
+- Users get one phone. Losing it is c5/0004's recovery phrase, which is the
+  same answer whether or not multi-device exists.
+- The redemption web page is **not** affected: the holder's browser is the
+  other party to a conversation, not a second device of an account.
+
+## What would change our mind
+
+- More than 50 support requests in a quarter naming a tablet or a second
+  phone, or
+- a named customer segment (a business issuing tokens from a shared desk)
+  that cannot use the product at all without it.
+
+Not: "users would like it." Everyone would like it. The trigger has to be
+something that can be counted without building the feature first.`
+  });
+
+  createQuiz("lesson-quiz", [
+    {
+      question: "Why is adding a second device not simply a settings toggle in Token?",
+      options: [
+        "The app is not built for tablet screen sizes",
+        "The private key is stored THIS_DEVICE_ONLY and the server holds no copy, so a second device has to be given a key rather than syncing one",
+        "The server would need more storage",
+        "React Native cannot run on two devices at once"
+      ],
+      correct: 1,
+      explanation: "It is a key distribution problem, and the constraint is the one that makes Token worth using: ADR-0002 leaves no server-side copy, and c5/0001 deliberately excludes the key from iCloud and Google backup. Everything else about an account restores from a phone number — the key is the single exception, which is exactly what 0004 was about."
+    },
+    {
+      question: "Sharing one identity key across two devices leaves the directory, the send path and the schema unchanged. Why was it rejected anyway?",
+      options: [
+        "Transferring a key by QR code is insecure",
+        "You cannot untrust one device: revoking a stolen tablet means rotating the identity everywhere, because the key IS the identity",
+        "It would double the storage cost",
+        "iOS forbids exporting Keychain items"
+      ],
+      correct: 1,
+      explanation: "The transfer itself is fine — done in person over a QR code, it never touches the server. The cost is afterwards. Per-device keys exist so that losing one device retires one key; a shared identity collapses that into an identity rotation, and a device you cannot individually revoke is a second copy of you rather than a device."
+    },
+    {
+      question: "Under per-device keys, what happens to the messages table from b2/0002?",
+      options: [
+        "Nothing — key_version already handles it",
+        "One ciphertext per recipient device, so envelopes move to their own table and volume becomes messages times devices",
+        "Messages become plaintext with per-device access control",
+        "The server re-encrypts per device on delivery"
+      ],
+      correct: 1,
+      explanation: "The single ciphertext, nonce and key_version columns assume exactly one recipient key. Three devices means three ciphertexts sealed to three public keys, all of which the server stores and routes without being able to read any. The multiplier lands on the table b2/0002 already partitions by time because it was expected to be the largest in the system."
+    },
+    {
+      type: "predict-output",
+      code: `const messagesPerDay = 2000;\nconst devicesPerUser = 3;\n// Both sides of every conversation get an envelope per device.\nconsole.log('envelopes/day:', messagesPerDay * devicesPerUser * 2);\nconsole.log('multiplier vs single-device:', devicesPerUser * 2);`,
+      answer: "envelopes/day: 12000\nmultiplier vs single-device: 6",
+      explanation: "Three devices each side is a six-fold multiplier on the largest table in the system, and it arrives the day multi-device ships rather than gradually. This is the sort of number an ADR should carry: 'more storage' is an adjective, 'six times the rows on the partitioned table' is a decision."
+    },
+    {
+      question: "You add a tablet. Why can it not show your conversation history?",
+      options: [
+        "The history is on the server and needs a separate download",
+        "Every earlier message was sealed to keys the tablet does not have, so 'add a device' needs a history transfer from a device that can already read them",
+        "SQLite cannot be copied between devices",
+        "History is deleted when a new device is registered"
+      ],
+      correct: 1,
+      explanation: "This is the consequence people find most surprising, and it follows directly from the guarantee: the server has ciphertext it cannot read, so it cannot re-seal anything for a new key. The history has to come from a device that already holds it, over a channel the server cannot read — a second protocol, for a mailbox that may be years long."
+    },
+    {
+      question: "What is the race in a per-device send?",
+      options: [
+        "Two devices sending at the same instant",
+        "The recipient adds a device between your fetch of their device list and your send, so that device gets no envelope and never learns the message exists",
+        "The database write and the WebSocket push happening out of order",
+        "Two devices both incrementing key_version"
+      ],
+      correct: 1,
+      explanation: "And there is no error to notice: you sealed the message correctly to every device you knew about, and the send succeeded. That is why planEnvelopes refuses a list older than a threshold rather than filtering it — a list too old to trust cannot be filtered into trustworthiness."
+    },
+    {
+      question: "planEnvelopes is asked to send using a device list fetched 40 minutes ago, with maxListAgeMs of five minutes. The recipient has no active devices. What should it report?",
+      options: [
+        "no_recipient_devices, because that is the more serious problem",
+        "stale_device_list — the staleness check runs first, so we never got far enough to know whether they have a device",
+        "Both reasons, joined",
+        "ok, with zero envelopes"
+      ],
+      correct: 1,
+      explanation: "Ordering is the whole point. What the function knows after a stale fetch is nothing at all, including whether that empty device list is current. Reporting no_recipient_devices would state a fact it has not established, and would send the caller to fix the wrong thing — the recipient's setup rather than their own refetch."
+    },
+    {
+      question: "Why does planEnvelopes refuse the entire send when one recipient key is malformed, rather than skipping that device?",
+      options: [
+        "Malformed keys usually indicate an attack",
+        "Skipping silently drops a device the recipient is still using, and the send then reports success",
+        "The array methods would throw anyway",
+        "It keeps the envelope count predictable"
+      ],
+      correct: 1,
+      explanation: "Fifth arrival at the same rule in this module: when a value cannot be understood, refuse it rather than working around it. The workaround here produces a message the recipient may simply never see on the device they actually use, with a green tick on the sender's screen — and the skip is invisible, because a shorter array looks exactly like a smaller device list."
+    },
+    {
+      type: "spot-the-bug",
+      code: `const theirs = recipient.devices.filter(d => !d.retiredAt);   // line 1\nconst mine = self.devices.filter(d => !d.retiredAt);\nreturn theirs.concat(mine).map(toEnvelope);`,
+      bugLine: 2,
+      options: [
+        "Line 2: the sending device is not excluded, so it gets an envelope it does not need",
+        "Line 2: self.devices may be undefined",
+        "Line 2: the retired filter should use === null"
+      ],
+      correct: 0,
+      explanation: "It is the mildest of several problems here and the one the code as written actually has: the device holding the plaintext is sealed an envelope, doubling nothing useful. The larger omissions are structural — no staleness check, and no refusal when theirs is empty, which would return the envelopes for your own devices and call it a send."
+    },
+    {
+      question: "Which rule is the one most often left out of a first implementation?",
+      options: [
+        "Filtering retired devices",
+        "Sealing an envelope to your OWN other devices",
+        "Sorting the envelopes",
+        "Validating the key format"
+      ],
+      correct: 1,
+      explanation: "Because it does not look like part of sending a message — you are writing to Ravi, and your tablet is not Ravi. Leave it out and everything works: Ravi receives the message, the send succeeds, nothing warns. Weeks later the tablet shows your half of every conversation missing, unrecoverably, because no copy exists that it can read."
+    },
+    {
+      question: "Why is an empty recipient device list a refusal, while having no other devices of your own is not?",
+      options: [
+        "They are the same case and should both refuse",
+        "They are different questions: no recipient means the message is encrypted to nobody, while no other device of mine is just the single-device case",
+        "Self devices are validated elsewhere",
+        "Recipients are always guaranteed to have a device"
+      ],
+      correct: 1,
+      explanation: "The two produce the same-looking empty array from very different facts, which is exactly why they need separate handling. Mapping over an empty recipient list yields zero envelopes and no error, so the message is sealed to nobody and reported as sent — deny-by-default says an empty result is a refusal, never an answer."
+    },
+    {
+      type: "predict-output",
+      code: `const devices = [\n  { deviceId: 'r-phone', retiredAt: null },\n  { deviceId: 'r-old', retiredAt: 0 },\n];\nconsole.log('truthy filter:', devices.filter(d => !d.retiredAt).map(d => d.deviceId).join(','));\nconsole.log('null check   :', devices.filter(d => d.retiredAt === null).map(d => d.deviceId).join(','));`,
+      answer: "truthy filter: r-phone,r-old\nnull check   : r-phone",
+      explanation: "A retiredAt of 0 is a real timestamp — the Unix epoch — and it is falsy, so the truthy filter treats a retired device as active. Unlikely as a real value and identical in shape to max_uses: 0 and expires_at, which this course has met three times: the only field where a falsy check is safe is one where zero cannot occur, and timestamps are not that field."
+    },
+    {
+      question: "Why does the exercise require envelopes sorted by deviceId?",
+      options: [
+        "The database needs them in order",
+        "The set is what matters, so a stable order is what lets a test compare two sends at all",
+        "Sorting makes the encryption faster",
+        "Devices must be processed in registration order"
+      ],
+      correct: 1,
+      explanation: "Order carries no meaning to the protocol — every envelope is delivered to its own device. It carries meaning to everything that reads the output: a test, a log, a diff between two runs. An unordered result is not wrong, it is merely uncomparable, and uncomparable output is how a regression stays invisible."
+    },
+    {
+      question: "Why is the redemption web page not an example of multi-device already working?",
+      options: [
+        "It is, and the lesson understates it",
+        "The browser is the other party to a conversation, not another device of your account — b2/0002 identifies holders by holder_session_id and gives them no user_id at all",
+        "The web page does not use encryption",
+        "Browsers cannot store keys"
+      ],
+      correct: 1,
+      explanation: "Two parties to a conversation and two devices for one party are different shapes, and the schema draws the line: a holder is not a user. Everything hard about multi-device — fan-out, history transfer, the device list race — comes from one identity having several keys, which is not what the redemption page does."
+    },
+    {
+      question: "Why is the participants table being deleted rather than defined?",
+      options: [
+        "It can be added later when there is time",
+        "A junction table records a membership that can vary, and nothing varies: conversations.token_id determines both parties, there are no groups, and the holder has no user_id to put in it",
+        "Postgres junction tables are slow",
+        "It duplicates the messages table"
+      ],
+      correct: 1,
+      explanation: "Half of every row could never have been filled in, which is the decisive detail: the junction shape assumed both parties were users, and in Token only one of them ever is. Writing it anyway would have produced a table that is always exactly two rows, one of them impossible — and every query joining it would have been an elaborate way of asking a question conversations.token_id already answers."
+    },
+    {
+      type: "fill-blank",
+      code: `-- Message ownership, without a participants table\nSELECT m.*\n  FROM messages m\n  JOIN conversations c ON c.id = m.conversation_id\n  JOIN ______ t ON t.id = c.token_id\n WHERE m.conversation_id = $1 AND t.user_id = $2;`,
+      answer: "tokens",
+      explanation: "The ownership chain is message, conversation, token, owner — and it is not a workaround for the missing junction table, it is the relationship that actually exists. A conversation exists because a token was redeemed, so the token is what connects a message to the user who is allowed to read it."
+    },
+    {
+      question: "Three tables were carried as 'queried but never created'. What made this one different from deletion_queue?",
+      options: [
+        "It was newer",
+        "deletion_queue was a schema waiting on a policy, and this one turned out to describe a product Token is not building",
+        "deletion_queue had a foreign key and this did not",
+        "This one was queried more often"
+      ],
+      correct: 1,
+      explanation: "b10/0002 settled the erasure policy and the table followed immediately, because the shape was only ever waiting on a decision about retention. This one was waiting on a feature. The general form is worth keeping: an orphan table is sometimes a feature that was never decided rather than a schema that was never written, and the two are resolved in opposite directions."
+    },
+    {
+      question: "How do safety numbers behave under per-device keys?",
+      options: [
+        "Unchanged — one number per conversation",
+        "They multiply: three devices each side is nine pairs, and the number changes whenever anyone adds a device",
+        "They are no longer possible",
+        "The server computes them centrally"
+      ],
+      correct: 1,
+      explanation: "c5/0003's number binds two keys, so it is a statement about one pair. With several keys per identity, either the user compares many numbers or you add a layer — an identity key that signs device keys, so verification is per person again. That layer is real work, and its absence is one of the costs the ADR has to name rather than discover."
+    },
+    {
+      type: "order-steps",
+      steps: [
+        "Refuse if the recipient's device list is older than the threshold",
+        "Drop retired devices from both sides",
+        "Refuse if the recipient has no active device left",
+        "Add every device of mine except the one sending",
+        "Refuse if any key that would receive an envelope is malformed",
+        "Sort by deviceId and return"
+      ],
+      correctOrder: [0, 1, 2, 3, 4, 5],
+      explanation: "Staleness comes first because it invalidates everything downstream, including the emptiness check. The recipient emptiness check comes before adding your own devices, so your tablet cannot accidentally satisfy a rule that is about the recipient. Key validation comes after retirement filtering, because a corrupt key on a device nobody is sealing to is nobody's problem."
+    },
+    {
+      question: "What belongs in the 'what would change our mind' section of this ADR?",
+      options: [
+        "\"When users ask for it\"",
+        "Something countable without building the feature first — a number of support requests naming a tablet, or a named customer segment blocked entirely",
+        "\"When we have more engineers\"",
+        "Nothing; the decision is final"
+      ],
+      correct: 1,
+      explanation: "Everyone would like multi-device, so wanting it is not information. ADR-0008 set the precedent by naming a bandwidth figure as its trigger: a criterion you can check against reality turns a reversal into an argument about evidence rather than a fresh fight, which is the entire point of writing the decision down."
+    },
+    {
+      question: "A future session finds this ADR and disagrees. What should it do?",
+      options: [
+        "Start changing the lessons to match the new view",
+        "Argue against the stated criteria and supersede the ADR — the lessons follow it, so they are the last thing to change, not the first",
+        "Delete the ADR and write a new one",
+        "Ask the student to decide again with no context"
+      ],
+      correct: 1,
+      explanation: "CLAUDE.md records this as the only legitimate way these decisions change: deliberately, against the cost that was written down. Editing lessons first produces exactly the state this module spent a week repairing — several files each internally consistent and collectively contradictory, with no record of which one was meant to be right."
+    },
+    {
+      question: "What does single-device cost the user, honestly stated?",
+      options: [
+        "Nothing at all",
+        "No tablet or second phone, and a lost phone means the recovery phrase from 0004 — which would be the answer either way",
+        "They cannot use the redemption web page",
+        "Their messages are less secure"
+      ],
+      correct: 1,
+      explanation: "The recovery path is the same with or without multi-device, which is worth noticing: a second device is sometimes proposed AS a backup strategy, and it is a poor one, since two devices lost together is one house fire. 0004's phrase is the answer to losing a phone regardless of how many phones there were."
+    },
+    {
+      type: "fill-blank",
+      code: `// The device I am typing on already has the plaintext.\nconst mine = active(self.devices)\n  .filter(d => d.deviceId !== self.____);`,
+      answer: "thisDeviceId",
+      explanation: "Excluding the sending device is a small optimisation and including it is harmless — the real work of this line is everything it does NOT exclude. Every other device of mine has to be in that list, and the filter is the only place that is decided."
+    },
+    {
+      question: "planEnvelopes is a pure function in a lesson about a feature that is not being built. Why write it?",
+      options: [
+        "To keep the lesson the same length as the others",
+        "Costing a decision concretely is what makes 'not yet' a real answer rather than a deferral — the price is the content",
+        "It will be needed in v2",
+        "To test the encryption library"
+      ],
+      correct: 1,
+      explanation: "The function is the cheapest honest way to see the price: it is the part that must be right before a single message can be sent, and writing it surfaces the fan-out, the race and the self-device rule as concrete requirements rather than as adjectives in a paragraph. A decision recorded with its cost can be reversed on evidence; one recorded without can only be reargued."
+    },
+    {
+      question: "What is the general rule this lesson demonstrates about orphaned schema?",
+      options: [
+        "Always create tables as soon as a query references them",
+        "An orphan table is sometimes a feature that was never decided rather than a schema that was never written, and those resolve in opposite directions",
+        "Junction tables should be avoided",
+        "Queries should never reference tables that do not exist"
+      ],
+      correct: 1,
+      explanation: "The three orphans in this course ended three different ways: one was defined once its policy existed, one is still waiting on an unwritten module, and this one was deleted because the product it belonged to is not being built. Treating all three as 'write the missing table' would have produced one useful table, one guess, and one that is always exactly two rows with an unfillable column."
+    }
+  ]);
+  </script>
+</body>
+</html>

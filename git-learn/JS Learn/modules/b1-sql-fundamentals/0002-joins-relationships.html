@@ -118,8 +118,8 @@ SELECT
   t.issued_to,
   t.status,
   u.display_name AS owner,
-  ar.max_calls_per_day,
-  ar.allowed_hours
+  ar.rule_type,
+  ar.payload
 FROM tokens t
 INNER JOIN users u ON t.user_id = u.id
 LEFT JOIN access_rules ar ON ar.token_id = t.id
@@ -132,13 +132,18 @@ WHERE t.code = 'MERC-8GH2-KP4X';</code></pre>
     <p>Let's add the tables referenced above:</p>
 
     <pre><code>CREATE TABLE access_rules (
-  id              SERIAL PRIMARY KEY,
-  token_id        INTEGER NOT NULL REFERENCES tokens(id),
-  allowed_start   INTEGER NOT NULL DEFAULT 0,   -- hour 0-23
-  allowed_end     INTEGER NOT NULL DEFAULT 23,
-  max_calls_per_day INTEGER NOT NULL DEFAULT 0, -- 0 = unlimited
-  categories      TEXT[] DEFAULT '{}',          -- Postgres array
-  created_at      TIMESTAMP NOT NULL DEFAULT NOW()
+  id          SERIAL PRIMARY KEY,
+  token_id    INTEGER NOT NULL REFERENCES tokens(id) ON DELETE CASCADE,
+  -- Exactly three, and the CHECK is what stops a rule type the engine
+  -- cannot evaluate ever reaching the table. See b2/0001.
+  rule_type   TEXT NOT NULL
+              CHECK (rule_type IN ('time_window', 'contact_limit', 'channel_restrict')),
+  -- Each type has a different shape, so the CONTENTS are JSONB while
+  -- the vocabulary above is constrained.
+  payload     JSONB NOT NULL,
+  enabled     BOOLEAN NOT NULL DEFAULT true,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(token_id, rule_type)
 );
 
 CREATE TABLE redemption_events (
@@ -319,7 +324,7 @@ ORDER BY r.redeemed_at DESC;`
       {
         type: "fill-blank",
         question: "Get all tokens and their rules, including tokens with no rules:",
-        code: "SELECT t.code, r.type, r.value\nFROM tokens t\n___ JOIN access_rules r ON r.token_id = t.id;",
+        code: "SELECT t.code, r.rule_type, r.payload\nFROM tokens t\n___ JOIN access_rules r ON r.token_id = t.id;",
         answer: "LEFT",
         explanation: "LEFT JOIN keeps every row from the left table (tokens) even if there's no matching row in the right table (access_rules). Tokens without rules still appear — their rule columns are NULL. INNER JOIN would hide those tokens."
       },
@@ -400,10 +405,10 @@ ORDER BY r.redeemed_at DESC;`
       },
       {
         type: "fill-blank",
-        question: "Get conversations where the user is a participant:",
-        code: "SELECT c.id, c.created_at\nFROM conversations c\n___ participants p ON p.conversation_id = c.id\nWHERE p.user_id = $1;",
+        question: "Get the conversations belonging to one user's tokens:",
+        code: "SELECT c.id, c.created_at\nFROM conversations c\n___ tokens t ON t.id = c.token_id\nWHERE t.user_id = $1;",
         answer: "JOIN",
-        explanation: "INNER JOIN (or just JOIN) returns only conversations where the user IS a participant. You don't need LEFT JOIN here because you only want matching rows — conversations the user belongs to. LEFT JOIN would add conversations they're NOT in (with NULL participant data)."
+        explanation: "INNER JOIN — or just JOIN — returns only conversations whose token belongs to this user, which is exactly what is wanted. LEFT JOIN would keep conversations with no matching token and fill the columns with NULL, so the WHERE would discard them again anyway. Note there is no participants table in the chain: a conversation exists because a token was redeemed, so the token is what connects it to an owner."
       },
       {
         type: "predict-output",
@@ -414,10 +419,10 @@ ORDER BY r.redeemed_at DESC;`
       },
       {
         type: "order-steps",
-        question: "Put the steps for designing a many-to-many relationship (users ↔ conversations):",
-        steps: ["Create the users table", "Create the conversations table", "Create a junction table (participants) with foreign keys to both", "Add user_id and conversation_id columns to the junction table", "Add a composite unique constraint on (user_id, conversation_id)"],
+        question: "Put the steps for designing a many-to-many relationship in general (say, students ↔ courses):",
+        steps: ["Create the first table", "Create the second table", "Create a junction table with a foreign key to each", "Add the two id columns to the junction table", "Add a composite unique constraint on the pair"],
         correctOrder: [0, 1, 2, 3, 4],
-        explanation: "Many-to-many requires a junction (bridge) table. It has foreign keys pointing to both sides. The composite unique constraint prevents duplicate entries (a user can't join the same conversation twice)."
+        explanation: "Many-to-many needs a junction table holding a foreign key to each side, and a composite unique constraint so the same pair cannot be recorded twice. The example is deliberately generic because Token has no many-to-many: a conversation has exactly two parties, conversations.token_id determines both, and the holder is not a user at all — so a junction table here would have been permanently two rows with an unfillable column. Recognise the shape, and check that your relationship really has it."
       },
       {
         question: "What does a foreign key constraint actually enforce?",

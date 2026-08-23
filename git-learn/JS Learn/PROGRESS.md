@@ -11,17 +11,17 @@ with this one, this one is right — everything below is measured, not asserted.
 
 | Metric | Value |
 |---|---|
-| Token-track lessons | 100 |
+| Token-track lessons | 101 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
-| Quiz questions (track) | 2693 |
-| Avg teaching prose per track lesson | 2065 words |
-| Lessons with a playground | 91 / 100 |
-| Lessons with an exercise | 100 / 100 |
-| **Deepened** (all 3 spine sections) | 16 / 100 |
-| **Verified** (code executed) | 73 / 100 |
-| Ran clean but had nothing to run | 0 / 100 |
+| Quiz questions (track) | 2718 |
+| Avg teaching prose per track lesson | 2062 words |
+| Lessons with a playground | 92 / 101 |
+| Lessons with an exercise | 101 / 101 |
+| **Deepened** (all 3 spine sections) | 16 / 101 |
+| **Verified** (code executed) | 74 / 101 |
+| Ran clean but had nothing to run | 0 / 101 |
 | Errors | 0 |
-| Known and blocked | 2 |
+| Known and blocked | 1 |
 | Warnings | 0 |
 
 Student-completed lessons are **not** tracked here — that comes from the student
@@ -29,12 +29,12 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 ## Answer-position distribution — **authored order, not what the student sees**
 
-1456 keyed questions (multiple-choice, spot-the-bug, which-breaks).
+1476 keyed questions (multiple-choice, spot-the-bug, which-breaks).
 
 > **This clustering is expected and already handled. Do not "fix" it again.**
 > `quiz.js` shuffles options at render time (`optionDisplayOrder`), so the
 > displayed distribution is roughly even — measured at 26.9 / 28.5 / 26.9 / 17.6
-> across all 1456 questions, versus the authored figures below. Index 3 sits
+> across all 1476 questions, versus the authored figures below. Index 3 sits
 > lower only because many questions have three options.
 >
 > The numbers here read `correct` straight from the lesson data, which is
@@ -53,21 +53,21 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Position | Count | Share |
 |---|---|---|
-| index 0 | 148 | 10.2% |
-| index 1 | 928 | 63.7% |
-| index 2 | 346 | 23.8% |
+| index 0 | 149 | 10.1% |
+| index 1 | 947 | 64.2% |
+| index 2 | 346 | 23.4% |
 | index 3 | 34 | 2.3% |
 
 ## Question types
 
 | Type | Count |
 |---|---|
-| multiple-choice | 798 |
-| predict-output | 500 |
-| fill-blank | 459 |
-| spot-the-bug | 375 |
+| multiple-choice | 817 |
+| predict-output | 502 |
+| fill-blank | 461 |
+| spot-the-bug | 376 |
 | which-breaks | 283 |
-| order-steps | 278 |
+| order-steps | 279 |
 
 ## Modules
 
@@ -85,17 +85,17 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a7-voice-video | 5 | 1279 | 6 | 6 | 138 | 0/5 | 1/5 |
 | a8-redemption-web | 4 | 1722 | 8 | 8 | 115 | 0/4 | 4/4 |
 | a9-deep-linking | 2 | 1167 | 2 | 2 | 53 | 0/2 | 0/2 |
-| b1-sql-fundamentals | 4 | 1073 | 0 | 4 | 103 | 0/4 | 0/4 |
-| b10-security-compliance | 2 | 3899 | 5 | 4 | 53 | 1/2 | 2/2 |
+| b1-sql-fundamentals | 4 | 1082 | 0 | 4 | 103 | 0/4 | 0/4 |
+| b10-security-compliance | 2 | 3984 | 5 | 4 | 53 | 1/2 | 2/2 |
 | b2-schema-design | 3 | 2363 | 3 | 6 | 82 | 0/3 | 3/3 |
 | b3-node-http-server | 4 | 2120 | 5 | 8 | 117 | 2/4 | 4/4 |
 | b4-auth-server | 3 | 3014 | 6 | 6 | 81 | 2/3 | 3/3 |
 | b5-websocket-server | 3 | 1961 | 6 | 6 | 77 | 0/3 | 3/3 |
-| b6-webrtc-signalling | 2 | 2009 | 2 | 2 | 52 | 1/2 | 0/2 |
+| b6-webrtc-signalling | 2 | 2052 | 2 | 2 | 52 | 1/2 | 0/2 |
 | b7-token-engine | 3 | 3451 | 7 | 6 | 78 | 3/3 | 3/3 |
 | b8-push-notifications | 1 | 1420 | 1 | 1 | 25 | 0/1 | 0/1 |
 | b9-docker-deployment | 3 | 2298 | 3 | 3 | 77 | 2/3 | 0/3 |
-| c5-end-to-end-encryption | 4 | 1744 | 8 | 8 | 101 | 0/4 | 4/4 |
+| c5-end-to-end-encryption | 5 | 1671 | 10 | 10 | 126 | 0/5 | 5/5 |
 | x1-git-dev-environment | 3 | 698 | 1 | 3 | 76 | 0/3 | 0/3 |
 | x2-debugging | 2 | 778 | 1 | 2 | 50 | 0/2 | 0/2 |
 
@@ -105,23 +105,20 @@ or from `progress.js` localStorage, and is never inferred from the files.
 |---|---|
 | Inline `<script>` blocks parse | ok |
 | Quiz structure valid | ok |
-| Tables queried but never created | participants, calls |
+| Tables queried but never created | calls |
 | Broken relative links | ok |
-| search-index.json | 101 entries, 0 dead, 0 unindexed |
+| search-index.json | 102 entries, 0 dead, 0 unindexed |
 | Example tokens valid under alphabet | ok |
 
 ## Errors
 
 None.
 
-## Known and blocked (2)
+## Known and blocked (1)
 
 Real problems with a named gate, acknowledged in `scripts/known-issues.json`
 so they do not hold the audit red. They are **not** resolved.
 
-- schema: table "participants" is queried in 1 lesson(s) but never created
-  - **why:** Group/thread membership has no schema yet. Writing one now would bake in a shape that E2EE key distribution is about to change.
-  - **gate:** c5/0005, and it is now the ONLY thing left gating this. The B2 rewrite this used to name landed 2026-08-21 (b2/0002) and did not settle membership; c5/0001-0004 are written and none of them needed it either -- 0004 is backup, which is about key versions over TIME rather than membership. So the gate has narrowed to one lesson, and that lesson is itself blocked on a student decision: multi-device lost its subject when they chose ONE DEVICE for v1 on 2026-08-23, and a single-device product may not need a membership table at all. Expect the answer here to be a DELETION as often as a definition. If c5/0005 is dropped rather than rewritten, this entry stops having a gate and must be resolved outright rather than re-worded. _(since 2026-08-18)_
 - schema: table "calls" is queried in 2 lesson(s) but never created
   - **why:** Call records depend on what WebRTC signalling actually needs to persist, which B6 has not settled.
   - **gate:** B6 (signalling), which has not been written. The B2 rewrite this used to name landed 2026-08-21 and did not touch call records. _(since 2026-08-18)_
@@ -195,10 +192,10 @@ so they do not hold the audit red. They are **not** resolved.
 | a9-deep-linking/0001-universal-links-app-links.html | 1112 | 7 | 1 | 1 | 28 | — | n/a |
 | a9-deep-linking/0002-in-app-deep-link-handling.html | 1222 | 9 | 1 | 1 | 25 | — | — |
 | b1-sql-fundamentals/0001-tables-insert-select.html | 1442 | 10 | 0 | 1 | 26 | — | — |
-| b1-sql-fundamentals/0002-joins-relationships.html | 828 | 10 | 0 | 1 | 25 | — | — |
+| b1-sql-fundamentals/0002-joins-relationships.html | 863 | 10 | 0 | 1 | 25 | — | — |
 | b1-sql-fundamentals/0003-indexes-transactions-constraints.html | 972 | 11 | 0 | 1 | 26 | — | n/a |
 | b1-sql-fundamentals/0004-postgres-specifics.html | 1051 | 8 | 0 | 1 | 26 | — | — |
-| b10-security-compliance/0001-security-hardening.html | 3838 | 20 | 2 | 2 | 25 | yes | yes |
+| b10-security-compliance/0001-security-hardening.html | 4007 | 20 | 2 | 2 | 25 | yes | yes |
 | b10-security-compliance/0002-dpdp-act.html | 3960 | 12 | 3 | 2 | 28 | — | yes |
 | b2-schema-design/0001-token-schema.html | 3257 | 10 | 1 | 2 | 27 | — | yes |
 | b2-schema-design/0002-messaging-schema.html | 2245 | 8 | 1 | 2 | 26 | — | yes |
@@ -213,7 +210,7 @@ so they do not hold the audit red. They are **not** resolved.
 | b5-websocket-server/0001-ws-connection-lifecycle.html | 1928 | 11 | 2 | 2 | 25 | — | yes |
 | b5-websocket-server/0002-message-routing.html | 1850 | 10 | 2 | 2 | 26 | — | yes |
 | b5-websocket-server/0003-presence-typing.html | 2105 | 10 | 2 | 2 | 26 | — | yes |
-| b6-webrtc-signalling/0001-signalling-server.html | 2873 | 9 | 1 | 1 | 26 | yes | n/a |
+| b6-webrtc-signalling/0001-signalling-server.html | 2958 | 9 | 1 | 1 | 26 | yes | n/a |
 | b6-webrtc-signalling/0002-coturn-setup.html | 1145 | 9 | 1 | 1 | 26 | — | n/a |
 | b7-token-engine/0001-token-generation-redemption.html | 3766 | 12 | 3 | 2 | 25 | yes | yes |
 | b7-token-engine/0002-access-rules-engine.html | 3620 | 8 | 2 | 2 | 27 | yes | yes |
@@ -225,7 +222,8 @@ so they do not hold the audit red. They are **not** resolved.
 | c5-end-to-end-encryption/0001-keys-on-the-device.html | 1371 | 5 | 2 | 2 | 26 | — | yes |
 | c5-end-to-end-encryption/0002-publishing-fetching-keys.html | 1782 | 3 | 2 | 2 | 25 | — | yes |
 | c5-end-to-end-encryption/0003-verification-safety-numbers.html | 1462 | 4 | 2 | 2 | 25 | — | yes |
-| c5-end-to-end-encryption/0004-backup-recovery.html | 2360 | 1 | 2 | 2 | 25 | — | yes |
+| c5-end-to-end-encryption/0004-backup-recovery.html | 2354 | 1 | 2 | 2 | 25 | — | yes |
+| c5-end-to-end-encryption/0005-single-device.html | 1386 | 2 | 2 | 2 | 25 | — | yes |
 | x1-git-dev-environment/0001-git-fundamentals.html | 790 | 9 | 1 | 1 | 26 | — | n/a |
 | x1-git-dev-environment/0002-github-workflow.html | 719 | 7 | 0 | 1 | 25 | — | n/a |
 | x1-git-dev-environment/0003-dev-environment.html | 586 | 13 | 0 | 1 | 25 | — | n/a |

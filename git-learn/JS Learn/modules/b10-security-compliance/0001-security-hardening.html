@@ -335,8 +335,33 @@ router.get('/tokens/:id', authenticateJWT, async (req, res) => {
 // Delete (revoke) a token (owned by user)
 'UPDATE tokens SET revoked_at = NOW() WHERE id = $1 AND user_id = $2'
 
-// Read messages in a conversation the user participates in
-'SELECT m.* FROM messages m JOIN participants p ON p.conversation_id = m.conversation_id WHERE m.conversation_id = $1 AND p.user_id = $2'</code></pre>
+// Read messages in a conversation this user owns the token for.
+// The chain is message -> conversation -> token -> owner, and it is
+// the relationship that actually exists: a conversation exists
+// BECAUSE a token was redeemed.
+`SELECT m.*
+   FROM messages m
+   JOIN conversations c ON c.id = m.conversation_id
+   JOIN tokens t        ON t.id = c.token_id
+  WHERE m.conversation_id = $1
+    AND t.user_id = $2`</code></pre>
+
+    <div class="callout">
+      <div class="callout-title">There is no <code>participants</code> table, and that is a decision rather than an omission</div>
+      <p>This query used to join a <code>participants(user_id,
+      conversation_id)</code> junction table, which no migration has ever
+      created. It was resolved on 2026-08-23 by <strong>deleting it from the
+      plan</strong> — see <code>c5/0005</code>.</p>
+      <p>A junction table records a membership that can vary. Here nothing
+      varies: a conversation has exactly two parties,
+      <code>conversations.token_id</code> determines both, there are no group
+      conversations, and <strong>the holder is not a user at all</strong> —
+      <code>b2/0002</code> identifies them by <code>holder_session_id</code>,
+      so half of every row in that table could never have been filled in.</p>
+      <p><strong>The ownership rule is unchanged and the chain is longer.</strong>
+      Two joins instead of one is the honest price of not having a table that
+      would have been permanently half-empty.</p>
+    </div>
 
     <h2>Preventing Common Attacks</h2>
 

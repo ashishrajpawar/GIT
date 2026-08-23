@@ -14,6 +14,15 @@ how far it got.
 
 **Nothing in flight.** Working tree clean, everything committed.
 
+> **⚠ A process trap found the hard way on 2026-08-23.** Running
+> `verify-lesson.mjs` on a lesson **without** the `--unverifiable` reason it
+> needs **deletes that lesson's log entry**, because a failing run deletes.
+> I did this to `b6/0001` while checking whether an edit had broken it, and
+> only noticed because a recount disagreed with an earlier one by one. It was
+> restored from `git show HEAD:` and re-run with its original reason.
+> **Before verifying a lesson you did not just write, check the log for its
+> existing status** — `node -e "console.log(require('./scripts/verification-log.json')['modules/…'])"`.
+
 > **`render-as-authored` is 0 again, and this time it means it.** All 69 were
 > reworded on 2026-08-23 across 28 lessons. Before assuming a future 0 is
 > clean, read *The `variant` blind spot* below — the number was 0 for five
@@ -1056,20 +1065,31 @@ not just here** — see *Where a token's rules live* and *Expiry is
 | **Expiry** | **`tokens.expires_at` only.** Not a rule type. `a5/0004` still accepts `'expiry'` in its zod enum |
 | **TypeScript** | **Teach the verifier TypeScript**, so `a2/*` and `a3/0002` stop being the only lessons whose code has never run |
 
-### → Start here: `c5/0005`
+### → Start here: the TypeScript runner
 
-The rules model and the `variant` blind spot both landed on 2026-08-23. What
-remains is `c5/0005` (rewrite as *why one phone*), then the TypeScript runner.
-See *The order for the rest* below.
+**C5 is complete** and the rules model, the `variant` blind spot and the
+`participants` orphan all landed on 2026-08-23. **`known-issues.json` is down
+to one entry** — `calls`, gated on B6, which is the only genuinely blocked
+thing left in the course.
 
-**Also worth a unit of its own: 8 lessons have never been executed.** They
-have no `verification-log.json` entry at all — not `unverifiable`, *absent* —
-so `verify-lesson.mjs` has never run over them and nothing has checked their
-code. `a2/0001`, `a2/0003` (TypeScript, waiting on the runner),
-`a9/0002`, `b1/0001`, `b1/0002`, `b1/0004`, `x2/0001`, `x2/0002`. The
-`Verified: n/100` figure counts them as unverified, so the number is honest —
-what is not obvious is that these differ from the rest by never having been
-*attempted*.
+The TypeScript runner is the decided next unit: teach `verify-lesson.mjs` to
+execute TypeScript so `a2/0001`, `a2/0003` and `a3/0002` stop being the only
+lessons whose code has never run.
+
+**It overlaps with a bigger number: 8 lessons have never been executed at
+all.** No `verification-log.json` entry — not `unverifiable`, *absent* — so
+the verifier has never run over them:
+
+| Lesson | Why it is stuck |
+|---|---|
+| `a2/0001`, `a2/0003` | TypeScript — the runner unblocks these |
+| `a9/0002`, `x2/0001`, `x2/0002` | Nothing structural; simply never attempted |
+| `b1/0001`, `b1/0002`, `b1/0004` | Pure SQL, and the M3 hunt has never been run over B1 |
+
+`Verified: n/101` counts them honestly as unverified. What the number does not
+show is that these differ from the rest by never having been *tried* — and
+`CLAUDE.md`'s own warning applies: the reflex to call a lesson unrunnable is
+wrong more often than it is right, and B1 was never even asked.
 
 ---
 
@@ -1155,11 +1175,63 @@ caught something reading it would not.
 
 ### The order for the rest, and why
 
-1. ~~**The rules model**~~ — **done 2026-08-23**, six lessons. See below.
-2. **`c5/0005`** — finishes C5 and closes the `participants` gate, which is one
-   of only two entries left in `known-issues.json`.
-3. **The TypeScript runner** — tooling, so it is the one that can wait. It is
-   also the one that pays off across the whole course rather than in one place.
+1. ~~**The rules model**~~ — **done 2026-08-23**, six lessons.
+2. ~~**`c5/0005`**~~ — **done 2026-08-23.** C5 complete; `participants`
+   resolved by deletion and its `known-issues.json` entry removed.
+3. **The TypeScript runner** — now the head of the queue.
+
+### c5/0005 — the lesson that builds nothing, and the orphan it closed (2026-08-23)
+
+M3: **`planEnvelopes`**. 18 self-checks, 12 wrong-cases. **101 lessons, 74
+verified. C5 is complete.**
+
+The planned multi-device lesson lost its subject when the student chose one
+phone for v1, and **costing the feature turned out to be worth more than
+building it.** The argument that decides it is one row of a table: sharing an
+identity key across devices changes nothing downstream and means **you cannot
+untrust one device**, because the key *is* the identity. Per-device keys are
+the only honest alternative, and they cost:
+
+- **Fan-out onto the message table.** One ciphertext per recipient device, so
+  envelopes move to their own table and volume becomes messages × devices — on
+  the table `b2/0002` already partitions by time because it was expected to be
+  the largest in the system.
+- **A new device starts empty**, since everything earlier was sealed to keys it
+  does not have. "Add a device" needs a history-transfer protocol.
+- **The device list is a race**, so a send must refuse a stale list rather than
+  trust it.
+- **Safety numbers multiply** — three devices each side is nine pairs.
+
+### The `participants` orphan was a feature, not a schema
+
+Blocked since it was first written, and **resolved by deletion.** The decisive
+detail is not that Token lacks groups: **the holder is not a user.**
+`b2/0002` identifies them by `holder_session_id` and gives them no `user_id`,
+so a `participants(user_id, conversation_id)` junction had a column that could
+never have been filled in for half of every row. The correct query walks the
+relationship that exists — messages → conversations → tokens → owner.
+
+**The general form, and the three orphans ended three different ways:**
+`deletion_queue` was a schema waiting on a policy and appeared once
+`b10/0002` decided one; `calls` is still waiting on an unwritten module; this
+one described a product Token is not building. **Treating all three as "write
+the missing table" would have produced one useful table, one guess, and one
+that is always exactly two rows with an impossible column.**
+
+### And a third `access_rules` design, found while closing it
+
+`b1/0002` had its own `access_rules` — columns `allowed_start`,
+`allowed_end`, `max_calls_per_day`, `categories` — which is neither the rows
+design nor the JSONB one, making it the **third** vocabulary in a course that
+had just been reconciled to one. It also carried
+`max_calls_per_day INTEGER NOT NULL DEFAULT 0, -- 0 = unlimited`, the exact
+inversion `CLAUDE.md` documents, **and** a `SELECT ar.allowed_hours` naming a
+column its own `CREATE TABLE` does not define.
+
+**The rules-model sweep missed it because it greps clean:** the file never
+mentions `call_limit` or `cooldown`, because its design has no `rule_type` at
+all. **A vocabulary sweep finds files using the wrong words, not files using
+a wrong shape.**
 
 **Also unblocked and small:** the `a8/0004` fix (`tokenCode` sent over the
 WebSocket on every chat message, twice — the holder knows the code so nothing
