@@ -14,11 +14,11 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 101 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
 | Quiz questions (track) | 2718 |
-| Avg teaching prose per track lesson | 2085 words |
-| Lessons with a playground | 95 / 101 |
+| Avg teaching prose per track lesson | 2089 words |
+| Lessons with a playground | 96 / 101 |
 | Lessons with an exercise | 101 / 101 |
 | **Deepened** (all 3 spine sections) | 16 / 101 |
-| **Verified** (code executed) | 80 / 101 |
+| **Verified** (code executed) | 81 / 101 |
 | Ran clean but had nothing to run | 0 / 101 |
 | Errors | 0 |
 | Known and blocked | 1 |
@@ -85,7 +85,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a7-voice-video | 5 | 1279 | 6 | 6 | 138 | 0/5 | 1/5 |
 | a8-redemption-web | 4 | 1722 | 8 | 8 | 115 | 0/4 | 4/4 |
 | a9-deep-linking | 2 | 1395 | 3 | 3 | 53 | 0/2 | 1/2 |
-| b1-sql-fundamentals | 4 | 1237 | 2 | 6 | 103 | 0/4 | 2/4 |
+| b1-sql-fundamentals | 4 | 1326 | 3 | 7 | 103 | 0/4 | 3/4 |
 | b10-security-compliance | 2 | 3984 | 5 | 4 | 53 | 1/2 | 2/2 |
 | b2-schema-design | 3 | 2363 | 3 | 6 | 82 | 0/3 | 3/3 |
 | b3-node-http-server | 4 | 2120 | 5 | 8 | 117 | 2/4 | 4/4 |
@@ -198,7 +198,7 @@ so they do not hold the audit red. They are **not** resolved.
 | b1-sql-fundamentals/0001-tables-insert-select.html | 1816 | 10 | 1 | 2 | 26 | — | yes |
 | b1-sql-fundamentals/0002-joins-relationships.html | 1110 | 10 | 1 | 2 | 25 | — | yes |
 | b1-sql-fundamentals/0003-indexes-transactions-constraints.html | 972 | 11 | 0 | 1 | 26 | — | n/a |
-| b1-sql-fundamentals/0004-postgres-specifics.html | 1051 | 8 | 0 | 1 | 26 | — | — |
+| b1-sql-fundamentals/0004-postgres-specifics.html | 1407 | 9 | 1 | 2 | 26 | — | yes |
 | b10-security-compliance/0001-security-hardening.html | 4007 | 20 | 2 | 2 | 25 | yes | yes |
 | b10-security-compliance/0002-dpdp-act.html | 3960 | 12 | 3 | 2 | 28 | — | yes |
 | b2-schema-design/0001-token-schema.html | 3257 | 10 | 1 | 2 | 27 | — | yes |

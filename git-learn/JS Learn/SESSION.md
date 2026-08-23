@@ -31,11 +31,50 @@ TypeScript whose code has ever run.** Nine left with no log entry:
 | ~~`a9/0002`~~ | **done 2026-08-23** — `parseTokenLink`, and it was hiding a denial oracle |
 | ~~`x2/0002`~~ | **done 2026-08-23** — `redactLogFields`, and it was teaching `tokenCode: token.code` as best practice |
 | ~~`x2/0001`~~ | **done 2026-08-23** — `firstDivergence`; a probe that never ran is not a probe that saw zero |
-| `b1/0004` | Pure SQL, and the M3 hunt has never been run over B1 |
+| ~~`b1/0004`~~ | **done 2026-08-23** — `jsonbContains`; `@>` is not a search |
 | ~~`b1/0001`~~ | **done 2026-08-23** — `checkRow`; its `NOT NULL` gloss contradicted its own quiz |
 | ~~`b1/0002`~~ | **done 2026-08-23** — `joinRows`; its LEFT JOIN example claimed "most recent redemption" and returned all of them |
 
 Previous good state is `b9276d7`.
+
+### b1/0004 — `@>` is not a search, and B1 is finished (2026-08-23)
+
+M3: **`jsonbContains`**. 29 self-checks, 10 wrong-cases. **B1 is now three
+verified and one `unverifiable`-with-a-reason** — the module went from *no
+lesson ever executed* to fully covered in one pass.
+
+`@>` is the operator the GIN index accelerates, so it is the one you end up
+writing, and its rule is narrower than the word "contains" suggests.
+**Structure matches from the top down; the only things it may skip are extra
+keys and extra array elements, never a level of nesting.** So
+`{"a":{"b":1}} @> {"b":1}` is **false**, which is the mistake everyone makes
+because containment sounds like a search.
+
+Three more that each bite:
+
+- **Arrays ignore order and duplicates.** `[1,2,3] @> [3,1]` is true, and so
+  is `[1,2,3] @> [1,1,1]` — the question is *is each of these in there*, not
+  *are these the same array*.
+- **A top-level array contains a bare scalar** — `["qr"] @> "qr"` is true,
+  documented as an exception because "is this tag present" is the commonest
+  JSONB question there is.
+- **The exception stops at the top.** `{"tags":["qr"]} @> {"tags":"qr"}` is
+  **false**. One rule with one exception at one level is exactly the thing
+  that works in the psql prompt where you tested it and fails in the query
+  you shipped.
+
+### One wrong-case was not a mistake, and only running it showed that
+
+`doc[key] !== undefined` instead of `hasOwnProperty` — **JSON has no
+`undefined`, so the two are equivalent for every input this function can
+receive.** It passed everything because it was correct. Replaced with the
+genuine version, a truthiness test on the value, which rejects
+`{allow_video: false}` — the only query anyone would write about that column.
+
+That is the second time in this batch a wrong-case turned out to be a
+no-op (after `O`→`0` in `a9/0002`), and both were caught the same way:
+**a case that passes everything is either a hole in the self-check or a
+mistake that is not one, and the only way to tell is to look.**
 
 ### b1/0001 — the NOT NULL gloss contradicted the lesson's own quiz (2026-08-23)
 

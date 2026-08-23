@@ -235,9 +235,72 @@ DO UPDATE SET payload = EXCLUDED.payload;</code></pre>
 
     <hr>
 
-    <h2>Exercise</h2>
+    <!-- ───────────────────────────────────────────── -->
+    <div class="callout danger">
+      <div class="callout-title"><code>@&gt;</code> does not mean "find this anywhere"</div>
+
+      <p><code>@&gt;</code> is the operator the GIN index accelerates, so it is
+      the one you end up writing — and its rule is narrower than it looks.
+      <strong>Containment matches from the top down.</strong> The query has to
+      describe the shape of the document starting at the outside, and the only
+      thing it is allowed to skip is <em>extra</em> keys and <em>extra</em>
+      array elements.</p>
+
+      <pre><code>-- TRUE: same shape from the top, extra keys ignored
+'{"days": [1,2,3], "timezone": "Asia/Kolkata"}' @&gt; '{"days": [1]}'
+
+-- FALSE: {"b":1} is in there, but not at the TOP
+'{"a": {"b": 1}}' @&gt; '{"b": 1}'</code></pre>
+
+      <p>The second one is the mistake everyone makes, because
+      <em>containment</em> sounds like a search. It is not — to reach a nested
+      value you have to spell out the path:
+      <code>'{"a": {"b": 1}}'</code>.</p>
+
+      <p><strong>Three more rules that are not obvious, and each one bites:</strong></p>
+
+      <ul>
+        <li><strong>Arrays ignore order and duplicates.</strong>
+        <code>'[1,2,3]' @&gt; '[3,1]'</code> is true, and so is
+        <code>'[1,2,3]' @&gt; '[1,1,1]'</code> — the query asks "is each of
+        these in there", not "does this array equal that one".</li>
+
+        <li><strong>A top-level array contains a bare scalar.</strong>
+        <code>'["qr","mobile"]' @&gt; '"qr"'</code> is true. This is documented
+        as an exception to the general rule, and it exists because asking "is
+        this tag present" is the commonest thing anyone does with a JSONB
+        array.</li>
+
+        <li><strong>That exception does NOT apply once nested.</strong>
+        <code>'{"tags": ["qr"]}' @&gt; '{"tags": "qr"}'</code> is
+        <strong>false</strong> — you need <code>'{"tags": ["qr"]}'</code>. One
+        rule with one exception at one level is exactly the sort of thing that
+        works in the psql prompt where you tested it and fails in the query
+        you shipped.</li>
+      </ul>
+
+      <p>And the type rule from the callout above applies here too, with no
+      coercion at all: <code>'{"max_messages_per_day": 10}' @&gt; '{"max_messages_per_day": "10"}'</code>
+      is false. In JSONB, <code>10</code> and <code>"10"</code> are different
+      values, and <code>@&gt;</code> will not meet you halfway.</p>
+    </div>
+
+    <hr>
+
+    <h2>Now build it yourself</h2>
+
+    <p>The SQL needs a running Postgres. What <code>@&gt;</code> <em>means</em>
+    does not — and writing it out is the only way to stop guessing at which of
+    the four rules above applies to the query you are about to ship.</p>
+
+    <div id="exercise-contains"></div>
+    <div id="pg-exercise-contains"></div>
+
+    <h3>And the SQL</h3>
 
     <div id="exercise-1"></div>
+
+    <div id="explain-b1-0004"></div>
 
     <hr>
 
@@ -251,12 +314,66 @@ DO UPDATE SET payload = EXCLUDED.payload;</code></pre>
   </div>
 
   <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
+    createSolution("exercise-contains", {
+      exercise: `Write jsonbContains(doc, query) — Postgres's @> operator, in JavaScript.\n\nBoth arguments are already-parsed JSON: objects, arrays, strings, numbers, booleans or null. Return true if doc contains query.\n\nThe rules:\n\n1. TWO SCALARS ARE CONTAINED IF THEY ARE STRICTLY EQUAL. Same type and same value. 10 and "10" are different values in JSONB and there is no coercion — @> will not meet you halfway, and the ->> lesson above is why: text extraction is the ONLY place a number becomes a string.\n\n2. AN OBJECT CONTAINS AN OBJECT if every key in query is present in doc and each of those values is contained, recursively. Extra keys in doc are ignored — that is what makes it containment rather than equality.\n\n3. AN ARRAY CONTAINS AN ARRAY if every element of query is contained by SOME element of doc. Order does not matter and duplicates do not matter: [1,2,3] contains [3,1], and it also contains [1,1,1], because the question is "is each of these in there" and not "are these two arrays the same".\n\n4. AT THE TOP LEVEL ONLY, AN ARRAY CONTAINS A BARE SCALAR if some element of it equals that scalar. ["qr","mobile"] contains "qr". Postgres documents this as an exception to the general rule, and it exists because "is this tag present" is the commonest question anyone asks of a JSONB array.\n\n5. THAT EXCEPTION DOES NOT APPLY ONCE NESTED. {"tags":["qr"]} does NOT contain {"tags":"qr"} — you need {"tags":["qr"]}. This is the rule that works in the psql prompt where you tested it and fails in the query you shipped, because the top-level version of the same question was true.\n\n6. STRUCTURE MATCHES FROM THE TOP. {"a":{"b":1}} does NOT contain {"b":1}. Containment sounds like a search and is not one: the only things it may skip are EXTRA keys and EXTRA array elements, never a level of nesting. To reach a nested value you spell out the path.\n\n7. A TYPE MISMATCH IS FALSE, everywhere. An object does not contain an array, an array does not contain an object, and null is contained only by null.\n\n8. AN EMPTY QUERY OBJECT IS CONTAINED BY ANY OBJECT, and an empty query array by any array — there is nothing to fail. But {} is not contained by an array, and [] is not contained by an object: rule 7 still applies first.`,
+      hints: [
+        "Write the recursion with a `topLevel` flag, defaulting to true, and pass false on every recursive call. Rules 4 and 5 are then the same line, guarded by that flag, rather than two rules you have to remember are related.",
+        "Rule 3 is a `.every` over the query wrapped around a `.some` over the doc — for each thing asked for, is there anything here that contains it. Writing it as an index-by-index comparison gives you array EQUALITY, which is rule 3's opposite.",
+        "Do the type check first and once: if doc and query are different kinds of thing (object / array / scalar), the answer is false before any recursion — except for the one top-level array-and-scalar case, which is exactly why that exception is worth naming separately."
+      ],
+      solution: `function jsonbContains(doc, query, topLevel = true) {
+  const kindOf = (v) => {
+    if (Array.isArray(v)) return "array";
+    if (v !== null && typeof v === "object") return "object";
+    return "scalar";
+  };
+
+  const docKind = kindOf(doc);
+  const queryKind = kindOf(query);
+
+  // Rule 4, and rule 5 is the same line: the flag is what stops it
+  // applying once nested. Checked BEFORE the type match, because it is
+  // the one case where the kinds are deliberately allowed to differ.
+  if (topLevel && docKind === "array" && queryKind === "scalar") {
+    return doc.some((element) => element === query);
+  }
+
+  // Rules 6 and 7. An object never contains an array, and nothing
+  // skips a level of nesting.
+  if (docKind !== queryKind) return false;
+
+  // Rule 1. Strict, so 10 !== "10" and null is contained only by null.
+  if (queryKind === "scalar") return doc === query;
+
+  // Rule 3. For each thing asked for, is there anything here that
+  // contains it -- which is why order and duplicates fall out for free.
+  // Rule 8: an empty query array passes, because every() of nothing is
+  // true.
+  if (queryKind === "array") {
+    return query.every((wanted) =>
+      doc.some((element) => jsonbContains(element, wanted, false))
+    );
+  }
+
+  // Rule 2, and rule 8 again: an empty query object has no keys to
+  // fail. Extra keys in doc are simply never visited.
+  return Object.keys(query).every(
+    (key) =>
+      Object.prototype.hasOwnProperty.call(doc, key) &&
+      jsonbContains(doc[key], query[key], false)
+  );
+}`
+    });
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is SQL run against a live Postgres database",
       exercise: "Build Token's access rules system: (1) Create the access_rules table with a JSONB payload column, (2) Insert all three of Token's rule types (time_window, contact_limit, channel_restrict) for a token, (3) Write a query that finds every rule whose daily message limit is above 5, (4) Create a trigger that fires NOTIFY when a token's status changes to 'revoked', (5) Write an UPSERT that updates a rule if it already exists for that token+type.",
       hints: [
         "Use payload->>'max_messages_per_day' to extract the value, then cast before comparing: (payload->>'max_messages_per_day')::integer > 5. Skip the cast and you are comparing text, where '10' sorts before '5'.",
@@ -317,6 +434,104 @@ INSERT INTO access_rules (token_id, rule_type, payload)
 VALUES (1, 'time_window', '{"days": [1,2,3,4,5], "start_time": "10:00", "end_time": "20:00", "timezone": "Asia/Kolkata"}')
 ON CONFLICT (token_id, rule_type)
 DO UPDATE SET payload = EXCLUDED.payload;`
+    });
+
+    createPlayground("pg-exercise-contains", `// Write jsonbContains(doc, query) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(v) { return JSON.stringify(v); }
+
+// The lesson's own payloads.
+var TIME_WINDOW = {
+  days: [1, 2, 3, 4, 5],
+  start_time: "09:00",
+  end_time: "18:00",
+  timezone: "Asia/Kolkata",
+};
+var CONTACT_LIMIT = { max_messages_per_day: 10, max_calls_per_day: 2 };
+var CHANNEL = { allow_text: true, allow_voice: true, allow_video: false };
+
+function got(doc, query) {
+  try { return jsonbContains(doc, query); }
+  catch (e) { return "threw: " + e.message; }
+}
+function yes(label, doc, query) {
+  check(label, got(doc, query) === true, "got " + show(got(doc, query)));
+}
+function no(label, doc, query, why) {
+  check(label, got(doc, query) === false,
+    "got " + show(got(doc, query)) + (why ? " -- " + why : ""));
+}
+
+try {
+  if (typeof jsonbContains !== "function") throw new Error("not written yet");
+
+  // Rule 2 -- extra keys ignored. This is the lesson's own query.
+  yes("a payload contains a subset of its keys", TIME_WINDOW, { days: [1] });
+  yes("...and several at once", TIME_WINDOW, { timezone: "Asia/Kolkata", start_time: "09:00" });
+  no("...but not a key it does not have", TIME_WINDOW, { days: [1], enabled: true });
+  no("...nor a key with a different value", TIME_WINDOW, { start_time: "9:00" },
+    "'9:00' and '09:00' are different strings, which is why the regex in b3/0004 exists");
+
+  // Rule 3 -- order and duplicates are irrelevant.
+  yes("an array contains its elements in any order", TIME_WINDOW, { days: [3, 1] });
+  yes("...and repeats in the query do not require repeats in the doc",
+    TIME_WINDOW, { days: [1, 1, 1] });
+  no("...but a missing element fails", TIME_WINDOW, { days: [0] },
+    "0 is Sunday, and this rule is weekdays only");
+  no("...and it is not array equality", { days: [1, 2] }, { days: [1, 2, 3] });
+
+  // Rule 4 -- the top-level exception.
+  yes("a top-level array contains a bare scalar", ["qr", "mobile"], "qr");
+  no("...and does not contain one it lacks", ["qr", "mobile"], "nfc");
+
+  // Rule 5 -- and NOT once nested. The pair that catches people.
+  no("a NESTED array does not contain a bare scalar", { tags: ["qr"] }, { tags: "qr" },
+    "true at the top level and false one level down");
+  yes("...it needs the array form", { tags: ["qr"] }, { tags: ["qr"] });
+
+  // Rule 6 -- THE headline. Containment is not a search.
+  no("containment does not find a value nested deeper", { a: { b: 1 } }, { b: 1 },
+    "the only things @> may skip are EXTRA keys and EXTRA elements, never a level");
+  yes("...spelling out the path works", { a: { b: 1 } }, { a: { b: 1 } });
+  yes("...and it still ignores extra keys at every level",
+    { a: { b: 1, c: 2 }, d: 3 }, { a: { b: 1 } });
+
+  // Rule 1 -- no coercion at all.
+  no("10 does not contain \\"10\\"", CONTACT_LIMIT, { max_messages_per_day: "10" },
+    "in JSONB these are different values; only ->> turns a number into text");
+  yes("a boolean false is a value like any other", CHANNEL, { allow_video: false });
+  no("...and true does not contain false", CHANNEL, { allow_video: true });
+
+  // Rule 7 -- type mismatches, including null.
+  no("an object does not contain an array", { a: 1 }, [1]);
+  no("an array does not contain an object", [1, 2], { a: 1 });
+  yes("null contains null", { revoked_at: null }, { revoked_at: null });
+  no("...but null does not contain a value", { revoked_at: null }, { revoked_at: "2026-08-01" });
+  no("...and a value does not contain null", { revoked_at: "2026-08-01" }, { revoked_at: null });
+
+  // Rule 8 -- nothing to fail.
+  yes("any object contains the empty object", TIME_WINDOW, {});
+  yes("any array contains the empty array", [1, 2, 3], []);
+  no("...but an array does not contain the empty OBJECT", [1, 2, 3], {},
+    "rule 7 applies before rule 8");
+  no("...and an object does not contain the empty array", { a: 1 }, []);
+
+  // A realistic nested query, of the kind the GIN index accelerates.
+  var row = { token_id: 7, rule_type: "time_window", payload: TIME_WINDOW };
+  yes("a nested payload query works when the path is spelled out",
+    row, { rule_type: "time_window", payload: { days: [1] } });
+  no("...and not when the path is skipped", row, { days: [1] });
+} catch (err) {
+  console.log("Self-check could not run: " + err.message);
+}`);
+
+    createExplain("explain-b1-0004", {
+      prompt: "A top-level array contains a bare scalar, so <code>['qr'] @&gt; 'qr'</code> is true — but one level down, <code>{tags: ['qr']} @&gt; {tags: 'qr'}</code> is false. Explain why Postgres draws that line at the top level, and what would become ambiguous if the exception applied at every depth."
     });
 
     createQuiz("lesson-quiz", [
