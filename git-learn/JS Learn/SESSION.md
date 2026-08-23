@@ -45,8 +45,8 @@ Its LEFT JOIN example was commented *"All tokens, plus their most recent
 redemption (if any)"* and returns **every** redemption of each. A token
 redeemed four times comes back as four rows — which is the row multiplication
 the lesson teaches two sections further down, contradicted by its own example.
-**A join reads like \"attach the matching row\" and means \"produce one row per
-matching pair\", so a query that looks like it enriches a list silently
+**A join reads like "attach the matching row" and means "produce one row per
+matching pair", so a query that looks like it enriches a list silently
 lengthens it.**
 
 Also `t.issued_to` → `t.label` and `r.redeemed_at` → `r.created_at`, the exact
