@@ -17,18 +17,16 @@ how far it got.
 **State as of 2026-08-23** — run `node scripts/audit.mjs` before trusting any
 of it:
 
-- **99 track lessons, 72 verified.** Audit **green**, **0 warnings**, five
+- **100 track lessons, 73 verified.** Audit **green**, **0 warnings**, five
   suites pass.
 - **Known-and-blocked is 2** — `participants` (gated on C5) and `calls` (gated
   on B6). Both still legitimately gated.
 - **M3 is finished**, all 37 lessons. `--unverifiable` was used zero times.
-- **Complete:** B2, B3, B4, B7, B10, A11. **C5 is 3 of 5.**
-- The 40 legacy pre-pivot lessons (modules `04`–`09`) were **deleted** on
-  2026-08-22. In git history if ever wanted.
+- **Complete:** B2, B3, B4, B7, B10, A11. **C5 is 4 of 5**, and the fifth
+  needs a decision before it can be written at all.
 
-**The next unit is `c5/0004`** — see *Next action*. It is unblocked and the
-design is decided; nothing is waiting on the student except one small call
-about `c5/0005`.
+**The one thing waiting on the student is `c5/0005`** — see *Next action*.
+Everything else in the queue is unblocked.
 
 > **Eleven decisions were taken across 2026-08-22/23**, several of which
 > reversed things the course had been teaching for months — phone sign-in with
@@ -1040,38 +1038,139 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
-### → Start here: `c5/0004`, backup &amp; recovery
+### → Ask the student one question: what happens to `c5/0005`?
 
-**Unblocked, designed, nothing waiting on the student.** Write it to the split
-decided 2026-08-23 (below, and in `CLAUDE.md`):
+**This is the only blocked item in the course.** `c5/0005` was planned as
+multi-device, and the student chose **one device for v1** on 2026-08-23, so it
+has no product left to describe. Two options, and the first is the
+recommendation:
 
-- Signing in with the phone number restores the **token list, labels, rules,
-  expiry, max uses, redemption history, conversation list, timestamps, display
-  name and avatar** — all server-side, none encrypted to a user key. Nothing to
-  write down.
-- **A 12-word recovery phrase, offered at sign-up and skippable**, unlocks
-  message **bodies** only. Skip it and you lose old message text on a new
-  device, and nothing else.
-- The phrase must **never** be recoverable by SMS, or a SIM-swap takes the
-  history with the account.
+1. **Rewrite it as *"why Token is single-device, and what changing it would
+   cost"*.** Genuinely useful rather than a consolation prize — that answer
+   shapes the whole key model, and it is where the `participants` orphan
+   finally gets decided. `0004` already sets it up: the backup blob is a
+   *set* of key versions, and a second device is the same question asked
+   about space instead of time.
+2. **Drop it and make C5 four lessons.**
 
-**M3 candidate worth considering:** the restore-planning function — given what
-came back from the server and whether a phrase was supplied, decide what is
-recoverable and what is permanently gone. The interesting edges are that a
-missing phrase is *not* an error (most users will skip), and that "gone" and
-"not yet fetched" must never be collapsed.
+**Do not write it as originally planned.** And note what option 1 unblocks:
+`participants` has been gated on this module since it was first written, and
+a single-device product may not need a membership table at all — so the
+answer there may be a deletion rather than a definition.
 
-**Then one small call from the student:** `c5/0005` was multi-device, and they
-chose **one device for v1**, so it has no product to describe. Either rewrite it
-as *"why Token is single-device, and what it would cost to change"* — genuinely
-useful, since that answer shapes the whole key model — or **drop it and make C5
-four lessons.** Do not write it as planned.
+**Everything else is unblocked:** `a3/0002`'s M3 extraction, `a2`'s runtime
+type guards, and the small `a8/0004` fix (`tokenCode` sent over the WebSocket
+on every chat message, twice — the holder knows the code so nothing leaks to
+*them*, but it lands in server logs and Redis pub/sub against ADR-0007, and the
+holder JWT already carries `conversationId`).
 
-**After C5:** `a3/0002`'s M3 extraction, `a2`'s runtime type guards, and the
-small `a8/0004` fix (`tokenCode` sent over the WebSocket on every chat message,
-twice — the holder knows the code so nothing leaks to *them*, but it lands in
-server logs and Redis pub/sub against ADR-0007, and the holder JWT already
-carries `conversationId`). None of these is blocked.
+---
+
+### c5/0004 — the split was already in the schema, and nobody had looked (2026-08-23)
+
+M3: **`planRestore`**. 22 self-checks, 12 wrong-cases. **100 track lessons,
+73 verified.** C5 is 4 of 5.
+
+**The lesson's best finding cost nothing to make: read `b2/0002`'s columns and
+ask which ones the server can read.** Exactly one cannot —
+`messages.ciphertext`. `tokens`, `conversations`, `redemption_events` and
+`users` are ordinary rows the server serves every day. So *"what needs the
+recovery phrase"* was never a product trade-off to be argued about; it was
+settled the morning someone decided which columns stay outside the ciphertext.
+
+**The general move, and it is cheap: list what is encrypted, and the backup
+requirement is whatever is left.** Designing the flow first and then working
+out what it must carry is how you end up with a recovery phrase protecting a
+token list the server hands over anyway — all of the user-facing cost, none of
+the security.
+
+### Wrapping beat deriving on one cell of a table
+
+Two honest designs: the phrase **is** the key (12 words → seed → keypair,
+nothing uploaded) or the phrase **wraps** the key (generated on-device per
+`0001`, encrypted, blob uploaded).
+
+**Deriving loses on a single row — it cannot be skipped**, because the phrase
+must exist before the key does. That makes twelve words a wall in front of the
+first screen of a product whose pitch is that you can start immediately. It is
+what wallets do and it is right *there*, because there is nothing to do until
+you have a restorable key. Token is the other case.
+
+The consequence is that the blob sits on a server the SIM-swapper can reach,
+so **the phrase is generated by the app and never chosen by the user.** The
+attack is offline — no rate limit, no lockout — and the gap between ~128
+generated bits and a human-chosen passphrase is about **ninety bits**. No KDF
+tuning closes that: a slow hash multiplies the attacker's cost by a constant,
+and a constant does not close 2<sup>90</sup>. Argon2id is still there, for
+*partial* leaks, which is the case that actually happens.
+
+### The finding that came from reading 0002 against this lesson
+
+**A backup of the current key is not a backup.** `0002` made the key directory
+append-only because old messages were sealed to old keys, and `b2/0002` put
+`key_version` on the messages table for exactly that. A blob holding one key
+means a user who rotated in Tuesday and restores in March gets **every message
+since Tuesday and none of the two years before it** — and *nothing errors*,
+because the restore genuinely recovered the key it was given. Silent, found
+weeks later, unfixable by then.
+
+So the blob is a **set** and re-wrapping is additive, with `key_versions` as a
+column so a restore can say *"this covers 1–3 and you have messages at 4"*.
+Same family as `UPDATE public_key` and `revoked_at`: **a backup that keeps only
+the current state is a backup of the present, and what you lost is the past.**
+
+### `planRestore` exists because two pairs of states get merged
+
+- **"not fetched yet" merged with "gone".** They arrive at the same line with
+  the same-looking data — `backup` is null either way — so the guard gets
+  dropped. The result is an app telling someone their history is permanently
+  destroyed because a train went into a tunnel, and **they will not retry, because
+  you do not retry something that is gone.**
+- **The account gated on the phrase.** Most users will skip the phrase, and
+  the entire token list needs no key at all, so this draws an empty app for
+  the majority.
+
+The broken-on-purpose playground runs four real returning-user states through
+the naive planner and **all four come back "gone"**, only one of them truly.
+
+**The general rule: not knowing something and knowing it is absent are
+different states, and code that merges them reports the permanent answer for
+the temporary case.** Cache miss, feature flag that failed to load, permission
+that could not be read — the permanent answer is almost always the harmful one
+to guess.
+
+### And a third arrival at the false-assurance rule
+
+Showing twelve words and recording a successful backup on **Done** is worse
+than having no backup feature: they did not write it down, and the app has now
+told them they are protected, so they are *less* careful than they would have
+been. Identical in shape to `0003`'s eight-digit safety number. Fix is to ask
+three words back at positions the app picks, and record nothing until that
+passes. Plus `FLAG_SECURE` — a screenshot of the phrase lands in Google Photos,
+which is a **server-held copy of the thing protecting the key**, arriving
+through the camera roll.
+
+### The wrong-cases found three things, and two of them were mine
+
+Twelve mistakes, two alternatives. Every multi-trip was run against the
+self-check on its own, and the three that were not inherent were fixed:
+
+- **A `expect` that named a check the mistake does not trip.** Dropping the
+  empty-phrase guard leaves `messages` as `'locked'` — unwrap returns false
+  and lands in the same state — so only the *reason* moves. The first draft
+  named the messages check and passed.
+- **A case failing for an unrelated reason.** The phrase-gating mistake
+  originally fell back to `snapshot.accountData` raw, which also broke the
+  `ok → 'restored'` mapping, so it tripped the first check for a reason that
+  had nothing to do with gating. Now it keeps the mapping and differs in
+  exactly one place.
+- **A self-check bundling two claims.** *"a correct phrase does not rescue a
+  failed account fetch"* asserted the account **and** the messages outcome, so
+  any phrase-handling bug tripped an account check. Split, and the
+  messages-independence half now uses no phrase at all.
+
+**That is seven times a wrong-case has caught a gap in the self-check written
+beside it, and it remains the only mechanism that does.**
 
 ---
 

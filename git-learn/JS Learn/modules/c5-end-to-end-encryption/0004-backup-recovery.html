@@ -1,0 +1,1151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Backup &amp; Recovery — C5.4</title>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+  <div class="page-wrap">
+
+    <nav class="breadcrumb">
+      <a href="../../index.html">Course Home</a>
+      <span class="sep">›</span>
+      <a href="./README.html">C5 — End-to-End Encryption</a>
+      <span class="sep">›</span>
+      <span class="current">Backup &amp; Recovery</span>
+    </nav>
+
+    <h1>Backup &amp; Recovery</h1>
+    <div class="lesson-meta">
+      <span>C5 — Lesson 4 of 5</span>
+      <span>~50 min</span>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why this matters for Token</div>
+      <p><code>0001</code> put the private key in the Keychain with
+      <code>THIS_DEVICE_ONLY</code>, which deliberately excludes it from every
+      backup Apple and Google offer. <strong>So the phone going in the river
+      is not a hypothetical — it is a state the design guarantees will be
+      unrecoverable unless this lesson exists.</strong></p>
+      <p>ADR-0002 calls it <em>key loss is data loss</em> and requires the
+      answer at launch rather than later, for a reason that is easy to miss:
+      a backup mechanism added in v1.4 cannot protect the keys of anyone who
+      signed up in v1.0. Their keys were generated before there was anywhere
+      to put a copy.</p>
+    </div>
+
+    <div class="callout warning">
+      <div class="callout-title">The shape of the answer was decided on 2026-08-23, and it is a split</div>
+      <p>Not "everything comes back" and not "write these words down or lose
+      your account". <strong>Almost everything comes back from the phone
+      number alone; the words are needed for one thing.</strong></p>
+      <table>
+        <thead><tr><th>Restores from an OTP alone</th><th>Needs the recovery phrase</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Token list, labels, access rules, expiry, max uses, status</td>
+            <td rowspan="3">Message <strong>bodies</strong>. That is the whole list.</td>
+          </tr>
+          <tr><td>Redemption history, conversation list, timestamps</td></tr>
+          <tr><td>Display name, avatar</td></tr>
+        </tbody>
+      </table>
+      <p>A user who skips the phrase loses <em>old message text on a new
+      device</em> and nothing else. They get their entire working product
+      back with nothing to write down — and that is not a compromise someone
+      invented to end an argument. Read on: it is what the schema already
+      was.</p>
+    </div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>The split is a fact about the schema, not a policy</h2>
+
+    <p>Go back to what B2 actually stores and ask one question of every
+    column: <em>can the server read this?</em></p>
+
+    <table>
+      <thead><tr><th>Table</th><th>Server can read</th><th>Server cannot read</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>tokens</code></td>
+          <td><code>label</code>, <code>status</code>, <code>expires_at</code>, <code>max_uses</code>, <code>paused_at</code>, <code>revoked_at</code></td>
+          <td><code>code_hash</code> is one-way and <code>code_enc</code> is encrypted with a key <em>the API holds</em> — so for this purpose the API can read it</td>
+        </tr>
+        <tr>
+          <td><code>conversations</code></td>
+          <td>All of it — <code>token_id</code>, <code>created_at</code>, <code>closed_reason</code></td>
+          <td>—</td>
+        </tr>
+        <tr>
+          <td><code>redemption_events</code></td>
+          <td>All of it</td>
+          <td>—</td>
+        </tr>
+        <tr>
+          <td><code>users</code></td>
+          <td><code>display_name</code>, <code>avatar_url</code></td>
+          <td>—</td>
+        </tr>
+        <tr>
+          <td><code>messages</code></td>
+          <td><code>conversation_id</code>, <code>sender_type</code>, <code>created_at</code>, receipts, <code>key_version</code></td>
+          <td><strong><code>ciphertext</code> and <code>nonce</code></strong></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p><strong>One cell in that table is encrypted to a user key, and it is
+    the last one.</strong> Everything else is ordinary rows the server serves
+    to an authenticated client every day. So "what needs the phrase" was never
+    a product decision — it was settled in <code>b2/0002</code>, the morning
+    someone decided which columns stay outside the ciphertext, and nobody had
+    gone back and read it.</p>
+
+    <div class="callout">
+      <div class="callout-title">This is worth doing before designing any recovery flow</div>
+      <p>The instinct is to design backup as a feature and then work out what
+      it has to carry. The cheaper order is the reverse: <strong>list what is
+      encrypted, and the backup requirement is whatever is left.</strong> Do
+      it the other way round and you end up designing a recovery phrase that
+      protects a token list the server would hand over anyway — all of the
+      user-facing cost, none of the security.</p>
+    </div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <div class="callout danger">
+      <div class="callout-title">Why the phone number cannot bring the messages back, stated exactly</div>
+
+      <p>The first answer to this question was <em>"once logged in with the
+      same number, data is auto restored"</em>. It is the right instinct and
+      it cannot be built. The argument is two sentences:</p>
+
+      <p><strong>For message bodies to return from a phone number alone, the
+      server must be able to release the key to whoever proves the number.
+      A server that can release the key can release it to itself.</strong></p>
+
+      <p>That is not weakened end-to-end encryption. It is its absence — the
+      guarantee in ADR-0002 is precisely <em>the server holds no key it can
+      use</em>, and there is no version of "auto-restore from an OTP" that
+      leaves that sentence true. It is also not a private matter any more:
+      <code>b10/0002</code> and <code>a11/0005</code> both declare end-to-end
+      encryption to Google Play and the App Store, and both stores re-check
+      declarations against the binary.</p>
+
+      <p>The second reason is the one that decides it even for someone
+      relaxed about the first. Sign-in is OTP-only, so
+      <strong>whoever controls the SIM controls the account</strong>. That is
+      an accepted cost for the account itself — a SIM-swapper gets a token
+      list, and every token in it is revocable. It is <em>not</em> an
+      acceptable cost for the message history, which is not revocable, not
+      replaceable, and is the thing users would actually mind. So:</p>
+
+      <p><strong>The key backup must never be recoverable by SMS alone.</strong>
+      Anything that lets a fresh SIM-swapped device decrypt old messages hands
+      the whole guarantee to whoever ports the number.</p>
+    </div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Two designs, and why only one of them is skippable</h2>
+
+    <p>There are two honest ways to survive a lost phone without the server
+    holding a usable key.</p>
+
+    <table>
+      <thead><tr><th></th><th>A — the phrase <em>is</em> the key</th><th>B — the phrase <em>wraps</em> the key</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>How</td>
+          <td>12 words → seed → identity keypair, derived deterministically. Nothing is uploaded at all</td>
+          <td>The key is generated on-device as in <code>0001</code>. The phrase derives a wrapping key, which encrypts the private key; the ciphertext is uploaded</td>
+        </tr>
+        <tr>
+          <td>Server stores</td>
+          <td>Nothing</td>
+          <td>A blob it cannot open</td>
+        </tr>
+        <tr>
+          <td>Can it be offered later?</td>
+          <td><strong>No.</strong> The phrase must exist <em>before</em> the key does</td>
+          <td>Yes — at sign-up, from settings, or after a nudge six months in</td>
+        </tr>
+        <tr>
+          <td>Can it be skipped?</td>
+          <td><strong>No.</strong> There is no key until the user has accepted one</td>
+          <td>Yes. The key already works; backup is an extra</td>
+        </tr>
+        <tr>
+          <td>Rotation (<code>0002</code>)</td>
+          <td>A new key means a new phrase, so every rotation is a user-facing event</td>
+          <td>Re-wrap and re-upload. The user never sees it</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p><strong>Token uses B, and the two "no" cells are why.</strong> The
+    decision was that the phrase is <em>offered at sign-up and skippable</em>,
+    and design A cannot be skipped — under A, the twelve words are a wall in
+    front of the first screen of the app, for a product whose entire pitch is
+    that you can start using it immediately.</p>
+
+    <p>Design A is not a bad design; it is what cryptocurrency wallets use,
+    and there the trade is right because there is nothing to do with the app
+    until you have a key you can restore. Token is the other case: there is a
+    great deal to do, and most of it does not need the phrase at all.</p>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>The phrase is generated by the app, never chosen by the user</h2>
+
+    <p>This looks like a usability preference and it is a security
+    requirement, because of where the blob lives. The wrapped key sits on the
+    server. Anyone who signs in with the SIM can download it. From that
+    moment the attack is <strong>offline</strong> — no rate limit, no lockout,
+    no "too many attempts", just a file and as much hardware as they care to
+    rent.</p>
+
+    <table>
+      <thead><tr><th>What protects the blob</th><th>Entropy</th><th>Verdict</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>A passphrase a person invented</td>
+          <td>Typically under 40 bits, and often far less</td>
+          <td><strong>Falls to an offline attack.</strong> Days on rented hardware, even with a slow KDF</td>
+        </tr>
+        <tr>
+          <td>12 words from a 2048-word list</td>
+          <td>132 bits (128 of entropy plus a 4-bit checksum)</td>
+          <td>Not reachable at any speed, by anyone</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>The gap is not a factor of ten. It is roughly ninety bits, which is
+    why no amount of KDF tuning rescues the first row — <strong>a slow hash
+    multiplies the attacker's cost by a constant, and a constant does not
+    close a gap of 2<sup>90</sup>.</strong> The only lever that works is the
+    entropy of the secret itself, and the only reliable way to get it is to
+    stop asking humans for it.</p>
+
+    <div class="callout">
+      <div class="callout-title">Then why bother with Argon2id, if 128 bits is already unbreakable?</div>
+      <p>Two reasons, and neither is the usual one.</p>
+      <ul>
+        <li><strong>Phrases leak partially.</strong> A photo of a page with
+        three words obscured, a phrase read aloud in a room, a note where the
+        last line is smudged. A memory-hard KDF is what makes the remaining
+        space expensive rather than instant.</li>
+        <li><strong>The parameters must travel with the blob.</strong> A blob
+        wrapped in 2026 has to open in 2034, when the defaults have moved on
+        twice. So <code>kdf</code>, <code>kdf_salt</code> and
+        <code>kdf_params</code> are columns, not constants in the client. A
+        constant in the client is a value you can never change without
+        orphaning every backup made before the change.</li>
+      </ul>
+      <p>The one to avoid is a plain SHA-256 of the phrase. It is fast by
+      design, which is the property you want everywhere except here.</p>
+    </div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>What the server stores</h2>
+
+    <pre><code>-- Migration: 011_key_backups.sql
+CREATE TABLE key_backups (
+  user_id      INTEGER     PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+
+  -- EVERY identity key this user has ever held, sealed as one blob.
+  -- Not just the current one -- see the callout below.
+  wrapped      BYTEA       NOT NULL,
+
+  -- The KDF parameters travel WITH the blob. They are not secret, and a
+  -- backup made today must still open when the defaults have moved on.
+  kdf          TEXT        NOT NULL,          -- 'argon2id'
+  kdf_salt     BYTEA       NOT NULL,
+  kdf_params   JSONB       NOT NULL,          -- { m, t, p }
+
+  -- Which key versions are inside, so a restore can tell whether it has
+  -- what it needs for the messages it is about to try to read.
+  key_versions INTEGER[]   NOT NULL,
+
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);</code></pre>
+
+    <p>One row per user, so re-wrapping is an <code>UPDATE</code> and turning
+    backup off is a <code>DELETE</code>. That <code>DELETE</code> is
+    irreversible in the strongest sense in this course — worse than a revoked
+    token, which at least only destroys a capability — so it belongs behind
+    the same kind of explicit confirmation <code>a11/0001</code> argued for,
+    and for the same reason: <strong>there is no undo to fall back on.</strong></p>
+
+    <p>Two rules the API inherits from elsewhere and must not relax here:</p>
+
+    <ul>
+      <li><strong><code>wrapped</code> never goes in a log.</strong> Same rule
+      as the token code in ADR-0007, and the error tracker attaches request
+      bodies by default — so the scrubbing config is part of shipping this
+      endpoint, not a follow-up.</li>
+      <li><strong>Serving the blob requires a verified session</strong>, even
+      though the phrase is what actually protects it. Handing ciphertext to
+      unauthenticated callers converts "you must swap the SIM first" into "you
+      must guess a user id", and defence in depth is exactly the kind of thing
+      that gets dropped because the layer underneath it is strong.</li>
+    </ul>
+
+    <!-- ───────────────────────────────────────────── -->
+    <div class="callout danger">
+      <div class="callout-title">A backup of the current key is not a backup</div>
+
+      <p><code>0002</code> made the key directory append-only because
+      <strong>old messages were sealed to old keys</strong>, and
+      <code>b2/0002</code> put <code>key_version</code> on the messages table
+      for exactly that. Now read that against a backup blob containing one
+      key.</p>
+
+      <p>A user rotates on Tuesday — new phone, reinstall, whatever
+      <code>0002</code>'s "different key, higher version" row describes. The
+      client re-wraps and uploads. The blob now holds v4. In March they lose
+      the phone, restore, type the phrase correctly, and get back
+      <strong>every message sent since Tuesday and none of the two years
+      before it.</strong></p>
+
+      <p>Nothing errors. The restore reports success, because it did succeed
+      — it recovered the key it was given. The failure is silent, it is
+      discovered weeks later, and by then the bytes that would have fixed it
+      are gone from a phone in a river.</p>
+
+      <p><strong>So the blob is a set, and re-wrapping is additive.</strong>
+      A rotation adds v4 to the blob; it never replaces v3. <code>key_versions</code>
+      exists so a restore can say <em>"this backup covers versions 1–3, and
+      you have messages at version 4"</em> — which is a sentence worth being
+      able to say, and impossible without the column.</p>
+
+      <p>The general shape has appeared before in this course and will again:
+      <strong>a backup that keeps only the current state is a backup of the
+      present, and the thing you lost is the past.</strong> Same family as
+      <code>UPDATE public_key</code> in <code>0002</code> and
+      <code>revoked_at</code> in <code>b2/0001</code> — a history recorded,
+      never expressed by absence.</p>
+    </div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Showing the words is not backing them up</h2>
+
+    <p>The screen displays twelve words. The user taps <em>Done</em>. What
+    just happened?</p>
+
+    <p>Almost certainly nothing. They glanced at it, they meant to come back
+    to it, and the app has now recorded a successful backup. Six months later
+    the phone is gone and the phrase was never written anywhere — and worse
+    than the loss itself, <strong>the app told them they were protected</strong>,
+    so they were less careful than they would have been with no backup feature
+    at all.</p>
+
+    <p>That is the same argument as the eight-digit safety number in
+    <code>0003</code>: <em>a feature that gives false assurance is worse than
+    the same feature absent, because the absent one does not stop the user
+    being careful.</em> Third lesson in this module to arrive at it.</p>
+
+    <ul>
+      <li><strong>Confirm before recording.</strong> Ask for three of the
+      twelve back, at positions the app picks. Only then write
+      <code>created_at</code> and only then show the backed-up state.</li>
+      <li><strong>Do not accept a screenshot as the answer.</strong> A
+      screenshot lands in Google Photos or iCloud Photos, which is a
+      server-held copy of the thing protecting the key — the exact outcome
+      the design exists to avoid, arriving through the camera roll. Set
+      <code>FLAG_SECURE</code> on Android and mark the screen non-capturing
+      on iOS, and say <em>write it on paper</em> in words.</li>
+      <li><strong>Never send the phrase or the wrapping key anywhere</strong>,
+      including to your own analytics, including in a crash report. This is
+      the one screen where an ordinary breadcrumb is a catastrophe.</li>
+    </ul>
+
+    <h3>Try it yourself — this one is broken on purpose</h3>
+
+    <p>The restore planner as it is usually first written, run against four
+    real states a returning user can be in. Three of the four tell someone
+    their history is destroyed when it is not, and the fourth shows an empty
+    app to a user whose entire token list is sitting on the server waiting
+    to be drawn.</p>
+
+    <div id="playground-restore"></div>
+
+    <!-- ───────────────────────────────────────────── -->
+    <h2>Now build it yourself</h2>
+
+    <p>Argon2id, the wrapping and the two screens all need a device. What
+    does not is the decision they hang off: given what came back from the
+    server and whether the user has supplied a phrase, <strong>what is
+    readable, what is waiting, and what is actually gone.</strong></p>
+
+    <div id="exercise-restore"></div>
+    <div id="pg-exercise-restore"></div>
+
+    <h3>And the screens</h3>
+
+    <div id="exercise-1"></div>
+
+    <div id="explain-c5-0004"></div>
+
+    <hr>
+
+    <h2>Quiz</h2>
+    <div id="lesson-quiz"></div>
+
+    <nav class="lesson-nav">
+      <a href="./0003-verification-safety-numbers.html">← Verification &amp; Safety Numbers</a>
+      <span class="disabled">Next: Single-Device, and What Changing It Would Cost →</span>
+    </nav>
+
+  </div>
+
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
+  <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+
+  <script>
+  createPlayground("playground-restore", `// BROKEN ON PURPOSE. The restore planner as it is usually first written.
+
+function planRestore(snapshot, attempt) {
+  // "No phrase, no data."
+  if (!attempt.phrase) {
+    return { account: "failed", messages: "gone" };
+  }
+  try {
+    unwrap(snapshot.backup, attempt.phrase);
+    return { account: "restored", messages: "readable" };
+  } catch (e) {
+    // "We could not get the messages back."
+    return { account: "restored", messages: "gone" };
+  }
+}
+
+// Stand-in for the real unwrap. Throws on anything it cannot open --
+// including on a backup that has not arrived yet, which is the trap.
+const CORRECT = "vault ridge amber tunnel cobalt hazel";
+function unwrap(backup, phrase) {
+  if (!backup) throw new Error("no backup to open");
+  if (phrase !== CORRECT) throw new Error("wrong phrase");
+  return "the-identity-key";
+}
+
+const CASES = [
+  { name: "skipped backup at sign-up, new phone",
+    snapshot: { accountData: "ok", backupFetch: "ok", backup: null },
+    attempt:  { phrase: null },
+    truth:    "account restored; messages genuinely gone -- but this is NOT an error" },
+
+  { name: "has a backup, has not typed the phrase yet",
+    snapshot: { accountData: "ok", backupFetch: "ok", backup: { wrapped: "..." } },
+    attempt:  { phrase: null },
+    truth:    "locked, waiting for words. Nothing is lost" },
+
+  { name: "typed it correctly, with a trailing space",
+    snapshot: { accountData: "ok", backupFetch: "ok", backup: { wrapped: "..." } },
+    attempt:  { phrase: CORRECT + " " },
+    truth:    "readable, once the phrase is normalised" },
+
+  { name: "backup fetch timed out on a train",
+    snapshot: { accountData: "ok", backupFetch: "pending", backup: null },
+    attempt:  { phrase: CORRECT },
+    truth:    "pending. We have not learned ANYTHING about this backup yet" },
+];
+
+for (const c of CASES) {
+  const got = planRestore(c.snapshot, c.attempt);
+  console.log("case  :", c.name);
+  console.log("  says:", "account=" + got.account + "  messages=" + got.messages);
+  console.log("  is  :", c.truth);
+  console.log("");
+}
+
+console.log("All four say 'gone'. Only the first one is true.");
+console.log("");
+console.log("Case 4 is the worst: the network hiccuped, and the app told a");
+console.log("user their message history is permanently destroyed. They will");
+console.log("not try again -- why would you retry something that is gone?");
+console.log("");
+console.log("Case 3 is the commonest: twelve words copied off paper into a");
+console.log("phone keyboard arrive with capitals and stray spaces. That is a");
+console.log("CORRECT phrase, and it was called a wrong one.");
+console.log("");
+console.log("Cases 1 and 2 are the quiet ones. The token list, labels, rules");
+console.log("and redemption history are all sitting on the server needing no");
+console.log("key at all, and the app drew an empty screen because a phrase");
+console.log("was missing that none of that data ever needed.");
+console.log("");
+console.log("Two collapses cause all four: 'gone' merged with 'not yet");
+console.log("fetched', and the ACCOUNT gated on a key that only the MESSAGES");
+console.log("require.");`);
+
+  createSolution("exercise-restore", {
+    exercise: `Write planRestore(snapshot, attempt, config) — what a returning user gets back.\n\nsnapshot is what the server gave us after a successful OTP sign-in:\n  accountData   'ok' | 'pending' | 'failed'   the token list, labels, rules, history\n  backupFetch   'ok' | 'pending' | 'failed'   did the request for the backup blob complete?\n  backup        null | { wrapped, salt, kdf } meaningful ONLY when backupFetch is 'ok'\n\nattempt is what the user has typed so far:\n  phrase        string | null\n\nconfig is:\n  normalise(s)            the phrase in canonical form -- trimmed, collapsed, lowercased\n  unwrap(backup, phrase)  true if that phrase opens that blob, false if not\n\nReturn { account, messages, reason, canRetry, lost }.\n\naccount is 'restored' | 'pending' | 'failed'.\nmessages is 'readable' | 'locked' | 'pending' | 'gone'.\nlost is an array of the things that are PERMANENTLY unrecoverable.\n\nThe rules:\n\n1. ACCOUNT COMES FROM snapshot.accountData ALONE, and never from the phrase. 'ok' gives 'restored', 'pending' gives 'pending', 'failed' gives 'failed'. This is the whole split: none of the token list, labels, rules, expiry, redemption history, display name or avatar is encrypted to a user key, so a user who never wrote the words down still gets their entire working product back. Gating the account on the phrase draws an empty app for the majority of users.\n\n2. IF backupFetch IS 'pending' OR 'failed', messages is 'pending', reason is 'not_fetched', canRetry is true. NEVER 'gone'. We have not learned anything about this backup yet — the request did not finish. Telling someone their history is destroyed because a train went into a tunnel is the single worst thing this function can do, and it is the mistake everyone writes, because a failed fetch and an absent backup arrive at the same line of code.\n\n3. IF backupFetch IS 'ok' AND backup IS null, messages is 'gone', reason is 'no_backup', canRetry is false, and lost is ['message bodies']. The fetch succeeded and reported that there is no backup, which is a real fact. Note what this outcome is NOT: it is not an error. Most users will skip the phrase, so this is the ordinary path, and the account is still fully restored.\n\n4. IF THERE IS A BACKUP AND NO PHRASE HAS BEEN SUPPLIED, messages is 'locked', reason is 'awaiting_phrase', canRetry is true. A phrase that is null, or that normalises to the empty string, counts as not supplied — three spaces is not a wrong answer, it is not an answer.\n\n5. IF THERE IS A BACKUP AND THE PHRASE DOES NOT OPEN IT, messages is 'locked', reason is 'wrong_phrase', canRetry is true. NEVER 'gone', and never discard the blob. A typo in twelve handwritten words is far more likely than a genuine loss, and a function that says 'gone' after one wrong attempt has destroyed something the user still has on paper.\n\n6. IF THE PHRASE OPENS THE BACKUP, messages is 'readable', reason is 'ok', canRetry is false, lost is [].\n\n7. NORMALISE BEFORE UNWRAPPING. Pass config.normalise(phrase) to config.unwrap, never the raw string, and call config.unwrap at most once. Someone copying twelve words off paper into a phone keyboard will produce trailing spaces and capitals, and every one of those is a correct phrase that a strict comparison rejects.\n\n8. lost IS NON-EMPTY ONLY WHEN SOMETHING IS PERMANENTLY GONE. 'pending' and 'locked' both give lost: []. A screen that renders lost must never be handed a transient state — that is rule 2's mistake arriving through a different field.`,
+    hints: [
+      "Compute account first, on its own line, from snapshot.accountData and nothing else. If the phrase appears anywhere in that expression, rule 1 is already broken — and it is the rule with the most users behind it.",
+      "The four message outcomes fall out of three questions asked in order: did the fetch finish, is there a blob, and does the phrase open it. Each question is only worth asking if the previous one said yes, which is why 'not fetched' can never be confused with 'no backup'.",
+      "For rule 4, do the normalise first and then test length. A null phrase and a phrase of three spaces have to reach the same branch, and the cheapest way to guarantee that is to have only one branch."
+    ],
+    solution: `function planRestore(snapshot, attempt, config) {
+  // Rule 1. Account state comes from the server's answer alone. The
+  // phrase is not part of this expression and must never become part
+  // of it -- most users will not have one.
+  const account = {
+    ok: "restored",
+    pending: "pending",
+    failed: "failed",
+  }[snapshot.accountData];
+
+  const done = (messages, reason, canRetry, lost) => ({
+    account, messages, reason, canRetry, lost,
+  });
+
+  // Rule 2. The request did not finish, so we know nothing. This is
+  // NOT 'gone', and the difference is the whole point of the function.
+  if (snapshot.backupFetch !== "ok") {
+    return done("pending", "not_fetched", true, []);
+  }
+
+  // Rule 3. The fetch succeeded and said there is no backup. A real
+  // fact, permanently gone -- and the ordinary path, not an error.
+  if (!snapshot.backup) {
+    return done("gone", "no_backup", false, ["message bodies"]);
+  }
+
+  // Rule 7. Normalise once, before anything looks at the phrase.
+  const phrase = config.normalise(attempt.phrase || "");
+
+  // Rule 4. Nothing typed yet. Three spaces is not an answer.
+  if (phrase.length === 0) {
+    return done("locked", "awaiting_phrase", true, []);
+  }
+
+  // Rules 5 and 6. Exactly one unwrap call.
+  if (!config.unwrap(snapshot.backup, phrase)) {
+    // A typo, almost always. The blob stays exactly where it is.
+    return done("locked", "wrong_phrase", true, []);
+  }
+
+  return done("readable", "ok", false, []);
+}`
+  });
+
+  createPlayground("pg-exercise-restore", `// Write planRestore(snapshot, attempt, config) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(v) { return JSON.stringify(v); }
+
+// The correct phrase is lowercase with single spaces. Every fixture that
+// is meant to WORK is deliberately typed with capitals and a trailing
+// space, so an implementation that skips normalise cannot pass by luck.
+var CORRECT = "vault ridge amber tunnel cobalt hazel";
+var TYPED = "  Vault  Ridge   Amber  Tunnel  Cobalt  Hazel ";
+var BLOB = { wrapped: "wrapped-bytes", salt: "s", kdf: "argon2id" };
+
+var unwrapCalls = 0;
+var unwrapSaw = null;
+function cfg(over) {
+  var c = {
+    normalise: function (s) { return String(s).trim().toLowerCase().replace(/\\s+/g, " "); },
+    unwrap: function (backup, phrase) {
+      unwrapCalls++;
+      unwrapSaw = phrase;
+      return phrase === CORRECT;
+    },
+  };
+  for (var k in (over || {})) c[k] = over[k];
+  return c;
+}
+function snap(over) {
+  var s = { accountData: "ok", backupFetch: "ok", backup: BLOB };
+  for (var k in (over || {})) s[k] = over[k];
+  return s;
+}
+function got(snapshot, phrase, over) {
+  unwrapCalls = 0;
+  unwrapSaw = null;
+  try {
+    var r = planRestore(snapshot, { phrase: phrase }, cfg(over));
+    return r || {};
+  } catch (e) {
+    return { account: "threw", messages: "threw: " + e.message, reason: "threw", lost: [] };
+  }
+}
+
+try {
+  if (typeof planRestore !== "function") throw new Error("not written yet");
+
+  // Rule 1 -- the split. Tested in BOTH directions, because an
+  // implementation can get one right by accident.
+  check("a user who never wrote the words down still gets their account back",
+    got(snap({ backup: null }), null).account === "restored",
+    "got " + show(got(snap({ backup: null }), null).account) +
+      " -- the token list, labels, rules and history need no key at all");
+  check("...and a correct phrase does not rescue a failed account fetch",
+    got(snap({ accountData: "failed" }), TYPED).account === "failed",
+    "got " + show(got(snap({ accountData: "failed" }), TYPED).account) +
+      " -- a phrase opens messages, and cannot conjure a token list");
+  // Independence runs both ways, and this half deliberately uses NO
+  // phrase: bundling it with a correct one makes any phrase-handling
+  // bug trip an account check, which is a misleading diagnostic.
+  check("...and the message outcome is decided even when the account fetch failed",
+    got(snap({ accountData: "failed", backup: null }), null).messages === "gone",
+    "got " + show(got(snap({ accountData: "failed", backup: null }), null).messages));
+  check("...and a pending account fetch reports pending",
+    got(snap({ accountData: "pending" }), TYPED).account === "pending",
+    "got " + show(got(snap({ accountData: "pending" }), TYPED).account));
+
+  // Rule 2 -- the one that must never say 'gone'.
+  check("a backup fetch still in flight is 'pending', not 'gone'",
+    got(snap({ backupFetch: "pending", backup: null }), TYPED).messages === "pending",
+    "got " + show(got(snap({ backupFetch: "pending", backup: null }), TYPED).messages) +
+      " -- a train going into a tunnel is not a destroyed history");
+  check("...and a FAILED fetch is also 'pending', not 'gone'",
+    got(snap({ backupFetch: "failed", backup: null }), TYPED).messages === "pending",
+    "got " + show(got(snap({ backupFetch: "failed", backup: null }), TYPED).messages));
+  check("...reported as not_fetched, and retryable",
+    got(snap({ backupFetch: "failed", backup: null }), TYPED).reason === "not_fetched" &&
+    got(snap({ backupFetch: "failed", backup: null }), TYPED).canRetry === true,
+    "got " + show(got(snap({ backupFetch: "failed", backup: null }), TYPED)));
+  // A failed fetch leaves 'backup' looking exactly like a skipped
+  // backup. An implementation that checks the blob first cannot tell
+  // them apart -- which is why this pair is checked and not just one.
+  check("...even when a blob somehow arrived alongside the failure",
+    got(snap({ backupFetch: "failed", backup: BLOB }), TYPED).messages === "pending",
+    "backupFetch decides first; the blob is not trustworthy until the fetch says ok");
+
+  // Rule 3 -- genuinely gone, and genuinely not an error.
+  check("no backup at all is 'gone'",
+    got(snap({ backup: null }), null).messages === "gone",
+    "got " + show(got(snap({ backup: null }), null).messages));
+  check("...reported as no_backup, and NOT retryable",
+    got(snap({ backup: null }), null).reason === "no_backup" &&
+    got(snap({ backup: null }), null).canRetry === false,
+    "got " + show(got(snap({ backup: null }), null)));
+  check("...naming message bodies as the only thing lost",
+    show(got(snap({ backup: null }), null).lost) === show(["message bodies"]),
+    "got " + show(got(snap({ backup: null }), null).lost));
+
+  // Rule 4 -- nothing typed yet is not a wrong answer.
+  check("a backup with no phrase yet is 'locked', not 'gone'",
+    got(snap(), null).messages === "locked",
+    "got " + show(got(snap(), null).messages));
+  check("...reported as awaiting_phrase",
+    got(snap(), null).reason === "awaiting_phrase",
+    "got " + show(got(snap(), null).reason));
+  check("...and three spaces is not an answer either",
+    got(snap(), "   ").reason === "awaiting_phrase",
+    "got " + show(got(snap(), "   ").reason) +
+      " -- whitespace normalises to empty, which is 'not supplied'");
+
+  // Rule 5 -- a typo is not a loss.
+  check("a wrong phrase is 'locked', never 'gone'",
+    got(snap(), "wrong words entirely here at all").messages === "locked",
+    "got " + show(got(snap(), "wrong words entirely here at all").messages) +
+      " -- the paper is still in a drawer");
+  check("...reported as wrong_phrase, and retryable",
+    got(snap(), "wrong words entirely here at all").reason === "wrong_phrase" &&
+    got(snap(), "wrong words entirely here at all").canRetry === true,
+    "got " + show(got(snap(), "wrong words entirely here at all")));
+
+  // Rules 6 and 7 -- the phrase as a human actually types it.
+  check("the phrase as typed off paper opens the backup",
+    got(snap(), TYPED).messages === "readable",
+    "got " + show(got(snap(), TYPED).messages) +
+      " -- capitals and stray spaces are a correct phrase, not a wrong one");
+  check("...reported as ok, with nothing lost",
+    got(snap(), TYPED).reason === "ok" &&
+    show(got(snap(), TYPED).lost) === show([]),
+    "got " + show(got(snap(), TYPED)));
+  check("...and unwrap was handed the NORMALISED phrase",
+    (got(snap(), TYPED), unwrapSaw) === CORRECT,
+    "unwrap saw " + show(unwrapSaw));
+  check("unwrap is called at most once",
+    (got(snap(), TYPED), unwrapCalls) === 1,
+    "called " + unwrapCalls + " times");
+  check("...and not at all when there is no phrase",
+    (got(snap(), null), unwrapCalls) === 0,
+    "called " + unwrapCalls + " times on an empty box");
+
+  // Rule 8 -- transient states carry no losses.
+  check("nothing is 'lost' while a state is still transient",
+    show(got(snap({ backupFetch: "pending", backup: null }), TYPED).lost) === show([]) &&
+    show(got(snap(), null).lost) === show([]) &&
+    show(got(snap(), "wrong words entirely here at all").lost) === show([]),
+    "pending and locked must both give an empty lost array");
+} catch (err) {
+  console.log("Self-check could not run: " + err.message);
+}`);
+
+  createExplain("explain-c5-0004", {
+    prompt: "A user signs in on a new phone and skips the recovery phrase. Explain why their token list, labels, rules and redemption history all come back while their old messages do not — and why that difference was settled in <code>b2/0002</code> rather than being a policy someone chose for this lesson."
+  });
+
+  createSolution("exercise-1", {
+    unverifiable: "the deliverable is two React Native screens plus Argon2id key wrapping in libsodium, needing a device and the Keychain",
+    exercise: `Build the backup screen and the restore screen.\n\nBACKUP (offered at sign-up, and reachable from settings forever after):\n1. Generate the phrase in the app from a 2048-word list and system randomness. Never accept one the user invented, and never derive one from anything they already know.\n2. Display the twelve words, with the screen marked non-capturing — FLAG_SECURE on Android, and the iOS equivalent. Tell them to write it on paper, and say why.\n3. Before recording anything, ask for three of the words back at positions the app picks. Only on a correct confirmation do you wrap the key, upload it, and show the backed-up state.\n4. Wrap EVERY identity key version the device holds, not only the current one, and send key_versions with the blob.\n5. Store kdf, kdf_salt and kdf_params alongside the blob. They are not secret and they are not constants.\n\nRESTORE (after a successful OTP sign-in on a new device):\n6. Draw the account from the server immediately and do not wait for the phrase. The token list, labels, rules, expiry, history, display name and avatar are all available with no key.\n7. Render each planRestore outcome as its own state. 'pending' offers a retry, 'locked' offers the phrase box, 'gone' says plainly what is gone and — just as plainly — what is not, and 'readable' says nothing at all.\n8. Never delete the server blob on a failed attempt, and never rate-limit the user out of their own history.`,
+    hints: [
+      "Point 3 is the one that will get argued about, because it adds a screen to sign-up. The counter-argument is in the lesson: recording a backup that was only glanced at is worse than having no backup feature, because it makes the user less careful than they would otherwise have been.",
+      "For point 7, the message on the 'gone' screen matters more than any of the others, and it is the one most likely to be written as a bare apology. Say what came back as well as what did not — a user who reads 'your data could not be recovered' will think they lost their tokens, and they did not.",
+      "Do not put the phrase in component state any longer than the screen lives, and do not let it reach a crash reporter. Sentry and its equivalents attach state and props by default, so the scrubbing rule from b10/0001 applies to this screen specifically."
+    ],
+    solution: `// app/src/screens/BackupScreen.tsx
+import { useMemo, useState } from 'react';
+import { View, Text, Pressable, TextInput, StyleSheet } from 'react-native';
+import * as ScreenCapture from 'expo-screen-capture';
+import { generatePhrase, wrapAllKeys } from '../crypto/backup';
+import { api } from '../api/client';
+import { useTheme } from '../theme';
+
+const CONFIRM_COUNT = 3;
+
+export function BackupScreen({ onDone, onSkip }) {
+  const { colors } = useTheme();
+  const [stage, setStage] = useState('show');
+  const [typed, setTyped] = useState({});
+  const [error, setError] = useState(null);
+
+  // Generated here, from system randomness. Never chosen by the user:
+  // the blob lives on the server, so a guessable phrase is an offline
+  // attack with no rate limit in front of it.
+  const phrase = useMemo(() => generatePhrase(12), []);
+
+  // The words we will ask back. Picked by the app, not the user.
+  const asked = useMemo(() => pickPositions(CONFIRM_COUNT, 12), []);
+
+  // A screenshot of this screen lands in Google Photos or iCloud, which
+  // is a server-held copy of the thing protecting the key.
+  ScreenCapture.usePreventScreenCapture();
+
+  async function confirm() {
+    const wrong = asked.filter(
+      (i) => (typed[i] || '').trim().toLowerCase() !== phrase[i]
+    );
+    if (wrong.length > 0) {
+      setError('That does not match. Check the paper and try again.');
+      return;
+    }
+
+    // Rule 4: every version, not just the current one. A blob holding
+    // only v4 silently loses every message sent before the rotation.
+    const { wrapped, kdf, salt, params, keyVersions } = await wrapAllKeys(phrase);
+    await api.put('/keys/backup', {
+      wrapped, kdf, salt, params, keyVersions,
+    });
+
+    onDone();
+  }
+
+  if (stage === 'show') {
+    return (
+      <View style={styles.screen}>
+        <Text style={[styles.heading, { color: colors.text }]}>
+          Write these twelve words on paper
+        </Text>
+        <Text style={{ color: colors.textSecondary }}>
+          They are the only way to read your old messages on a new phone.
+          Everything else — your tokens, their rules, who redeemed them —
+          comes back from your phone number without them.
+        </Text>
+        <Text style={{ color: colors.textSecondary }}>
+          Do not screenshot this. A screenshot goes to your photo backup,
+          which puts these words on someone else's server.
+        </Text>
+
+        <View style={styles.wordGrid}>
+          {phrase.map((w, i) => (
+            <Text key={i} style={[styles.word, { color: colors.text }]}>
+              {i + 1}. {w}
+            </Text>
+          ))}
+        </View>
+
+        <Pressable style={styles.button} onPress={() => setStage('confirm')}>
+          <Text style={{ color: colors.onAccent }}>I have written them down</Text>
+        </Pressable>
+        <Pressable onPress={onSkip}>
+          <Text style={{ color: colors.textSecondary }}>Skip for now</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.screen}>
+      <Text style={[styles.heading, { color: colors.text }]}>
+        Type these back
+      </Text>
+      {asked.map((i) => (
+        <TextInput
+          key={i}
+          style={styles.input}
+          placeholder={'Word ' + (i + 1)}
+          autoCapitalize="none"
+          autoCorrect={false}
+          value={typed[i] || ''}
+          onChangeText={(t) => setTyped({ ...typed, [i]: t })}
+        />
+      ))}
+      {error ? <Text style={{ color: colors.danger }}>{error}</Text> : null}
+      <Pressable style={styles.button} onPress={confirm}>
+        <Text style={{ color: colors.onAccent }}>Confirm</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function pickPositions(count, total) {
+  const all = Array.from({ length: total }, (_, i) => i);
+  for (let i = all.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [all[i], all[j]] = [all[j], all[i]];
+  }
+  return all.slice(0, count).sort((a, b) => a - b);
+}
+
+
+// app/src/screens/RestoreScreen.tsx
+import { useEffect, useState } from 'react';
+import { View, Text, TextInput, Pressable } from 'react-native';
+import { planRestore } from '../crypto/restore';
+import { normalisePhrase, unwrapBackup } from '../crypto/backup';
+import { api } from '../api/client';
+
+const CONFIG = { normalise: normalisePhrase, unwrap: unwrapBackup };
+
+export function RestoreScreen() {
+  const [snapshot, setSnapshot] = useState({
+    accountData: 'pending', backupFetch: 'pending', backup: null,
+  });
+  const [phrase, setPhrase] = useState(null);
+
+  // Rule 6: the account is drawn immediately and does not wait for a
+  // phrase most users will never have.
+  useEffect(() => { load(); }, []);
+
+  async function load() {
+    setSnapshot((s) => ({ ...s, backupFetch: 'pending' }));
+    try {
+      const account = await api.get('/me/bootstrap');
+      setSnapshot((s) => ({ ...s, accountData: 'ok', account }));
+    } catch {
+      setSnapshot((s) => ({ ...s, accountData: 'failed' }));
+    }
+    try {
+      const backup = await api.get('/keys/backup');   // 200 with null body if none
+      setSnapshot((s) => ({ ...s, backupFetch: 'ok', backup }));
+    } catch {
+      // NOT 'no backup'. We did not learn anything.
+      setSnapshot((s) => ({ ...s, backupFetch: 'failed' }));
+    }
+  }
+
+  const plan = planRestore(snapshot, { phrase }, CONFIG);
+
+  return (
+    <View>
+      {plan.account === 'restored' ? <TokenList /> : <AccountSkeleton state={plan.account} />}
+
+      {plan.messages === 'pending' ? (
+        <Notice
+          title="Still checking for your backup"
+          body="We have not been able to reach the server yet. Nothing is lost."
+          action={<Pressable onPress={load}><Text>Try again</Text></Pressable>}
+        />
+      ) : null}
+
+      {plan.messages === 'locked' ? (
+        <View>
+          <Text>Enter your twelve words to read your old messages.</Text>
+          {plan.reason === 'wrong_phrase' ? (
+            <Text>That phrase did not open the backup. Check for a mistyped word — your backup is still there.</Text>
+          ) : null}
+          <TextInput
+            autoCapitalize="none"
+            autoCorrect={false}
+            onSubmitEditing={(e) => setPhrase(e.nativeEvent.text)}
+          />
+        </View>
+      ) : null}
+
+      {plan.messages === 'gone' ? (
+        <Notice
+          title="Your old messages cannot be recovered"
+          body="No recovery phrase was set up on your old phone, so the text of messages sent before today is gone. Your tokens, their rules, and everyone who redeemed them have all come back, and new messages will work normally."
+        />
+      ) : null}
+    </View>
+  );
+}`
+  });
+
+  createQuiz("lesson-quiz", [
+    {
+      question: "Why can message bodies not be restored from the phone number alone?",
+      options: [
+        "SMS is not encrypted in transit",
+        "For the data to return from a number alone the server must be able to release the key, and a server that can release the key can release it to itself",
+        "The OTP is too short to derive a key from",
+        "Postgres cannot store the key securely"
+      ],
+      correct: 1,
+      explanation: "It is not weakened end-to-end encryption, it is its absence — the ADR-0002 guarantee is exactly that the server holds no key it can use. It is also a declaration both app stores now hold, since b10/0002 and a11/0005 tick end-to-end encryption on the Data Safety and App Privacy forms."
+    },
+    {
+      question: "A user skips the recovery phrase and later signs in on a new phone. What do they get back?",
+      options: [
+        "Nothing until they contact support",
+        "Their tokens, labels, rules, expiry, max uses, redemption history, conversation list, display name and avatar — everything except the text of old messages",
+        "Only their display name and avatar",
+        "Everything, since the server can re-encrypt on their behalf"
+      ],
+      correct: 1,
+      explanation: "None of that is encrypted to a user key, so none of it needs one. That is why skipping is a reasonable default rather than a trap: the user gets their whole working product back with nothing written down, and loses only the words inside old messages."
+    },
+    {
+      question: "Where was the split between 'restores from an OTP' and 'needs the phrase' actually decided?",
+      options: [
+        "In this lesson, as a product trade-off",
+        "In b2/0002, when it was decided which columns stay outside the ciphertext — the backup requirement is whatever is left",
+        "In ADR-0003, which covers stateless deployment",
+        "It has not been decided and is still open"
+      ],
+      correct: 1,
+      explanation: "The schema decides it. Only messages.ciphertext is sealed to a user key; tokens, conversations, redemption_events and users are ordinary rows the server serves every day. Designing a recovery flow before listing what is encrypted risks protecting data the server hands over anyway — all of the cost, none of the security."
+    },
+    {
+      question: "Why does Token wrap the key with the phrase rather than deriving the key from the phrase?",
+      options: [
+        "Deriving is cryptographically weaker",
+        "A derived key must exist before the phrase does not, so the phrase could be neither skipped nor offered later — and both were requirements",
+        "Wrapping is faster on mobile",
+        "Deriving requires storing the phrase on the server"
+      ],
+      correct: 1,
+      explanation: "Under the derive design the twelve words are a wall in front of the first screen of the app, because there is no identity until the user has accepted one. Wallets make that trade correctly, since there is nothing to do until you have a restorable key. Token is the other case."
+    },
+    {
+      question: "Why must the app generate the phrase rather than let the user choose one?",
+      options: [
+        "Users pick words that are hard to spell",
+        "The wrapped blob is on the server, so anyone who signs in with the SIM can attack it offline — no rate limit, and a human-chosen passphrase falls in days",
+        "A chosen phrase cannot be checksummed",
+        "The word list must match the server's"
+      ],
+      correct: 1,
+      explanation: "Everything turns on the attack being offline. There is no lockout to hide behind, so the entropy of the secret is the only defence — roughly 128 bits generated against typically under 40 chosen. That gap is about ninety bits, and no KDF tuning closes it."
+    },
+    {
+      type: "predict-output",
+      code: `const words = 12;\nconst listSize = 2048;\nconsole.log('bits from the list:', words * Math.log2(listSize));\nconsole.log('a human-chosen passphrase, generously:', 40);\nconsole.log('the gap, in bits:', words * Math.log2(listSize) - 40);`,
+      answer: "bits from the list: 132\na human-chosen passphrase, generously: 40\nthe gap, in bits: 92",
+      explanation: "Each word from a 2048-entry list carries exactly 11 bits, so twelve of them carry 132 — of which 128 are entropy and 4 are a checksum. The gap is why a memory-hard KDF cannot rescue a chosen passphrase: a slow hash multiplies the attacker's cost by a constant, and a constant does not close ninety-two bits."
+    },
+    {
+      question: "If 128 bits is already unreachable, why use Argon2id at all rather than SHA-256?",
+      options: [
+        "SHA-256 is broken",
+        "Phrases leak partially — an obscured photo, a smudged line — and a memory-hard KDF is what makes the remaining space expensive instead of instant",
+        "Argon2id produces longer output",
+        "SHA-256 cannot take a salt"
+      ],
+      correct: 1,
+      explanation: "The full 128 bits is the case that never happens in practice; the cases that happen are partial. A fast hash is exactly what you want everywhere else and exactly what you do not want here, because speed is the attacker's whole budget once the search space has shrunk."
+    },
+    {
+      question: "Why are kdf, kdf_salt and kdf_params stored as columns rather than as constants in the client?",
+      options: [
+        "They are secret and belong in the database",
+        "A blob wrapped today must still open in eight years, when the defaults have moved on — a constant in the client is a value you can never change without orphaning every existing backup",
+        "The server needs them to verify the phrase",
+        "JSONB is faster than a client constant"
+      ],
+      correct: 1,
+      explanation: "They are not secret at all, which is the point — publishing them costs nothing and hard-coding them costs everything later. The moment you raise the memory parameter for new backups, every blob made under the old one becomes unopenable unless its parameters travelled with it."
+    },
+    {
+      question: "A user rotates their key on Tuesday. The client re-wraps and uploads a blob containing the new key. What happens when they restore in March?",
+      options: [
+        "Everything comes back — the newest key can decrypt older messages",
+        "They get every message sent since Tuesday and none of the two years before it, and nothing errors, because the restore genuinely did recover the key it was given",
+        "The restore fails with a version mismatch",
+        "The server re-encrypts the old messages during the rotation"
+      ],
+      correct: 1,
+      explanation: "Old messages were sealed to old keys, which is why 0002 made the key directory append-only and b2/0002 put key_version on the messages table. A blob holding only the current key is a backup of the present, and the thing that was lost is the past. Re-wrapping must be additive."
+    },
+    {
+      question: "What is the key_versions column for?",
+      options: [
+        "To order the keys inside the blob",
+        "So a restore can say 'this backup covers versions 1 to 3 and you have messages at version 4' — a sentence that is impossible without it",
+        "To let the server decrypt older messages",
+        "To satisfy a foreign key on device_keys"
+      ],
+      correct: 1,
+      explanation: "Without it, a partial backup and a complete one look identical to the client, and the gap is discovered weeks later when someone scrolls far enough back. The column turns a silent failure into a statement the restore screen can make on the day."
+    },
+    {
+      question: "The restore planner is told backupFetch is 'failed'. What must messages be?",
+      options: [
+        "'gone' — the backup could not be retrieved",
+        "'pending' — the request did not finish, so nothing has been learned about this backup yet",
+        "'locked' — the user should type the phrase anyway",
+        "'readable' if a phrase was supplied"
+      ],
+      correct: 1,
+      explanation: "A failed fetch and an absent backup arrive at the same line of code with the same-looking data, which is exactly why they get merged. Saying 'gone' after a train goes into a tunnel tells someone their history is permanently destroyed, and they will not retry — why would you retry something that is gone?"
+    },
+    {
+      type: "predict-output",
+      code: `const states = ['pending', 'gone', 'locked', 'readable'];\n// A UI that treats anything not readable as lost:\nconsole.log(states.map(s => (s === 'readable' ? 'show it' : 'permanently gone')).join(' | '));`,
+      answer: "permanently gone | permanently gone | permanently gone | show it",
+      explanation: "Three states collapse into one message and only one of the three deserves it. This is the shape of the bug rather than an unlikely edge: the four outcomes are distinguished carefully in the planner and then thrown away by a single ternary in the component that renders them."
+    },
+    {
+      question: "backupFetch is 'ok' and backup is null. What does that mean, and what should the function report?",
+      options: [
+        "An error — the backup should have been there",
+        "The fetch succeeded and reported there is no backup: 'gone', not retryable, and the ordinary path rather than a failure",
+        "'pending', until a second attempt confirms it",
+        "'locked', so the user can still try a phrase"
+      ],
+      correct: 1,
+      explanation: "Most users will skip the phrase, so this is the common case and not an exception. It is genuinely permanent — there is nothing to retry against — and it must still sit alongside a fully restored account, which is the part a bare apology screen gets wrong."
+    },
+    {
+      type: "spot-the-bug",
+      code: `const account = attempt.phrase ? 'restored' : 'failed';   // line 1\nif (!snapshot.backup) {\n  return { account, messages: 'gone' };\n}`,
+      bugLine: 1,
+      options: [
+        "Line 1: the account state is gated on the phrase, so every user who skipped the backup sees an empty app despite their whole token list sitting on the server",
+        "Line 1: 'restored' should be 'ok'",
+        "Line 1: attempt.phrase should be normalised first"
+      ],
+      correct: 0,
+      explanation: "Line 2 has its own problem — it cannot tell a fetch that failed from a backup that was never made. But line 1 is the one with the most users behind it: the account is drawn from data that needs no key at all, and tying it to a phrase most people will never have empties the app for the majority."
+    },
+    {
+      question: "A user types their phrase and it does not open the blob. What should the planner report?",
+      options: [
+        "'gone', since the phrase was wrong",
+        "'locked' with reason 'wrong_phrase' and canRetry true — a typo in twelve handwritten words is far more likely than a real loss",
+        "'pending', and retry the unwrap automatically",
+        "'failed', and delete the blob to prevent brute-forcing"
+      ],
+      correct: 1,
+      explanation: "Deleting the blob is the actively dangerous answer: it destroys something the user still has on paper, in response to the most common possible input error. The correct handling leaves the server untouched and says which word to check."
+    },
+    {
+      type: "predict-output",
+      code: `const typed = '  Vault  Ridge   Amber ';\nconst normalised = typed.trim().toLowerCase().replace(/\\s+/g, ' ');\nconsole.log(JSON.stringify(normalised));\nconsole.log('strict match:', typed === 'vault ridge amber');\nconsole.log('after normalise:', normalised === 'vault ridge amber');`,
+      answer: "\"vault ridge amber\"\nstrict match: false\nafter normalise: true",
+      explanation: "Someone copying twelve words off paper into a phone keyboard produces capitals and stray spaces, and every one of those is a correct phrase. A strict comparison rejects it and then the screen has to decide what to say — which is how a correct phrase becomes a 'wrong phrase' message."
+    },
+    {
+      question: "Why does a phrase of three spaces count as 'not supplied' rather than 'wrong'?",
+      options: [
+        "Whitespace cannot be hashed",
+        "It is not an answer, and calling it wrong tells the user they made a mistake when they have not typed anything yet",
+        "It would waste an unwrap call",
+        "The KDF rejects empty input"
+      ],
+      correct: 1,
+      explanation: "The difference is what the screen says. 'That phrase did not open your backup' in response to an untouched box is a false accusation, and it appears the instant a stray keystroke lands. Normalising first and then testing length puts both cases through one branch, which is the cheapest way to guarantee they agree."
+    },
+    {
+      type: "fill-blank",
+      code: `// The request did not finish, so we know nothing yet\nif (snapshot.backupFetch !== 'ok') {\n  return done('pending', '___', true, []);\n}`,
+      answer: "not_fetched",
+      explanation: "A distinct reason from no_backup, and the distinction is the function's whole purpose. not_fetched means we have not learned anything, so the screen offers a retry; no_backup means we learned there is nothing, so it does not. Collapsing them makes the retry button either absent when it is needed or present when it is useless."
+    },
+    {
+      question: "Why must 'lost' be empty for a 'pending' or 'locked' outcome?",
+      options: [
+        "To keep the object small",
+        "A screen that renders 'lost' would otherwise be handed a transient state and announce a permanent loss — rule 2's mistake arriving through a different field",
+        "Because the array is typed as never empty elsewhere",
+        "So the array can be reused between calls"
+      ],
+      correct: 1,
+      explanation: "Same reasoning as the empty groups array on every safetyNumber refusal and the null keyBytes on every non-reuse in c5/0001: a result must carry no half-answer. Here the half-answer is a permanent-sounding word attached to a state that is still in motion."
+    },
+    {
+      question: "The backup screen shows twelve words and the user taps Done. Why is recording a successful backup at that moment worse than having no backup feature?",
+      options: [
+        "It wastes a database row",
+        "They almost certainly did not write it down, and the app has now told them they are protected — so they are less careful than they would have been with no feature at all",
+        "The words might still be in memory",
+        "The server has no blob yet"
+      ],
+      correct: 1,
+      explanation: "Identical in shape to the eight-digit safety number in 0003: false assurance is worse than absence, because absence leaves the user cautious. The fix is to confirm three words back at positions the app picks, and to record nothing until that succeeds."
+    },
+    {
+      question: "Why should the backup screen prevent screenshots?",
+      options: [
+        "To stop shoulder-surfing",
+        "A screenshot goes to Google Photos or iCloud Photos, which puts the thing protecting the key on someone else's server — the exact outcome the design exists to avoid",
+        "Screenshots are lower resolution than the display",
+        "App store policy requires it"
+      ],
+      correct: 1,
+      explanation: "The whole architecture is arranged so that no server holds a usable key, and the camera roll is a server that silently holds anything on the screen. FLAG_SECURE on Android plus the iOS equivalent closes it, and the screen should also say 'write it on paper' in words, because the technical block only stops the obvious route."
+    },
+    {
+      type: "order-steps",
+      steps: [
+        "Decide the account state from snapshot.accountData alone",
+        "If the backup fetch did not complete, report pending and stop",
+        "If the fetch completed and there is no blob, report gone and stop",
+        "Normalise the phrase, and treat an empty result as not supplied",
+        "Unwrap once, and report readable or wrong_phrase"
+      ],
+      correctOrder: [0, 1, 2, 3, 4],
+      explanation: "Each question is only worth asking if the previous one said yes, and that ordering is what makes 'not fetched' structurally unable to be confused with 'no backup'. The account comes first and separately because it depends on none of the rest."
+    },
+    {
+      question: "Why must fetching the wrapped blob require a verified session, when the phrase is what really protects it?",
+      options: [
+        "The blob would be too large to serve publicly",
+        "Otherwise the attack drops from 'swap the SIM' to 'guess a user id', and defence in depth is exactly what gets dropped because the layer beneath it looks strong",
+        "The server needs the session to decrypt it",
+        "Rate limiting is impossible without a session"
+      ],
+      correct: 1,
+      explanation: "The phrase does carry the real security, and that is the argument someone will make for serving the blob freely. It is the same reasoning that removes any cheap layer: each one is individually unnecessary, right up to the moment the strong one turns out to have a flaw."
+    },
+    {
+      question: "Deleting a key_backups row is described as more irreversible than revoking a token. Why?",
+      options: [
+        "The row has no foreign keys",
+        "A revoked token destroys a capability that can be reissued; deleting the blob destroys the only recoverable copy of a key, and the messages sealed to it cannot be recreated by anyone",
+        "The delete cascades to messages",
+        "It cannot be done inside a transaction"
+      ],
+      correct: 1,
+      explanation: "Revocation is deliberately terminal and still leaves the user able to issue another token. This delete removes something that no party — not the user, not the server, not a backup — can reconstruct, which is why it belongs behind the same explicit confirmation a11/0001 argued for when there is no undo to fall back on."
+    },
+    {
+      question: "What is the general rule the 'pending' versus 'gone' distinction demonstrates?",
+      options: [
+        "Always retry failed network requests",
+        "Not knowing something and knowing it is absent are different states, and code that merges them reports the permanent answer for the temporary case",
+        "Network errors should be logged separately",
+        "Optimistic UI should be avoided for security features"
+      ],
+      correct: 1,
+      explanation: "The merge is easy to write because both arrive as a missing value at the same line. It shows up wherever an absent result can mean either 'we asked and there is none' or 'we never got an answer' — a cache miss, a feature flag that failed to load, a permission that could not be read — and the permanent answer is almost always the harmful one to guess."
+    }
+  ]);
+  </script>
+</body>
+</html>

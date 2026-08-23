@@ -252,7 +252,7 @@ unverified lessons against a student on lesson 5.
 | ID | Module | ~Lessons | Why here |
 |----|--------|---------|----------|
 | **C0** | Architecture & System Design | 2 | Before B1 — the whole-system view, trust boundaries, ADRs, where the seams go |
-| **C5** | End-to-End Encryption | 5 (likely 4) | **Written after B4, 2026-08-22/23** — the plan said before B2, and the dependency was met anyway because `b2/0002` did the E2EE schema rewrite up front. The prerequisite was satisfied by *anticipation* rather than by ordering. `0001`-`0003` done; `0004` is backup/recovery; `0005` was multi-device and lost its subject when the student chose one device for v1 |
+| **C5** | End-to-End Encryption | 5 (likely 4) | **Written after B4, 2026-08-22/23** — the plan said before B2, and the dependency was met anyway because `b2/0002` did the E2EE schema rewrite up front. The prerequisite was satisfied by *anticipation* rather than by ordering. `0001`-`0004` done; `0005` was multi-device and lost its subject when the student chose one device for v1, so it is either rewritten as *why single-device, and what changing it would cost* or dropped — the one open question in the course, and the `participants` orphan is decided with it |
 | **C1** | Testing & Quality | 5 | After B3 — test the API as it is built, not at the end |
 | **C2** | CI/CD & Release Engineering | 4 | After C1 — nothing to automate until tests exist |
 | **C3** | Trust, Safety & Abuse | 3 | After A5 — redesigned around client-side report packaging (ADR-0006), since E2EE removes server-side moderation |

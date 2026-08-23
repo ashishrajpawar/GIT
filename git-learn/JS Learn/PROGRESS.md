@@ -11,15 +11,15 @@ with this one, this one is right — everything below is measured, not asserted.
 
 | Metric | Value |
 |---|---|
-| Token-track lessons | 99 |
+| Token-track lessons | 100 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
-| Quiz questions (track) | 2666 |
-| Avg teaching prose per track lesson | 2042 words |
-| Lessons with a playground | 90 / 99 |
-| Lessons with an exercise | 99 / 99 |
-| **Deepened** (all 3 spine sections) | 16 / 99 |
-| **Verified** (code executed) | 72 / 99 |
-| Ran clean but had nothing to run | 0 / 99 |
+| Quiz questions (track) | 2691 |
+| Avg teaching prose per track lesson | 2046 words |
+| Lessons with a playground | 91 / 100 |
+| Lessons with an exercise | 100 / 100 |
+| **Deepened** (all 3 spine sections) | 16 / 100 |
+| **Verified** (code executed) | 73 / 100 |
+| Ran clean but had nothing to run | 0 / 100 |
 | Errors | 0 |
 | Known and blocked | 2 |
 | Warnings | 0 |
@@ -29,12 +29,12 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 ## Answer-position distribution — **authored order, not what the student sees**
 
-1434 keyed questions (multiple-choice, spot-the-bug, which-breaks).
+1454 keyed questions (multiple-choice, spot-the-bug, which-breaks).
 
 > **This clustering is expected and already handled. Do not "fix" it again.**
 > `quiz.js` shuffles options at render time (`optionDisplayOrder`), so the
 > displayed distribution is roughly even — measured at 26.9 / 28.5 / 26.9 / 17.6
-> across all 1434 questions, versus the authored figures below. Index 3 sits
+> across all 1454 questions, versus the authored figures below. Index 3 sits
 > lower only because many questions have three options.
 >
 > The numbers here read `correct` straight from the lesson data, which is
@@ -53,21 +53,21 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Position | Count | Share |
 |---|---|---|
-| index 0 | 148 | 10.3% |
-| index 1 | 905 | 63.1% |
-| index 2 | 347 | 24.2% |
-| index 3 | 34 | 2.4% |
+| index 0 | 149 | 10.2% |
+| index 1 | 924 | 63.5% |
+| index 2 | 347 | 23.9% |
+| index 3 | 34 | 2.3% |
 
 ## Question types
 
 | Type | Count |
 |---|---|
-| multiple-choice | 776 |
-| predict-output | 497 |
-| fill-blank | 458 |
-| spot-the-bug | 374 |
+| multiple-choice | 795 |
+| predict-output | 500 |
+| fill-blank | 459 |
+| spot-the-bug | 375 |
 | which-breaks | 284 |
-| order-steps | 277 |
+| order-steps | 278 |
 
 ## Modules
 
@@ -95,7 +95,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b7-token-engine | 3 | 3211 | 7 | 6 | 77 | 3/3 | 3/3 |
 | b8-push-notifications | 1 | 1420 | 1 | 1 | 25 | 0/1 | 0/1 |
 | b9-docker-deployment | 3 | 2298 | 3 | 3 | 77 | 2/3 | 0/3 |
-| c5-end-to-end-encryption | 3 | 1538 | 6 | 6 | 76 | 0/3 | 3/3 |
+| c5-end-to-end-encryption | 4 | 1744 | 8 | 8 | 101 | 0/4 | 4/4 |
 | x1-git-dev-environment | 3 | 698 | 1 | 3 | 76 | 0/3 | 0/3 |
 | x2-debugging | 2 | 778 | 1 | 2 | 50 | 0/2 | 0/2 |
 
@@ -107,7 +107,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Quiz structure valid | ok |
 | Tables queried but never created | participants, calls |
 | Broken relative links | ok |
-| search-index.json | 100 entries, 0 dead, 0 unindexed |
+| search-index.json | 101 entries, 0 dead, 0 unindexed |
 | Example tokens valid under alphabet | ok |
 
 ## Errors
@@ -121,7 +121,7 @@ so they do not hold the audit red. They are **not** resolved.
 
 - schema: table "participants" is queried in 1 lesson(s) but never created
   - **why:** Group/thread membership has no schema yet. Writing one now would bake in a shape that E2EE key distribution is about to change.
-  - **gate:** C5 key distribution. The B2 rewrite this used to name LANDED 2026-08-21 (b2/0002: ciphertext, nonce, key_version) and did not settle membership. C5 0001-0003 are written; the shape depends on 0004/0005, and the student has since chosen ONE DEVICE for v1, which may simplify it away entirely. _(since 2026-08-18)_
+  - **gate:** c5/0005, and it is now the ONLY thing left gating this. The B2 rewrite this used to name landed 2026-08-21 (b2/0002) and did not settle membership; c5/0001-0004 are written and none of them needed it either -- 0004 is backup, which is about key versions over TIME rather than membership. So the gate has narrowed to one lesson, and that lesson is itself blocked on a student decision: multi-device lost its subject when they chose ONE DEVICE for v1 on 2026-08-23, and a single-device product may not need a membership table at all. Expect the answer here to be a DELETION as often as a definition. If c5/0005 is dropped rather than rewritten, this entry stops having a gate and must be resolved outright rather than re-worded. _(since 2026-08-18)_
 - schema: table "calls" is queried in 2 lesson(s) but never created
   - **why:** Call records depend on what WebRTC signalling actually needs to persist, which B6 has not settled.
   - **gate:** B6 (signalling), which has not been written. The B2 rewrite this used to name landed 2026-08-21 and did not touch call records. _(since 2026-08-18)_
@@ -225,6 +225,7 @@ so they do not hold the audit red. They are **not** resolved.
 | c5-end-to-end-encryption/0001-keys-on-the-device.html | 1371 | 5 | 2 | 2 | 26 | — | yes |
 | c5-end-to-end-encryption/0002-publishing-fetching-keys.html | 1782 | 3 | 2 | 2 | 25 | — | yes |
 | c5-end-to-end-encryption/0003-verification-safety-numbers.html | 1462 | 4 | 2 | 2 | 25 | — | yes |
+| c5-end-to-end-encryption/0004-backup-recovery.html | 2360 | 1 | 2 | 2 | 25 | — | yes |
 | x1-git-dev-environment/0001-git-fundamentals.html | 790 | 9 | 1 | 1 | 26 | — | n/a |
 | x1-git-dev-environment/0002-github-workflow.html | 719 | 7 | 0 | 1 | 25 | — | n/a |
 | x1-git-dev-environment/0003-dev-environment.html | 586 | 13 | 0 | 1 | 25 | — | n/a |
