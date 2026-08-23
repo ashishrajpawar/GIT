@@ -50,14 +50,17 @@
     <pre><code>// time_window
 { "days": [1,2,3,4,5], "start_time": "09:00", "end_time": "18:00", "timezone": "Asia/Kolkata" }
 
-// contact_limit
-{ "max_per_day": 3, "type": "messages" }  // or "calls"
+// contact_limit -- both caps, always set together
+{ "max_messages_per_day": 10, "max_calls_per_day": 2 }
 
-// channel_restrict
-{ "allowed": ["text"], "blocked": ["voice", "video"] }
+// channel_restrict -- three booleans, not two lists
+{ "allow_text": true, "allow_voice": true, "allow_video": false }</code></pre>
 
-// expiry
-{ "expires_at": "2026-09-01T00:00:00.000Z" }</code></pre>
+    <p><strong>There is no <code>expiry</code> rule.</strong> Expiry is
+    <code>expires_at</code> on the token itself, and putting it here as well
+    would mean the badge in <code>a5/0003</code> had to consult two places and
+    know which one wins. Settled 2026-08-23; this lesson carried both for
+    months.</p>
 
     <h2>TypeScript types for rules</h2>
 
@@ -89,15 +92,10 @@ export interface ChannelRestrictPayload {
   allow_video: boolean;
 }
 
-export interface ExpiryPayload {
-  expires_at: string;   // ISO 8601
-}
-
 export type RulePayload =
   | TimeWindowPayload
   | ContactLimitPayload
-  | ChannelRestrictPayload
-  | ExpiryPayload;
+  | ChannelRestrictPayload;
 
 export interface AccessRule {
   id: number;
@@ -305,11 +303,13 @@ import { View, Text, Switch, TextInput, StyleSheet } from 'react-native';
 
 export function ContactLimitSection({ tokenId, rule, onUpdate }) {
   const [enabled, setEnabled] = useState(rule?.enabled ?? false);
-  const [maxPerDay, setMaxPerDay] = useState(
-    rule?.payload.max_per_day?.toString() ?? '5'
+  // Both caps live on one rule and are edited on one screen, which is
+  // why call_limit was absorbed rather than kept as a fourth type.
+  const [maxMessages, setMaxMessages] = useState(
+    rule?.payload.max_messages_per_day?.toString() ?? '10'
   );
-  const [type, setType] = useState&lt;'messages' | 'calls'&gt;(
-    rule?.payload.type ?? 'messages'
+  const [maxCalls, setMaxCalls] = useState(
+    rule?.payload.max_calls_per_day?.toString() ?? '2'
   );
 
   return (
@@ -470,7 +470,6 @@ function TokenDetailScreen({ route }) {
     time_window: formatTimeWindow(rule.payload as TimeWindowPayload),
     contact_limit: formatContactLimit(rule.payload as ContactLimitPayload),
     channel_restrict: formatChannelRestrict(rule.payload as ChannelRestrictPayload),
-    expiry: formatExpiry(rule.payload as ExpiryPayload),
   };
 
   return (
@@ -486,19 +485,23 @@ function TokenDetailScreen({ route }) {
 function formatTimeWindow(p: TimeWindowPayload): string {
   const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   const dayStr = p.days.map(d =&gt; dayNames[d]).join(', ');
-  return `${dayStr} · ${p.start}–${p.end}`;
+  // start_time / end_time, NOT start / end. See "When this breaks":
+  // the engine reads start_time, and a mismatch here compares the
+  // current time against undefined.
+  return `${dayStr} · ${p.start_time}–${p.end_time}`;
 }
 
 function formatContactLimit(p: ContactLimitPayload): string {
-  return `Max ${p.max_per_day} ${p.type}/day`;
+  return `Max ${p.max_messages_per_day} messages, ${p.max_calls_per_day} calls/day`;
 }
 
 function formatChannelRestrict(p: ChannelRestrictPayload): string {
-  return `${p.allowed.join(', ')} only`;
-}
-
-function formatExpiry(p: ExpiryPayload): string {
-  return `Expires ${new Date(p.expires_at).toLocaleDateString()}`;
+  const on = [
+    p.allow_text ? 'text' : null,
+    p.allow_voice ? 'voice' : null,
+    p.allow_video ? 'video' : null,
+  ].filter(Boolean);
+  return on.length > 0 ? `${on.join(', ')} only` : 'nothing allowed';
 }</code></pre>
 
     <h2>Server-side rules endpoints</h2>
@@ -512,7 +515,9 @@ import { z } from 'zod';
 const router = Router();
 
 const ruleSchema = z.object({
-  rule_type: z.enum(['time_window', 'contact_limit', 'channel_restrict', 'expiry']),
+  // The same three the CHECK constraint permits. Keep them in step:
+  // this rejects with a 400, the constraint rejects with a 500.
+  rule_type: z.enum(['time_window', 'contact_limit', 'channel_restrict']),
   payload: z.record(z.unknown()),
   enabled: z.boolean().optional().default(true),
 });
@@ -731,29 +736,62 @@ export default router;</code></pre>
       one layer up, where no test in this lesson can see it.
     </p>
 
-    <h3>Expiry is modelled twice</h3>
+    <h3>Expiry was modelled twice — settled 2026-08-23</h3>
 
     <p>
-      There is an <code>ExpiryPayload</code> rule above carrying
-      <code>expires_at</code>, and <code>a5/0003</code> derives its status badge
-      from a <code>tokens.expires_at</code> column. Both cannot be the source of
-      truth: a token expiring by rule and a token expiring by column would need
-      the badge to consult two places and agree about which wins. Recorded here
-      rather than resolved, because picking one is part of the
-      <strong>B2 schema rewrite</strong> that the next section is also waiting
-      on. Until then, <code>0003</code>'s column is what the client reads.
+      This lesson carried an <code>ExpiryPayload</code> rule holding
+      <code>expires_at</code>, while <code>a5/0003</code> derives its status
+      badge from the <code>tokens.expires_at</code> <em>column</em>. Both
+      cannot be the source of truth: a token expiring by rule and a token
+      expiring by column would need the badge to consult two places and know
+      which wins.
     </p>
 
-    <h3>Two storage models, and this lesson picked the other one</h3>
+    <p>
+      <strong>The column won, and the rule is gone.</strong> The general form
+      is worth more than the fix: <strong>a value modelled in two places needs
+      a written precedence order at every site that reads it, and every site
+      that forgets is a token which looks live and is not.</strong>
+    </p>
+
+    <p>
+      Compare it with the duplication this course <em>kept</em>:
+      <code>status</code> alongside <code>paused_at</code> and
+      <code>revoked_at</code> in <code>b2/0001</code> is also one fact in two
+      places, and it is fine — because two <code>CHECK</code> biconditionals
+      refuse to let the copies disagree. <strong>Duplication is tolerable only
+      when something enforces the agreement.</strong> Nothing enforced this
+      one, which is why it survived unnoticed across two modules.
+    </p>
+
+    <h3>Two storage models — settled the same day</h3>
 
     <p>
       This lesson describes an <code>access_rules</code> table with one row per
-      rule. B7.2 evaluates <code>tokens.rules</code>, a JSONB column. Both are
-      defensible — rows give you constraints, indexes and history; JSONB gives
-      you one read and no join on the hottest path — and having both is not.
-      Recorded here rather than silently resolved: it belongs to the B2 rewrite,
-      which is already scheduled. What the client sends is the same either way;
-      what it must not do is assume.
+      rule. B7.2 evaluated <code>tokens.rules</code>, a JSONB column — and
+      <strong><code>b2/0001</code> never created such a column</strong>, so the
+      engine had been written against a schema nobody had.
+    </p>
+
+    <p>
+      <strong>Rows won</strong>, and not on the join cost, which is trivial
+      against <code>idx_rules_token_id</code>. They won because
+      <code>rule_type</code> becomes a constrained column, so a rule type
+      nothing can evaluate is refused at the <code>INSERT</code> rather than
+      met at every future redemption. B7.2 had already shipped the defect that
+      prevents: an unrecognised rule type falling through to
+      <code>allowed</code>, which is a restriction the owner set and the
+      server ignored.
+    </p>
+
+    <p>
+      The vocabulary had drifted along with the storage — this lesson and B7.2
+      said <code>contact_limit</code> and <code>channel_restrict</code>, while
+      <code>b2/0001</code>'s <code>CHECK</code> permitted
+      <code>call_limit</code>, <code>category</code> and <code>cooldown</code>.
+      Three lessons, three vocabularies, and only <code>time_window</code>
+      common to all of them. <strong>The database would have rejected every
+      rule this screen creates.</strong>
     </p>
 
     <hr>
@@ -1052,7 +1090,7 @@ try {
 
     createSolution("exercise-1", {
       unverifiable: "the editors are React Native components talking to a running rules API, needing a device",
-      exercise: "Build the full access rules system:\n\n1. Create `shared/src/rules.ts` with TypeScript types for all four rule types and their payloads.\n\n2. Create the server-side CRUD endpoints: GET (list), POST (create), PATCH (update), DELETE (remove) for `/tokens/:tokenId/rules`.\n\n3. Build the `TimeWindowSection` component: day picker (7 tappable chips), start/end time inputs, and a save button that calls the API.\n\n4. Build the `ChannelRestrictSection` component: three toggles (text/voice/video) with a warning when all are disabled.\n\n5. Build the `RuleSummary` component that shows a one-line description of each active rule on the TokenDetail screen.\n\n6. Test: create a token, add a time window (Mon–Fri 9–6), add a channel restriction (text only), and verify the summaries display correctly.",
+      exercise: "Build the full access rules system:\n\n1. Create `shared/src/rules.ts` with TypeScript types for all three rule types and their payloads.\n\n2. Create the server-side CRUD endpoints: GET (list), POST (create), PATCH (update), DELETE (remove) for `/tokens/:tokenId/rules`.\n\n3. Build the `TimeWindowSection` component: day picker (7 tappable chips), start/end time inputs, and a save button that calls the API.\n\n4. Build the `ChannelRestrictSection` component: three toggles (text/voice/video) with a warning when all are disabled.\n\n5. Build the `RuleSummary` component that shows a one-line description of each active rule on the TokenDetail screen.\n\n6. Test: create a token, add a time window (Mon–Fri 9–6), add a channel restriction (text only), and verify the summaries display correctly.",
       hints: [
         "Each rule type has its own payload shape — use a discriminated union with rule_type as the discriminator.",
         "The JSONB column stores any valid JSON. Use JSON.stringify() when inserting and the pg driver auto-parses on SELECT.",
@@ -1110,13 +1148,13 @@ try {
         type: "which-breaks",
         question: "Which channel restriction configuration is problematic?",
         variants: [
-          "{ allowed: ['text', 'voice', 'video'], blocked: [] }",
-          "{ allowed: ['text'], blocked: ['voice', 'video'] }",
-          "{ allowed: [], blocked: ['text', 'voice', 'video'] }",
-          "{ allowed: ['text', 'voice'], blocked: ['video'] }"
+          "{ allow_text: true, allow_voice: true, allow_video: true }",
+          "{ allow_text: true, allow_voice: false, allow_video: false }",
+          "{ allow_text: false, allow_voice: false, allow_video: false }",
+          "{ allow_text: true, allow_voice: true, allow_video: false }"
         ],
         correct: 2,
-        explanation: "An empty allowed list means the holder cannot contact the user through ANY channel. The token is effectively useless — they can redeem it but can't actually communicate. The UI should warn: 'No channels allowed — the holder won't be able to contact you at all.' This might be intentional (a 'silent' token that just logs visits), but it's almost always a mistake."
+        explanation: "Every flag false means the holder cannot reach the user through any channel at all. The token still redeems, so they get a working page that can do nothing — which reads as a broken product rather than as a rule. The screen should warn: 'No channels allowed — the holder won't be able to contact you at all.' It might be deliberate, as a token that only records that someone visited, but it is almost always a mistake. Note the shape: three booleans cannot contradict each other, which is why this is not an allowed list and a blocked list."
       },
       {
         type: "fill-blank",
@@ -1204,9 +1242,9 @@ try {
       {
         type: "predict-output",
         question: "What does this rule conflict detection output?",
-        code: "function detectConflicts(rules) {\n  const timeRules = rules.filter(r => r.rule_type === 'time_window' && r.enabled);\n  const channelRules = rules.filter(r => r.rule_type === 'channel_restrict' && r.enabled);\n  const conflicts = [];\n\n  if (timeRules.length > 0 && channelRules.length > 0) {\n    const channels = channelRules[0].payload.allowed;\n    if (channels.length === 0) {\n      conflicts.push('TIME_WINDOW_NO_CHANNELS');\n    }\n  }\n  if (timeRules.length > 1) {\n    conflicts.push('MULTIPLE_TIME_WINDOWS');\n  }\n  return conflicts;\n}\n\nconst rules = [\n  { rule_type: 'time_window', enabled: true, payload: { days: [1,2,3], start: '09:00', end: '17:00' } },\n  { rule_type: 'time_window', enabled: true, payload: { days: [4,5], start: '10:00', end: '16:00' } },\n  { rule_type: 'channel_restrict', enabled: true, payload: { allowed: ['text'], blocked: ['voice','video'] } }\n];\nconsole.log(detectConflicts(rules));",
-        answer: "[\"MULTIPLE_TIME_WINDOWS\"]",
-        explanation: "There are 2 enabled time_window rules, so 'MULTIPLE_TIME_WINDOWS' is pushed. The channel_restrict rule has allowed=['text'] which is not empty, so 'TIME_WINDOW_NO_CHANNELS' is not triggered. Only one conflict is detected."
+        code: "function detectConflicts(rules) {\n  const on = rules.filter(r => r.enabled);\n  const conflicts = [];\n\n  const channel = on.find(r => r.rule_type === 'channel_restrict');\n  if (channel) {\n    const p = channel.payload;\n    if (!p.allow_text && !p.allow_voice && !p.allow_video) {\n      conflicts.push('NO_CHANNELS_ALLOWED');\n    }\n  }\n\n  const limit = on.find(r => r.rule_type === 'contact_limit');\n  if (limit && limit.payload.max_messages_per_day === 0) {\n    conflicts.push('ZERO_MESSAGES');\n  }\n\n  return conflicts;\n}\n\nconst rules = [\n  { rule_type: 'time_window', enabled: true, payload: { days: [1,2,3,4,5], start_time: '09:00', end_time: '17:00', timezone: 'Asia/Kolkata' } },\n  { rule_type: 'channel_restrict', enabled: true, payload: { allow_text: false, allow_voice: false, allow_video: false } },\n  { rule_type: 'contact_limit', enabled: false, payload: { max_messages_per_day: 0, max_calls_per_day: 0 } }\n];\nconsole.log(detectConflicts(rules));",
+        answer: "[\"NO_CHANNELS_ALLOWED\"]",
+        explanation: "The channel rule has every flag false, so that conflict fires. The contact_limit rule would also have fired — max_messages_per_day is 0, which permits nothing rather than meaning unlimited — but it is disabled, and the filter drops it first. That is the same distinction the engine's LEFT JOIN makes with `AND r.enabled` in the join condition: a switched-off rule is not a rule. Note also what this function no longer checks: UNIQUE(token_id, rule_type) makes two time_window rows impossible, so a 'multiple time windows' conflict is dead code the database already prevents."
       },
       {
         type: "order-steps",
@@ -1348,9 +1386,9 @@ try {
       {
         type: "fill-blank",
         question: "Complete the API integration that transforms local form state into the correct payload shape:",
-        code: "async function saveContactLimit(tokenId, ruleId, maxPerDay, type) {\n  const payload = {\n    max_per_day: ___(maxPerDay, 10),\n    type: type,\n  };\n\n  await apiRequest('PATCH', `/tokens/${tokenId}/rules/${ruleId}`, { payload });\n}",
+        code: "async function saveContactLimit(tokenId, ruleId, maxMessages, maxCalls) {\n  const payload = {\n    max_messages_per_day: ___(maxMessages, 10),\n    max_calls_per_day: ___(maxCalls, 10),\n  };\n\n  await apiRequest('PATCH', `/tokens/${tokenId}/rules/${ruleId}`, { payload });\n}",
         answer: "parseInt",
-        explanation: "Since maxPerDay comes from a TextInput (always a string), we must convert it to a number before sending to the API. parseInt(maxPerDay, 10) converts '5' to 5. The second argument (10) specifies base-10 parsing to avoid edge cases with leading zeros. Without this conversion, the API receives {max_per_day: '5'} (a string) which may fail Zod validation or cause comparison bugs server-side."
+        explanation: "Both values come from a TextInput, so both are strings, and the API would otherwise receive {max_messages_per_day: '5'}. The second argument fixes base 10, which matters for input starting with a zero. Note what a11/0003 adds to this: parseInt reads a PREFIX, so '1e3' becomes 1 and a user asking for a thousand silently gets one — the conversion is necessary and is not sufficient, and the value still has to be refused rather than defaulted when it cannot be understood."
       },
       {
         question: "Why should the delete endpoint for rules NOT validate the payload before deleting?",

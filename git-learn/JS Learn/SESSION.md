@@ -14,6 +14,11 @@ how far it got.
 
 **Nothing in flight.** Working tree clean, everything committed.
 
+> **One finding is open and unowned — see *Next action*.** 61 `which-breaks`
+> explanations name a variant by letter ("Variant B uses ==") in questions that
+> **shuffle**, and the audit's position-naming detector does not know the word
+> *variant*. Found 2026-08-23 while editing `b7/0002`. Not fixed.
+
 **State as of 2026-08-23** — run `node scripts/audit.mjs` before trusting any
 of it:
 
@@ -1051,14 +1056,47 @@ not just here** — see *Where a token's rules live* and *Expiry is
 | **Expiry** | **`tokens.expires_at` only.** Not a rule type. `a5/0004` still accepts `'expiry'` in its zod enum |
 | **TypeScript** | **Teach the verifier TypeScript**, so `a2/*` and `a3/0002` stop being the only lessons whose code has never run |
 
-### The order to do them in, and why
+### → Start here: 61 quiz explanations name a letter that is not there
 
-1. **The rules model** — `b7/0002` and `a5/0004` together. Both decisions land
-   in the same two files, and this is the only item that is a **live
-   contradiction rather than a gap**: the engine queries a column that does not
-   exist, so one of those two lessons is teaching code that cannot run.
-   `b7/0002`'s `evaluateRuleSet` M3 and its wrong-cases will need re-verifying;
-   `KNOWN_RULES` is already correct and must stay.
+Found 2026-08-23 while editing `b7/0002`; **not fixed, and it is the largest
+known student-facing defect in the course.**
+
+`quiz.js` shuffles `which-breaks` variants at render
+(`optionDisplayOrder(q, q.variants)`), and 61 explanations across ~25 lessons
+say things like *"Variant A uses 0, which is falsy"*. **The letter names a
+position the student never saw.** The reader is told the answer in terms of a
+label that does not exist on their screen.
+
+**Why the audit says `render-as-authored: 0` anyway** — its detector is:
+
+```js
+/\b(?:option|answer|choice)\s+[A-D]\b/i
+```
+
+**It does not know the word `variant`**, which is precisely the word you reach
+for when the question type is called `which-breaks` and the field is called
+`variants`. 10 hits use the words it does catch; **61 use the one it does not.**
+
+The fix is small and has two halves, and the first is one word:
+
+1. **Add `variant` to `explanationNamesAPosition()` in `assets/quiz.js` and to
+   its mirror in `scripts/audit.mjs`.** That immediately *pins* all 61 rather
+   than shuffling them, so the explanations become true again — and the audit
+   count jumps off 0, which makes them visible instead of silent. **Add the
+   case to `test-quiz-shuffle.mjs`**, because that suite is the only thing that
+   proves the detector still detects.
+2. **Then reword them**, the way the 48 were on 2026-08-18 — describe what the
+   variant *says*, not where it sits — and watch the count return to 0.
+
+**Do the halves in that order.** Pinning is safe and immediate; rewording 61
+explanations is where a key gets broken. Note the trap `CLAUDE.md` already
+records: read the variants before unpinning a question, because an explanation
+naming a position is sometimes the only thing stopping an
+all-of-the-above-shaped option from being shuffled into the middle.
+
+### The order for the rest, and why
+
+1. ~~**The rules model**~~ — **done 2026-08-23**, six lessons. See below.
 2. **`c5/0005`** — finishes C5 and closes the `participants` gate, which is one
    of only two entries left in `known-issues.json`.
 3. **The TypeScript runner** — tooling, so it is the one that can wait. It is
@@ -1068,6 +1106,95 @@ not just here** — see *Where a token's rules live* and *Expiry is
 WebSocket on every chat message, twice — the holder knows the code so nothing
 leaks to *them*, but it lands in server logs and Redis pub/sub against
 ADR-0007, and the holder JWT already carries `conversationId`).
+
+### The rules model — settled and applied across six lessons (2026-08-23)
+
+**Three lessons, three vocabularies, and only `time_window` common to all
+three.** What began as "rows or a column?" turned out to be a live break: the
+engine ran `SELECT rules FROM tokens` against a column `b2/0001` has never
+created, and `b2/0001`'s `CHECK` permitted `call_limit`, `category` and
+`cooldown` while the engine and the screen evaluated `contact_limit` and
+`channel_restrict`. **The database would have rejected every rule the product
+creates.**
+
+Settled: **rows, three types, expiry is not one of them.**
+
+| Lesson | What changed |
+|---|---|
+| `b2/0001` | `CHECK` list, `is_active` → `enabled`, real payload shapes, a callout on why `rule_type` is constrained and `payload` is not, and a new question on the `cooldown` INSERT being refused |
+| `b7/0002` | `SELECT rules FROM tokens` → a `LEFT JOIN` on `access_rules`, plus the row→object assembly and the callout below |
+| `a5/0004` | `ExpiryPayload`/`formatExpiry`/`'expiry'` removed; `{start, end}` → `{start_time, end_time}`; `allowed`/`blocked` → three booleans; two quiz questions rebuilt |
+| `b3/0004` | Zod union → the three real types, payload keys → snake_case, `HH:MM` regex |
+| `b1/0004` | Every JSONB example and five quiz questions moved to the real payloads |
+
+### `a5/0004` had already been half-corrected, and that is the pattern
+
+Its `RuleType` excluded `expiry` and its `CHECK` recap listed the right three,
+while its zod enum, its `RulePayload` union, its `formatContactLimit` and four
+quiz questions still used the old shapes. **Its "When this breaks" section
+argues at length that the client must write `start_time`, and its own
+`formatTimeWindow` wrote `p.start`.**
+
+**Same failure as `b10/0002`: the prose was corrected and the code beside it
+was not.** The rule already written down — *when a lesson's prose gets
+corrected, grep its solution block in the same commit* — needs widening.
+It is not just `createSolution`: it is every `<pre>` in the file, and the quiz.
+
+### The two words in the new query that are load-bearing
+
+Moving to rows introduced a failure the JSONB column could not have, and it is
+worth more than the change that caused it. **An inner join returns zero rows
+for a token with no rules, and zero rows is how the engine recognises *token
+not found*.** So the naive join refuses every unrestricted token — which is
+most of them — reporting "not found" for a token that is right there.
+
+Putting `enabled` in the `WHERE` instead of the `ON` does the same thing to a
+token whose only rule is switched off: `WHERE` is applied *after* the join, so
+a predicate on the right-hand table discards the null-filled row the
+`LEFT JOIN` just produced, quietly converting it back into an inner join.
+
+**Deny-by-default is what makes both silent and total.** Nothing throws, and
+the reported reason points the debugger at the wrong table.
+
+And `UNIQUE(token_id, rule_type)` turns out to be load-bearing too:
+`rules[row.rule_type] = row.payload` keeps the *last* row it sees, and **row
+order is not guaranteed without an `ORDER BY`** — so without the constraint a
+duplicated rule type would make the token's behaviour depend on the query
+planner.
+
+### Why rows won, stated so it is not re-argued
+
+**Not the join cost**, which is trivial against `idx_rules_token_id`.
+**`rule_type` becomes a constrained column, so a rule type nothing can evaluate
+is refused at the `INSERT`** — and `b7/0002` had already shipped the defect
+that prevents, where an unrecognised type fell through to `allowed`. The
+payload stays JSONB because each type has a different shape; the *type* does
+not get that latitude.
+
+`cooldown` is the worked example of the trade: dropping it was a product call
+(a daily cap of 10 does not stop ten messages in ten seconds), and adding it
+back is a migration that appends one value to a `CHECK` list. Under a JSONB
+blob it would be the same work with nothing enforcing it.
+
+### Four defects found in passing, and one gap that is still open
+
+- **`b3/0004`'s payload keys are not that file's convention to choose.** Its
+  envelope is camelCase like every request body there; the payload is stored
+  verbatim as JSONB and read back by the engine, so its keys *are* the column
+  contents. A validator that accepts the wrong key names is worse than none,
+  because it certifies the payload that breaks the rule.
+- **A quiz explanation that argued with itself.** `b7/0002`'s daily-limit
+  question ended *"Wait — actually the count is checked before sending…"* and
+  never resolved. It has been resolved.
+- **`a5/0004`'s conflict-detection fixture was unreachable** — two enabled
+  `time_window` rules on one token, which `UNIQUE(token_id, rule_type)` makes
+  impossible. Rebuilt around a conflict that can actually occur.
+- **`b1/0002` and `b1/0004` have no verification-log entry at all** and never
+  did — `verify-lesson.mjs` fails them with *no self-check found*. That is
+  pre-existing, not caused by these edits, and it means two SQL lessons have
+  never been executed. Candidates for the M3 treatment.
+- **Still open: the 61 letter-naming explanations** at the top of *Next
+  action*.
 
 ### One correction to `CLAUDE.md`, made the same day
 

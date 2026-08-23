@@ -41,22 +41,17 @@ CREATE TABLE access_rules (
   created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
--- Insert a time-window rule
+-- Token has exactly three rule types. The payload shape depends on
+-- which one, which is what JSONB is here for.
 INSERT INTO access_rules (token_id, rule_type, payload) VALUES
-(1, 'time_window', '{"start_hour": 9, "end_hour": 18, "timezone": "Asia/Kolkata"}');
-
--- Insert a call-limit rule
-INSERT INTO access_rules (token_id, rule_type, payload) VALUES
-(1, 'call_limit', '{"max_per_day": 2, "max_per_week": 10}');
-
--- Insert a category restriction
-INSERT INTO access_rules (token_id, rule_type, payload) VALUES
-(1, 'categories', '{"allowed": ["delivery", "support"], "blocked": ["marketing"]}');</code></pre>
+(1, 'time_window',      '{"days": [1,2,3,4,5], "start_time": "09:00", "end_time": "18:00", "timezone": "Asia/Kolkata"}'),
+(1, 'contact_limit',    '{"max_messages_per_day": 10, "max_calls_per_day": 2}'),
+(1, 'channel_restrict', '{"allow_text": true, "allow_voice": true, "allow_video": false}');</code></pre>
 
     <h3>Querying JSONB</h3>
 
-    <pre><code>-- Get the start_hour from a time_window rule
-SELECT payload->>'start_hour' AS start_hour
+    <pre><code>-- Get the start_time from a time_window rule
+SELECT payload->>'start_time' AS start_time
 FROM access_rules
 WHERE token_id = 1 AND rule_type = 'time_window';
 
@@ -67,13 +62,33 @@ WHERE token_id = 1 AND rule_type = 'time_window';
 SELECT * FROM access_rules
 WHERE payload->>'timezone' = 'Asia/Kolkata';
 
--- Check if a JSONB array contains a value
+-- Does this rule HAVE a key at all? (? tests keys, not values)
 SELECT * FROM access_rules
-WHERE payload->'allowed' ? 'delivery';
+WHERE payload ? 'timezone';
+
+-- Containment: which rules apply on Mondays?
+-- @> is the operator the GIN index below actually accelerates.
+SELECT * FROM access_rules
+WHERE payload @> '{"days": [1]}';
 
 -- Cast to number for comparison
 SELECT * FROM access_rules
-WHERE (payload->>'max_per_day')::integer > 1;</code></pre>
+WHERE (payload->>'max_messages_per_day')::integer > 5;</code></pre>
+
+    <div class="callout">
+      <div class="callout-title"><code>-&gt;&gt;</code> always gives you TEXT, and that decides how you compare</div>
+      <p>The cast on the last query is not decoration.
+      <code>payload-&gt;&gt;'max_messages_per_day' &gt; 5</code> compares text
+      to a number and errors; <code>&gt; '5'</code> compares text to text and
+      quietly says <code>'10' &lt; '5'</code>, because that is true
+      alphabetically. <strong>The version that errors is the lucky one.</strong></p>
+      <p><code>start_time</code> is the case where text comparison is
+      <em>correct</em> — <code>'09:00' &lt; '18:00'</code> holds — but only
+      because the values are zero-padded. <code>'9:00'</code> sorts after
+      <code>'18:00'</code>, so an unpadded time silently inverts the window.
+      That is why <code>b3/0004</code> rejects the unpadded form at the API
+      boundary rather than making every comparison defensive.</p>
+    </div>
 
     <h3>Indexing JSONB</h3>
 
@@ -212,7 +227,7 @@ RETURNING *;</code></pre>
     <pre><code>-- If a rule already exists for this token + type, update it.
 -- Otherwise, insert a new one.
 INSERT INTO access_rules (token_id, rule_type, payload)
-VALUES (1, 'time_window', '{"start_hour": 10, "end_hour": 20}')
+VALUES (1, 'time_window', '{"days": [1,2,3,4,5], "start_time": "10:00", "end_time": "20:00", "timezone": "Asia/Kolkata"}')
 ON CONFLICT (token_id, rule_type)
 DO UPDATE SET payload = EXCLUDED.payload;</code></pre>
 
@@ -242,9 +257,9 @@ DO UPDATE SET payload = EXCLUDED.payload;</code></pre>
 
   <script>
     createSolution("exercise-1", {
-      exercise: "Build Token's access rules system: (1) Create the access_rules table with a JSONB payload column, (2) Insert three different rule types (time_window, call_limit, categories) for a token, (3) Write a query that finds all rules for a given token where the time window starts after 8 AM, (4) Create a trigger that fires NOTIFY when a token's status changes to 'revoked', (5) Write an UPSERT that updates a rule if it already exists for that token+type.",
+      exercise: "Build Token's access rules system: (1) Create the access_rules table with a JSONB payload column, (2) Insert all three of Token's rule types (time_window, contact_limit, channel_restrict) for a token, (3) Write a query that finds every rule whose daily message limit is above 5, (4) Create a trigger that fires NOTIFY when a token's status changes to 'revoked', (5) Write an UPSERT that updates a rule if it already exists for that token+type.",
       hints: [
-        "Use payload->>'start_hour' to extract the value, then cast to integer for comparison: (payload->>'start_hour')::integer > 8",
+        "Use payload->>'max_messages_per_day' to extract the value, then cast before comparing: (payload->>'max_messages_per_day')::integer > 5. Skip the cast and you are comparing text, where '10' sorts before '5'.",
         "The trigger function uses pg_notify() and checks NEW.status vs OLD.status.",
         "For UPSERT, you need a UNIQUE constraint on (token_id, rule_type) first."
       ],
@@ -263,16 +278,17 @@ CREATE INDEX idx_rules_payload ON access_rules USING GIN (payload);
 
 -- 2. Insert different rule types
 INSERT INTO access_rules (token_id, rule_type, payload) VALUES
-(1, 'time_window', '{"start_hour": 9, "end_hour": 18, "timezone": "Asia/Kolkata"}'),
-(1, 'call_limit', '{"max_per_day": 2, "max_per_week": 10}'),
-(1, 'categories', '{"allowed": ["delivery", "support"], "blocked": ["marketing"]}');
+(1, 'time_window',      '{"days": [1,2,3,4,5], "start_time": "09:00", "end_time": "18:00", "timezone": "Asia/Kolkata"}'),
+(1, 'contact_limit',    '{"max_messages_per_day": 10, "max_calls_per_day": 2}'),
+(1, 'channel_restrict', '{"allow_text": true, "allow_voice": true, "allow_video": false}');
 
--- 3. Find rules with time window starting after 8 AM
+-- 3. Find rules whose daily message limit is above 5.
+--    The ::integer cast is load-bearing: ->> returns TEXT, and as text
+--    '10' sorts BEFORE '5'.
 SELECT token_id, rule_type, payload
 FROM access_rules
-WHERE token_id = 1
-  AND rule_type = 'time_window'
-  AND (payload->>'start_hour')::integer > 8;
+WHERE rule_type = 'contact_limit'
+  AND (payload->>'max_messages_per_day')::integer > 5;
 
 -- 4. Trigger for token revocation notifications
 CREATE OR REPLACE FUNCTION notify_token_revoked()
@@ -298,7 +314,7 @@ EXECUTE FUNCTION notify_token_revoked();
 
 -- 5. UPSERT: update rule if it exists, insert if not
 INSERT INTO access_rules (token_id, rule_type, payload)
-VALUES (1, 'time_window', '{"start_hour": 10, "end_hour": 20, "timezone": "Asia/Kolkata"}')
+VALUES (1, 'time_window', '{"days": [1,2,3,4,5], "start_time": "10:00", "end_time": "20:00", "timezone": "Asia/Kolkata"}')
 ON CONFLICT (token_id, rule_type)
 DO UPDATE SET payload = EXCLUDED.payload;`
     });
@@ -346,12 +362,12 @@ DO UPDATE SET payload = EXCLUDED.payload;`
         type: "which-breaks",
         question: "Which JSONB query has a type error?",
         variants: [
-          "WHERE payload->>'max_per_day' = '2'",
-          "WHERE (payload->>'max_per_day')::integer > 1",
-          "WHERE payload->>'max_per_day' > 1"
+          "WHERE payload->>'max_messages_per_day' = '2'",
+          "WHERE (payload->>'max_messages_per_day')::integer > 1",
+          "WHERE payload->>'max_messages_per_day' > 1"
         ],
         correct: 2,
-        explanation: "The ->> operator returns TEXT. Comparing TEXT > 1 (integer) works in some databases but is unreliable — '9' > 1 but '10' < '9' in text comparison! Always cast to integer explicitly: (payload->>'field')::integer > 1."
+        explanation: "The ->> operator returns TEXT, and comparing TEXT to an integer is a type error in Postgres. The one that errors is the lucky case: write '> 5' with quotes instead and it compares text to text, silently, where '10' sorts before '5' — so a limit of 10 fails a test for 'more than 5'. Always cast: (payload->>'field')::integer > 5."
       },
       // --- Questions 6–25 ---
       {
@@ -364,9 +380,9 @@ DO UPDATE SET payload = EXCLUDED.payload;`
       {
         type: "predict-output",
         question: "What's the difference between -> and ->> when extracting from JSONB?",
-        code: "SELECT\n  payload->'allowed' AS with_arrow,\n  payload->>'timezone' AS with_double_arrow\nFROM access_rules\nWHERE rule_type = 'categories';",
-        answer: "-> returns JSON (e.g., [\"delivery\",\"support\"]), ->> returns TEXT (e.g., null since categories has no timezone)",
-        explanation: "-> preserves the JSON type (arrays stay as arrays, objects as objects). ->> casts to plain text. Use -> when you need to chain operators (payload->'allowed'->0) or when the value is an array/object. Use ->> when you want a simple text value for comparison or display."
+        code: "SELECT\n  payload->'days'  AS with_arrow,\n  payload->>'days' AS with_double_arrow\nFROM access_rules\nWHERE rule_type = 'time_window';",
+        answer: "-> returns JSON (the array [1, 2, 3, 4, 5]), ->> returns TEXT (the string '[1, 2, 3, 4, 5]')",
+        explanation: "Same key, two operators, two types. -> preserves the JSON type, so arrays stay arrays and can be chained into (payload->'days'->0) or matched with @>. ->> flattens to plain text, which for an array gives you its printed form — a string that looks right and cannot be indexed into, compared numerically, or tested for containment. Use ->> only at the end, for a scalar you are about to display or cast."
       },
       {
         question: "What Postgres type should you use for Token's created_at column to handle users across Indian time zones correctly?",
@@ -410,12 +426,12 @@ DO UPDATE SET payload = EXCLUDED.payload;`
         question: "Why does Token use JSONB for access_rules payload instead of separate columns?",
         options: [
           "JSONB is always faster than regular columns",
-          "Different rule types have different fields — a time_window has start_hour/end_hour, a call_limit has max_per_day/max_per_week",
+          "Different rule types have different fields — a time_window has days and times, a contact_limit has two counts, a channel_restrict has three booleans",
           "Postgres doesn't support more than 10 columns per table",
           "JSONB avoids the need for indexes"
         ],
         correct: 1,
-        explanation: "Each rule type has a completely different structure. A fixed schema would need NULLable columns for every possible field across all rule types (start_hour, end_hour, max_per_day, max_per_week, allowed, blocked...). JSONB lets each row store exactly the fields its rule type needs."
+        explanation: "Each rule type has a completely different structure, and a fixed schema would need a nullable column for every field of every type. Note the limit of the argument: it applies to the payload only. rule_type itself is a constrained column with a CHECK, because a rule type nothing can evaluate should be refused at the INSERT — so the vocabulary is enforced and the contents are validated in code."
       },
       {
         type: "which-breaks",
@@ -476,9 +492,9 @@ DO UPDATE SET payload = EXCLUDED.payload;`
       {
         type: "fill-blank",
         question: "Extract the first element from a JSONB array in the payload:",
-        code: "SELECT payload->'allowed'___0 FROM access_rules WHERE rule_type = 'categories';",
+        code: "SELECT payload->'days'___0 FROM access_rules WHERE rule_type = 'time_window';",
         answer: "->",
-        explanation: "Use -> with an integer index to access JSONB array elements (0-based). payload->'allowed'->0 gets the first element of the 'allowed' array. Use ->>0 if you want it as text instead of JSON."
+        explanation: "Use -> with an integer index to reach JSONB array elements, which are 0-based. payload->'days'->0 gets the first day in the list. Use ->>0 if you want it as text instead of JSON — and note that the index is a position in the array, not a day number, so this returns the first day the rule permits rather than Sunday."
       },
       {
         type: "which-breaks",
@@ -511,16 +527,16 @@ DO UPDATE SET payload = EXCLUDED.payload;`
       },
       {
         type: "spot-the-bug",
-        question: "What's wrong with this JSONB query for checking if delivery is in the allowed categories?",
-        code: "SELECT * FROM access_rules\nWHERE payload->'allowed' = 'delivery';",
+        question: "What's wrong with this JSONB query for finding the rules that apply on Mondays?",
+        code: "SELECT * FROM access_rules\nWHERE payload->'days' = 1;",
         options: [
           "Should use ->> instead of ->",
-          "The -> operator returns a JSON array, and you're comparing it to a text string — use @> or the ? operator on the array",
+          "The -> operator returns the whole JSON array, and it is being compared to a single value — use containment: payload @> '{\"days\": [1]}'",
           "JSONB columns can't be filtered",
           "Single quotes are wrong for JSONB"
         ],
         correct: 1,
-        explanation: "payload->'allowed' returns a JSON array like [\"delivery\", \"support\"]. Comparing an array to a plain string 'delivery' doesn't work. Use: payload->'allowed' ? 'delivery' (contains key/element) or payload @> '{\"allowed\": [\"delivery\"]}' (containment)."
+        explanation: "payload->'days' returns the array [1, 2, 3, 4, 5], and an array is never equal to one of its elements. The containment operator @> asks the question actually intended — does this payload contain days: [1] — and it is also the operator a GIN index on the column can accelerate, so the correct query is the fast one here rather than despite being correct."
       },
       {
         type: "order-steps",

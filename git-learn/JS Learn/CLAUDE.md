@@ -586,6 +586,41 @@ summarised here rather than left in the ADR:
   give a rule change a history. "What could this token do last Tuesday" is a
   question with an answer only if the old row still exists.
 
+- **There are exactly three rule types** (decided 2026-08-23, after three
+  lessons were found using three different vocabularies):
+
+  | `rule_type` | Means | Payload |
+  |---|---|---|
+  | `time_window` | only during these hours | `days`, `start_time`, `end_time`, `timezone` |
+  | `contact_limit` | at most N a day | `max_messages_per_day`, `max_calls_per_day` |
+  | `channel_restrict` | which channels are allowed | `allow_text`, `allow_voice`, `allow_video` |
+
+  **`call_limit`, `cooldown` and `category` are gone.** `call_limit` was
+  absorbed — `contact_limit` already carries a call cap. `category` was
+  unenforceable: the *holder* declares it about themselves and can claim
+  anything, so it restricted nobody. `cooldown` (at most once every N minutes)
+  was a genuine capability and was dropped for v1 anyway, on cost — it is a
+  fourth evaluator, screen control, payload shape and validator.
+
+  **`cooldown` is the worked example of why rows won.** Adding it back is
+  a migration that adds one value to a `CHECK` list, not a redesign. Note the
+  gap it would close, so nobody re-argues it from scratch: a daily cap of 10
+  does not stop ten messages in ten seconds.
+
+  Where the old vocabulary still appears, it is a **bug**, not a variant:
+  `b2/0001` defined the `CHECK` list and `b1/0004`, `b1/0002`, `b1/0003` and
+  `b3/0004` were written against it, while `b7/0002` and `a5/0004` evaluate
+  and render the new one. The database would have rejected every rule the
+  product creates.
+
+- **The rules join is a `LEFT JOIN`, and `enabled` belongs in the join
+  condition.** Both halves are load-bearing and both look like style:
+  an inner join returns no rows for a token with **no rules**, and
+  `rows.length === 0` is how the engine recognises *token not found* — so an
+  unrestricted token would be refused as non-existent. Moving `enabled` into
+  the `WHERE` does the same thing to a token whose only rule is switched off.
+  **Deny-by-default makes both failures silent and total.**
+
 - **Expiry is `tokens.expires_at` and is not a rule type** (decided
   2026-08-23). `a5/0004` carried an `ExpiryPayload` rule *and* read the column,
   which meant the badge would have had to consult two places and know which

@@ -13,8 +13,8 @@ with this one, this one is right — everything below is measured, not asserted.
 |---|---|
 | Token-track lessons | 100 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
-| Quiz questions (track) | 2691 |
-| Avg teaching prose per track lesson | 2046 words |
+| Quiz questions (track) | 2693 |
+| Avg teaching prose per track lesson | 2065 words |
 | Lessons with a playground | 91 / 100 |
 | Lessons with an exercise | 100 / 100 |
 | **Deepened** (all 3 spine sections) | 16 / 100 |
@@ -29,12 +29,12 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 ## Answer-position distribution — **authored order, not what the student sees**
 
-1454 keyed questions (multiple-choice, spot-the-bug, which-breaks).
+1456 keyed questions (multiple-choice, spot-the-bug, which-breaks).
 
 > **This clustering is expected and already handled. Do not "fix" it again.**
 > `quiz.js` shuffles options at render time (`optionDisplayOrder`), so the
 > displayed distribution is roughly even — measured at 26.9 / 28.5 / 26.9 / 17.6
-> across all 1454 questions, versus the authored figures below. Index 3 sits
+> across all 1456 questions, versus the authored figures below. Index 3 sits
 > lower only because many questions have three options.
 >
 > The numbers here read `correct` straight from the lesson data, which is
@@ -54,15 +54,15 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Position | Count | Share |
 |---|---|---|
 | index 0 | 149 | 10.2% |
-| index 1 | 924 | 63.5% |
-| index 2 | 347 | 23.9% |
+| index 1 | 927 | 63.7% |
+| index 2 | 346 | 23.8% |
 | index 3 | 34 | 2.3% |
 
 ## Question types
 
 | Type | Count |
 |---|---|
-| multiple-choice | 795 |
+| multiple-choice | 797 |
 | predict-output | 500 |
 | fill-blank | 459 |
 | spot-the-bug | 375 |
@@ -80,19 +80,19 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a2-typescript | 3 | 781 | 2 | 3 | 76 | 0/3 | 0/3 |
 | a3-api-consumption | 4 | 1190 | 4 | 7 | 111 | 1/4 | 3/4 |
 | a4-auth-client | 3 | 1400 | 3 | 6 | 80 | 1/3 | 3/3 |
-| a5-core-token-features | 5 | 2543 | 10 | 10 | 148 | 2/5 | 5/5 |
+| a5-core-token-features | 5 | 2599 | 10 | 10 | 148 | 2/5 | 5/5 |
 | a6-chat-realtime | 3 | 1912 | 6 | 6 | 78 | 0/3 | 3/3 |
 | a7-voice-video | 5 | 1279 | 6 | 6 | 138 | 0/5 | 1/5 |
 | a8-redemption-web | 4 | 1722 | 8 | 8 | 115 | 0/4 | 4/4 |
 | a9-deep-linking | 2 | 1167 | 2 | 2 | 53 | 0/2 | 0/2 |
-| b1-sql-fundamentals | 4 | 1038 | 0 | 4 | 103 | 0/4 | 0/4 |
+| b1-sql-fundamentals | 4 | 1073 | 0 | 4 | 103 | 0/4 | 0/4 |
 | b10-security-compliance | 2 | 3899 | 5 | 4 | 53 | 1/2 | 2/2 |
-| b2-schema-design | 3 | 2185 | 3 | 6 | 81 | 0/3 | 3/3 |
-| b3-node-http-server | 4 | 2042 | 5 | 8 | 117 | 2/4 | 4/4 |
+| b2-schema-design | 3 | 2363 | 3 | 6 | 82 | 0/3 | 3/3 |
+| b3-node-http-server | 4 | 2120 | 5 | 8 | 117 | 2/4 | 4/4 |
 | b4-auth-server | 3 | 3014 | 6 | 6 | 81 | 2/3 | 3/3 |
 | b5-websocket-server | 3 | 1961 | 6 | 6 | 77 | 0/3 | 3/3 |
 | b6-webrtc-signalling | 2 | 2009 | 2 | 2 | 52 | 1/2 | 0/2 |
-| b7-token-engine | 3 | 3211 | 7 | 6 | 77 | 3/3 | 3/3 |
+| b7-token-engine | 3 | 3451 | 7 | 6 | 78 | 3/3 | 3/3 |
 | b8-push-notifications | 1 | 1420 | 1 | 1 | 25 | 0/1 | 0/1 |
 | b9-docker-deployment | 3 | 2298 | 3 | 3 | 77 | 2/3 | 0/3 |
 | c5-end-to-end-encryption | 4 | 1744 | 8 | 8 | 101 | 0/4 | 4/4 |
@@ -178,7 +178,7 @@ so they do not hold the audit red. They are **not** resolved.
 | a5-core-token-features/0001-token-generation-display.html | 3314 | 14 | 2 | 2 | 30 | yes | yes |
 | a5-core-token-features/0002-qr-generation-scanning.html | 2061 | 16 | 2 | 2 | 30 | — | yes |
 | a5-core-token-features/0003-token-list-management.html | 2338 | 16 | 2 | 2 | 30 | — | yes |
-| a5-core-token-features/0004-access-rules-ui.html | 3293 | 12 | 2 | 2 | 29 | yes | yes |
+| a5-core-token-features/0004-access-rules-ui.html | 3574 | 12 | 2 | 2 | 29 | yes | yes |
 | a5-core-token-features/0005-share-path-warnings.html | 1710 | 5 | 2 | 2 | 29 | — | yes |
 | a6-chat-realtime/0001-websocket-client.html | 1749 | 10 | 2 | 2 | 26 | — | yes |
 | a6-chat-realtime/0002-message-thread-ui.html | 2161 | 10 | 2 | 2 | 26 | — | yes |
@@ -195,18 +195,18 @@ so they do not hold the audit red. They are **not** resolved.
 | a9-deep-linking/0001-universal-links-app-links.html | 1112 | 7 | 1 | 1 | 28 | — | n/a |
 | a9-deep-linking/0002-in-app-deep-link-handling.html | 1222 | 9 | 1 | 1 | 25 | — | n/a |
 | b1-sql-fundamentals/0001-tables-insert-select.html | 1442 | 10 | 0 | 1 | 26 | — | n/a |
-| b1-sql-fundamentals/0002-joins-relationships.html | 828 | 10 | 0 | 1 | 25 | — | n/a |
+| b1-sql-fundamentals/0002-joins-relationships.html | 828 | 10 | 0 | 1 | 25 | — | — |
 | b1-sql-fundamentals/0003-indexes-transactions-constraints.html | 972 | 11 | 0 | 1 | 26 | — | n/a |
-| b1-sql-fundamentals/0004-postgres-specifics.html | 910 | 8 | 0 | 1 | 26 | — | n/a |
+| b1-sql-fundamentals/0004-postgres-specifics.html | 1051 | 8 | 0 | 1 | 26 | — | — |
 | b10-security-compliance/0001-security-hardening.html | 3838 | 20 | 2 | 2 | 25 | yes | yes |
 | b10-security-compliance/0002-dpdp-act.html | 3960 | 12 | 3 | 2 | 28 | — | yes |
-| b2-schema-design/0001-token-schema.html | 2721 | 10 | 1 | 2 | 26 | — | yes |
+| b2-schema-design/0001-token-schema.html | 3257 | 10 | 1 | 2 | 27 | — | yes |
 | b2-schema-design/0002-messaging-schema.html | 2245 | 8 | 1 | 2 | 26 | — | yes |
 | b2-schema-design/0003-migrations.html | 1588 | 11 | 1 | 2 | 29 | — | yes |
 | b3-node-http-server/0001-nodejs-fundamentals.html | 1657 | 10 | 2 | 2 | 29 | — | yes |
 | b3-node-http-server/0002-express-fastify-setup.html | 1283 | 13 | 1 | 2 | 30 | — | yes |
 | b3-node-http-server/0003-rest-api-design.html | 2378 | 10 | 1 | 2 | 28 | yes | yes |
-| b3-node-http-server/0004-input-validation-error-handling.html | 2850 | 9 | 1 | 2 | 30 | yes | yes |
+| b3-node-http-server/0004-input-validation-error-handling.html | 3160 | 9 | 1 | 2 | 30 | yes | yes |
 | b4-auth-server/0001-phone-signup-otp.html | 1867 | 6 | 2 | 2 | 25 | — | yes |
 | b4-auth-server/0002-jwt-refresh-rotation.html | 3533 | 9 | 2 | 2 | 26 | yes | yes |
 | b4-auth-server/0003-rate-limiting.html | 3641 | 6 | 2 | 2 | 30 | yes | yes |
@@ -216,7 +216,7 @@ so they do not hold the audit red. They are **not** resolved.
 | b6-webrtc-signalling/0001-signalling-server.html | 2873 | 9 | 1 | 1 | 26 | yes | n/a |
 | b6-webrtc-signalling/0002-coturn-setup.html | 1145 | 9 | 1 | 1 | 26 | — | n/a |
 | b7-token-engine/0001-token-generation-redemption.html | 3766 | 12 | 3 | 2 | 25 | yes | yes |
-| b7-token-engine/0002-access-rules-engine.html | 2900 | 7 | 2 | 2 | 26 | yes | yes |
+| b7-token-engine/0002-access-rules-engine.html | 3620 | 8 | 2 | 2 | 27 | yes | yes |
 | b7-token-engine/0003-revocation-pause.html | 2967 | 9 | 2 | 2 | 26 | yes | yes |
 | b8-push-notifications/0001-fcm-apns-expo.html | 1420 | 11 | 1 | 1 | 25 | — | n/a |
 | b9-docker-deployment/0001-docker-fundamentals.html | 2403 | 13 | 1 | 1 | 26 | yes | n/a |

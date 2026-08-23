@@ -168,31 +168,69 @@ export const redeemSchema = z.object({
   holderName: z.string().min(1).max(80),
 });
 
-// Access rule payload schemas
+// Access rule payload schemas.
+//
+// NOTE THE CASING, because it is inconsistent ON PURPOSE. The envelope
+// is camelCase like every other request body here (ruleType). The
+// PAYLOAD keys are snake_case, because the payload is stored verbatim
+// as JSONB and read back by the engine in b7/0002 - so these names are
+// not this file's convention to choose. They are the column contents.
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
 export const timeWindowPayload = z.object({
-  startHour: z.number().int().min(0).max(23),
-  endHour: z.number().int().min(0).max(23),
+  days: z.array(z.number().int().min(0).max(6)).min(1),
+  start_time: z.string().regex(HHMM, 'must be HH:MM, zero-padded'),
+  end_time: z.string().regex(HHMM, 'must be HH:MM, zero-padded'),
   timezone: z.string().default('Asia/Kolkata'),
-  days: z.array(z.number().int().min(0).max(6)).optional(),
 });
 
-export const callLimitPayload = z.object({
-  maxPerDay: z.number().int().min(1).max(100),
-  maxPerWeek: z.number().int().min(1).max(1000).optional(),
+export const contactLimitPayload = z.object({
+  max_messages_per_day: z.number().int().min(0).max(1000),
+  max_calls_per_day: z.number().int().min(0).max(100),
 });
 
-export const cooldownPayload = z.object({
-  minutesBetweenContacts: z.number().int().min(1).max(60 * 24),
+export const channelRestrictPayload = z.object({
+  allow_text: z.boolean(),
+  allow_voice: z.boolean(),
+  allow_video: z.boolean(),
 });
 
 // A discriminated union, not z.record(z.unknown()). "Validated later in the
 // service layer" means validated nowhere the day someone forgets - and the
 // type system cannot help, because unknown accepts anything.
+//
+// These three literals must match the CHECK constraint in b2/0001. This
+// rejects with a 400 and a message; the constraint rejects with a 500.
 export const createRuleSchema = z.discriminatedUnion('ruleType', [
-  z.object({ ruleType: z.literal('time_window'), payload: timeWindowPayload }),
-  z.object({ ruleType: z.literal('call_limit'),  payload: callLimitPayload }),
-  z.object({ ruleType: z.literal('cooldown'),    payload: cooldownPayload }),
+  z.object({ ruleType: z.literal('time_window'),      payload: timeWindowPayload }),
+  z.object({ ruleType: z.literal('contact_limit'),    payload: contactLimitPayload }),
+  z.object({ ruleType: z.literal('channel_restrict'), payload: channelRestrictPayload }),
 ]);</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">Why the payload keys break this file's own casing rule</div>
+      <p>Every other schema here takes <code>maxUses</code> and
+      <code>expiresAt</code> — camelCase in, snake_case in the database, with
+      the mapping done once at the boundary. <strong>The rule payload cannot
+      work that way, because nothing unpacks it.</strong> It goes into a JSONB
+      column as it arrives and comes back out into
+      <code>evaluateRules</code> exactly as it went in.</p>
+      <p>So the payload keys are not a naming preference, they are the stored
+      format — and this schema is the only place that checks them.
+      <code>a5/0004</code> shipped <code>{ start, end }</code> against an
+      engine reading <code>start_time</code>, and the result was not an error:
+      the engine compared the current time against <code>undefined</code> and,
+      depending on which way the comparison fell, either allowed everything or
+      blocked everything. <strong>A validator that accepts the wrong key names
+      is worse than no validator, because it certifies the payload that breaks
+      the rule.</strong></p>
+      <p><strong>The zero-padding regex is the same bug one level down.</strong>
+      <code>'9:05'</code> and <code>'09:05'</code> both read as nine o'clock to
+      a human, and only one of them compares correctly as a string —
+      <code>'9:05' &lt; '09:00'</code> is <code>false</code>. Rejecting the
+      unpadded form here is much cheaper than making every comparison
+      downstream defensive about it.</p>
+    </div>
 
     <div class="callout">
       <div class="callout-title">Two details in those schemas that are easy to read past</div>

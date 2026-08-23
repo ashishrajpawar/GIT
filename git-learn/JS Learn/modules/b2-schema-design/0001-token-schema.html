@@ -264,9 +264,13 @@ if (token.max_uses != null) { checkLimit(); }</code></pre>
   id          SERIAL PRIMARY KEY,
   token_id    INTEGER NOT NULL REFERENCES tokens(id) ON DELETE CASCADE,
   rule_type   TEXT NOT NULL
-              CHECK (rule_type IN ('time_window', 'call_limit', 'category', 'cooldown')),
+              -- Exactly three, and this list is what the engine in B7.2
+              -- is allowed to meet. 'expiry' is NOT here: it is
+              -- expires_at on the token itself, and two places to set the
+              -- same thing is two answers to "when does this stop working?".
+              CHECK (rule_type IN ('time_window', 'contact_limit', 'channel_restrict')),
   payload     JSONB NOT NULL,
-  is_active   BOOLEAN NOT NULL DEFAULT true,
+  enabled     BOOLEAN NOT NULL DEFAULT true,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
   UNIQUE(token_id, rule_type)
@@ -276,23 +280,75 @@ if (token.max_uses != null) { checkLimit(); }</code></pre>
     <ul>
       <li><strong>ON DELETE CASCADE</strong> — when a token is deleted, its rules are automatically removed. Rules can't exist without a token.</li>
       <li><strong>UNIQUE(token_id, rule_type)</strong> — one rule of each type per token. Simplifies the API and enables UPSERT.</li>
-      <li><strong>JSONB payload</strong> — each rule type has different fields. Time windows need start/end hours; call limits need max_per_day; categories need an allowed list. JSONB handles this without one table per rule type.</li>
-      <li><strong>is_active</strong> — lets users disable a rule without deleting it (they might want to re-enable later).</li>
+      <li><strong>JSONB payload</strong> — each rule type has different fields. A time window needs days and hours; a contact limit needs two counts; a channel restriction needs three booleans. JSONB handles that without one table per rule type.</li>
+      <li><strong>enabled</strong> — lets users switch a rule off without deleting it, so it can be switched back on with its settings intact.</li>
     </ul>
+
+    <div class="callout">
+      <div class="callout-title">Why the <code>rule_type</code> is a constrained column and the payload is not</div>
+      <p>This is the whole argument for storing rules as rows rather than as
+      a JSONB blob on <code>tokens</code>, and it is not about the join cost —
+      the join is trivial against <code>idx_rules_token_id</code>.</p>
+      <p><strong>A rule type the engine cannot evaluate is refused by the
+      database, before it is ever stored.</strong> <code>b7/0002</code>
+      shipped exactly the defect that prevents: an unrecognised rule type
+      fell through to <code>allowed</code>, which is a restriction the owner
+      set and the server ignored. A bare JSONB column has no layer at which
+      that is catchable.</p>
+      <p>The payload deliberately does not get the same treatment, because
+      each type has a different shape and a <code>CHECK</code> cannot express
+      that usefully. So the split is: <strong>the vocabulary is enforced, the
+      contents are validated in code</strong> — see <code>b3/0004</code>.</p>
+      <p>The second reason is the one the key directory in <code>c5/0002</code>
+      reached from a different direction: rows give a rule change a history.
+      <em>"What could this token do last Tuesday?"</em> has an answer only if
+      the old row still exists.</p>
+    </div>
 
     <h3>Payload shapes by rule_type</h3>
 
-    <pre><code>-- time_window
-{"start_hour": 9, "end_hour": 18, "timezone": "Asia/Kolkata", "days": [1,2,3,4,5]}
+    <pre><code>-- time_window: only during these hours
+{"days": [1,2,3,4,5], "start_time": "09:00", "end_time": "18:00", "timezone": "Asia/Kolkata"}
 
--- call_limit
-{"max_per_day": 2, "max_per_week": 10}
+-- contact_limit: at most this many a day
+{"max_messages_per_day": 10, "max_calls_per_day": 2}
 
--- category
-{"allowed": ["delivery", "support"], "blocked": ["marketing", "spam"]}
+-- channel_restrict: which channels are allowed at all
+{"allow_text": true, "allow_voice": true, "allow_video": false}</code></pre>
 
--- cooldown
-{"min_minutes_between": 30}</code></pre>
+    <p><strong>These field names are the contract with the rules engine.</strong>
+    It reads <code>start_time</code>; a client writing <code>start</code>
+    produces <code>undefined</code> on the server, and an <code>undefined</code>
+    inside a comparison is a rule that silently permits everything.</p>
+
+    <div class="callout warning">
+      <div class="callout-title">Three rule types, and the two that were removed</div>
+      <p>Until 2026-08-23 this list read
+      <code>time_window, call_limit, category, cooldown</code> while
+      <code>b7/0002</code> evaluated <code>time_window, contact_limit,
+      channel_restrict</code>. <strong>The database would have rejected every
+      rule the product actually creates</strong> — three lessons, three
+      vocabularies, and only <code>time_window</code> common to all of them.</p>
+      <ul>
+        <li><strong><code>call_limit</code> was absorbed.</strong>
+        <code>contact_limit</code> already carries a call cap alongside a
+        message cap, and the two limits are always set together on one
+        screen.</li>
+        <li><strong><code>category</code> was unenforceable.</strong> The
+        <em>holder</em> declares which category they are, and can claim any
+        of them, so a rule restricting categories restricted nobody. A
+        constraint that the constrained party gets to fill in is decoration.</li>
+        <li><strong><code>cooldown</code> was real and was dropped on
+        cost.</strong> It closed a genuine gap — a daily cap of 10 does not
+        stop ten messages in ten seconds — and it is a fourth evaluator,
+        screen control, payload shape and validator. Noted here so nobody
+        re-argues it from scratch.</li>
+      </ul>
+      <p><strong><code>cooldown</code> is also the worked example of why rows
+      won.</strong> Adding it back is a migration that adds one value to a
+      <code>CHECK</code> list and one evaluator to the engine. Under a JSONB
+      blob it would be the same work with nothing to enforce it.</p>
+    </div>
 
     <h2>The redemption_events table</h2>
 
@@ -377,9 +433,13 @@ CREATE TABLE access_rules (
   id          SERIAL PRIMARY KEY,
   token_id    INTEGER NOT NULL REFERENCES tokens(id) ON DELETE CASCADE,
   rule_type   TEXT NOT NULL
-              CHECK (rule_type IN ('time_window', 'call_limit', 'category', 'cooldown')),
+              -- Exactly three, and this list is what the engine in B7.2
+              -- is allowed to meet. 'expiry' is NOT here: it is
+              -- expires_at on the token itself, and two places to set the
+              -- same thing is two answers to "when does this stop working?".
+              CHECK (rule_type IN ('time_window', 'contact_limit', 'channel_restrict')),
   payload     JSONB NOT NULL,
-  is_active   BOOLEAN NOT NULL DEFAULT true,
+  enabled     BOOLEAN NOT NULL DEFAULT true,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(token_id, rule_type)
 );
@@ -622,9 +682,13 @@ CREATE TABLE access_rules (
   id          SERIAL PRIMARY KEY,
   token_id    INTEGER NOT NULL REFERENCES tokens(id) ON DELETE CASCADE,
   rule_type   TEXT NOT NULL
-              CHECK (rule_type IN ('time_window', 'call_limit', 'category', 'cooldown')),
+              -- Exactly three, and this list is what the engine in B7.2
+              -- is allowed to meet. 'expiry' is NOT here: it is
+              -- expires_at on the token itself, and two places to set the
+              -- same thing is two answers to "when does this stop working?".
+              CHECK (rule_type IN ('time_window', 'contact_limit', 'channel_restrict')),
   payload     JSONB NOT NULL,
-  is_active   BOOLEAN NOT NULL DEFAULT true,
+  enabled     BOOLEAN NOT NULL DEFAULT true,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(token_id, rule_type)
 );
@@ -777,12 +841,23 @@ COMMIT;
         type: "which-breaks",
         question: "Which access_rules INSERT violates the schema constraints?",
         variants: [
-          "INSERT INTO access_rules (token_id, rule_type, payload) VALUES (1, 'time_window', '{\"start_hour\": 9}');",
-          "INSERT INTO access_rules (token_id, rule_type, payload) VALUES (1, 'time_window', '{\"start_hour\": 18}');",
-          "INSERT INTO access_rules (token_id, rule_type, payload) VALUES (1, 'cooldown', '{\"min_minutes\": 30}');"
+          "INSERT INTO access_rules (token_id, rule_type, payload) VALUES (1, 'time_window', '{\"start_time\": \"09:00\"}');",
+          "INSERT INTO access_rules (token_id, rule_type, payload) VALUES (1, 'time_window', '{\"start_time\": \"18:00\"}');",
+          "INSERT INTO access_rules (token_id, rule_type, payload) VALUES (1, 'contact_limit', '{\"max_messages_per_day\": 10}');"
         ],
         correct: 1,
-        explanation: "The UNIQUE(token_id, rule_type) constraint allows only one rule of each type per token. The first INSERT creates a time_window rule for token 1. The second INSERT tries to create another time_window for the same token — violating the unique constraint. Use UPSERT (INSERT ... ON CONFLICT ... DO UPDATE) to modify an existing rule."
+        explanation: "The UNIQUE(token_id, rule_type) constraint allows only one rule of each type per token. One INSERT creates a time_window rule for token 1; a second time_window for that same token violates the constraint. A different rule type for the same token is fine, because the uniqueness is on the pair. Use UPSERT (INSERT ... ON CONFLICT ... DO UPDATE) to modify an existing rule."
+      },
+      {
+        question: "INSERT INTO access_rules ... VALUES (1, 'cooldown', '{\"min_minutes\": 30}') is run against the schema. What happens?",
+        options: [
+          "It inserts, and the engine ignores a rule type it does not know",
+          "The database rejects it: rule_type has a CHECK listing exactly time_window, contact_limit and channel_restrict",
+          "It inserts, and the engine refuses every action on that token",
+          "It inserts only if a cooldown evaluator exists in the API"
+        ],
+        correct: 1,
+        explanation: "This is the reason rules are rows rather than a JSONB blob on the token. A rule type nothing can evaluate is refused before it is ever stored, so the failure surfaces at the INSERT — loudly, in one place, to the developer who wrote it — instead of at every future redemption. b7/0002 shipped the alternative once: an unrecognised rule type fell through to allowed, which is a restriction the owner set and the server quietly ignored.",
       },
       {
         type: "fill-blank",
@@ -800,7 +875,7 @@ COMMIT;
           "PostgreSQL requires JSONB for columns with CHECK constraints"
         ],
         correct: 1,
-        explanation: "A time_window rule needs start_hour/end_hour/days. A call_limit rule needs max_per_day/max_per_week. A category rule needs allowed/blocked lists. JSONB stores this variable structure in one column. The alternative — one table per rule type — would mean 4+ tables and complex joins for a simple feature."
+        explanation: "A time_window rule needs days, start_time, end_time and a timezone. A contact_limit rule needs two counts. A channel_restrict rule needs three booleans. JSONB stores that variable structure in one column, where the alternative — one table per rule type — would mean a table and a join per rule. Note what is NOT flexible: rule_type itself is a constrained column, so the vocabulary is enforced while the contents are validated in code."
       },
       {
         type: "spot-the-bug",

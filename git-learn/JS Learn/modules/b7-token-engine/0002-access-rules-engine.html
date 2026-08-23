@@ -21,7 +21,7 @@
     <p>
       Rules are what make Token more than a contact form. A user can say "this
       delivery driver can message me only between 9 AM and 6 PM, only text, max
-      5 messages per day." The rules are stored as JSONB in the tokens table —
+      5 messages per day." Each rule is a row in <code>access_rules</code> —
       the engine evaluates them on every message or call attempt. If the engine
       is wrong, privacy erodes. Deny-by-default: if a rule cannot be evaluated,
       the action is blocked.
@@ -30,11 +30,31 @@
 
   <h2>The Rules Schema</h2>
   <p>
-    Rules live in the <code>rules</code> JSONB column of the tokens table. The
-    structure supports multiple rule types that are evaluated together — ALL
-    must pass for an action to be allowed.
+    Each rule is a row in <code>access_rules</code>: a constrained
+    <code>rule_type</code>, a JSONB <code>payload</code> whose shape depends on
+    that type, and an <code>enabled</code> flag. A token's rules are evaluated
+    together — ALL must pass for an action to be allowed.
   </p>
-  <pre><code>// The rules JSONB structure
+
+  <div class="callout warning">
+    <div class="callout-title">This lesson read a column that does not exist, for months</div>
+    <p>Until 2026-08-23 the query below was
+    <code>SELECT rules … FROM tokens</code>, and <code>b2/0001</code> has never
+    created a <code>rules</code> column — it creates the
+    <code>access_rules</code> table. <strong>The engine was written against a
+    schema nobody had.</strong> The two lessons were each internally consistent
+    and neither looked wrong from inside itself, which is the fourth time this
+    course has met that shape.</p>
+    <p>The vocabulary had drifted with it: this lesson evaluated
+    <code>contact_limit</code> and <code>channel_restrict</code> while
+    <code>b2/0001</code>'s <code>CHECK</code> permitted <code>call_limit</code>,
+    <code>category</code> and <code>cooldown</code>. <strong>Every rule the
+    product creates would have been rejected on insert.</strong> Settled
+    2026-08-23: three rule types, listed in the schema, and rows won.</p>
+  </div>
+  <pre><code>// What the engine works with: one entry per enabled rule, keyed by
+// rule_type. This is ASSEMBLED from the access_rules rows -- it is not
+// how the rules are stored.
 interface TokenRules {
   time_window?: {
     days: number[];        // 0=Sun, 1=Mon, ..., 6=Sat
@@ -53,7 +73,15 @@ interface TokenRules {
   };
 }
 
-// Example rules stored in the database:
+// The same thing as it is actually stored -- three rows:
+//
+//  token_id | rule_type        | payload                          | enabled
+//  ---------+------------------+----------------------------------+--------
+//         7 | time_window      | {"days":[1,2,3,4,5], ...}        | t
+//         7 | contact_limit    | {"max_messages_per_day":10, ...} | t
+//         7 | channel_restrict | {"allow_text":true, ...}         | t
+//
+// ...and assembled back into this:
 {
   "time_window": {
     "days": [1, 2, 3, 4, 5],
@@ -88,8 +116,10 @@ interface RuleResult {
   reason?: string;
 }
 
-// Every rule type this engine understands. Anything in the rules column
-// that is NOT in here is a rule we cannot evaluate - which under
+// Every rule type this engine understands. This list and the CHECK
+// constraint in b2/0001 must agree; when they drift, the CHECK is the
+// one that is authoritative and this one is the one that is deployed.
+// Anything not in here is a rule we cannot evaluate - which under
 // deny-by-default means the action is refused, not ignored.
 const KNOWN_RULES = ['channel_restrict', 'time_window', 'contact_limit'] as const;
 
@@ -101,9 +131,15 @@ export async function evaluateRules(
     // The token's STATE comes back with its rules. Evaluating rules without
     // checking whether the token is still alive is how a revoked token keeps
     // working on a conversation that already exists.
+    // LEFT JOIN, and `enabled` in the JOIN condition. Both are
+    // load-bearing and both look like style -- see the callout below.
     const { rows } = await pool.query(
-      `SELECT rules, status, expires_at, max_uses
-         FROM tokens WHERE id = $1`,
+      `SELECT t.status, t.expires_at,
+              r.rule_type, r.payload
+         FROM tokens t
+         LEFT JOIN access_rules r
+                ON r.token_id = t.id AND r.enabled
+        WHERE t.id = $1`,
       [tokenId]
     );
 
@@ -111,6 +147,7 @@ export async function evaluateRules(
       return { allowed: false, reason: 'Token not found' };
     }
 
+    // The token's own state repeats on every row, so any row will do.
     const token = rows[0];
 
     // 1. Is this token usable at all? Checked first, and independently of
@@ -126,24 +163,36 @@ export async function evaluateRules(
     // conversations, and only a contact_limit rule needs a count at all --
     // so the query above deliberately does not pay for one.
 
-    const rules = token.rules;
-
-    // 2. An empty rules object means the owner chose not to restrict, and
-    //    that is a real answer. A rules column that is not an object at all
-    //    means something is wrong, and "something is wrong" is not consent.
-    if (rules === null || rules === undefined) return { allowed: true };
-    if (typeof rules !== 'object' || Array.isArray(rules)) {
-      return { allowed: false, reason: 'unreadable rules' };
+    // 2. Assemble the rows into the object the evaluator works with. A
+    //    token with no rules comes back as ONE row with rule_type null --
+    //    that is the LEFT JOIN doing its job, not a missing rule.
+    const rules = {};
+    for (const row of rows) {
+      if (row.rule_type === null) continue;
+      rules[row.rule_type] = row.payload;
     }
 
-    // 3. Refuse what we do not understand. An older server meeting a rule
-    //    type added by a newer client must not silently ignore it.
+    // 3. An empty rules object means the owner chose not to restrict, and
+    //    that is a real answer. A payload that is not an object at all
+    //    means something is wrong, and "something is wrong" is not consent.
+    //    The database constrains rule_type; it does NOT constrain payload.
+    for (const [type, payload] of Object.entries(rules)) {
+      if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+        return { allowed: false, reason: 'unreadable rule: ' + type };
+      }
+    }
+
+    // 4. Refuse what we do not understand. The CHECK constraint in
+    //    b2/0001 is the first line of defence and this is the second --
+    //    a migration can add a value to that list while old replicas are
+    //    still running, so the database permitting a type does not mean
+    //    THIS server can evaluate it.
     const unknown = Object.keys(rules).filter(k =&gt; !KNOWN_RULES.includes(k as any));
     if (unknown.length &gt; 0) {
       return { allowed: false, reason: 'unsupported rule: ' + unknown[0] };
     }
 
-    // 4. Every rule present must pass.
+    // 5. Every rule present must pass.
     if (rules.channel_restrict) {
       const result = evaluateChannelRestrict(rules.channel_restrict, action);
       if (!result.allowed) return result;
@@ -168,6 +217,48 @@ export async function evaluateRules(
     return { allowed: false, reason: 'could not evaluate rules' };
   }
 }</code></pre>
+
+  <div class="callout danger">
+    <div class="callout-title">Two words in that query are load-bearing, and both look like style</div>
+
+    <p>Reading rules from rows introduces a failure the JSONB column could not
+    have. <strong>Both of these produce zero rows for a token that exists</strong>,
+    and zero rows is how this function recognises <em>token not found</em>:</p>
+
+    <pre><code>-- WRONG: an inner join
+  FROM tokens t
+  JOIN access_rules r ON r.token_id = t.id AND r.enabled
+
+-- WRONG: `enabled` moved into the WHERE
+  FROM tokens t
+  LEFT JOIN access_rules r ON r.token_id = t.id
+ WHERE t.id = $1 AND r.enabled</code></pre>
+
+    <p>The first refuses <strong>every token with no rules at all</strong> —
+    which is most of them, and is the token the owner deliberately left
+    unrestricted. The second refuses every token whose only rule is switched
+    <em>off</em>, so turning a rule off silently disables the token instead.</p>
+
+    <p>Both fail the same way and it is the worst available way:
+    <strong>deny-by-default turns a join mistake into a token that stops
+    working, with the engine reporting <em>token not found</em> for a token
+    that is right there.</strong> Nothing errors, no exception is logged, and
+    the reported reason points the person debugging at the wrong table.</p>
+
+    <p>The second one is the classic: <code>WHERE</code> is applied
+    <em>after</em> the join, so a condition on the right-hand table filters out
+    the null-filled row a <code>LEFT JOIN</code> just produced — quietly
+    converting it back into an inner join. If a predicate is about whether a
+    row should <em>match</em>, it belongs in <code>ON</code>; only predicates
+    about the surviving result belong in <code>WHERE</code>.</p>
+
+    <p><strong>And <code>UNIQUE(token_id, rule_type)</code> is what makes the
+    assembly loop safe.</strong> <code>rules[row.rule_type] = row.payload</code>
+    keeps the last row it sees, and <em>row order is not guaranteed without an
+    <code>ORDER BY</code></em>. Without the constraint, two
+    <code>time_window</code> rows would mean the token's behaviour depended on
+    the query planner — the same answer on every run until an index changed.</p>
+  </div>
 
   <div class="callout">
     <div class="callout-title">Why this reads <code>status</code> and not the timestamps</div>
@@ -563,8 +654,8 @@ ws.on('message', async (data) => {
         <td>Deploy order now matters: the server must understand a rule type before any client can write it. Ship the server first, always — which is a release-process constraint, not a code one.</td>
       </tr>
       <tr>
-        <td>Rules as JSONB</td>
-        <td>Flexible to add to, and the database cannot check any of it. Everything that would be a <code>CHECK</code> constraint on a real column becomes a Zod schema and a code review, and a malformed payload is only caught when someone tries to use the token.</td>
+        <td>Rules as rows, payload as JSONB</td>
+        <td>A rule <em>type</em> the engine cannot evaluate is refused by the database at the INSERT. The <em>payload</em> is not, so a malformed payload is still only caught when someone tries to use the token — that half stays a Zod schema and a code review (<code>b3/0004</code>). You also pay a join on the hottest path, which is trivial against <code>idx_rules_token_id</code>, and you gain a history of what a token could do last week.</td>
       </tr>
       <tr>
         <td>Timezone-aware everything</td>
@@ -656,7 +747,7 @@ const result = evaluateTimeWindow({
 console.log('Result:', JSON.stringify(result));`);
 
     createSolution("exercise-rules", {
-      exercise: "Write evaluateRuleSet(rules, action, ctx) — the part of the engine that needs no database.\n\nrules is the JSONB value from the tokens row. It may be a well-formed object, an empty object, null, or something malformed.\naction is 'message', 'voice_call' or 'video_call'.\nctx is { withinWindow, usedToday } — withinWindow is a boolean (a5/0004's isWithinWindow computed it), and usedToday is { messages, calls }.\n\nReturn { allowed: true } or { allowed: false, reason }.\n\nThe known rule types are exactly: channel_restrict, time_window, contact_limit.\n\nThe rules, in order:\n\n1. rules null or undefined -> allowed. The owner set no restrictions, and that is a real answer rather than a missing one.\n\n2. rules not an object, or an ARRAY -> { allowed: false, reason: 'unreadable rules' }. Note that typeof [] === 'object', so the array test is doing real work. Something is wrong, and something-is-wrong is not consent.\n\n3. Any key that is not one of the three known types -> { allowed: false, reason: 'unsupported rule: ' + thatKey }. Check this BEFORE evaluating any rule. An older server meeting a rule a newer client wrote must refuse, never ignore — silently dropping a restriction the owner set is the worst outcome available.\n\n4. An EMPTY object {} -> allowed. No keys means no unknown keys and no restrictions.\n\n5. channel_restrict: { allow_text, allow_voice, allow_video }. 'message' needs allow_text, 'voice_call' needs allow_voice, 'video_call' needs allow_video. The flag must be exactly true. Missing or undefined -> refuse, reason 'channel not allowed'.\n\n6. time_window present and ctx.withinWindow is not true -> reason 'outside allowed hours'.\n\n7. contact_limit: { max_messages_per_day, max_calls_per_day }. For 'message' compare usedToday.messages against max_messages_per_day; for either call action compare usedToday.calls against max_calls_per_day. At or over the limit -> reason 'daily limit reached'. A limit that is absent is not a limit.\n\n8. ALL present rules must pass, not any. Reaching the end means allowed.",
+      exercise: "Write evaluateRuleSet(rules, action, ctx) — the part of the engine that needs no database.\n\nrules is the object the engine assembles from the access_rules rows, keyed by rule_type. It may be a well-formed object, an empty object, null, or something malformed — the assembly is a seam like any other, and a caller that changes is not a reason for an authorisation check to stop defending itself.\naction is 'message', 'voice_call' or 'video_call'.\nctx is { withinWindow, usedToday } — withinWindow is a boolean (a5/0004's isWithinWindow computed it), and usedToday is { messages, calls }.\n\nReturn { allowed: true } or { allowed: false, reason }.\n\nThe known rule types are exactly: channel_restrict, time_window, contact_limit.\n\nThe rules, in order:\n\n1. rules null or undefined -> allowed. The owner set no restrictions, and that is a real answer rather than a missing one.\n\n2. rules not an object, or an ARRAY -> { allowed: false, reason: 'unreadable rules' }. Note that typeof [] === 'object', so the array test is doing real work. Something is wrong, and something-is-wrong is not consent.\n\n3. Any key that is not one of the three known types -> { allowed: false, reason: 'unsupported rule: ' + thatKey }. Check this BEFORE evaluating any rule. An older server meeting a rule a newer client wrote must refuse, never ignore — silently dropping a restriction the owner set is the worst outcome available.\n\n4. An EMPTY object {} -> allowed. No keys means no unknown keys and no restrictions.\n\n5. channel_restrict: { allow_text, allow_voice, allow_video }. 'message' needs allow_text, 'voice_call' needs allow_voice, 'video_call' needs allow_video. The flag must be exactly true. Missing or undefined -> refuse, reason 'channel not allowed'.\n\n6. time_window present and ctx.withinWindow is not true -> reason 'outside allowed hours'.\n\n7. contact_limit: { max_messages_per_day, max_calls_per_day }. For 'message' compare usedToday.messages against max_messages_per_day; for either call action compare usedToday.calls against max_calls_per_day. At or over the limit -> reason 'daily limit reached'. A limit that is absent is not a limit.\n\n8. ALL present rules must pass, not any. Reaching the end means allowed.",
       hints: [
         "Do the shape checks first — null, then not-an-object-or-array, then unknown keys — and return from each. By the time you reach the rules themselves you want to be certain you are holding something you understand.",
         "Map the action to its channel flag with a lookup object rather than three if statements. It makes the === true test obvious, which is the part that matters.",
@@ -1060,15 +1151,16 @@ try {
         type: "order-steps",
         steps: [
           "Receive action request (message/call) from holder",
-          "Look up token status (is it active?)",
-          "Fetch rules JSONB from the tokens table",
+          "Read the token and its enabled rules in one LEFT JOIN",
+          "Check the state gate — revoked, paused, expired",
+          "Assemble the rows into a rules object, refusing any type this server cannot evaluate",
           "Check channel_restrict for the action type",
-          "Check time_window against current timezone time",
-          "Query DB for today's count, check contact_limit",
+          "Check time_window against the rule's own timezone",
+          "Query for today's count, check contact_limit",
           "Return { allowed: true } — all rules passed"
         ],
-        correctOrder: [0, 1, 2, 3, 4, 5, 6],
-        explanation: "The full pipeline: action arrives, check token is active (gate), load rules, then evaluate from cheapest to most expensive. Only after all checks pass does the action proceed."
+        correctOrder: [0, 1, 2, 3, 4, 5, 6, 7],
+        explanation: "One read brings back the state and the rules together, so the state gate costs no extra query. The gate comes before any rule because it is independent of what the owner did or did not configure. Then evaluate from cheapest to most expensive — the count is last because it is the only one that goes back to the database."
       },
       {
         type: "fill-blank",
@@ -1119,7 +1211,7 @@ try {
           "const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);"
         ],
         correct: 1,
-        explanation: "new Date('today') returns Invalid Date — JavaScript's Date constructor doesn't accept the string 'today'. It would produce NaN timestamps, causing the SQL query to return incorrect results or error. Variants A and C both produce valid dates (UTC midnight vs local midnight)."
+        explanation: "new Date('today') returns Invalid Date — the Date constructor does not accept the string 'today'. It produces NaN timestamps, so the SQL query either errors or silently returns the wrong count, and a wrong count in a contact limit is a limit that does not hold. The two setHours forms both produce valid dates; they differ only in UTC versus local midnight, which is a separate decision about whose day it is."
       },
       {
         type: "spot-the-bug",
@@ -1148,16 +1240,16 @@ try {
         type: "predict-output",
         code: "const rule = { max_messages_per_day: 5 };\nconst counts = [0, 4, 5, 6];\ncounts.forEach(c => console.log(c >= rule.max_messages_per_day));",
         answer: "false\nfalse\ntrue\ntrue",
-        explanation: "The limit is 5 messages per day. Counts 0 and 4 are below (allowed), 5 and 6 are at or above (denied). The >= comparison means the 5th message itself is blocked — so effectively only 4 messages get through. Wait — actually the count is checked before sending, so if count is 4, the 5th message is allowed; if count is 5, the 6th is blocked."
+        explanation: "The count is of messages ALREADY sent today, and it is checked before this one is accepted. So a count of 4 means four have gone through and the fifth is allowed; a count of 5 means the limit is reached and the sixth is refused. Exactly five get through, which is what 'max 5 per day' should mean — and the way to keep this straight is to name the variable for what it counts (usedToday) rather than for what it is being compared against."
       },
       {
         type: "order-steps",
         steps: [
           "User sets rules via PUT /tokens/:id/rules",
-          "Rules stored as JSONB in the tokens table",
+          "Each rule is upserted as a row in access_rules",
           "Holder sends a message through WebSocket",
           "Server calls evaluateRules(tokenId, 'message')",
-          "Engine fetches rules JSONB from database",
+          "Engine reads the token and its enabled rules in one LEFT JOIN",
           "Each rule type evaluated in order",
           "Action allowed or denied with reason"
         ],
@@ -1178,18 +1270,29 @@ try {
           "if (rows[0].cnt >= (rule.max_messages_per_day || Infinity)) return { allowed: false, reason: 'Limit reached' };"
         ],
         correct: 1,
-        explanation: "Variant B uses > instead of >=. If max_messages_per_day is 5 and count is 5, variant B allows a 6th message (5 > 5 is false). The check should fire when count equals the limit, meaning the limit has been reached. Use >= to correctly enforce the cap."
+        explanation: "The one using > instead of >= is off by one: with a limit of 5 and a count of 5, 5 > 5 is false, so a sixth message goes through. The check has to fire when the count equals the limit, because equal means the limit has been reached. The || Infinity form is fine — an absent limit is not a limit, so it lets everything through, which is the correct reading of a missing field."
       },
       {
-        question: "What data structure does the rules engine use to store rules in PostgreSQL?",
+        question: "How are a token's rules stored in PostgreSQL?",
         options: [
-          "A separate rules table with one row per rule type",
           "A TEXT column with comma-separated key=value pairs",
-          "A JSONB column that holds all rules as a single structured object",
-          "Multiple boolean columns (allow_text, allow_voice, etc.) on the tokens table"
+          "One row per rule in access_rules: a constrained rule_type, a JSONB payload, and an enabled flag",
+          "A JSONB column on tokens holding every rule as one object",
+          "A boolean column per capability (allow_text, allow_voice, ...) on the tokens table"
         ],
-        correct: 2,
-        explanation: "JSONB stores the complete rules structure as a single JSON document. This allows flexible rule schemas without migrations for new rule types, supports indexing, and keeps all rules for a token together for atomic reads."
+        correct: 1,
+        explanation: "Rows, decided 2026-08-23. The argument is not the join cost, which is trivial against idx_rules_token_id — it is that rule_type becomes a constrained column, so a rule type nothing can evaluate is refused at the INSERT rather than met at every future redemption. A single JSONB object on the token was the design this lesson actually used for months, and its 'flexibility to add new rule types without a migration' is precisely the property that let the engine and the schema drift into three different vocabularies. The payload stays JSONB because each type has a different shape."
+      },
+      {
+        question: "Why does the engine still refuse unknown rule types, when the database has a CHECK constraint listing the valid ones?",
+        options: [
+          "The CHECK constraint can be disabled at runtime",
+          "A migration can add a value to that list while old replicas are still running, so the database permitting a type does not mean this server can evaluate it",
+          "JSONB payloads bypass CHECK constraints",
+          "It is redundant, and kept only for older Postgres versions"
+        ],
+        correct: 1,
+        explanation: "Deploys are not atomic. For a few minutes the database accepts a rule type that some running replicas have never heard of, and skipping it there would silently drop a restriction the owner just set — on a subset of requests, with nothing logged. Two layers, and the deploy order that follows is: migrate and ship the server before any client can write the new type."
       }
     ]);
   </script>
