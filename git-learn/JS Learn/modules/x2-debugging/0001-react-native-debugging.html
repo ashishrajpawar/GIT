@@ -193,11 +193,69 @@ useEffect(() =&gt; {
 // Check: is there a conditional render hiding it?
 {tokens.length &gt; 0 && &lt;TokenList /&gt;}  // won't show if array is empty</code></pre>
 
+    <!-- ───────────────────────────────────────────── -->
+    <div class="callout danger">
+      <div class="callout-title">The probe that printed nothing is your best finding, and it looks like zero</div>
+
+      <p>Step 2 of the mindset above is <em>isolate</em>, and in practice that
+      means dropping a counter at each stage and reading down the column:</p>
+
+      <pre><code>api response      : 3
+setTokens argument: 3
+tokens in render  : 3
+rows rendered     : 0        &lt;- lost here</code></pre>
+
+      <p>The list is empty because the render dropped them, not because the
+      fetch did. That is the whole technique, and it works. <strong>The trap is
+      the line that never printed at all.</strong></p>
+
+      <pre><code>api response      : 3
+setTokens argument:          &lt;- this log never ran
+tokens in render  : 0
+rows rendered     : 0</code></pre>
+
+      <p>Read carelessly — or by a function doing <code>count || 0</code> —
+      that middle line is a zero, and the answer is "the data was lost at
+      setTokens". It was not. <strong>Execution never reached that line</strong>,
+      so the truth is upstream: the promise rejected, an early return fired, a
+      guard was false. You would spend the afternoon reading a setState that
+      never ran.</p>
+
+      <p><strong>"I did not observe this" and "I observed nothing" are
+      different facts, and only one of them is about the data.</strong> The
+      same distinction that made <code>c5/0004</code> refuse to report a
+      backup as <em>gone</em> when the request had merely not finished — and
+      it shows up here as a missing property rather than a network state.</p>
+
+      <p>Two more readings of that column that are not "lost", and each sends
+      you somewhere different:</p>
+      <ul>
+        <li><strong>The count goes UP.</strong> Not a loss — a duplicate.
+        <code>a6/0002</code> has the real version: REST history and the socket
+        both delivering the same message, with no dedupe.</li>
+        <li><strong>Every count is equal and non-zero.</strong> Nothing was
+        lost anywhere, which is a real answer and the one people refuse to
+        accept. The data arrived; the bug is in rendering — a height of zero, a
+        conditional, a filter. See "Component not showing?" above.</li>
+      </ul>
+    </div>
+
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>Now build it yourself</h2>
+
+    <p>The screen needs a device and a running API. Reading the column does
+    not, and reading it correctly is the difference between fixing the bug and
+    fixing the line above it.</p>
+
+    <div id="exercise-trace"></div>
+    <div id="pg-exercise-trace"></div>
+
+    <h3>And the screen</h3>
 
     <div id="exercise-1"></div>
+
+    <div id="explain-x2-0001"></div>
 
     <hr>
 
@@ -236,7 +294,66 @@ const missing = tokens.find(t => t.code === 'NOPE-0000');
 console.log('Missing:', missing);  // undefined!
 // console.log(missing.status);    // Would crash! TypeError: undefined is not an object`);
 
+    createSolution("exercise-trace", {
+      exercise: `Write firstDivergence(trace) — read the column of counters and say where the story stops making sense.\n\ntrace is an array of { step, count } in EXECUTION order — one entry per probe you dropped into the code. count is the number of items observed at that point. A probe that never ran has NO count property at all.\n\nReturn { verdict, at, from, to }.\n\nverdict is one of: 'intact', 'lost', 'grew', 'never_reached', 'empty_at_source', 'unreadable', 'no_trace'.\nat is the step name the finding belongs to, or null. from and to are the counts either side of a change, or null.\n\nWalk the trace once, left to right, and report the FIRST thing that is wrong. That ordering is the whole method: the earliest point where the story stops making sense is the only one worth reading, because everything after it is downstream of a cause you have not found yet.\n\nThe rules, in the order they apply at each step:\n\n1. NO count PROPERTY MEANS THE PROBE NEVER RAN. Report 'never_reached' at that step. This is the rule the exercise exists for, and it must be tested BEFORE any comparison, because undefined compared against a number is neither equal nor unequal in any useful way — it is just false, twice, and a careless implementation reads that as "no change". A missing count is not a count of zero: one says the data was absent, the other says the CODE was, and only the second tells you the cause is upstream.\n\n2. A count THAT IS NOT A NON-NEGATIVE INTEGER IS 'unreadable' at that step. A trace scraped out of log text arrives as strings, and '10' < '5' is true — so a string count does not fail, it silently inverts the comparison and blames the wrong step.\n\n3. IF THE FIRST STEP'S count IS 0, report 'empty_at_source' with to: 0. Nothing was lost; there was never anything. Reporting that as a loss sends someone to look for a leak in code that behaved perfectly.\n\n4. OTHERWISE, THE FIRST STEP WHOSE count DIFFERS FROM THE PREVIOUS ONE IS THE FINDING. Lower is 'lost', higher is 'grew'. Report at as the LATER step — the one where the number changed — with from and to as the two counts. Blaming the earlier step is the classic off-by-one here: the earlier probe told the truth, and the code between it and the next one is what you have to read.\n\n5. 'grew' IS NOT A VARIANT OF 'lost'. It is a duplicate, and it sends you somewhere completely different — a list appended to twice, a socket and a REST fetch both delivering. Collapsing the two into 'changed' throws away the direction, which is the only part that says where to look.\n\n6. ALL COUNTS EQUAL AND NON-ZERO IS 'intact', with at null. Nothing was lost anywhere. This is a real answer and the one people refuse to believe: the data arrived and the bug is in rendering. Returning it confidently is the point of the function.\n\n7. AN EMPTY TRACE IS 'no_trace'. You cannot bisect nothing, and returning 'intact' for it claims the data survived a journey you never watched.`,
+      hints: [
+        "One loop, one pass, first finding wins. Every rule except 'intact' and 'no_trace' is a return statement inside it — if you find yourself collecting findings and picking one at the end, you have written a harder function than this one.",
+        "For rule 1 the test is on the PROPERTY, not the value: !('count' in entry) or entry.count === undefined. Reaching for a falsy check folds 0 into it and destroys the distinction the whole exercise is about.",
+        "Rule 2's test is Number.isInteger(count) && count >= 0. typeof count === 'number' lets NaN through, and NaN compares false against everything including itself — so a NaN count reads as 'no change' at every step after it."
+      ],
+      solution: `function firstDivergence(trace) {
+  const none = (verdict, at, from, to) => ({
+    verdict,
+    at: at === undefined ? null : at,
+    from: from === undefined ? null : from,
+    to: to === undefined ? null : to,
+  });
+
+  // Rule 7. Returning 'intact' here would claim the data survived a
+  // journey nobody watched.
+  if (!Array.isArray(trace) || trace.length === 0) return none("no_trace");
+
+  let previous = null;
+
+  for (const entry of trace) {
+    const count = entry ? entry.count : undefined;
+
+    // Rule 1 -- FIRST, before anything compares. undefined against a
+    // number is false both ways, which reads as "no change".
+    if (count === undefined || count === null) {
+      return none("never_reached", entry && entry.step);
+    }
+
+    // Rule 2. Number.isInteger rejects NaN and '3' alike; typeof would
+    // admit NaN, which then compares false against everything forever.
+    if (!Number.isInteger(count) || count < 0) {
+      return none("unreadable", entry.step);
+    }
+
+    if (previous === null) {
+      // Rule 3. Never anything, as opposed to something lost.
+      if (count === 0) return none("empty_at_source", entry.step, null, 0);
+    } else if (count !== previous.count) {
+      // Rules 4 and 5. Direction is the part that says where to look,
+      // and 'at' is the LATER step -- the earlier probe told the truth.
+      return none(
+        count < previous.count ? "lost" : "grew",
+        entry.step,
+        previous.count,
+        count
+      );
+    }
+
+    previous = entry;
+  }
+
+  // Rule 6. The data arrived. The bug is in rendering.
+  return none("intact");
+}`
+    });
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is a React Native screen debugged against a running API and a device",
       exercise: "You have a TokenListScreen that shows an empty list even though the API returns tokens. Debug it systematically: add console logs at each step (before fetch, after fetch, before setState, after render), use console.table to inspect the data shape, and identify the common cause. Write the debugging code you'd add.",
       hints: [
         "Start from the data source (API call) and trace forward to where it should appear in the UI.",
@@ -299,6 +416,133 @@ function TokenListScreen() {
 
 // TYPICAL FIX: The API returned { data: { items: [...] } }
 // but the code did setTokens(json) instead of setTokens(json.data.items)`
+    });
+
+    createPlayground("pg-exercise-trace", `// Write firstDivergence(trace) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(v) { return JSON.stringify(v); }
+
+// The lesson's own scenario: the API really did return three tokens.
+// Counts are 3 rather than 1 so that "lost" and "off by one" cannot be
+// confused, and the final 0 is the empty list on screen.
+function trace(over) {
+  var t = [
+    { step: "api response", count: 3 },
+    { step: "setTokens argument", count: 3 },
+    { step: "tokens in render", count: 3 },
+    { step: "rows rendered", count: 0 },
+  ];
+  for (var k in (over || {})) t[k] = over[k];
+  return t;
+}
+function got(t) {
+  try {
+    var r = firstDivergence(t);
+    return r || {};
+  } catch (e) {
+    return { verdict: "threw: " + e.message, at: null, from: null, to: null };
+  }
+}
+
+try {
+  if (typeof firstDivergence !== "function") throw new Error("not written yet");
+
+  // Rule 4 -- the ordinary case, and which step gets the blame.
+  check("a drop is reported as lost",
+    got(trace()).verdict === "lost", "got " + show(got(trace())));
+  check("...blamed on the LATER step, where the number changed",
+    got(trace()).at === "rows rendered",
+    "got " + show(got(trace()).at) +
+      " -- the earlier probe told the truth; the code between them is what to read");
+  check("...carrying both counts",
+    got(trace()).from === 3 && got(trace()).to === 0,
+    "got " + show(got(trace())));
+
+  // Rule 1 -- THE rule. A probe that never ran is not a probe that saw 0.
+  var missing = trace({ 1: { step: "setTokens argument" } });
+  check("a probe with no count is never_reached, not lost",
+    got(missing).verdict === "never_reached",
+    "got " + show(got(missing)) +
+      " -- 'I did not observe this' and 'I observed nothing' are different facts");
+  check("...blamed on the step that never ran",
+    got(missing).at === "setTokens argument", "got " + show(got(missing).at));
+  // The distinction only exists if 0 still behaves like a number.
+  check("...while an explicit 0 in the middle is still a loss",
+    got(trace({ 1: { step: "setTokens argument", count: 0 } })).verdict === "lost",
+    "got " + show(got(trace({ 1: { step: "setTokens argument", count: 0 } }))) +
+      " -- a falsy check folds these two together and destroys the whole exercise");
+  check("...and never_reached wins over a comparison it would also fail",
+    got(trace({ 3: { step: "rows rendered" } })).verdict === "never_reached",
+    "got " + show(got(trace({ 3: { step: "rows rendered" } }))) +
+      " -- undefined vs a number is false both ways, which reads as 'no change'");
+
+  // Rule 3 -- nothing was lost; there was never anything.
+  check("a first count of 0 is empty_at_source, not lost",
+    got([{ step: "api response", count: 0 }, { step: "rows rendered", count: 0 }]).verdict === "empty_at_source",
+    "got " + show(got([{ step: "api response", count: 0 }, { step: "rows rendered", count: 0 }])) +
+      " -- reporting a leak in code that behaved perfectly");
+
+  // Rule 5 -- direction is the finding.
+  var grew = [
+    { step: "rest history", count: 3 },
+    { step: "after socket merge", count: 6 },
+  ];
+  check("a rise is grew, not lost",
+    got(grew).verdict === "grew", "got " + show(got(grew)));
+  check("...and it reports the growth, not a loss",
+    got(grew).from === 3 && got(grew).to === 6,
+    "got " + show(got(grew)) + " -- a duplicate sends you somewhere completely different");
+
+  // Rule 6 -- the answer people refuse to believe.
+  check("all counts equal and non-zero is intact",
+    got([
+      { step: "api response", count: 3 },
+      { step: "tokens in render", count: 3 },
+      { step: "rows rendered", count: 3 },
+    ]).verdict === "intact",
+    "the data arrived; the bug is in rendering");
+  check("...with no step blamed",
+    got([{ step: "a", count: 2 }, { step: "b", count: 2 }]).at === null,
+    "got " + show(got([{ step: "a", count: 2 }, { step: "b", count: 2 }]).at));
+
+  // Rule 2 -- a trace scraped from log text.
+  check("a string count is unreadable, not compared",
+    got(trace({ 1: { step: "setTokens argument", count: "3" } })).verdict === "unreadable",
+    "got " + show(got(trace({ 1: { step: "setTokens argument", count: \"3\" } }))) +
+      " -- '10' < '5' is true, so a string does not fail, it inverts");
+  check("...and so is NaN",
+    got(trace({ 1: { step: "setTokens argument", count: NaN } })).verdict === "unreadable",
+    "NaN compares false against everything, including itself");
+  check("...and so is a negative count",
+    got(trace({ 1: { step: "setTokens argument", count: -1 } })).verdict === "unreadable",
+    "got " + show(got(trace({ 1: { step: "setTokens argument", count: -1 } }))));
+
+  // Rule 7.
+  check("an empty trace is no_trace",
+    got([]).verdict === "no_trace",
+    "got " + show(got([])) + " -- 'intact' would claim the data survived a journey nobody watched");
+
+  // First finding wins, in execution order.
+  var twoFaults = [
+    { step: "api response", count: 3 },
+    { step: "after filter", count: 1 },
+    { step: "rows rendered", count: 0 },
+  ];
+  check("the FIRST divergence is reported, not the last",
+    got(twoFaults).at === "after filter" && got(twoFaults).to === 1,
+    "got " + show(got(twoFaults)) +
+      " -- everything after the first fault is downstream of a cause you have not found");
+} catch (err) {
+  console.log("Self-check could not run: " + err.message);
+}`);
+
+    createExplain("explain-x2-0001", {
+      prompt: "A probe that printed nothing and a probe that printed <code>0</code> look almost identical in a console. Explain what each one tells you about <em>where</em> the bug is, and why <code>count || 0</code> destroys the more useful of the two."
     });
 
     createQuiz("lesson-quiz", [

@@ -30,10 +30,38 @@ TypeScript whose code has ever run.** Nine left with no log entry:
 | `a3/0002` | An M3 exercise; SESSION already flags the "I annotated it, so it is one" gap |
 | ~~`a9/0002`~~ | **done 2026-08-23** — `parseTokenLink`, and it was hiding a denial oracle |
 | ~~`x2/0002`~~ | **done 2026-08-23** — `redactLogFields`, and it was teaching `tokenCode: token.code` as best practice |
-| `x2/0001` | Nothing structural — never attempted |
+| ~~`x2/0001`~~ | **done 2026-08-23** — `firstDivergence`; a probe that never ran is not a probe that saw zero |
 | `b1/0001`, `b1/0002`, `b1/0004` | Pure SQL, and the M3 hunt has never been run over B1 |
 
 Previous good state is `b9276d7`.
+
+### x2/0001 — a probe that never ran is not a probe that saw zero (2026-08-23)
+
+M3: **`firstDivergence`**. 17 self-checks, 10 wrong-cases. No pre-existing
+defect in this one — the lesson's *isolate* step was sound and simply had
+nothing executable in it.
+
+**The exercise is the gap between the technique and doing it right.** Dropping
+a counter at each stage and reading down the column works; the trap is the
+line that never printed. Read carelessly — or by anything doing
+`count || 0` — a missing probe is a zero, and the answer becomes *"lost at
+setTokens"* when execution never reached setTokens and the cause is upstream.
+**"I did not observe this" and "I observed nothing" are different facts, and
+only one of them is about the data.** Same distinction as `c5/0004`'s
+*gone* versus *not fetched*, arriving as a missing property rather than a
+network state.
+
+Four other readings of that column, each sending you somewhere different:
+`grew` is a duplicate (`a6/0002`'s REST-plus-socket overlap), `empty_at_source`
+means nothing was ever there, `intact` means the data arrived and the bug is
+in rendering — the answer people refuse to believe — and `unreadable` catches
+a trace scraped out of log text, where `'10' < '5'` is true so a string count
+does not fail, it **inverts** the comparison and blames the wrong step.
+
+**What every wrong-case here has in common:** it still returns a confident
+answer naming a step, and the step is wrong. A debugging tool that says *"I
+don't know"* costs an hour; one that points at the wrong line costs the
+afternoon, because you believe it.
 
 ### x2/0002 — the logging lesson was teaching the code into the logs (2026-08-23)
 
@@ -2293,23 +2321,53 @@ the API client, where the beginner conclusion *"I annotated the response as
 `Token`, so it is a `Token`"* is exactly wrong and exactly what a hostile or
 merely out-of-date server will punish.
 
-### Open questions for the student
+### Do not stop to ask. Decide, and write the decision down so it can be reversed
 
-**None.** Everything that was open has been decided across the three rounds on
-2026-08-20, -21 and -22. Do not invent one to fill this space — if a decision
-is genuinely needed, it will surface from the work.
+**Standing instruction, given 2026-08-23: stop asking for approvals and stop
+putting choices to the student mid-task.** Two rounds of questions were
+answered that day and the third was declined outright — *"can u skip that
+too"*. Treat that as the rule from here, not as impatience with one question.
 
-**The lookahead question is closed. Stop asking it.** It was raised on
-2026-08-18, -20, -21 and -22 and answered "keep going" every time. Four
-identical answers is the student telling you it is not a live question.
+**What replaces asking**, and it is stricter rather than looser:
 
-**How to ask, based on what worked.** The three decisions that got answered on
-2026-08-20 were answered only after being restated in **money, minutes and
-concrete failure**, with the options laid out and the cost of each spelled out.
-The first framing named ADR numbers and `iceTransportPolicy` and got nothing
-back. The second said "voice is effectively free, video costs about 450 MB an
-hour, and if the relay server goes down nobody can call" — and got a decision,
-plus a better answer than any option offered ("keep all 3"). **Do not ask an
+1. **Make the call**, on the evidence in the repo and the decisions already
+   recorded. `CLAUDE.md` wins over any lesson; an ADR wins over a habit.
+2. **Write it down where the decision lives** — `CLAUDE.md` for a product or
+   architecture rule, an ADR in the token repo for anything with alternatives
+   worth preserving, this file for anything in flight.
+3. **State the cost of the option you rejected.** A decision recorded with its
+   cost can be reversed on evidence; one recorded without can only be
+   reargued. ADR-0008 is the model — three modes, costed, with a written
+   trigger for switching.
+4. **Flag it in the session report**, plainly, as *"I decided X, here is what
+   it rules out."* The student reverses it by saying so.
+
+**This is not licence to guess quietly.** The failure mode it replaces —
+stopping and waiting — is now impossible, so the only remaining failure mode
+is a decision buried where nobody sees it. **An unflagged assumption is worse
+than a question.**
+
+**Still stop for:** anything irreversible or outward-facing — pushing to a
+remote, deleting work that git cannot bring back, anything that leaves the
+machine. Everything inside this repo is recoverable, so none of the ordinary
+work qualifies.
+
+**Two questions that are permanently closed.** Do not reopen either:
+
+- **The lookahead question** — raised 2026-08-18, -20, -21, -22, answered
+  "keep going" every time.
+- **Where the student is in the course** — asked 2026-08-23 and declined:
+  *"dont ask as it wont affect your work or plan."* `CLAUDE.md`'s other half
+  still stands and is now the whole rule: **never infer progress from the
+  files either.** Make no claims about it at all.
+
+**If you ever do need to ask — how, based on what worked.** The three
+decisions answered on 2026-08-20 landed only after being restated in **money,
+minutes and concrete failure**, with each option's cost spelled out. The first
+framing named ADR numbers and `iceTransportPolicy` and got nothing back. The
+second said "voice is effectively free, video costs about 450 MB an hour, and
+if the relay server goes down nobody can call" — and got a decision, plus a
+better answer than any option offered ("keep all 3"). **Never ask an
 architecture question in architecture vocabulary.**
 
 ## Blocked on
