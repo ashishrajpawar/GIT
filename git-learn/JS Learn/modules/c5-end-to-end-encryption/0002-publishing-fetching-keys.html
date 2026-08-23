@@ -190,6 +190,53 @@ router.post('/keys', requireAuth, async (req, res, next) =&gt; {
       </ol>
     </div>
 
+    <div class="callout warning">
+      <div class="callout-title">Token uses the first defence and does not surface it — a deliberate product decision</div>
+
+      <p>Decided 2026-08-23. <strong>A key change is accepted silently: no
+      warning, no banner, no fingerprint prompt.</strong> The reasoning is
+      specific to this product rather than general. Most Token conversations
+      are with a delivery driver or a shop who redeemed a token. You will never
+      compare a safety number with them, so the warning would be dismissed
+      every time — and a warning users are trained to dismiss is worse than
+      none, because it is the same tap as the one that matters.</p>
+
+      <p><strong>The honest consequence, and it belongs in the same paragraph
+      as the decision:</strong></p>
+
+      <blockquote>Token is end-to-end encrypted <strong>against a server that
+      stores and does not attack.</strong> The server holds ciphertext and no
+      key, so it cannot read messages. It is <em>not</em> protected against a
+      server that actively substitutes a key, because nothing tells the user
+      that happened.</blockquote>
+
+      <p>That is a real posture, not a euphemism — iMessage was exactly this
+      until Contact Key Verification shipped in 2023. It is also
+      <strong>not</strong> a false store declaration: the data genuinely is
+      end-to-end encrypted, which is what Google's Data Safety form asks. What
+      you must not write is <em>"nobody can intercept your messages"</em>.
+      What you can write is <em>"we store only ciphertext and hold no
+      key"</em>.</p>
+
+      <p><strong>Two things survive the decision, and removing them would turn
+      it from a trade into a hole:</strong></p>
+      <ul>
+        <li><strong>The rollback block stays.</strong> A different key at the
+        same or a lower version is still refused outright. That is a refusal,
+        not a notification — the user sees a send that did not go through, never
+        a dialog about keys — and no honest path produces it.</li>
+        <li><strong>The classification stays; only the policy moved.</strong>
+        <code>classifyPeerKey</code> still returns <code>warn</code>, because a
+        key change <em>is</em> a key change. The send path pins and logs rather
+        than prompting. <strong>That the product decision was a four-line edit
+        to the caller, and no edit at all to the function, is the argument for
+        having separated them.</strong></li>
+      </ul>
+
+      <p>Lesson 3's verification screen still exists and is reachable from
+      settings. It is never prompted.</p>
+    </div>
+
     <h3>Trust on first use, and its honest weakness</h3>
 
     <p>The first time you fetch someone's key there is nothing to compare it
@@ -660,11 +707,26 @@ export async function keyForSending(peerId) {
       return fetched.publicKey;
 
     case 'warn':
-      // Stops the send. The UI shows the change, offers re-verification,
-      // and only pins if the user accepts. verificationLost tells it
-      // whether to say "you verified this before" -- which is the
-      // difference between a mild notice and a serious one.
-      throw new PeerKeyChangedError(verdict);
+      // PRODUCT DECISION, 2026-08-23: accept silently. Most Token
+      // conversations are with a delivery driver or a shop who redeemed
+      // a token; the user will never compare fingerprints with them, so
+      // a crypto warning here is noise they learn to dismiss.
+      //
+      // The classification is still 'warn' -- that is what a key change
+      // IS. What changed is the policy applied to it, which is why this
+      // is a four-line edit rather than a rewrite of the function.
+      //
+      // The cost, stated where it is being paid: an actively malicious
+      // server can substitute a key and nothing surfaces it. Token is
+      // end-to-end encrypted against a server that stores and does not
+      // attack. See CLAUDE.md.
+      await recordKeyChange(peerId, verdict);   // logged, not shown
+      await savePin(peerId, {
+        publicKey: fetched.publicKey,
+        keyVersion: fetched.keyVersion,
+        verifiedAt: null,        // a new key was never verified
+      });
+      return fetched.publicKey;
 
     case 'block':
       throw new PeerKeyUnusableError(verdict);

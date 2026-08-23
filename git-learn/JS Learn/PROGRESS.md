@@ -4,7 +4,7 @@
      Regenerate with: node scripts/audit.mjs
      Hand-written session state lives in SESSION.md, never here. -->
 
-Generated 2026-08-22 from the files on disk. Where any other document disagrees
+Generated 2026-08-23 from the files on disk. Where any other document disagrees
 with this one, this one is right — everything below is measured, not asserted.
 
 ## Summary
@@ -14,7 +14,7 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 99 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
 | Quiz questions (track) | 2666 |
-| Avg teaching prose per track lesson | 2037 words |
+| Avg teaching prose per track lesson | 2042 words |
 | Lessons with a playground | 90 / 99 |
 | Lessons with an exercise | 99 / 99 |
 | **Deepened** (all 3 spine sections) | 16 / 99 |
@@ -95,7 +95,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b7-token-engine | 3 | 3211 | 7 | 6 | 77 | 3/3 | 3/3 |
 | b8-push-notifications | 1 | 1420 | 1 | 1 | 25 | 0/1 | 0/1 |
 | b9-docker-deployment | 3 | 2298 | 3 | 3 | 77 | 2/3 | 0/3 |
-| c5-end-to-end-encryption | 3 | 1362 | 6 | 6 | 76 | 0/3 | 3/3 |
+| c5-end-to-end-encryption | 3 | 1538 | 6 | 6 | 76 | 0/3 | 3/3 |
 | x1-git-dev-environment | 3 | 698 | 1 | 3 | 76 | 0/3 | 0/3 |
 | x2-debugging | 2 | 778 | 1 | 2 | 50 | 0/2 | 0/2 |
 
@@ -223,8 +223,8 @@ so they do not hold the audit red. They are **not** resolved.
 | b9-docker-deployment/0002-coolify-setup.html | 2663 | 12 | 1 | 1 | 26 | yes | n/a |
 | b9-docker-deployment/0003-logs-backups-monitoring.html | 1827 | 17 | 1 | 1 | 25 | — | n/a |
 | c5-end-to-end-encryption/0001-keys-on-the-device.html | 1371 | 5 | 2 | 2 | 26 | — | yes |
-| c5-end-to-end-encryption/0002-publishing-fetching-keys.html | 1426 | 3 | 2 | 2 | 25 | — | yes |
-| c5-end-to-end-encryption/0003-verification-safety-numbers.html | 1289 | 4 | 2 | 2 | 25 | — | yes |
+| c5-end-to-end-encryption/0002-publishing-fetching-keys.html | 1782 | 3 | 2 | 2 | 25 | — | yes |
+| c5-end-to-end-encryption/0003-verification-safety-numbers.html | 1462 | 4 | 2 | 2 | 25 | — | yes |
 | x1-git-dev-environment/0001-git-fundamentals.html | 790 | 9 | 1 | 1 | 26 | — | n/a |
 | x1-git-dev-environment/0002-github-workflow.html | 719 | 7 | 0 | 1 | 25 | — | n/a |
 | x1-git-dev-environment/0003-dev-environment.html | 586 | 13 | 0 | 1 | 25 | — | n/a |

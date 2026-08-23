@@ -1019,6 +1019,81 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
+### Settled 2026-08-23 — key backup, multi-device, and the key-change UX
+
+Three put with options; the first two answers came back as free text and one
+of them conflicted with a constraint recorded the day before, so it was put
+back with the cost spelled out.
+
+| Question | Answer |
+|---|---|
+| **Key backup** | **Split** — everything but message bodies auto-restores from the phone number |
+| **Multi-device** | **One device for v1** |
+| **Key-change UX** | **Show nothing at all** — silent accept |
+
+### The one that had to go back to the student
+
+The first answer was *"once logged in with the same number, data is auto
+restored"* — no passphrase. **That cannot be built without removing E2EE**, and
+the reason is short enough to state exactly: for data to return from a phone
+number alone, the server must be able to release the key, which means it can
+release it to itself. Not weakened encryption — its absence. And `b10/0002`
+and `a11/0005` now declare end-to-end encryption to both stores.
+
+**Put back with the split as the recommendation, and the student took it.**
+What made that work was checking what is *actually* encrypted:
+
+| Auto-restores from an OTP alone | Needs the recovery phrase |
+|---|---|
+| Token list, labels, rules, expiry, max uses | Message **bodies** only |
+| Redemption history, conversation list, timestamps | |
+| Display name, avatar | |
+
+**The user gets their whole working state back with nothing to write down.**
+Only the words inside messages need the phrase. That was not a compromise
+invented to end an argument — it is what the schema already was, and nobody
+had looked.
+
+### The key-change answer stands, and the guarantee is now stated narrowly
+
+*"As long as the token is approved, changing key is more technical, user should
+not be notified."* Put back once with the consequence; the student chose
+**Show nothing at all** having read it. That is their decision and it is
+recorded as one.
+
+**I also overstated the case and corrected it.** I had called E2EE-plus-silent-
+key-acceptance "incoherent". It is not — it is a real and common posture:
+
+> Token is end-to-end encrypted **against a server that stores and does not
+> attack.** The server holds ciphertext and no key. It is not protected against
+> a server that actively substitutes a key, because nothing surfaces that.
+
+iMessage was exactly this until Contact Key Verification in 2023, and the store
+declaration stays true — Google's Data Safety form asks whether data is
+end-to-end encrypted, and it is. **What must not be written is "nobody can
+intercept your messages."** What can be written is "we store only ciphertext
+and hold no key."
+
+### The decision cost four lines, and that is the argument for the split
+
+`classifyPeerKey` **did not change at all.** It still returns `warn` for a
+rotation, because a key change *is* a key change — that is a classification,
+and it is still true. What changed is the policy the caller applies: the send
+path now pins and logs instead of throwing.
+
+Both lessons re-verified untouched, self-checks and wrong-cases passing,
+**including the assertion that the function never pins silently** — because it
+still does not. The pinning moved to the caller, where policy belongs.
+
+**Keep this separation.** It is the reason a product decision that reverses the
+user-facing behaviour of a security feature was a four-line edit rather than a
+rewrite of a function and its eleven wrong-cases.
+
+Two things deliberately survive, and removing them would turn the trade into a
+hole: **the rollback block stays** (a refusal, not a notification — the user
+sees a failed send, never a crypto dialog), and **`c5/0003` stays reachable
+from settings**, never prompted.
+
 ### c5/0003 — verification, and the one line that makes it impossible (2026-08-22)
 
 M3: **`safetyNumber`**. 18 self-checks, 11 wrong-cases. **99 track lessons,
@@ -1482,20 +1557,15 @@ produce, in order:
 3. **Write C5 — end-to-end encryption.** **`0001`, `0002` and `0003` done
    2026-08-22** — everything ADR-0002 determines. **The remaining two are
    blocked on decisions and must not be guessed:**
-   - **`0004` (backup &amp; recovery)** — ADR-0002 requires it at launch and
-     forbids a server-held copy. One constraint is already fixed by this
-     session: **the key backup must not be recoverable by SMS alone**, or a
-     SIM-swap takes the message history along with the account. The open
-     question is *what the user actually does* — a recovery phrase they write
-     down, a passphrase-wrapped blob the server stores blind, or an export to
-     their own cloud.
-   - **`0005` (multi-device)** — ADR-0002 says multi-device needs explicit key
-     sharing because there is no server copy to sync from. The open question
-     is the linking mechanism, and whether history transfers to a new device
-     at all.
-
-   **Ask before writing either.** Both change what the lessons contain, not
-   just their examples.
+   - **`0004` (backup &amp; recovery)** — **unblocked 2026-08-23.** The split:
+     everything but message bodies auto-restores from the phone number; a
+     12-word phrase, offered and skippable, unlocks message text. Ready to
+     write.
+   - **`0005` (multi-device)** — **the student chose one device for v1**, so
+     this lesson has no product to describe. Options: rewrite it as *"why
+     Token is single-device, and what it would cost to change"* — which is
+     genuinely useful, since the answer shapes C5's whole key model — or drop
+     it and make C5 four lessons. **Decide when `0004` lands.**
 4. **`a3/0002` M3 extraction**, then **`a2` runtime type guards**.
 5. The small `a8/0004` fix — `tokenCode` is sent over the WebSocket on every
    chat message, twice. The holder knows the code so nothing leaks to *them*,

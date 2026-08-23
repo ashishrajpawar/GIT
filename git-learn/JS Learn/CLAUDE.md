@@ -678,6 +678,58 @@ Most "no phone number" phrasing across the course is about the first and is
 fine. `b10/0002` was making the second claim, in a compliance document, and was
 corrected. **When you see the phrase, check which one it means.**
 
+### Key backup, and what "end-to-end encrypted" covers (decided 2026-08-23)
+
+**Signing in with the phone number restores everything except message
+bodies.** The token list, labels, rules, expiry, max uses, redemption history,
+conversation list, timestamps, display name and avatar are all server-side and
+not encrypted to a user key — so a new phone gets the entire working state back
+from an OTP alone, with nothing to write down.
+
+**Message bodies need a 12-word recovery phrase**, offered at sign-up and
+skippable. A user who skips it loses old message *text* on a new device and
+nothing else. This is what keeps ADR-0002 true: the server never holds a key it
+can use, so it cannot read messages, and a SIM-swap gets the token list but not
+the conversations.
+
+> Full auto-restore was considered and rejected on 2026-08-23, after the cost
+> was spelled out: for data to return from a phone number alone the server must
+> be able to release the key, which means it can release it to itself. That is
+> not weakened E2EE, it is the absence of it — and `b10/0002` and `a11/0005`
+> now declare end-to-end encryption to Google Play and Apple.
+
+**A key change is accepted silently** (decided 2026-08-23). No warning, no
+banner, no safety-number prompt in the normal flow. The student's reasoning:
+most Token conversations are with a delivery driver or a shop who redeemed a
+token, the user will never verify a fingerprint with them, and a cryptographic
+warning is noise they will learn to dismiss.
+
+**State the guarantee accurately, because it is narrower than "E2EE" alone
+implies:**
+
+> Token is end-to-end encrypted **against a server that stores and does not
+> attack.** The server holds only ciphertext and cannot read messages. It is
+> **not** protected against a server that actively substitutes a key in the
+> directory, because nothing surfaces that substitution to the user.
+
+That is a real and common posture — iMessage was exactly this until Contact Key
+Verification. It is **not** a false store declaration: the data genuinely is
+end-to-end encrypted. Do not write "nobody can intercept your messages"; do
+write "we store only ciphertext and hold no key".
+
+**Two things survive the decision and must not be removed:**
+
+- **The rollback block stays.** `c5/0002` refuses a different key at the same
+  or a lower version outright. That is a refusal, not a notification — the user
+  sees a failed send, never a crypto dialog — and no honest path produces it.
+- **The classification stays; only the policy changed.** `classifyPeerKey`
+  still returns `warn` for a rotation, because that is what it *is*. The send
+  path now pins and logs instead of prompting. Keeping the pure function honest
+  and moving the product decision to its caller is why this was a small change.
+
+`c5/0003`'s verification screen remains reachable from settings for anyone who
+wants it, and is never prompted.
+
 ### Communication
 - Chat: WebSocket on own server, routed across nodes through Redis pub/sub
 - Voice/video: WebRTC (`react-native-webrtc` on mobile, native APIs in browser)
