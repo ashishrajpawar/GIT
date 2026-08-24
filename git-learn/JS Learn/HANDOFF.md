@@ -3195,3 +3195,87 @@ open, and a set of cases that only pushes one way stops being a specification
 and becomes a slogan.
 
 **Result: 90 verified, 11 `unverifiable`.** Audit green, six suites pass.
+
+---
+
+### Session of 2026-08-24 (continued) — x1/0001, and a rule that is not a precedence rule
+
+First of the X1 trio. M3: `isIgnored` — 24 self-checks, 10 wrong-cases, 3 new
+executable quiz questions.
+
+X1's three lessons were the oldest `unverifiable` entries in the log, all
+excused with the same reason: *"the solution is git and shell setup rather
+than runnable code"*. That reason was wrong. **`.gitignore` is not
+configuration — it is a pattern language with a precedence order and a tree
+walk**, and it behaves procedurally while reading declaratively, which is
+precisely the combination that produces bugs nobody can explain.
+
+#### The rule worth the whole lesson
+
+```
+node_modules/
+!node_modules/patched/index.js     # does nothing at all
+```
+
+The explanation people reach for is that the first line beat the second on
+precedence. It did not. **Git does not evaluate patterns against every file in
+the repository** — it walks the tree, and when a *directory* is excluded it
+never descends into it. The negation naming the file inside is therefore never
+reached. It did not lose; it was never considered.
+
+That distinction is load-bearing rather than pedantic, because it is what makes
+`node_modules/*` behave differently from `node_modules/`: excluding the
+contents leaves the directory itself includable, so git still looks inside and
+the negation gets a turn.
+
+The best wrong-case in the file is built on exactly that: an implementation
+with **perfect precedence and no ancestor walk**. Getting the precedence rules
+right does not produce this behaviour, which is the point.
+
+#### Three more, each one character apart from its opposite
+
+- A **bare name matches at any depth**. `.env` is not "the `.env` in the root";
+  it matches `api/.env` as well.
+- A **slash anywhere anchors to the root**. So adding one to be "more specific"
+  silently converts the rule from *anywhere* to *exactly here* — the opposite
+  of the previous rule, reached by typing one character.
+- A **trailing slash is directories only**, and leaves a file of the same name
+  tracked.
+
+#### A real defect in the lesson's own .gitignore
+
+It listed `.env` and `.env.local`: the two files that exist on the machine
+today. `.env.production` matches neither, so it gets committed — silently,
+because git only warns about files it is already tracking. Under ADR-0007 that
+file holds `TOKEN_CODE_PEPPER` and `TOKEN_CODE_KEY`.
+
+Replaced with `.env.*` plus `!.env.example`, and added the signing-key patterns
+(`*.keystore`, `*.jks`, `*.p8`, `*.p12`, `*.mobileprovision`) — an Android
+keystore is the one secret that cannot be rotated for an app that is already
+published, so committing it is the mistake with no remedy at all.
+
+The general form: **ignore the shape of the name, not the names you happen to
+have.** A rule written from today's directory listing goes out of date without
+saying so.
+
+#### Why these are hard to find at all
+
+The direction of failure decides it. A `.gitignore` bug that ignores **too
+much** is loud — the file is missing from the repo and somebody notices within
+the hour. A bug that ignores **too little** is silent, and the thing it commits
+is the thing you were trying to keep out. Six of the ten wrong-cases fail that
+way, and the two loud ones are the two that would be caught by ordinary use.
+
+#### Two bugs that hide each other
+
+An unescaped `.` in the compiled glob and a regex without `^`/`$` anchors are
+independent mistakes, and **a fixture exercising one will pass an
+implementation that has the other**: `^.env$` tested against `aenv.bak` comes
+back false purely because of the anchors, so the unescaped dot goes unnoticed.
+
+A wrong-case tripped the wrong check and exposed it. Each now has its own
+fixture — `aenv` for the escaping, `latest.txt` against `test` for the
+anchoring. Eighth time a wrong-case has found a gap in the self-check beside
+it.
+
+**Result: 91 verified, 10 `unverifiable`.** Audit green, six suites pass.

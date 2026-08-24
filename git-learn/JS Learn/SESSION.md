@@ -22,14 +22,14 @@ how far it got.
 **Nothing in flight.** Working tree clean, everything committed.
 
 **Started the `unverifiable` cluster** — the recommended body of work in
-*Next action*. **A7 and A10 are both finished.** 11 to go. See below.
+*Next action*. A7 and A10 are finished; X1 is one of three. 10 to go.
 
 **State as of 2026-08-23** — run `node scripts/audit.mjs` before trusting any
 of it:
 
 - **101 lessons.** Audit **green**, 2 warnings, six suites pass.
 - **Every lesson has been executed at least once.** The verification log has
-  no absent entries: **90 verified, 11 `unverifiable`** with a stated reason,
+  no absent entries: **91 verified, 10 `unverifiable`** with a stated reason,
   1 `nothing-to-verify`. All four remaining A7 lessons moved across on
   2026-08-23/24.
 - **`known-issues.json` is down to one entry** — `calls`, gated on B6.
@@ -40,6 +40,66 @@ of it:
 
 **Nothing is blocked.** See *Next action* for the four candidate bodies of
 work and why the `unverifiable` cluster is the recommendation.
+
+### x1/0001 — .gitignore is not configuration (2026-08-24)
+
+M3: **`isIgnored`**. 24 self-checks, 10 wrong-cases, 3 new executable quiz
+questions. First of the X1 trio, and **the "git and shell setup rather than
+runnable code" excuse was wrong again** — `.gitignore` is a pattern language
+with a precedence order and a tree walk.
+
+**The rule that costs an afternoon, and it is not a precedence rule at all:**
+
+```
+node_modules/
+!node_modules/patched/index.js     # does nothing
+```
+
+Git does not evaluate patterns against every file. It **walks the tree, and
+never descends into an excluded directory** — so the negation naming the file
+inside is never reached. The negation did not lose the precedence contest; it
+was never considered. That is exactly why `node_modules/*` behaves
+differently: excluding the *contents* leaves git willing to look inside.
+
+The wrong-case for this is the interesting one — an implementation with
+**perfect precedence and no ancestor walk** gets it wrong, so getting
+precedence right does not fix it.
+
+### Three more rules that are one character apart
+
+- **A bare name matches at any depth.** `.env` is not "the `.env` in the
+  root"; it matches `api/.env` too.
+- **A slash *anywhere* anchors to the root.** So adding one to be "more
+  specific" silently changes the rule from *anywhere* to *exactly here*.
+- **A trailing slash is directories only**, and leaves a file of that name
+  tracked.
+
+### And a real defect in the lesson's own .gitignore
+
+It listed `.env` and `.env.local` — **the two files on the machine today** —
+and not `.env.*`. So `.env.production` is committed, silently, because git
+only warns about files it already tracks. Under ADR-0007 that file holds
+`TOKEN_CODE_PEPPER` and `TOKEN_CODE_KEY`. Added `.env.*` with
+`!.env.example`, plus the signing-key patterns (`*.keystore`, `*.jks`,
+`*.p8`, `*.p12`, `*.mobileprovision`) — an Android keystore is the one secret
+that cannot be rotated for an app already published.
+
+**Ignore the shape of the name, not the names you happen to have.**
+
+### The direction of failure is what makes these hard to find
+
+A `.gitignore` bug that ignores **too much** is loud: the file is missing from
+the repo and you notice within the hour. One that ignores **too little** is
+silent, and what it commits is the file you were trying to keep out. Six of
+the ten wrong-cases fail that way.
+
+### Two bugs that hide each other
+
+An unescaped `.` in the compiled glob and an unanchored regex are separate
+mistakes, and **a fixture exercising one will pass an implementation with the
+other** — `^.env$` against `aenv.bak` is false purely because of the anchors.
+The self-check now has a case for each, added because a wrong-case tripped the
+wrong check.
 
 ### a10/0002 — the lock that only works if you never change the setting (2026-08-24)
 
@@ -1917,23 +1977,23 @@ executed; the log is 84 verified, 17 `unverifiable` with a reason, 1
 
 What is left, in no forced order:
 
-1. **The `unverifiable` lessons — started 2026-08-23; all of A7 and all of
-   A10 done, 11 left.**
+1. **The `unverifiable` lessons — started 2026-08-23; all of A7, all of A10
+   and `x1/0001` done, 10 left.**
    `CLAUDE.md` warns that the reflex to reach for that flag is wrong more often
    than it is right, and this pass proved it again — nine lessons that looked
    unrunnable produced nine exercises, and `a7/0001` then produced a tenth
-   plus two real defects. Remaining clusters: **B9 (3), X1 (3), B6 (2)**,
+   plus two real defects. Remaining clusters: **B9 (3), X1 (2), B6 (2)**,
    plus `a9/0001`, `b1/0003`, `b8/0001`. Each needs the same
    move: find the plain function, excuse the rest per-exercise, **and add the
-   `createExplain` prompt** — the 11 without one are exactly the 11 still
+   `createExplain` prompt** — the 10 without one are exactly the 10 still
    excused.
 
-   **Next in this cluster: `x1-git-dev-environment` (3 lessons).** These are
-   the oldest `unverifiable` entries in the log, all excused as *"git and
-   shell setup rather than runnable code"* — which is exactly the judgement
-   `CLAUDE.md` says is wrong more often than it is right. Likely plain
-   functions: a `.gitignore` match, a branch-name or commit-message
-   validator, a merge-conflict-marker detector, an `.env` parser.
+   **Next: `x1/0002-github-workflow.html`, then `x1/0003`.** `0001` settled
+   the question for this module — the "git and shell setup" excuse was wrong,
+   and `.gitignore` turned out to be a pattern language with a tree walk.
+   Likely plain functions: for `0002` a merge-conflict-marker parser or a
+   branch-name validator; for `0003` the tsconfig path-alias resolution its
+   monorepo section already describes, or `.nvmrc`-versus-semver matching.
 
    **Three results to carry in**, now confirmed across six lessons:
 

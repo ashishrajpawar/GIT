@@ -13,12 +13,12 @@ with this one, this one is right — everything below is measured, not asserted.
 |---|---|
 | Token-track lessons | 101 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
-| Quiz questions (track) | 2732 |
-| Avg teaching prose per track lesson | 2143 words |
+| Quiz questions (track) | 2735 |
+| Avg teaching prose per track lesson | 2147 words |
 | Lessons with a playground | 98 / 101 |
 | Lessons with an exercise | 101 / 101 |
 | **Deepened** (all 3 spine sections) | 16 / 101 |
-| **Verified** (code executed) | 90 / 101 |
+| **Verified** (code executed) | 91 / 101 |
 | Ran clean but had nothing to run | 0 / 101 |
 | Errors | 0 |
 | Known and blocked | 1 |
@@ -63,7 +63,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Type | Count |
 |---|---|
 | multiple-choice | 817 |
-| predict-output | 516 |
+| predict-output | 519 |
 | fill-blank | 461 |
 | spot-the-bug | 376 |
 | which-breaks | 283 |
@@ -96,7 +96,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b8-push-notifications | 1 | 1420 | 1 | 1 | 25 | 0/1 | 0/1 |
 | b9-docker-deployment | 3 | 2439 | 3 | 3 | 77 | 2/3 | 0/3 |
 | c5-end-to-end-encryption | 5 | 1671 | 10 | 10 | 126 | 0/5 | 5/5 |
-| x1-git-dev-environment | 3 | 698 | 1 | 3 | 76 | 0/3 | 0/3 |
+| x1-git-dev-environment | 3 | 853 | 2 | 4 | 79 | 0/3 | 1/3 |
 | x2-debugging | 2 | 1242 | 3 | 4 | 50 | 0/2 | 2/2 |
 
 ## Integrity checks
@@ -228,7 +228,7 @@ so they do not hold the audit red. They are **not** resolved.
 | c5-end-to-end-encryption/0003-verification-safety-numbers.html | 1462 | 4 | 2 | 2 | 25 | — | yes |
 | c5-end-to-end-encryption/0004-backup-recovery.html | 2354 | 1 | 2 | 2 | 25 | — | yes |
 | c5-end-to-end-encryption/0005-single-device.html | 1386 | 2 | 2 | 2 | 25 | — | yes |
-| x1-git-dev-environment/0001-git-fundamentals.html | 790 | 9 | 1 | 1 | 26 | — | n/a |
+| x1-git-dev-environment/0001-git-fundamentals.html | 1254 | 10 | 2 | 2 | 29 | — | yes |
 | x1-git-dev-environment/0002-github-workflow.html | 719 | 7 | 0 | 1 | 25 | — | n/a |
 | x1-git-dev-environment/0003-dev-environment.html | 586 | 13 | 0 | 1 | 25 | — | n/a |
 | x2-debugging/0001-react-native-debugging.html | 1188 | 11 | 2 | 2 | 25 | — | yes |

@@ -168,9 +168,19 @@ git merge feature/token-generation</code></pre>
     <pre><code># Node dependencies
 node_modules/
 
-# Environment secrets
+# Environment secrets — the glob matters, see below
 .env
-.env.local
+.env.*
+!.env.example
+
+# Signing keys. Committing these is the one mistake you cannot undo by
+# rotating a secret: an Android keystore cannot be changed for an app that
+# is already published.
+*.keystore
+*.jks
+*.p8
+*.p12
+*.mobileprovision
 
 # Build output
 dist/
@@ -183,13 +193,85 @@ Thumbs.db
 # Expo
 .expo/</code></pre>
 
+    <div class="callout warning">
+      <div class="callout-title">Listing the files you have, not the ones you
+      will have</div>
+      <p>The obvious version of those middle lines is <code>.env</code> and
+      <code>.env.local</code> — the two files on your machine today. It works
+      perfectly until somebody adds <code>.env.production</code>, which is
+      <strong>not</strong> matched by either, and commits it without a
+      warning because git only warns about files it is tracking.</p>
+      <p>For Token that file holds <code>TOKEN_CODE_PEPPER</code> and
+      <code>TOKEN_CODE_KEY</code>. ADR-0007 notes that losing them makes every
+      token ever issued permanently unusable; publishing them is the other
+      direction of the same disaster. <strong>Ignore the shape of the name,
+      not the names you happen to have</strong> — then re-include the one file
+      that is meant to be committed.</p>
+    </div>
+
     <p>For Token, this one <code>.gitignore</code> at the root covers all four folders. Each subfolder can add its own if needed, but usually the root one is enough.</p>
+
+    <h2>The four rules that make .gitignore behave unexpectedly</h2>
+
+    <p>It reads like a list of filenames. It is a small pattern language with
+    a precedence order, and four of its rules surprise people:</p>
+
+    <p><strong>1. A bare name matches at every depth.</strong>
+    <code>.env</code> does not mean "the <code>.env</code> in the root". It
+    matches <code>api/.env</code>, <code>app/config/.env</code>, and any other
+    file or directory with that name anywhere in the tree. This is usually
+    what you wanted, and it is not what most people think they wrote.</p>
+
+    <p><strong>2. A slash anywhere anchors the pattern to the root.</strong>
+    <code>/dist</code> and <code>api/dist</code> are both root-relative and
+    will not match <code>web/api/dist</code>. So adding a slash to be
+    "more specific" quietly changes the rule from <em>anywhere</em> to
+    <em>exactly here</em>.</p>
+
+    <p><strong>3. A trailing slash means directories only.</strong>
+    <code>dist/</code> ignores the directory and everything under it, and
+    leaves a <em>file</em> called <code>dist</code> tracked.</p>
+
+    <p><strong>4. The last matching line wins.</strong> Patterns are not a
+    set, they are a sequence, and <code>!</code> re-includes. That is why
+    <code>.env.*</code> followed by <code>!.env.example</code> works — and why
+    the same two lines in the opposite order would not.</p>
+
+    <div class="callout danger">
+      <div class="callout-title">And the one that costs an afternoon</div>
+      <p><strong>You cannot re-include a file inside a directory that has been
+      excluded.</strong></p>
+      <pre><code>node_modules/
+!node_modules/my-patched-lib/index.js   # does nothing at all</code></pre>
+      <p>Git does not evaluate your patterns against every file in the
+      repository. It walks the tree, and when a <em>directory</em> is
+      excluded it <strong>does not descend into it</strong> — so the file
+      inside is never considered, and the negation that mentions it by name is
+      never reached.</p>
+      <p>The behaviour is not "the negation lost the precedence contest". The
+      negation was never evaluated. That distinction is the whole reason the
+      fix is to exclude the directory's <em>contents</em>
+      (<code>node_modules/*</code>) rather than the directory itself, which
+      leaves git willing to look inside.</p>
+    </div>
+
+    <hr>
+
+    <h2>Now build it yourself</h2>
+
+    <div id="exercise-ignore"></div>
+
+    <div id="pg-exercise-ignore"></div>
 
     <hr>
 
     <h2>Exercise</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="explain-x1-0001"></div>
 
     <hr>
 
@@ -205,6 +287,7 @@ Thumbs.db
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -222,7 +305,242 @@ stagingArea.push(workingDirectory[1]); // types.ts
 console.log("Staged for commit:", stagingArea);
 console.log("Still unstaged:", workingDirectory.filter(f => !stagingArea.includes(f)));`);
 
+    createSolution("exercise-ignore", {
+      exercise: "Write isIgnored(filePath, patterns) — decide whether git would ignore a file, given the lines of a .gitignore.\n\nfilePath is a POSIX path relative to the repo root and always refers to a FILE, e.g. 'api/.env' or 'app/node_modules/x/index.js'.\n\npatterns is an array of raw lines.\n\nThe rules:\n\n1. Skip blank lines and lines whose first non-space character is #. Trim surrounding whitespace from every line.\n\n2. A leading ! makes the rule a re-inclusion.\n\n3. A trailing / means DIRECTORIES ONLY. It can match an ancestor directory of the file, never the file itself.\n\n4. A pattern containing a slash anywhere other than at the end is anchored to the repo root, and is matched against the whole path. A pattern with no slash is matched against the BASENAME, at any depth — '.env' matches 'api/.env'.\n\n5. In a pattern, * matches any run of characters except /, and ? matches exactly one non-/ character. Everything else is literal. (Real git also has **, character classes and escapes. Out of scope here.)\n\n6. The LAST matching line wins. Patterns are a sequence, not a set.\n\n7. THE ONE THAT COSTS AN AFTERNOON: if any ancestor DIRECTORY of the file is ignored, the file is ignored and no later negation can rescue it. Git does not evaluate your patterns against every file; it walks the tree and never descends into an excluded directory, so the negation naming the file inside is never reached.\n\nReturn true or false.",
+      hints: [
+        "Parse the lines into rules once — { negated, dirOnly, anchored, regex } — before matching anything. Doing the parsing inside the match loop makes rule 6 much harder to see.",
+        "Work out each ancestor directory path in turn, shallowest first, and give each one the ordinary last-match-wins treatment. Rule 7 falls out on its own: the moment an ancestor comes back ignored, return true without looking further.",
+        "For rule 5, build a RegExp by escaping every regex metacharacter EXCEPT * and ?, then replacing those two. Anchor it with ^ and $ so a pattern matches a whole name rather than part of one."
+      ],
+      solution: `function toRegExp(glob) {
+  // Escape every regex metacharacter, then re-enable the two glob ones.
+  // [^/]* rather than .* is what stops a pattern crossing a directory
+  // boundary -- 'api/*.env' must not match 'api/sub/x.env'.
+  const body = glob
+    .replace(/[.+^\${}()|[\\]\\\\]/g, "\\\\$&")
+    .replace(/\\*/g, "[^/]*")
+    .replace(/\\?/g, "[^/]");
+  return new RegExp("^" + body + "$");
+}
+
+function parseRules(lines) {
+  const rules = [];
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (line === "" || line.startsWith("#")) continue;
+
+    const negated = line.startsWith("!");
+    let body = negated ? line.slice(1) : line;
+
+    const dirOnly = body.endsWith("/");
+    if (dirOnly) body = body.slice(0, -1);
+
+    // A slash ANYWHERE in what is left anchors the pattern to the root.
+    // A leading slash is just the shortest way to write that.
+    const anchored = body.includes("/");
+    if (body.startsWith("/")) body = body.slice(1);
+
+    rules.push({ negated, dirOnly, anchored, re: toRegExp(body) });
+  }
+
+  return rules;
+}
+
+// Last match wins. No match at all means not ignored.
+function verdict(path, rules, isDir) {
+  let ignored = false;
+
+  for (const rule of rules) {
+    if (rule.dirOnly && !isDir) continue;
+
+    const subject = rule.anchored ? path : path.slice(path.lastIndexOf("/") + 1);
+    if (rule.re.test(subject)) ignored = !rule.negated;
+  }
+
+  return ignored;
+}
+
+function isIgnored(filePath, patterns) {
+  const rules = parseRules(patterns);
+  const segments = filePath.split("/");
+
+  // Ancestors first, shallowest to deepest. Git walks the tree and does not
+  // descend into an excluded directory, so the first ignored ancestor ends
+  // the question -- a negation naming something inside it is never reached.
+  for (let i = 1; i < segments.length; i++) {
+    if (verdict(segments.slice(0, i).join("/"), rules, true)) return true;
+  }
+
+  return verdict(filePath, rules, false);
+}`
+    });
+
+    createPlayground("pg-exercise-ignore", `// Write isIgnored(filePath, patterns) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+
+try {
+  if (typeof isIgnored !== "function") throw new Error("not written yet");
+
+  try {
+    check("an exact name at the root is ignored",
+          isIgnored(".env", [".env"]) === true,
+          "got false");
+  } catch (e) { check("an exact name at the root is ignored", false, "threw " + e.message); }
+
+  try {
+    // The one most people have backwards: a bare name is not root-only.
+    check("a bare name matches at any depth",
+          isIgnored("api/.env", [".env"]) === true,
+          "got false -- '.env' means the name anywhere, not the file in the root");
+  } catch (e) { check("a bare name matches at any depth", false, "threw " + e.message); }
+
+  try {
+    check("a file matching nothing is not ignored",
+          isIgnored("api/src/index.ts", ["node_modules/", ".env"]) === false,
+          "got true");
+  } catch (e) { check("a file matching nothing is not ignored", false, "threw " + e.message); }
+
+  try {
+    check("a leading slash anchors to the root",
+          isIgnored("dist/bundle.js", ["/dist"]) === true &&
+          isIgnored("api/dist/bundle.js", ["/dist"]) === false,
+          "root dist=" + isIgnored("dist/bundle.js", ["/dist"]) +
+          " nested dist=" + isIgnored("api/dist/bundle.js", ["/dist"]));
+  } catch (e) { check("a leading slash anchors to the root", false, "threw " + e.message); }
+
+  try {
+    // A slash in the MIDDLE anchors too. Adding one to be "more specific"
+    // silently changes the rule from anywhere to exactly-here.
+    check("a slash in the middle also anchors",
+          isIgnored("api/dist/x.js", ["api/dist"]) === true &&
+          isIgnored("web/api/dist/x.js", ["api/dist"]) === false,
+          "direct=" + isIgnored("api/dist/x.js", ["api/dist"]) +
+          " nested=" + isIgnored("web/api/dist/x.js", ["api/dist"]));
+  } catch (e) { check("a slash in the middle also anchors", false, "threw " + e.message); }
+
+  try {
+    check("a trailing slash ignores the directory and its contents",
+          isIgnored("app/node_modules/lib/index.js", ["node_modules/"]) === true,
+          "got false");
+    // ...and leaves a FILE of the same name alone.
+    check("a trailing slash does not match a file of the same name",
+          isIgnored("dist", ["dist/"]) === false,
+          "got true -- 'dist/' is directories only");
+  } catch (e) { check("a trailing slash ignores the directory and its contents", false, "threw " + e.message); }
+
+  try {
+    check("* matches within a name",
+          isIgnored("logs/app.log", ["*.log"]) === true,
+          "got false");
+  } catch (e) { check("* matches within a name", false, "threw " + e.message); }
+
+  try {
+    // * must not cross a directory boundary, which is why the glob compiles
+    // to [^/]* rather than .*
+    check("* does not cross a slash",
+          isIgnored("api/sub/x.env", ["api/*.env"]) === false,
+          "got true -- api/*.env is one level, not a subtree");
+  } catch (e) { check("* does not cross a slash", false, "threw " + e.message); }
+
+  try {
+    check("the last matching line wins",
+          isIgnored("important.log", ["*.log", "!important.log"]) === true ||
+          isIgnored("important.log", ["*.log", "!important.log"]) === false,
+          "");
+    check("a later negation re-includes",
+          isIgnored("important.log", ["*.log", "!important.log"]) === false,
+          "got true");
+    check("a later exclusion wins over an earlier negation",
+          isIgnored("keep.log", ["*.log", "!keep.log", "keep.log"]) === true,
+          "got false -- patterns are a sequence, not a set");
+  } catch (e) { check("the last matching line wins", false, "threw " + e.message); }
+
+  try {
+    // THE headline. Git never descends into an excluded directory, so the
+    // negation naming a file inside it is never even evaluated.
+    const r = isIgnored("node_modules/patched/index.js", [
+      "node_modules/",
+      "!node_modules/patched/index.js",
+    ]);
+    check("a negation cannot rescue a file inside an excluded DIRECTORY",
+          r === true,
+          "got false -- the negation was never reached; git did not look inside");
+  } catch (e) { check("a negation cannot rescue a file inside an excluded DIRECTORY", false, "threw " + e.message); }
+
+  try {
+    // The contrast that makes the rule legible: excluding the CONTENTS
+    // leaves git willing to descend, so the same negation now works.
+    const r = isIgnored("node_modules/patched/index.js", [
+      "/node_modules/*",
+      "!node_modules/patched",
+    ]);
+    check("excluding the contents instead leaves the negation reachable",
+          r === false,
+          "got true -- with the directory itself not excluded, the negation is evaluated");
+  } catch (e) { check("excluding the contents instead leaves the negation reachable", false, "threw " + e.message); }
+
+  try {
+    check("a # line is a comment, not a pattern",
+          isIgnored(".env", ["# .env"]) === false,
+          "got true");
+    check("blank lines are skipped",
+          isIgnored("a.txt", ["", "   ", "*.log"]) === false,
+          "got true");
+    check("surrounding whitespace is trimmed",
+          isIgnored("a.log", ["  *.log  "]) === true,
+          "got false");
+  } catch (e) { check("a # line is a comment, not a pattern", false, "threw " + e.message); }
+
+  try {
+    // The lesson's own defect: listing the files you have rather than the
+    // shape of the name.
+    check("'.env' alone does NOT cover .env.production",
+          isIgnored(".env.production", [".env", ".env.local"]) === false,
+          "got true -- neither literal name matches, which is the bug");
+    check("'.env.*' does cover it",
+          isIgnored(".env.production", [".env", ".env.*"]) === true,
+          "got false");
+    check("and .env.example is still re-includable",
+          isIgnored(".env.example", [".env", ".env.*", "!.env.example"]) === false,
+          "got true");
+  } catch (e) { check("'.env' alone does NOT cover .env.production", false, "threw " + e.message); }
+
+  try {
+    // A dot in a pattern is literal, not "any character".
+    check("a dot in a pattern is literal",
+          isIgnored("aenv", [".env"]) === false,
+          "got true -- '.' must be escaped when the glob is compiled");
+    // ...and the compiled regex has to be anchored at BOTH ends. This is a
+    // separate bug from the one above and needs its own fixture: an
+    // unescaped dot and an unanchored match are different mistakes.
+    check("a pattern matches a whole name, not part of one",
+          isIgnored("latest.txt", ["test"]) === false,
+          "got true -- without ^ and $, 'test' matches inside 'latest.txt'");
+  } catch (e) { check("a dot in a pattern is literal", false, "threw " + e.message); }
+
+  try {
+    check("? matches exactly one character",
+          isIgnored("a.txt", ["?.txt"]) === true &&
+          isIgnored("ab.txt", ["?.txt"]) === false,
+          "one=" + isIgnored("a.txt", ["?.txt"]) + " two=" + isIgnored("ab.txt", ["?.txt"]));
+  } catch (e) { check("? matches exactly one character", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write isIgnored(filePath, patterns) above, then press Run. (" + e.message + ")");
+}`);
+
+    createExplain("explain-x1-0001", {
+      prompt: "<code>node_modules/</code> followed by <code>!node_modules/patched/index.js</code> does nothing, and it is <em>not</em> because the first line beat the second on precedence. Explain what git actually does instead — and why that makes <code>node_modules/*</code> behave differently from <code>node_modules/</code>."
+    });
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is git and shell commands run against a real filesystem",
       exercise: "Create the Token project repo from scratch. Initialize git, create the four folders (app, web, api, shared), create a .gitignore that excludes node_modules and .env files, stage everything, and make your first commit with the message 'Initial Token project structure'.",
       hints: [
         "Use mkdir to create directories. Git doesn't track empty folders — you'll need at least one file in each (a .gitkeep file is conventional).",
@@ -490,6 +808,27 @@ git commit -m "Initial Token project structure"`
         ],
         correct: 1,
         explanation: "Good commit messages describe what changed and why. Messages like 'changes', 'more changes', 'fix' are useless when you look back at history trying to understand what happened. Write messages like 'Add token revocation endpoint' or 'Fix QR scanner crash on Android 13'."
+      },
+      {
+        type: "predict-output",
+        question: "A .gitignore listing the env files that exist today, checked against the one somebody adds next month. What prints?",
+        code: "const patterns = ['.env', '.env.local'];\n\nconst files = ['.env', '.env.local', '.env.production'];\n\n// A bare pattern with no glob is an exact name match.\nconst committed = files.filter((f) => !patterns.includes(f));\n\nconsole.log(committed.join(','));",
+        answer: ".env.production",
+        explanation: "Neither literal name matches, so the file is tracked — and git says nothing, because git only warns about files it is already tracking. For Token that file holds TOKEN_CODE_PEPPER and TOKEN_CODE_KEY. The fix is to ignore the SHAPE of the name rather than the names you happen to have: `.env.*` plus `!.env.example` to bring back the one that is meant to be committed. Writing down the files on your machine today is a rule that goes out of date silently."
+      },
+      {
+        type: "predict-output",
+        question: "Compiling a .gitignore pattern to a regular expression. Three ways to do it, against the filename 'aenv.bak'. What prints?",
+        code: "const name = 'aenv.bak';\n\nconst raw      = new RegExp('.env');            // nothing escaped, not anchored\nconst anchored = new RegExp('^' + '.env' + '$'); // anchored, dot still wild\nconst correct  = new RegExp('^' + '\\\\.env' + '$');\n\nconsole.log([raw, anchored, correct].map((r) => r.test(name)).join(' '));",
+        answer: "true false false",
+        explanation: "Two independent bugs and they hide each other. Unescaped, the dot is 'any character', so '.env' also matches 'aenv'. Unanchored, the pattern matches anywhere inside the name, so 'test' would match 'latest.txt'. Here the anchors alone happen to save it — which is exactly why both need their own test case: a fixture that only exercises one of them will pass an implementation that has the other. Both bugs ignore MORE than you asked for, which is the loud direction; the quiet ones ignore less."
+      },
+      {
+        type: "predict-output",
+        question: "This models git's tree walk: it checks each ancestor directory before the file, and stops at the first ignored directory. What prints?",
+        code: "function excluded(path) {\n  return path === 'node_modules';           // stands in for the rule 'node_modules/'\n}\n\nfunction walk(filePath) {\n  const parts = filePath.split('/');\n  for (let i = 1; i < parts.length; i++) {\n    const dir = parts.slice(0, i).join('/');\n    if (excluded(dir)) return 'stopped at ' + dir;\n  }\n  return 'reached ' + filePath;\n}\n\nconsole.log(walk('node_modules/patched/index.js'));",
+        answer: "stopped at node_modules",
+        explanation: "The walk never reaches the file, so a line saying `!node_modules/patched/index.js` is never evaluated at all. That is the part worth holding onto: the negation did not lose a precedence contest, it was never considered. Which is why `node_modules/*` behaves differently from `node_modules/` — excluding the CONTENTS leaves the directory itself includable, so git still descends and the negation gets a turn."
       }
     ]);
   </script>
