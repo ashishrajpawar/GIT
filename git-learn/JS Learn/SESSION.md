@@ -22,14 +22,14 @@ how far it got.
 **Nothing in flight.** Working tree clean, everything committed.
 
 **Started the `unverifiable` cluster** — the recommended body of work in
-*Next action*. A7 and A10 are finished; X1 is two of three. 9 to go.
+*Next action*. **A7, A10 and X1 are all finished.** 8 to go. See below.
 
 **State as of 2026-08-23** — run `node scripts/audit.mjs` before trusting any
 of it:
 
 - **101 lessons.** Audit **green**, 2 warnings, six suites pass.
 - **Every lesson has been executed at least once.** The verification log has
-  no absent entries: **92 verified, 9 `unverifiable`** with a stated reason,
+  no absent entries: **93 verified, 8 `unverifiable`** with a stated reason,
   1 `nothing-to-verify`. All four remaining A7 lessons moved across on
   2026-08-23/24.
 - **`known-issues.json` is down to one entry** — `calls`, gated on B6.
@@ -40,6 +40,62 @@ of it:
 
 **Nothing is blocked.** See *Next action* for the four candidate bodies of
 work and why the `unverifiable` cluster is the recommendation.
+
+### x1/0003 — paths is a router, not a dictionary, and X1 is finished (2026-08-24)
+
+M3: **`resolveAlias`**. 15 self-checks, 8 wrong-cases, 2 new executable quiz
+questions. **X1 is complete — three of three.** The "git and shell setup
+rather than runnable code" excuse was wrong all three times, and all three
+turned out to be an algorithm with a **precedence order**.
+
+**`paths` looks like a dictionary lookup and behaves like a longest-prefix
+router.** An exact pattern beats every wildcard; among wildcards the longest
+*prefix* wins; the order they are written in is irrelevant.
+
+**In a monorepo the wrong answer is usually a file that exists.** So resolving
+against the wrong pattern does not give "cannot find module" — it gives a type
+error about a symbol you have never heard of, in a file you did not mean to
+open.
+
+### The config defect: rootDir and a shared folder cannot both hold
+
+`api/tsconfig.json` had `"rootDir": "./src"` and imports `@token/shared/*`
+from outside it. That is `TS6059`, and with `declaration: true` the build
+simply stops.
+
+**The alias is not a trick that copies the file in.** It resolves to a real
+path outside `api/`, so that file becomes an input to the api build — and
+`rootDir` is a promise that every input lives under one directory. Removing
+`rootDir` is the fix; TypeScript then infers the common ancestor and the
+output nests one level deeper, which is a Dockerfile path change and nothing
+more.
+
+### Three mistakes passed everything, and the fixture was the reason
+
+The first draft's precedence fixtures used `"@token/*": ["./*"]` against
+`"@token/shared/*": ["./shared/*"]` — and **both resolve `@token/shared/types`
+to the same string**, so first-match, last-match and longest-prefix were
+indistinguishable. `CLAUDE.md` states the rule I broke: *choose fixture values
+that differ from what a wrong answer would produce.*
+
+Two more fixtures proved nothing for the same family of reason: the
+length-guard case failed the `startsWith` test first, so the guard was never
+reached, and the longest-prefix-versus-longest-pattern case used patterns
+where both metrics agree.
+
+### Two wrong-cases were written and then deleted, with the reasons kept
+
+Flagging these rather than quietly dropping them:
+
+- **`>=` instead of `>` on prefix length** differs from the correct answer
+  *only* when two prefixes are the same length, and **what TypeScript does on
+  that tie is not something I am confident enough to teach.** A wrong-case has
+  to encode a rule you are sure of, so it is gone rather than guessed at.
+- **The two-star guard is unreachable.** With a prefix/suffix split a key like
+  `@token/*/*` leaves a literal `*` in the suffix, which no ordinary specifier
+  can match. The guard stays in the solution as belt-and-braces, but the
+  self-check *cannot observe it* — and **a rule you cannot test is worth
+  knowing you cannot test.**
 
 ### x1/0002 — the check that cries wolf, and the one that stays silent (2026-08-24)
 
@@ -2030,25 +2086,33 @@ executed; the log is 84 verified, 17 `unverifiable` with a reason, 1
 
 What is left, in no forced order:
 
-1. **The `unverifiable` lessons — started 2026-08-23; all of A7, all of A10
-   and two of X1 done, 9 left.**
+1. **The `unverifiable` lessons — started 2026-08-23; all of A7, A10 and X1
+   done, 8 left.**
    `CLAUDE.md` warns that the reflex to reach for that flag is wrong more often
    than it is right, and this pass proved it again — nine lessons that looked
    unrunnable produced nine exercises, and `a7/0001` then produced a tenth
-   plus two real defects. Remaining clusters: **B9 (3), B6 (2)**, plus `x1/0003`,
-   `a9/0001`, `b1/0003`, `b8/0001`. Each needs the same
+   plus two real defects. Remaining clusters: **B9 (3), B6 (2)**, plus `a9/0001`,
+   `b1/0003`, `b8/0001`. Each needs the same
    move: find the plain function, excuse the rest per-exercise, **and add the
-   `createExplain` prompt** — the 9 without one are exactly the 9 still
+   `createExplain` prompt** — the 8 without one are exactly the 8 still
    excused.
 
-   **Next: `x1/0003-dev-environment.html`**, which finishes X1. Its monorepo
-   section already describes tsconfig path aliases, so the likely plain
-   function is alias resolution — `@shared/*` to a real path, longest-prefix
-   wins, `baseUrl` relative. `.nvmrc`-versus-semver matching is the fallback.
+   **Next: `b9-docker-deployment` (3 lessons)** — the largest remaining
+   cluster, excused as needing Docker, a VPS, Coolify and DNS. Expect the
+   same result X1 just produced three times over: a Dockerfile is a layer
+   -cache algorithm, a compose file is a dependency graph, and `0003` is
+   already about logs and backups, where `b9/0003`'s redemption handler was
+   fixed on 2026-08-23 but nothing executable was added.
 
-   Both X1 lessons so far were excused as *"git and shell setup rather than
-   runnable code"* and both turned out to contain an algorithm with a
-   precedence order. **Assume `0003` does too.**
+   **Four results now carry forward**, confirmed across nine lessons:
+
+   - **The "not runnable code" excuse has been wrong 9 times out of 9.**
+   - Lessons hide **precedence, three-state, or exactly-once** problems.
+   - **The lesson often already holds the right answer** — in its quiz, or in
+     its body while the revealed solution contradicts it. Read both against
+     the prose.
+   - **A defect shape travels between sibling lessons** even when the feature
+     it attached to does not.
 
    **Three results to carry in**, now confirmed across six lessons:
 

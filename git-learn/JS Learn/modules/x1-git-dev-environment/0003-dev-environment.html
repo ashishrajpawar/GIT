@@ -161,11 +161,39 @@ build
     <pre><code>{
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "./dist",
-    "rootDir": "./src"
+    "outDir": "./dist"
+    // NO rootDir — see below. It is the obvious line to add and it
+    // breaks the build the first time you import from shared/.
   },
   "include": ["src/**/*"]
 }</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title"><code>rootDir</code> and a shared folder are
+      mutually exclusive</div>
+      <p>Writing <code>"rootDir": "./src"</code> beside
+      <code>"outDir": "./dist"</code> looks like the tidy, explicit thing to
+      do — it says "compile <code>src/</code> into <code>dist/</code>". Then
+      the first file does this:</p>
+      <pre><code>import { TokenCode } from '@token/shared/types';</code></pre>
+      <p>and the build stops:</p>
+      <pre><code>error TS6059: File '/token/shared/types.ts' is not under 'rootDir'
+'/token/api/src'. 'rootDir' is expected to contain all source files.</code></pre>
+      <p><strong>The alias is not a trick that copies the file in.</strong> It
+      resolves to a real path outside <code>api/</code>, so that file becomes
+      an input to the api build — and <code>rootDir</code> is a promise that
+      every input lives under one directory. The two cannot both be true while
+      <code>shared/</code> is consumed as source.</p>
+      <p>Leaving <code>rootDir</code> out is the fix. TypeScript then infers it
+      as the common ancestor of the actual inputs, which here is the repo root,
+      and the output nests one level deeper —
+      <code>dist/api/src/index.js</code> rather than
+      <code>dist/index.js</code>. Point your start script and Dockerfile at
+      that path and it is a non-event. <strong>The alternative is not "keep
+      <code>rootDir</code> and try harder"; it is to stop sharing source and
+      build <code>shared/</code> to its own output first</strong>, which is a
+      bigger change than this project wants.</p>
+    </div>
 
     <p>And <code>app/tsconfig.json</code>:</p>
 
@@ -179,6 +207,50 @@ build
     <p>The <code>@token/shared/*</code> path alias means any folder can import shared types with:</p>
 
     <pre><code>import { TokenCode, AccessRule } from '@token/shared/types';</code></pre>
+
+    <h2>How <code>paths</code> actually picks a mapping</h2>
+
+    <p>With one alias this looks like a dictionary lookup. It is not, and the
+    difference shows up the moment there are two. Suppose the base config grows
+    a second entry:</p>
+
+    <pre><code>"paths": {
+  "@token/*":        ["./*"],
+  "@token/shared/*": ["./shared/*"]
+}</code></pre>
+
+    <p>Now <code>import '@token/shared/types'</code> matches
+    <strong>both</strong> patterns. Which one wins?</p>
+
+    <div class="callout warning">
+      <div class="callout-title">The longest prefix wins — not the first
+      match</div>
+      <p>TypeScript does not take the first pattern in the object, and it does
+      not take the last. It compares how much <em>literal text sits before the
+      <code>*</code></em> and takes the most specific: <code>@token/shared/</code>
+      beats <code>@token/</code>, whichever order they are written in.</p>
+      <p>An exact pattern — one with no <code>*</code> at all — beats every
+      wildcard.</p>
+      <p>Assuming first-match-wins resolves <code>@token/shared/types</code> to
+      <code>./shared/types</code> instead of <code>./shared/shared/types</code>
+      … or the other way round, depending on which mistake you made.
+      <strong>In a monorepo the wrong answer is often a file that
+      exists</strong>, so you do not get "cannot find module". You get a type
+      error about a symbol you have never heard of, in a file you did not mean
+      to import.</p>
+    </div>
+
+    <p>Two smaller rules that follow from the same place:</p>
+
+    <ul>
+      <li><strong>Each key maps to an <em>array</em></strong>, tried in order,
+      first one that exists wins. That is how you shadow a generated file with
+      a hand-written one.</li>
+      <li><strong>The pattern has a suffix as well as a prefix.</strong>
+      <code>"@token/*.css"</code> matches <code>@token/theme.css</code> and not
+      <code>@token/theme</code> — the <code>*</code> captures only what is
+      between them.</li>
+    </ul>
 
     <h2>Package.json scripts</h2>
 
@@ -197,9 +269,21 @@ build
 
     <hr>
 
+    <h2>Now build it yourself</h2>
+
+    <div id="exercise-alias"></div>
+
+    <div id="pg-exercise-alias"></div>
+
+    <hr>
+
     <h2>Exercise</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="explain-x1-0003"></div>
 
     <hr>
 
@@ -213,12 +297,230 @@ build
   </div>
 
   <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
+    createSolution("exercise-alias", {
+      exercise: "Write resolveAlias(specifier, paths) — TypeScript's `paths` lookup, which is a precedence contest rather than a dictionary read.\n\nspecifier is an import string such as '@token/shared/types'.\npaths is the object from tsconfig: keys are patterns, values are ARRAYS of targets.\n\nReturn the array of candidate paths with the wildcard substituted, or [] if nothing matches.\n\nThe rules:\n\n1. A pattern containing no * is an EXACT pattern. It matches only a specifier equal to it, and it beats every wildcard pattern.\n\n2. A wildcard pattern has exactly one *. Split it into a prefix and a suffix; it matches when the specifier starts with the prefix, ends with the suffix, and is long enough for both not to overlap. The * captures everything between them.\n\n3. When several wildcard patterns match, THE LONGEST PREFIX WINS — not the first in the object, not the last, and not the longest pattern overall. '@token/shared/' beats '@token/' whichever order they appear in.\n\n4. Substitute the captured text into each target's *. A target with no * is used as it is.\n\n5. Every target for the winning pattern is returned, in order — they are candidates to try, not alternatives to choose between.\n\n6. No match returns []. That is not an error: it means the specifier is an ordinary package name and normal resolution takes over.\n\n7. A pattern with two or more * is invalid. Skip it rather than guessing.",
+      hints: [
+        "Handle the exact patterns in a separate pass before you look at any wildcard. Rule 1 is a different question from rule 3 and mixing them makes both harder.",
+        "For rule 3, keep the best match so far and its prefix length, and only replace it when you find a STRICTLY longer prefix. Using >= instead of > silently turns the rule into last-match-wins.",
+        "The capture is specifier.slice(prefix.length, specifier.length - suffix.length). Check that this is not negative before using it, or a specifier shorter than prefix+suffix produces nonsense that still looks like a match."
+      ],
+      solution: `function resolveAlias(specifier, paths) {
+  const keys = Object.keys(paths || {});
+
+  // 1. Exact patterns first, and they outrank every wildcard. Checking
+  //    them in a separate pass keeps rule 1 and rule 3 from tangling.
+  for (const key of keys) {
+    if (!key.includes("*") && key === specifier) {
+      return paths[key].slice();
+    }
+  }
+
+  let best = null;
+
+  for (const key of keys) {
+    const star = key.indexOf("*");
+    if (star === -1) continue;
+
+    // 7. Two stars is not a pattern TypeScript accepts. Skip, do not guess.
+    if (key.indexOf("*", star + 1) !== -1) continue;
+
+    const prefix = key.slice(0, star);
+    const suffix = key.slice(star + 1);
+
+    if (!specifier.startsWith(prefix)) continue;
+    if (!specifier.endsWith(suffix)) continue;
+
+    // Long enough that prefix and suffix do not overlap each other. Without
+    // this, '@token/' + 'types' against '@toke' produces a negative slice
+    // that still reads as a match.
+    if (specifier.length < prefix.length + suffix.length) continue;
+
+    // 3. STRICTLY longer. Using >= here would quietly mean last-match-wins.
+    if (best === null || prefix.length > best.prefix.length) {
+      best = {
+        prefix: prefix,
+        capture: specifier.slice(prefix.length, specifier.length - suffix.length),
+        targets: paths[key],
+      };
+    }
+  }
+
+  if (best === null) return [];
+
+  // 4 and 5. Every target, in order, with the capture substituted.
+  return best.targets.map(function (target) {
+    return target.includes("*") ? target.replace("*", best.capture) : target;
+  });
+}`
+    });
+
+    createPlayground("pg-exercise-alias", `// Write resolveAlias(specifier, paths) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+function show(v) { return JSON.stringify(v); }
+
+try {
+  if (typeof resolveAlias !== "function") throw new Error("not written yet");
+
+  try {
+    const r = resolveAlias("@token/shared/types", { "@token/shared/*": ["./shared/*"] });
+    check("a single wildcard substitutes the captured text",
+          eq(r, ["./shared/types"]),
+          "got " + show(r));
+  } catch (e) { check("a single wildcard substitutes the captured text", false, "threw " + e.message); }
+
+  try {
+    const r = resolveAlias("react-native", { "@token/shared/*": ["./shared/*"] });
+    check("a specifier matching nothing returns an empty list",
+          eq(r, []),
+          "got " + show(r) + " -- an ordinary package name is not an error");
+  } catch (e) { check("a specifier matching nothing returns an empty list", false, "threw " + e.message); }
+
+  try {
+    // THE rule. Both patterns match; the longer PREFIX has to win.
+    // The two targets MUST differ. With "@token/*" -> "./*" both patterns
+    // resolve to ./shared/types, so first-match, last-match and
+    // longest-prefix are indistinguishable and the check proves nothing.
+    const r = resolveAlias("@token/shared/types", {
+      "@token/*": ["./packages/*"],
+      "@token/shared/*": ["./shared/*"],
+    });
+    check("the longest prefix wins",
+          eq(r, ["./shared/types"]),
+          "got " + show(r) + " -- ./packages/shared/types means the broader pattern won");
+  } catch (e) { check("the longest prefix wins", false, "threw " + e.message); }
+
+  try {
+    // Same two patterns, written the other way round. Object order must
+    // make no difference at all -- this is what separates longest-prefix
+    // from first-match and from last-match.
+    const r = resolveAlias("@token/shared/types", {
+      "@token/shared/*": ["./shared/*"],
+      "@token/*": ["./packages/*"],
+    });
+    check("the order the patterns are written in changes nothing",
+          eq(r, ["./shared/types"]),
+          "got " + show(r) + " -- first-match and last-match both fail one of these two checks");
+  } catch (e) { check("the order the patterns are written in changes nothing", false, "threw " + e.message); }
+
+  try {
+    // Longest PREFIX, not longest pattern. These two metrics agree on almost
+    // every real config, so telling them apart needs a pattern with a short
+    // prefix and a long suffix competing against one with a longer prefix.
+    const r = resolveAlias("@token/shared/generated/types", {
+      "@token/*/generated/types": ["./gen/*"],
+      "@token/shared/*": ["./shared/*"],
+    });
+    check("longest prefix, not longest pattern overall",
+          eq(r, ["./shared/generated/types"]),
+          "got " + show(r) + " -- ./gen/shared means total pattern length decided it");
+  } catch (e) { check("longest prefix, not longest pattern overall", false, "threw " + e.message); }
+
+  try {
+    const r = resolveAlias("@token/config", {
+      "@token/*": ["./*"],
+      "@token/config": ["./config/production.ts"],
+    });
+    check("an exact pattern beats a wildcard",
+          eq(r, ["./config/production.ts"]),
+          "got " + show(r) + " -- no star means no substitution either");
+  } catch (e) { check("an exact pattern beats a wildcard", false, "threw " + e.message); }
+
+  try {
+    const r = resolveAlias("@token/shared/types", {
+      "@token/shared/*": ["./generated/*", "./shared/*"],
+    });
+    check("every target is returned, in order",
+          eq(r, ["./generated/types", "./shared/types"]),
+          "got " + show(r) + " -- they are candidates to try, not a choice to make");
+  } catch (e) { check("every target is returned, in order", false, "threw " + e.message); }
+
+  try {
+    const paths = { "@token/*.css": ["./styles/*.css"] };
+    const hit = resolveAlias("@token/theme.css", paths);
+    const miss = resolveAlias("@token/theme", paths);
+    check("the suffix has to match too",
+          eq(hit, ["./styles/theme.css"]) && eq(miss, []),
+          "hit=" + show(hit) + " miss=" + show(miss) + " -- the star captures only what is BETWEEN");
+  } catch (e) { check("the suffix has to match too", false, "threw " + e.message); }
+
+  try {
+    // prefix and suffix each match, and OVERLAP. "@token/index" starts with
+    // "@token/" and ends with "/index", but is one character too short to
+    // contain both -- so the capture slice runs backwards. A fixture that
+    // simply fails the prefix test never reaches this guard at all.
+    const r = resolveAlias("@token/index", { "@token/*/index": ["./*/index"] });
+    check("a specifier too short for prefix and suffix does not match",
+          eq(r, []),
+          "got " + show(r));
+  } catch (e) { check("a specifier too short for prefix and suffix does not match", false, "threw " + e.message); }
+
+  try {
+    const r = resolveAlias("@token/anything", { "@token/*": ["./shared/index.ts"] });
+    check("a target without a star is used literally",
+          eq(r, ["./shared/index.ts"]),
+          "got " + show(r));
+  } catch (e) { check("a target without a star is used literally", false, "threw " + e.message); }
+
+  try {
+    const r = resolveAlias("@token/a/b/c", { "@token/*": ["./*"] });
+    check("the star captures slashes as well",
+          eq(r, ["./a/b/c"]),
+          "got " + show(r) + " -- unlike a .gitignore glob, this one does cross directories");
+  } catch (e) { check("the star captures slashes as well", false, "threw " + e.message); }
+
+  try {
+    const r = resolveAlias("@token/x", { "@token/*/*": ["./*"], "@token/*": ["./ok/*"] });
+    check("a pattern with two stars is skipped, not guessed at",
+          eq(r, ["./ok/x"]),
+          "got " + show(r));
+  } catch (e) { check("a pattern with two stars is skipped, not guessed at", false, "threw " + e.message); }
+
+  try {
+    const r = resolveAlias("@token/", { "@token/*": ["./shared/*"] });
+    check("an empty capture is still a match",
+          eq(r, ["./shared/"]),
+          "got " + show(r) + " -- the star may capture nothing at all");
+  } catch (e) { check("an empty capture is still a match", false, "threw " + e.message); }
+
+  try {
+    const r = resolveAlias("other/@token/types", { "@token/*": ["./*"] });
+    check("the prefix has to be at the START",
+          eq(r, []),
+          "got " + show(r) + " -- an includes() test would match this");
+  } catch (e) { check("the prefix has to be at the START", false, "threw " + e.message); }
+
+  try {
+    const before = { "@token/*": ["./*"] };
+    const snapshot = show(before);
+    resolveAlias("@token/types", before);
+    check("the paths object is not modified",
+          show(before) === snapshot,
+          "it became " + show(before) + " -- a target array returned by reference and then mutated is a config that changes as you read it");
+  } catch (e) { check("the paths object is not modified", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write resolveAlias(specifier, paths) above, then press Run. (" + e.message + ")");
+}`);
+
+    createExplain("explain-x1-0003", {
+      prompt: "<code>\"rootDir\": \"./src\"</code> in <code>api/tsconfig.json</code> reads as a harmless statement of the obvious, and it stops the build the first time anything imports from <code>shared/</code>. Explain what the path alias actually does to the set of files TypeScript is compiling — and why that makes <code>rootDir</code> and a shared source folder incompatible rather than merely awkward."
+    });
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is nvm, VS Code extensions and npm-installed tooling on a real machine",
       exercise: "Set up the complete dev environment for your Token repo: install Node 20 via nvm, create .nvmrc, initialize package.json, install ESLint + Prettier, create the config files (eslint.config.js, .prettierrc, .prettierignore), create tsconfig.base.json and one per folder, add VS Code settings, then commit everything.",
       hints: [
         "Work from the repo root (the token/ folder). All config files go at the root level.",
@@ -503,6 +805,20 @@ git commit -m "Add dev tooling: ESLint, Prettier, TypeScript, VS Code config"`
         steps: ["Clone the repo", "nvm install (reads .nvmrc)", "npm install in each sub-project", "Open in VS Code — extensions auto-suggested via .vscode/extensions.json", "Run npm run lint to verify setup"],
         correctOrder: [0, 1, 2, 3, 4],
         explanation: "A well-configured project makes onboarding easy: clone, install the right Node version (from .nvmrc), install dependencies, open the editor (which suggests required extensions), and verify the toolchain works."
+      },
+      {
+        type: "predict-output",
+        question: "Two path patterns, both matching the same import. This resolves it three ways: first match, last match, and longest prefix. What prints?",
+        code: "const paths = {\n  '@token/*':        ['./packages/*'],\n  '@token/shared/*': ['./shared/*'],\n};\n\nconst spec = '@token/shared/types';\nconst keys = Object.keys(paths);\n\nconst matching = keys.filter((k) => spec.startsWith(k.slice(0, k.indexOf('*'))));\n\nconst apply = (k) =>\n  paths[k][0].replace('*', spec.slice(k.indexOf('*')));\n\nconst byPrefix = matching.reduce((a, b) =>\n  b.indexOf('*') > a.indexOf('*') ? b : a);\n\nconsole.log(apply(matching[0]) + ' | ' + apply(matching[matching.length - 1]) + ' | ' + apply(byPrefix));",
+        answer: "./packages/shared/types | ./shared/types | ./shared/types",
+        explanation: "Three answers, two of them wrong, and all three are real files in a monorepo of this shape — which is why the failure is not 'cannot find module'. It is a type error about a symbol you have never heard of, in a file you did not mean to open. TypeScript uses the third: the longest literal prefix before the star, regardless of the order the patterns are written in. Note that first-match and longest-prefix happen to agree if you write the specific pattern first, so a single example cannot tell them apart."
+      },
+      {
+        type: "predict-output",
+        question: "The capture is the text between the prefix and the suffix. This computes it for a specifier that is too short to hold both. What prints?",
+        code: "const spec = '@token/index';\nconst prefix = '@token/';    // 7 characters\nconst suffix = '/index';     // 6 characters\n\nconsole.log([\n  spec.startsWith(prefix),\n  spec.endsWith(suffix),\n  spec.length,\n  JSON.stringify(spec.slice(prefix.length, spec.length - suffix.length)),\n].join(' '));",
+        answer: "true true 12 \"\"",
+        explanation: "Both ends match and the pattern still does not, because 7 + 6 is more than 12 — the prefix and suffix would have to overlap. slice with a start past its end returns an empty string rather than throwing, so the pattern reports a confident match with an empty capture and resolves to a path nobody intended. The guard is `specifier.length < prefix.length + suffix.length`, and the reason it is easy to leave out is that the two obvious tests, startsWith and endsWith, both pass."
       }
     ]);
   </script>

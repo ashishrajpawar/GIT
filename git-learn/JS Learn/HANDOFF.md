@@ -3353,3 +3353,76 @@ styles was not a correct implementation. Both roles are useful, and only
 running them tells you which one you are getting.
 
 **Result: 92 verified, 9 `unverifiable`.** Audit green, six suites pass.
+
+---
+
+### Session of 2026-08-24 (continued) — x1/0003 finishes X1, and two cases deleted on purpose
+
+Last of the X1 trio. M3: `resolveAlias` — 15 self-checks, 8 wrong-cases, 2 new
+executable quiz questions. **X1 is complete.**
+
+All three X1 lessons carried the same excuse — *"the solution is git and shell
+setup rather than runnable code"* — and all three turned out to contain an
+algorithm with a **precedence order**. That is now nine lessons in a row where
+the "not runnable" judgement was wrong, which is enough to stop treating it as
+a judgement at all.
+
+#### `paths` is a router, not a dictionary
+
+An exact pattern beats every wildcard; among wildcards **the longest prefix
+wins**; and the order the patterns are written in is irrelevant. It reads like
+a lookup table and behaves like longest-prefix routing.
+
+The reason it matters here rather than being trivia: **in a monorepo the wrong
+answer is usually a file that exists.** Resolve `@token/shared/types` through
+the broad pattern instead of the specific one and you do not get "cannot find
+module" — you get a type error about a symbol you have never heard of, in a
+file you did not mean to open.
+
+#### The config defect
+
+`api/tsconfig.json` had `"rootDir": "./src"` alongside `"outDir": "./dist"`,
+which is the tidy, explicit-looking thing to write. It stops the build the
+first time anything imports from `shared/`, with `TS6059`.
+
+The point worth carrying: **the alias is not a trick that copies the file in.**
+It resolves to a real path outside `api/`, so `shared/types.ts` becomes an
+input to the api build — and `rootDir` is a promise that every input lives
+under one directory. The two cannot both be true while `shared/` is consumed as
+source. Removing `rootDir` is the fix; TypeScript infers the common ancestor,
+the output nests one level deeper, and that is a Dockerfile path change.
+
+#### Three mistakes passed everything, and the fixture was the cause
+
+The first draft's two precedence fixtures used `"@token/*": ["./*"]` against
+`"@token/shared/*": ["./shared/*"]`. Both resolve `@token/shared/types` to
+**the same string**, so first-match, last-match and longest-prefix were
+indistinguishable and three separate wrong-cases sailed through.
+
+`CLAUDE.md` already states the rule that was broken — *choose fixture values
+that differ from what a wrong answer would produce* — and this is a clean
+instance of it: the fixture was realistic, readable, and proved nothing.
+
+Two others failed for the same family of reason. The length-guard fixture
+failed the `startsWith` test first, so the guard it existed to exercise was
+never reached; and the longest-prefix-versus-longest-pattern case used two
+patterns where both metrics agree.
+
+#### Two wrong-cases written, then deleted, with the reasons kept
+
+Both are limits on what the exercise can honestly test, and both are recorded
+in the case file rather than quietly dropped:
+
+- **`>=` instead of `>` on prefix length.** It differs from the correct answer
+  *only* when two prefixes are the same length, and what TypeScript does on
+  that tie is not something this lesson is confident enough to teach. **A
+  wrong-case has to encode a rule you are sure of**, so it went rather than
+  being guessed at.
+- **The two-star guard.** With a prefix/suffix split, a key like `@token/*/*`
+  leaves a literal `*` in the suffix, which no ordinary specifier can match —
+  so the guard is unreachable. It stays in the solution as belt-and-braces,
+  but the self-check cannot observe it. **A rule you cannot test is worth
+  knowing you cannot test**, and writing that down is better than leaving a
+  case that appears to cover it.
+
+**Result: 93 verified, 8 `unverifiable`.** Audit green, six suites pass.
