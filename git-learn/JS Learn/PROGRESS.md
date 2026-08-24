@@ -13,12 +13,12 @@ with this one, this one is right — everything below is measured, not asserted.
 |---|---|
 | Token-track lessons | 101 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
-| Quiz questions (track) | 2730 |
-| Avg teaching prose per track lesson | 2138 words |
+| Quiz questions (track) | 2732 |
+| Avg teaching prose per track lesson | 2143 words |
 | Lessons with a playground | 98 / 101 |
 | Lessons with an exercise | 101 / 101 |
 | **Deepened** (all 3 spine sections) | 16 / 101 |
-| **Verified** (code executed) | 89 / 101 |
+| **Verified** (code executed) | 90 / 101 |
 | Ran clean but had nothing to run | 0 / 101 |
 | Errors | 0 |
 | Known and blocked | 1 |
@@ -63,7 +63,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Type | Count |
 |---|---|
 | multiple-choice | 817 |
-| predict-output | 514 |
+| predict-output | 516 |
 | fill-blank | 461 |
 | spot-the-bug | 376 |
 | which-breaks | 283 |
@@ -75,7 +75,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 |---|---|---|---|---|---|---|---|
 | 01-javascript-fundamentals | 13 | 2556 | 85 | 15 | 380 | 0/13 | 13/13 |
 | 02-react-native | 14 | 2641 | 39 | 14 | 355 | 0/14 | 14/14 |
-| a10-device-security | 2 | 2058 | 3 | 3 | 50 | 1/2 | 1/2 |
+| a10-device-security | 2 | 2273 | 4 | 4 | 52 | 1/2 | 2/2 |
 | a11-polish-publish | 5 | 2196 | 9 | 10 | 137 | 0/5 | 5/5 |
 | a2-typescript | 3 | 1099 | 5 | 6 | 76 | 0/3 | 3/3 |
 | a3-api-consumption | 4 | 1275 | 5 | 8 | 111 | 1/4 | 4/4 |
@@ -160,7 +160,7 @@ so they do not hold the audit red. They are **not** resolved.
 | 02-react-native/0013-token-list-screen.html | 2863 | 6 | 2 | 1 | 25 | — | yes |
 | 02-react-native/0014-message-thread-screen.html | 3405 | 8 | 2 | 1 | 25 | — | yes |
 | a10-device-security/0001-secure-storage.html | 2544 | 8 | 2 | 2 | 25 | yes | yes |
-| a10-device-security/0002-biometric-app-lock.html | 1572 | 9 | 1 | 1 | 25 | — | n/a |
+| a10-device-security/0002-biometric-app-lock.html | 2001 | 12 | 2 | 2 | 27 | — | yes |
 | a11-polish-publish/0001-animations-gestures.html | 2503 | 13 | 2 | 2 | 28 | — | yes |
 | a11-polish-publish/0002-theming-dark-mode.html | 2214 | 10 | 2 | 2 | 27 | — | yes |
 | a11-polish-publish/0003-forms-validation.html | 2104 | 10 | 2 | 2 | 28 | — | yes |

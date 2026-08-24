@@ -3125,3 +3125,73 @@ everywhere else in the repo. The only thing that catches it is running the
 verifier, which is why it is cheap to run often.
 
 **Result: 89 verified, 12 `unverifiable`.** Audit green, six suites pass.
+
+---
+
+### Session of 2026-08-24 (continued) — a10/0002 finishes A10, and a lock nobody would notice was off
+
+Second of the A10 pair. M3: `applyAppState` — 18 self-checks, 9 wrong-cases,
+2 new executable quiz questions. **A10 is complete.**
+
+First, the thing that was *not* wrong: `CLAUDE.md` records that the session
+never expires and that the biometric app-lock is the control for a stolen
+unlocked phone instead. A lesson tying the lock to a session timeout would
+have contradicted a decision rather than a detail — it does not. This is a
+lock timeout and nothing else.
+
+#### `inactive` is not leaving
+
+On iOS the sequence out of an app is `active → inactive → background`, and the
+sequence back in is `background → inactive → active`. The handler stamped the
+away time on both `background` and `inactive` — so **the `inactive` on the way
+back overwrote the timestamp with *now*, one step before `active` read it.**
+Elapsed came out at a few milliseconds no matter how long the phone had been
+face-down on a table.
+
+The detail that makes this worth writing down is *who it affects*. The default
+timeout is `0`, and `elapsed >= 0` is true for any elapsed value at all, so the
+lock works perfectly on a default install. It fails only for a user who opened
+Settings and chose "after 1 minute". **The bug is invisible unless you change
+the setting the lesson itself provides a picker for**, which is close to a
+worst case: the users who cared enough to configure it are the only ones who
+lose it.
+
+`inactive` is not a departure in any sense — it fires for the app switcher, a
+notification banner pulled down, a permission dialog, an arriving call. In
+every one of those the phone is in the user's hand. Only `background` means
+they left.
+
+#### Two more, both failing open
+
+- `parseInt` on a corrupted preference returns `NaN`, and **every comparison
+  against `NaN` is false, including `>=`**. So a damaged setting does not
+  throw, does not warn, and does not lock. The course's *refuse rather than
+  substitute a default* rule applies, with an addition that matters here: on a
+  security control the **fallback has to be the strict direction**. A lock that
+  cannot read its own timeout should lock immediately. Failing open is the
+  option that is never defensible and the one that arrives by accident.
+- The in-call exemption was an early return that **discarded the away
+  timestamp**. A call that ended while the app was backgrounded therefore left
+  it unlocked however long it had been away — put the phone down mid-call, the
+  call ends, someone picks it up. The fix is to make the exemption a field read
+  at evaluation time rather than a branch taken at event time, so the clock
+  survives the call.
+
+#### A one-character difference that passed every check
+
+`elapsed > timeout` instead of `>=` **passed the entire self-check.** The
+timeout-0 fixture is 0.1 seconds away, and `0.1 > 0` is true, so nothing in the
+file separated the two operators. The fix was a fixture that is away for
+*exactly* the timeout — the only one that can, and the one "after 1 minute"
+literally means.
+
+That is the seventh time a wrong-case has exposed a gap in the self-check
+written beside it, and it remains the only mechanism that does. A green
+self-check still proves nothing about what it would catch.
+
+One case here deliberately fails in the **safe** direction — ignoring `inCall`,
+so the user gets locked out mid-call. Every other mistake in the file fails
+open, and a set of cases that only pushes one way stops being a specification
+and becomes a slogan.
+
+**Result: 90 verified, 11 `unverifiable`.** Audit green, six suites pass.

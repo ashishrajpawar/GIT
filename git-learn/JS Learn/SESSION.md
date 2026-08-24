@@ -22,24 +22,72 @@ how far it got.
 **Nothing in flight.** Working tree clean, everything committed.
 
 **Started the `unverifiable` cluster** — the recommended body of work in
-*Next action*. A7 is finished and A10 is half done. 12 to go. See below.
+*Next action*. **A7 and A10 are both finished.** 11 to go. See below.
 
 **State as of 2026-08-23** — run `node scripts/audit.mjs` before trusting any
 of it:
 
 - **101 lessons.** Audit **green**, 2 warnings, six suites pass.
 - **Every lesson has been executed at least once.** The verification log has
-  no absent entries: **89 verified, 12 `unverifiable`** with a stated reason,
+  no absent entries: **90 verified, 11 `unverifiable`** with a stated reason,
   1 `nothing-to-verify`. All four remaining A7 lessons moved across on
   2026-08-23/24.
 - **`known-issues.json` is down to one entry** — `calls`, gated on B6.
 - `render-as-authored` is **0**, and this time it means it (see *The `variant`
   blind spot*).
-- **Complete modules:** 01, 02, A2, A3, A4, **A7**, B1, B2, B3, B4, B7, B10,
-  A11, C5, X1, X2.
+- **Complete modules:** 01, 02, A2, A3, A4, **A7**, **A10**, B1, B2, B3, B4,
+  B7, B10, A11, C5, X1, X2.
 
 **Nothing is blocked.** See *Next action* for the four candidate bodies of
 work and why the `unverifiable` cluster is the recommendation.
+
+### a10/0002 — the lock that only works if you never change the setting (2026-08-24)
+
+M3: **`applyAppState`**. 18 self-checks, 9 wrong-cases, 2 new executable quiz
+questions. **A10 is complete**, and there is no contradiction with the session
+decision — this is a lock timeout, not a session expiry, which is what
+`CLAUDE.md` intends.
+
+**`inactive` was treated as leaving.** On iOS the sequence out is
+`active → inactive → background` and the sequence back is
+`background → inactive → active` — so a handler that stamps the away time on
+`inactive` **overwrites it with *now* one step before `active` reads it.**
+Elapsed comes out at a few milliseconds however long the phone sat on the
+table.
+
+**And look at who it affects.** With the default timeout of `0`,
+`elapsed >= 0` is still true, so the lock works. It fails only for someone who
+went into Settings and chose "after 1 minute" — **the bug is invisible unless
+you change the setting the lesson provides a picker for.**
+
+`inactive` is not a departure at all: it fires for the app switcher, a
+notification banner, a permission dialog, an arriving call. In every one the
+phone is still in the user's hand.
+
+### Two more, both failing open
+
+- **`parseInt` on a corrupt preference gives `NaN`, and `elapsed >= NaN` is
+  `false`** — so a damaged setting silently switches the control off. The
+  familiar *refuse, do not substitute* rule, with the addition that matters
+  for a security control: **the fallback has to be the strict direction.** A
+  lock that cannot read its timeout should lock.
+- **The `activeCall` guard cleared the away timestamp and returned.** A call
+  that *ends while the app is backgrounded* therefore left it unlocked however
+  long it had been away. The fix is one field instead of an early return:
+  read `inCall` at evaluation time, so the clock survives the call.
+
+### The wrong-case found a hole again, on a one-character difference
+
+`elapsed > timeout` instead of `>=` **passed every check in the file.** The
+timeout-0 case is 0.1 seconds away and `0.1 > 0` is true, so nothing separated
+the two operators. Added a check that is away for *exactly* the timeout — the
+only fixture that can tell them apart, and the one "after 1 minute" actually
+means. **Seventh time a wrong-case has exposed a gap in the self-check written
+beside it.**
+
+Also worth keeping: one case deliberately fails in the **safe** direction —
+ignoring `inCall`, so the user is locked out mid-call. A self-check that only
+tests one direction stops being a specification.
 
 ### a10/0001 — the body was right and the exercise was wrong, four times (2026-08-24)
 
@@ -1869,30 +1917,35 @@ executed; the log is 84 verified, 17 `unverifiable` with a reason, 1
 
 What is left, in no forced order:
 
-1. **The `unverifiable` lessons — started 2026-08-23; all of A7 plus
-   `a10/0001` done, 12 left.**
+1. **The `unverifiable` lessons — started 2026-08-23; all of A7 and all of
+   A10 done, 11 left.**
    `CLAUDE.md` warns that the reflex to reach for that flag is wrong more often
    than it is right, and this pass proved it again — nine lessons that looked
    unrunnable produced nine exercises, and `a7/0001` then produced a tenth
    plus two real defects. Remaining clusters: **B9 (3), X1 (3), B6 (2)**,
-   plus `a10/0002`, `a9/0001`, `b1/0003`, `b8/0001`. Each needs the same
+   plus `a9/0001`, `b1/0003`, `b8/0001`. Each needs the same
    move: find the plain function, excuse the rest per-exercise, **and add the
-   `createExplain` prompt** — the 12 without one are exactly the 12 still
+   `createExplain` prompt** — the 11 without one are exactly the 11 still
    excused.
 
-   **Next in this cluster: `a10/0002-biometric-app-lock.html`**, which
-   finishes A10. `CLAUDE.md` is explicit that the biometric app-lock is the
-   control for a stolen unlocked phone *instead of* session expiry, and that
-   the session never expires — so a lesson that ties the lock to a session
-   timeout contradicts a decision, not a detail. Expect a lock-state or
-   grace-period function.
+   **Next in this cluster: `x1-git-dev-environment` (3 lessons).** These are
+   the oldest `unverifiable` entries in the log, all excused as *"git and
+   shell setup rather than runnable code"* — which is exactly the judgement
+   `CLAUDE.md` says is wrong more often than it is right. Likely plain
+   functions: a `.gitignore` match, a branch-name or commit-message
+   validator, a merge-conflict-marker detector, an `.env` parser.
 
-   **Two results to carry in.** A7 was four for four on **precedence,
-   three-state, or exactly-once** problems, with the lesson's own quiz
-   holding the right answer in three of them. And `a10/0001` adds a second
-   pattern worth checking directly: **the lesson body was right and every
-   defect was in the exercise solution.** Read the revealed solution against
-   the prose, not just the prose.
+   **Three results to carry in**, now confirmed across six lessons:
+
+   - A7 was four for four on **precedence, three-state, or exactly-once**
+     problems.
+   - **The lesson often already holds the right answer** — in its quiz (A7,
+     three of four) or in its body (`a10/0001`, where all four defects were
+     in the revealed solution). **Read the quiz and the revealed solution
+     against the prose**, not just the prose.
+   - **A defect shape travels between sibling lessons even when the feature
+     it attached to does not** — `a7/0003` carried `0002`'s ternary on a
+     different variable. Read a module's lessons against each other.
 2. **The C-modules.** C0–C4 and C6–C9, roughly 34 lessons, none written. C0 is
    architecture and was planned to come *before* B1, so it is already out of
    order.

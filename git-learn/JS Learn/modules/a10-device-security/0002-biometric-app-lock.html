@@ -222,20 +222,26 @@ export function AppLockProvider({ children }: AppLockProviderProps) {
     return () => subscription.remove();
   }, [lockEnabled]);
 
+  // The whole decision lives in applyAppState, which is pure. This only
+  // reads the world and writes the result back.
   const handleAppState = useCallback(async (state: AppStateStatus) => {
-    if (state === 'background' || state === 'inactive') {
-      backgroundTimestamp.current = Date.now();
-    } else if (state === 'active' && backgroundTimestamp.current) {
-      const elapsed = (Date.now() - backgroundTimestamp.current) / 1000;
-      const timeoutStr = await AsyncStorage.getItem(LOCK_TIMEOUT_KEY);
-      const timeout = timeoutStr ? parseInt(timeoutStr, 10) : DEFAULT_TIMEOUT;
+    const timeoutStr = await AsyncStorage.getItem(LOCK_TIMEOUT_KEY);
 
-      if (elapsed >= timeout) {
-        setLocked(true);
+    const next = applyAppState(
+      { locked, awaySince: backgroundTimestamp.current },
+      {
+        appState: state,
+        now: Date.now(),
+        // Deliberately passed raw. applyAppState decides what an
+        // unparseable setting means, and it decides that it means LOCK.
+        timeoutSeconds: timeoutStr === null ? DEFAULT_TIMEOUT : Number(timeoutStr),
+        inCall: activeCallRef.current,
       }
-      backgroundTimestamp.current = null;
-    }
-  }, []);
+    );
+
+    backgroundTimestamp.current = next.awaySince;
+    if (next.locked !== locked) setLocked(next.locked);
+  }, [locked]);
 
   function handleUnlock() {
     setLocked(false);
@@ -249,6 +255,70 @@ export function AppLockProvider({ children }: AppLockProviderProps) {
 
   return &lt;&gt;{children}&lt;/&gt;;
 }</code></pre>
+
+    <h2><code>inactive</code> is not leaving</h2>
+
+    <p>
+      The obvious reading of <code>AppState</code> is that
+      <code>background</code> and <code>inactive</code> both mean "the user has
+      gone away", so both should start the clock. They do not.
+    </p>
+
+    <p>On iOS the sequence going out is:</p>
+
+    <pre><code>active  →  inactive  →  background</code></pre>
+
+    <p>and the sequence coming back is:</p>
+
+    <pre><code>background  →  inactive  →  active</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">The lock that never engages</div>
+      <p><strong><code>inactive</code> fires on the way back in too.</strong> So
+      a handler that stamps the away time on <code>inactive</code> overwrites
+      it with <em>now</em> one step before <code>active</code> reads it. The
+      elapsed time comes out as a few milliseconds, every time, no matter how
+      long the phone sat on the table.</p>
+      <p>And notice which users it affects. With the default timeout of
+      <code>0</code>, <code>elapsed &gt;= 0</code> is still true, so the lock
+      works. It fails only for someone who went into Settings and chose "after
+      1 minute" — <strong>the bug is invisible unless you change the setting
+      the lesson provides a picker for.</strong></p>
+    </div>
+
+    <p>
+      <code>inactive</code> is not a departure at all. It is a transient state:
+      the app switcher is open, a notification banner has been pulled down, a
+      permission dialog is up, or a call is arriving. In every one of those the
+      phone is still in the user's hand. <strong>Only
+      <code>background</code> means they left</strong>, so only
+      <code>background</code> starts the clock — and <code>inactive</code>
+      should do nothing whatsoever.
+    </p>
+
+    <h3>An unreadable setting must lock, not skip</h3>
+
+    <p>The original read the timeout like this:</p>
+
+    <pre><code>const timeout = timeoutStr ? parseInt(timeoutStr, 10) : DEFAULT_TIMEOUT;
+if (elapsed &gt;= timeout) setLocked(true);</code></pre>
+
+    <p>
+      <code>parseInt</code> on a value it cannot understand returns
+      <code>NaN</code>, and <strong>every comparison against <code>NaN</code>
+      is false</strong> — including <code>&gt;=</code>. So a corrupted
+      preference does not throw, does not warn, and does not lock. The security
+      control is simply off.
+    </p>
+
+    <p>
+      This is the rule the course keeps meeting — <em>when a value cannot be
+      understood, refuse it rather than substituting a default</em> — with the
+      important addition for a security control: <strong>the fallback has to be
+      the strict direction.</strong> A lock that cannot read its timeout should
+      lock immediately. Failing open is the one option that is never
+      defensible, and it is the one that arrives by accident.
+    </p>
 
     <h2>Settings: Enable/Disable and Timeout</h2>
     <pre><code>// app/src/screens/SecuritySettings.tsx
@@ -386,27 +456,29 @@ import { useCallState } from '../context/CallContext';
 // Inside the provider:
 const { activeCall } = useCallState();
 
+// applyAppState already takes inCall, so the exemption is one field rather
+// than an early return. That difference is the whole fix: the early return
+// DISCARDED the away timestamp, so a call that ended while the app was
+// backgrounded left it unlocked no matter how long it had been away.
+//
+// Reading inCall at evaluation time instead means the clock keeps running
+// through the call and is judged when the user actually comes back.
 const handleAppState = useCallback(async (state: AppStateStatus) => {
-  // Never lock during an active call — the user may switch apps
-  // to check something and come back
-  if (activeCall) {
-    backgroundTimestamp.current = null;
-    return;
-  }
+  const timeoutStr = await AsyncStorage.getItem(LOCK_TIMEOUT_KEY);
 
-  if (state === 'background' || state === 'inactive') {
-    backgroundTimestamp.current = Date.now();
-  } else if (state === 'active' && backgroundTimestamp.current) {
-    const elapsed = (Date.now() - backgroundTimestamp.current) / 1000;
-    const timeoutStr = await AsyncStorage.getItem(LOCK_TIMEOUT_KEY);
-    const timeout = timeoutStr ? parseInt(timeoutStr, 10) : DEFAULT_TIMEOUT;
-
-    if (elapsed >= timeout) {
-      setLocked(true);
+  const next = applyAppState(
+    { locked, awaySince: backgroundTimestamp.current },
+    {
+      appState: state,
+      now: Date.now(),
+      timeoutSeconds: timeoutStr === null ? DEFAULT_TIMEOUT : Number(timeoutStr),
+      inCall: Boolean(activeCall),
     }
-    backgroundTimestamp.current = null;
-  }
-}, [activeCall]);</code></pre>
+  );
+
+  backgroundTimestamp.current = next.awaySince;
+  if (next.locked !== locked) setLocked(next.locked);
+}, [activeCall, locked]);</code></pre>
 
     <h2>Hiding Content in App Switcher</h2>
     <pre><code>// When the app goes to background, iOS and Android take a screenshot
@@ -445,8 +517,14 @@ const styles = StyleSheet.create({
     <h2>Playground: Lock Timeout Logic</h2>
     <div id="playground-1"></div>
 
+    <h2>Now build it yourself</h2>
+    <div id="exercise-lock"></div>
+    <div id="pg-exercise-lock"></div>
+
     <h2>Exercise: Build the Complete Biometric Lock System</h2>
     <div id="exercise-1"></div>
+
+    <div id="explain-a10-0002"></div>
 
     <h2>Quiz</h2>
     <div id="lesson-quiz"></div>
@@ -459,6 +537,7 @@ const styles = StyleSheet.create({
     <script src="../../assets/quiz.js"></script>
     <script src="../../assets/playground.js"></script>
     <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
     <script src="../../assets/progress.js"></script>
     <script src="../../assets/copy-code.js"></script>
     <script>
@@ -494,7 +573,265 @@ if (activeCall) {
   shouldLock(600, 0);
 }`);
 
+        createSolution("exercise-lock", {
+            exercise: "Write applyAppState(lock, event) — the whole decision behind the app lock, as a pure function, so the sequences that break it can be tested without a phone.\n\nlock is { locked, awaySince }.\n  locked — is the lock screen showing?\n  awaySince — the ms timestamp the app went to background, or null.\n\nevent is { appState, now, timeoutSeconds, inCall }.\n  appState — 'active', 'inactive' or 'background'\n  now — the current ms timestamp\n  timeoutSeconds — the user's setting, RAW and possibly unusable\n  inCall — is there a call in progress right now?\n\nReturn the new lock. The rules:\n\n1. 'background' starts the clock: record now in awaySince. If awaySince is already set, keep the EARLIER one — being away longer is the safer reading.\n\n2. 'inactive' changes NOTHING. It fires on the way back in as well as on the way out, and also for the app switcher, a notification banner and any system dialog. Treating it as leaving resets the clock one step before it is read.\n\n3. 'active' with awaySince set: work out the elapsed seconds, clear awaySince, and lock if elapsed >= the timeout. 'active' with awaySince null changes nothing.\n\n4. A timeout that is not a finite number >= 0 means LOCK IMMEDIATELY — treat it as 0. parseInt on a corrupted setting gives NaN, and every comparison with NaN is false, so the natural failure of this control is to switch itself off. Refuse that.\n\n5. A timeout of 0 is valid and means lock immediately. It is not 'no timeout'.\n\n6. inCall true: do not lock on return. But do NOT throw the clock away for it — read inCall only when you evaluate, so a call that ends while the app is backgrounded still locks when the user comes back.\n\n7. Once locked, stay locked. Returning to the app never clears it; only unlocking does.\n\n8. Never mutate the lock you were given.",
+            hints: [
+                "Write a small helper that turns the raw timeoutSeconds into a usable number, and make its fallback 0. Getting the fallback direction right is most of rule 4.",
+                "Rules 5 and 4 pull in opposite directions on the same value. Number.isFinite(t) && t >= 0 separates 'a real 0' from 'NaN, undefined, a string, or a negative' without a falsy test anywhere.",
+                "For rule 7, do not write `locked: shouldLock`. Ask what happens to a lock screen that is already showing when the user switches away and comes back."
+            ],
+            solution: `function usableTimeout(raw) {
+  // The fallback is 0 — LOCK — on purpose. This is a security control, so
+  // the direction it fails in has to be the strict one. NaN, undefined, a
+  // string and a negative all land here.
+  return typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? raw : 0;
+}
+
+function applyAppState(lock, event) {
+  // 'inactive' is not leaving. It fires on the way back in, for the app
+  // switcher, for a notification banner and for any system dialog — in all
+  // of which the phone is still in the user's hand.
+  if (event.appState === "inactive") return lock;
+
+  if (event.appState === "background") {
+    // Keep the earlier stamp: having been away longer is the safer reading,
+    // and a second 'background' without an intervening 'active' should not
+    // restart the clock.
+    if (lock.awaySince !== null && lock.awaySince !== undefined) return lock;
+    return { locked: lock.locked, awaySince: event.now };
+  }
+
+  if (event.appState === "active") {
+    // Nothing to judge — a bare inactive/active flicker never left.
+    if (lock.awaySince === null || lock.awaySince === undefined) return lock;
+
+    const elapsed = (event.now - lock.awaySince) / 1000;
+    const timeout = usableTimeout(event.timeoutSeconds);
+
+    // inCall is read HERE, not at the moment the call started. That is what
+    // lets a call ending while backgrounded still produce a lock.
+    const shouldLock = !event.inCall && elapsed >= timeout;
+
+    return {
+      // Never clears an existing lock. Only unlocking does that.
+      locked: lock.locked || shouldLock,
+      awaySince: null,
+    };
+  }
+
+  return lock;
+}`
+        });
+
+        createPlayground("pg-exercise-lock", `// Write usableTimeout(raw) and applyAppState(lock, event) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+
+const T0 = 1000000;
+function open(overrides) {
+  return Object.assign({ locked: false, awaySince: null }, overrides || {});
+}
+function ev(appState, now, overrides) {
+  return Object.assign(
+    { appState: appState, now: now, timeoutSeconds: 60, inCall: false },
+    overrides || {}
+  );
+}
+// Drive a whole sequence, which is the only way several of these show up.
+function run(lock, steps) {
+  for (const step of steps) lock = applyAppState(lock, step);
+  return lock;
+}
+
+try {
+  if (typeof applyAppState !== "function") throw new Error("not written yet");
+
+  try {
+    const r = applyAppState(open(), ev("background", T0));
+    check("'background' starts the clock",
+          r.awaySince === T0,
+          "got " + JSON.stringify(r));
+  } catch (e) { check("'background' starts the clock", false, "threw " + e.message); }
+
+  try {
+    const r = applyAppState(open(), ev("inactive", T0));
+    check("'inactive' does not start the clock",
+          r.awaySince === null,
+          "got " + JSON.stringify(r) + " -- the app switcher and a banner both fire this");
+  } catch (e) { check("'inactive' does not start the clock", false, "threw " + e.message); }
+
+  try {
+    // THE headline. The real iOS sequence coming back is
+    // background -> inactive -> active, and stamping on 'inactive' resets
+    // the clock to ~0 one step before it is read.
+    const r = run(open(), [
+      ev("background", T0),
+      ev("inactive", T0 + 120000),
+      ev("active", T0 + 120001),
+    ]);
+    check("two minutes away still locks, despite the 'inactive' on the way back",
+          r.locked === true,
+          "got " + JSON.stringify(r) + " -- if this fails the lock NEVER engages for anyone with a timeout set");
+  } catch (e) { check("two minutes away still locks, despite the 'inactive' on the way back", false, "threw " + e.message); }
+
+  try {
+    const r = run(open(), [ev("background", T0), ev("active", T0 + 120000)]);
+    check("longer than the timeout locks",
+          r.locked === true && r.awaySince === null,
+          "got " + JSON.stringify(r));
+  } catch (e) { check("longer than the timeout locks", false, "threw " + e.message); }
+
+  try {
+    const r = run(open(), [ev("background", T0), ev("active", T0 + 5000)]);
+    check("shorter than the timeout does not lock",
+          r.locked === false && r.awaySince === null,
+          "got " + JSON.stringify(r) + " -- and the clock is cleared either way");
+  } catch (e) { check("shorter than the timeout does not lock", false, "threw " + e.message); }
+
+  try {
+    // 0 is a real setting meaning "lock immediately", not "no timeout".
+    const r = run(open(), [
+      ev("background", T0, { timeoutSeconds: 0 }),
+      ev("active", T0 + 100, { timeoutSeconds: 0 }),
+    ]);
+    check("a timeout of 0 locks immediately",
+          r.locked === true,
+          "got " + JSON.stringify(r) + " -- a falsy test on the timeout reads 0 as 'unset'");
+  } catch (e) { check("a timeout of 0 locks immediately", false, "threw " + e.message); }
+
+  try {
+    // Away for EXACTLY the timeout. This check exists because a wrong-case
+    // using > instead of >= passed every other check in this file: the
+    // timeout-0 case is 0.1s away, and 0.1 > 0 is true. Only an exact
+    // boundary separates the two operators.
+    const r = run(open(), [
+      ev("background", T0, { timeoutSeconds: 60 }),
+      ev("active", T0 + 60000, { timeoutSeconds: 60 }),
+    ]);
+    check("exactly the timeout locks -- the boundary is inclusive",
+          r.locked === true,
+          "got " + JSON.stringify(r) + " -- 'after 1 minute' has to mean AT one minute");
+  } catch (e) { check("exactly the timeout locks -- the boundary is inclusive", false, "threw " + e.message); }
+
+  try {
+    // parseInt on a corrupted preference gives NaN, and elapsed >= NaN is
+    // FALSE -- so the natural failure of this control is to switch off.
+    const r = run(open(), [
+      ev("background", T0, { timeoutSeconds: NaN }),
+      ev("active", T0 + 1000, { timeoutSeconds: NaN }),
+    ]);
+    check("an unreadable timeout locks rather than being skipped",
+          r.locked === true,
+          "got " + JSON.stringify(r) + " -- every comparison against NaN is false, including >=");
+  } catch (e) { check("an unreadable timeout locks rather than being skipped", false, "threw " + e.message); }
+
+  try {
+    const r = run(open(), [
+      ev("background", T0, { timeoutSeconds: undefined }),
+      ev("active", T0 + 1000, { timeoutSeconds: undefined }),
+    ]);
+    check("a missing timeout locks",
+          r.locked === true,
+          "got " + JSON.stringify(r));
+  } catch (e) { check("a missing timeout locks", false, "threw " + e.message); }
+
+  try {
+    const r = run(open(), [
+      ev("background", T0, { timeoutSeconds: -30 }),
+      ev("active", T0 + 1000, { timeoutSeconds: -30 }),
+    ]);
+    check("a negative timeout locks",
+          r.locked === true,
+          "got " + JSON.stringify(r));
+  } catch (e) { check("a negative timeout locks", false, "threw " + e.message); }
+
+  try {
+    // A string that LOOKS fine. Treated as unusable, so it locks -- which
+    // is the safe direction, and the reason the caller passes Number(...).
+    const r = run(open(), [
+      ev("background", T0, { timeoutSeconds: "300" }),
+      ev("active", T0 + 1000, { timeoutSeconds: "300" }),
+    ]);
+    check("a string timeout is not a number, so it locks",
+          r.locked === true,
+          "got " + JSON.stringify(r) + " -- '300' >= comparisons would coerce and silently work, which is worse");
+  } catch (e) { check("a string timeout is not a number, so it locks", false, "threw " + e.message); }
+
+  try {
+    const r = run(open(), [
+      ev("background", T0),
+      ev("active", T0 + 120000, { inCall: true }),
+    ]);
+    check("returning during a call does not lock",
+          r.locked === false,
+          "got " + JSON.stringify(r) + " -- the user stepped out to check an address mid-call");
+  } catch (e) { check("returning during a call does not lock", false, "threw " + e.message); }
+
+  try {
+    // The one the early-return guard got wrong: the call was live when the
+    // app went away and had ENDED by the time the user came back. The clock
+    // must have survived the call.
+    const r = run(open(), [
+      ev("background", T0, { inCall: true }),
+      ev("inactive", T0 + 300000, { inCall: false }),
+      ev("active", T0 + 300001, { inCall: false }),
+    ]);
+    check("a call that ends while backgrounded still locks on return",
+          r.locked === true,
+          "got " + JSON.stringify(r) + " -- phone down mid-call, call ends, somebody picks it up");
+  } catch (e) { check("a call that ends while backgrounded still locks on return", false, "threw " + e.message); }
+
+  try {
+    const r = applyAppState(open({ locked: true }), ev("active", T0));
+    check("coming back to an already-locked app leaves it locked",
+          r.locked === true,
+          "got " + JSON.stringify(r) + " -- only unlocking clears it");
+  } catch (e) { check("coming back to an already-locked app leaves it locked", false, "threw " + e.message); }
+
+  try {
+    const r = run(open({ locked: true }), [ev("background", T0), ev("active", T0 + 100)]);
+    check("a short trip away does not UNLOCK a locked app",
+          r.locked === true,
+          "got " + JSON.stringify(r) + " -- assigning locked = shouldLock is how this breaks");
+  } catch (e) { check("a short trip away does not UNLOCK a locked app", false, "threw " + e.message); }
+
+  try {
+    const r = applyAppState(open(), ev("active", T0));
+    check("'active' with no clock running changes nothing",
+          r.locked === false && r.awaySince === null,
+          "got " + JSON.stringify(r) + " -- a banner pulled down and released never left the app");
+  } catch (e) { check("'active' with no clock running changes nothing", false, "threw " + e.message); }
+
+  try {
+    const r = run(open(), [ev("background", T0), ev("background", T0 + 90000)]);
+    check("a second 'background' keeps the earlier timestamp",
+          r.awaySince === T0,
+          "got " + JSON.stringify(r) + " -- taking the later one shortens the measured absence");
+  } catch (e) { check("a second 'background' keeps the earlier timestamp", false, "threw " + e.message); }
+
+  try {
+    const start = open({ awaySince: T0 });
+    const before = JSON.stringify(start);
+    applyAppState(start, ev("active", T0 + 120000));
+    check("the lock you were given is not mutated",
+          JSON.stringify(start) === before,
+          "it became " + JSON.stringify(start));
+  } catch (e) { check("the lock you were given is not mutated", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write applyAppState(lock, event) above, then press Run. (" + e.message + ")");
+}`);
+
+        createExplain("explain-a10-0002", {
+            prompt: "A user who never opens Settings has a working app lock. A user who sets it to &ldquo;after 1 minute&rdquo; has one that never engages. Explain what <code>inactive</code> has to do with that — and why the default value of <code>0</code> is what hides the bug rather than avoiding it."
+        });
+
         createSolution("exercise-1", {
+            unverifiable: "the deliverable is a React Native provider using expo-local-authentication and AppState, needing a device with enrolled biometrics",
             exercise: "Build the complete biometric lock system for Token:\n\n1. Create an `AppLockProvider` component that wraps the app and shows a `LockScreen` when the app comes to foreground after the configured timeout.\n2. Include logic to skip locking during active calls.\n3. Add a `PrivacyOverlay` that hides content in the app switcher screenshot.\n4. The lock should trigger immediately on first app open (if enabled), and respect the timeout when returning from background.\n5. Integrate it in App.tsx around the navigation container.",
             hints: [
                 "Use AppState.addEventListener('change', ...) to track when the app goes to background and returns.",
@@ -846,6 +1183,20 @@ const styles = StyleSheet.create({
                 ],
                 correctOrder: [0, 1, 2, 3, 4],
                 explanation: "Lock check happens before any secure data is read. This ensures that even if the device is unlocked, the app content and credentials remain protected until the biometric owner is verified."
+            },
+            {
+                type: "predict-output",
+                question: "A corrupted lock_timeout preference reaches parseInt. This is every comparison the lock could plausibly make against the result. What prints?",
+                code: "const timeout = parseInt('later', 10);   // NaN\nconst elapsed = 600;                     // ten minutes away\n\nconsole.log([\n  elapsed >= timeout,\n  elapsed > timeout,\n  elapsed < timeout,\n  timeout === timeout,\n].join(' '));",
+                answer: "false false false false",
+                explanation: "Every one is false, including NaN === NaN. So whichever way round you write the comparison, the branch does not run — and for a lock, not running means not locking. A damaged preference silently switches the control off, with nothing thrown and nothing logged. This is why the timeout has to be validated into a usable number BEFORE the comparison, and why the fallback has to be 0: on a security control the direction you fail in is a design decision, and failing open is the one that is never defensible."
+            },
+            {
+                type: "predict-output",
+                question: "The real iOS AppState sequence for leaving the app for two minutes and coming back. This models a handler that stamps the away time on both 'background' and 'inactive'. What prints?",
+                code: "let awaySince = null;\n\nfunction onState(state, now) {\n  if (state === 'background' || state === 'inactive') {\n    awaySince = now;\n  } else if (state === 'active' && awaySince !== null) {\n    console.log('elapsed seconds: ' + (now - awaySince) / 1000);\n    awaySince = null;\n  }\n}\n\nonState('inactive',   0);        // leaving\nonState('background', 100);      // leaving\nonState('inactive',   120000);   // COMING BACK — fires again\nonState('active',     120100);",
+                answer: "elapsed seconds: 0.1",
+                explanation: "Two minutes away, and the handler measures a tenth of a second. The 'inactive' on the way back in overwrote the timestamp one step before 'active' read it. Nothing errors, and with the default timeout of 0 the app still locks — so the bug only appears once a user picks a real timeout in Settings. The fix is that 'inactive' means nothing at all here: it fires for the app switcher, a notification banner and any system dialog, and in every one of those the phone is still in the user's hand. Only 'background' means they left."
             }
         ]);
     </script>
