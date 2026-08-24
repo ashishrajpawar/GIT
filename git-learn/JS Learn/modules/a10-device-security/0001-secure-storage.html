@@ -317,6 +317,50 @@ async function clearSessionSecrets(): Promise&lt;void&gt; {
       password prompt.
     </p>
 
+    <h3>Splitting a value is where the byte limit bites twice</h3>
+
+    <p>
+      iOS caps a Keychain item at 2048 bytes, so a long value has to be split
+      across several keys. The wrapper above already makes the first point —
+      <code>.length</code> counts UTF-16 code units, not bytes, so a check
+      against a byte limit passes right up until a real user's data arrives.
+    </p>
+
+    <p>
+      Splitting brings a second problem, and it is worse because it does not
+      throw. <strong>Slicing by <code>.length</code> can cut a character in
+      half.</strong>
+    </p>
+
+    <pre><code>const key = '🔑';                    // one character
+console.log(key.length);            // 2  — a surrogate PAIR
+console.log(key.slice(0, 1));       // half a character
+
+// Encode that half and UTF-8 has nothing to represent it with:
+new TextEncoder().encode(key.slice(0, 1));   // [0xEF, 0xBF, 0xBD] — U+FFFD</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">The chunk that comes back different</div>
+      <p>A lone surrogate is not an error. It encodes to <strong>U+FFFD, the
+      replacement character</strong>, and the write succeeds. So the value goes
+      in, the chunks come back, they reassemble — and the secret is not the
+      secret you stored. For a refresh token that is a login loop nobody can
+      reproduce. <strong>For the identity key it is the message history, gone,
+      with no error anywhere.</strong></p>
+      <p>Note what makes it survive testing: a token is usually base64 or hex,
+      so it is pure ASCII and every boundary is safe. The corruption needs a
+      value with a multi-byte character in it, near a chunk boundary — which is
+      why an app built for the Indian market should assume it will happen
+      rather than hope.</p>
+    </div>
+
+    <p>
+      The fix is to walk <strong>code points</strong> rather than code units and
+      count <strong>bytes</strong> rather than either. <code>for…of</code> over
+      a string does the first for free: it yields <code>'🔑'</code> as one item,
+      so a surrogate pair can never be split by accident.
+    </p>
+
     <h3><code>THIS_DEVICE_ONLY</code> for the identity key</h3>
 
     <p>
@@ -449,8 +493,14 @@ async function clearSessionSecrets(): Promise&lt;void&gt; {
     <h2>Playground: SecureStore Decision Helper</h2>
     <div id="playground-1"></div>
 
+    <h2>Now build it yourself</h2>
+    <div id="exercise-chunks"></div>
+    <div id="pg-exercise-chunks"></div>
+
     <h2>Exercise: Build the Secure Storage Layer</h2>
     <div id="exercise-1"></div>
+
+    <div id="explain-a10-0001"></div>
 
     <h2>Quiz</h2>
     <div id="lesson-quiz"></div>
@@ -463,6 +513,7 @@ async function clearSessionSecrets(): Promise&lt;void&gt; {
     <script src="../../assets/quiz.js"></script>
     <script src="../../assets/playground.js"></script>
     <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
     <script src="../../assets/progress.js"></script>
     <script src="../../assets/copy-code.js"></script>
     <script>
@@ -495,7 +546,210 @@ whereToStore('@token/last_sync', 'Timestamp of last data sync');
 whereToStore('@token/refresh', 'Refresh token for session renewal');
 whereToStore('@token/onboarded', 'Whether user completed onboarding');`);
 
+        createSolution("exercise-chunks", {
+            exercise: "Write planChunks(value, maxBytes) — split a secret into pieces small enough for the Keychain, without ever cutting a character in half.\n\nReturn an array of strings. Joining them back with ''.join must reproduce the input exactly.\n\nThe rules:\n\n1. Measure in UTF-8 BYTES, not string length. 'नमस्ते' is 6 code units and 18 bytes; an emoji is 2 units and 4 bytes. Use new TextEncoder().encode(s).length.\n\n2. No chunk may exceed maxBytes.\n\n3. Never split a character. An emoji is a surrogate PAIR in JavaScript, so slicing at an odd index leaves half of one — and half a surrogate encodes to U+FFFD, the replacement character. That write SUCCEEDS and the value comes back different, which is the whole reason this function exists.\n\n4. Pack greedily: fill each chunk as full as it will go before starting the next.\n\n5. An empty string produces an empty array. There is nothing to store.\n\n6. If one single character needs more bytes than maxBytes, throw a RangeError. It cannot be split and pretending otherwise corrupts it.",
+            hints: [
+                "for...of over a string iterates CODE POINTS, not code units — it yields an emoji as one item. That single choice makes rule 3 impossible to get wrong.",
+                "Measure each character's own byte length as you go and keep a running total. Do not encode the whole string and slice the bytes: you would then have to decode back, which is where the half-characters come from.",
+                "Check rule 6 before you check whether the current chunk is full. A character that cannot fit in an EMPTY chunk is not a chunk-is-full problem, and treating it as one loops for ever or emits an over-sized chunk."
+            ],
+            solution: `function utf8Bytes(str) {
+  return new TextEncoder().encode(str).length;
+}
+
+function planChunks(value, maxBytes) {
+  if (typeof value !== "string") {
+    throw new TypeError("value must be a string");
+  }
+  if (!(maxBytes > 0)) {
+    throw new RangeError("maxBytes must be positive");
+  }
+
+  const chunks = [];
+  let current = "";
+  let currentBytes = 0;
+
+  // for...of walks CODE POINTS. An emoji arrives as one item, so its
+  // surrogate pair cannot be split — the bug is designed out rather than
+  // guarded against.
+  for (const ch of value) {
+    const size = utf8Bytes(ch);
+
+    // Checked first, and against maxBytes rather than the remaining space:
+    // a character that will not fit in an EMPTY chunk can never fit, and
+    // treating that as "chunk is full" would loop for ever.
+    if (size > maxBytes) {
+      throw new RangeError(
+        "a single character needs " + size + " bytes, over the " +
+        maxBytes + "-byte limit"
+      );
+    }
+
+    if (currentBytes + size > maxBytes) {
+      chunks.push(current);
+      current = "";
+      currentBytes = 0;
+    }
+
+    current += ch;
+    currentBytes += size;
+  }
+
+  // Only push a trailing chunk if there is one. An empty input produces an
+  // empty array, and ''.join of that is '' — the round trip still holds.
+  if (current !== "") chunks.push(current);
+
+  return chunks;
+}`
+        });
+
+        createPlayground("pg-exercise-chunks", `// Write planChunks(value, maxBytes) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+function bytesOf(s) { return enc.encode(s).length; }
+
+// What the Keychain actually does to each chunk: encode to UTF-8 going in,
+// decode coming back. Modelling that is essential rather than fussy -- in
+// pure JavaScript s.slice(0,5) + s.slice(5) reproduces s EXACTLY even across
+// a surrogate pair, so a plain join() cannot see this bug at all. The
+// corruption happens at ENCODE time, where a lone surrogate becomes U+FFFD.
+function throughStorage(chunks) {
+  return chunks.map(function (c) { return dec.decode(enc.encode(c)); }).join("");
+}
+
+// Devanagari: 6 code units, 18 bytes. An app for the Indian market will meet
+// this before it meets any emoji.
+const NAMASTE = "नमस्ते";
+// A key emoji: ONE character, TWO code units, FOUR bytes. Slicing by .length
+// cuts it in half and the half encodes to U+FFFD.
+const KEY = "🔑";
+
+try {
+  if (typeof planChunks !== "function") throw new Error("not written yet");
+
+  try {
+    const r = planChunks("abcdef", 10);
+    check("a short ASCII value is one chunk",
+          JSON.stringify(r) === JSON.stringify(["abcdef"]),
+          "got " + JSON.stringify(r));
+  } catch (e) { check("a short ASCII value is one chunk", false, "threw " + e.message); }
+
+  try {
+    const r = planChunks("abcdefghij", 10);
+    check("a value exactly on the limit is still one chunk",
+          r.length === 1,
+          "got " + JSON.stringify(r));
+  } catch (e) { check("a value exactly on the limit is still one chunk", false, "threw " + e.message); }
+
+  try {
+    const r = planChunks("abcdefghijk", 10);
+    check("one byte over the limit is two chunks",
+          JSON.stringify(r) === JSON.stringify(["abcdefghij", "k"]),
+          "got " + JSON.stringify(r) + " -- and packed greedily, not split evenly");
+  } catch (e) { check("one byte over the limit is two chunks", false, "threw " + e.message); }
+
+  try {
+    // 18 bytes at a 7-byte limit: the boundaries land INSIDE multi-byte
+    // characters, which is exactly where .length-based slicing goes wrong.
+    const r = planChunks(NAMASTE, 7);
+    check("Devanagari survives being written and read back",
+          throughStorage(r) === NAMASTE,
+          "got " + JSON.stringify(r) + " which reads back as " + JSON.stringify(throughStorage(r)));
+  } catch (e) { check("Devanagari survives being written and read back", false, "threw " + e.message); }
+
+  try {
+    // Three emoji, 12 bytes, at a limit that forces a boundary between them.
+    const value = KEY + KEY + KEY;
+    const r = planChunks(value, 5);
+    check("emoji survive being written and read back",
+          throughStorage(r) === value,
+          "read back as " + JSON.stringify(throughStorage(r)) +
+          " -- a split surrogate becomes U+FFFD, and the write still SUCCEEDS");
+    check("no chunk contains a replacement character once stored",
+          r.every(function (c) { return throughStorage([c]).indexOf("�") === -1; }),
+          "got " + JSON.stringify(r) + " -- U+FFFD is what half an emoji encodes to");
+    check("every emoji chunk is a whole number of emoji",
+          r.every(function (c) { return bytesOf(c) % 4 === 0; }),
+          "byte sizes were " + JSON.stringify(r.map(bytesOf)));
+  } catch (e) { check("emoji survive being written and read back", false, "threw " + e.message); }
+
+  try {
+    // Deliberately AFTER both round-trip checks. Three different wrong
+    // implementations fail here, and the ordering is what keeps them
+    // distinguishable: slicing by index corrupts emoji but not Devanagari
+    // (which is all BMP), slicing by byte corrupts both, and counting
+    // .length corrupts neither and simply produces over-sized chunks.
+    const r = planChunks(NAMASTE, 7);
+    check("no Devanagari chunk exceeds the BYTE limit",
+          r.every(function (c) { return bytesOf(c) <= 7; }),
+          "byte sizes were " + JSON.stringify(r.map(bytesOf)) + " -- .length would have said 6 for the whole string");
+  } catch (e) { check("no Devanagari chunk exceeds the BYTE limit", false, "threw " + e.message); }
+
+  try {
+    // The general invariant, on a mixture. If only one check survives, this
+    // is the one that matters: what went in must come back out.
+    const value = "tok_" + NAMASTE + "_" + KEY + "_end";
+    const r = planChunks(value, 6);
+    check("a mixed ASCII/Devanagari/emoji value survives storage",
+          throughStorage(r) === value,
+          "read back as " + JSON.stringify(throughStorage(r)));
+    check("every chunk of the mixed value is within the byte limit",
+          r.every(function (c) { return bytesOf(c) <= 6; }),
+          "byte sizes were " + JSON.stringify(r.map(bytesOf)));
+  } catch (e) { check("a mixed ASCII/Devanagari/emoji value survives storage", false, "threw " + e.message); }
+
+  try {
+    const r = planChunks("", 2048);
+    check("an empty value produces no chunks",
+          Array.isArray(r) && r.length === 0,
+          "got " + JSON.stringify(r) + " -- there is nothing to store");
+  } catch (e) { check("an empty value produces no chunks", false, "threw " + e.message); }
+
+  try {
+    let threw = null;
+    try { planChunks(KEY, 3); } catch (e) { threw = e; }
+    check("a single character larger than the limit throws",
+          threw instanceof RangeError,
+          "got " + (threw ? threw.constructor.name + ": " + threw.message : "no error") +
+          " -- 4 bytes cannot go in a 3-byte box, and splitting it corrupts it");
+  } catch (e) { check("a single character larger than the limit throws", false, "threw " + e.message); }
+
+  try {
+    // maxBytes exactly the size of one emoji: one per chunk, no throw.
+    const r = planChunks(KEY + KEY, 4);
+    check("a limit exactly one character wide gives one character per chunk",
+          r.length === 2 && r.join("") === KEY + KEY,
+          "got " + JSON.stringify(r));
+  } catch (e) { check("a limit exactly one character wide gives one character per chunk", false, "threw " + e.message); }
+
+  try {
+    // The realistic case: a long base64 token, which is pure ASCII. This is
+    // the case that passes with EVERY wrong implementation, and it is the
+    // only one anyone tests -- included so its silence is on the record.
+    const token = "a".repeat(5000);
+    const r = planChunks(token, 2048);
+    check("a 5000-byte ASCII token splits into three and rejoins",
+          r.length === 3 && r.join("") === token,
+          "got " + r.length + " chunks");
+  } catch (e) { check("a 5000-byte ASCII token splits into three and rejoins", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write planChunks(value, maxBytes) above, then press Run. (" + e.message + ")");
+}`);
+
+        createExplain("explain-a10-0001", {
+            prompt: "A refresh token is base64, so every chunk boundary in it is safe, and this bug never appears in testing. Explain what a user's data has to contain for it to appear — and why the failure is a value that comes back <em>different</em> rather than a write that fails."
+        });
+
         createSolution("exercise-1", {
+            unverifiable: "the deliverable is a React Native service calling expo-secure-store, needing a device Keychain or Keystore",
             exercise: "Build a complete secure storage service for the Token app:\n\n1. Create a `SecureTokenStore` class that handles storing and retrieving auth credentials (access token, refresh token) using expo-secure-store.\n2. Include a `migrate()` method that moves any existing tokens from AsyncStorage to SecureStore (one-time operation).\n3. Add a `isAvailable()` check that verifies the keychain is accessible, returning false if it isn't (e.g., after device restore).\n4. Ensure all values respect the 2048-byte limit — if a JWT is too long, split it across two keys.",
             hints: [
                 "Use a try/catch around SecureStore.getItemAsync with a known test key to verify availability.",
@@ -505,64 +759,81 @@ whereToStore('@token/onboarded', 'Whether user completed onboarding');`);
             solution: `// app/src/services/SecureTokenStore.ts
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { planChunks } from './planChunks';
 
-const MAX_ITEM_SIZE = 2048;
+const MAX_ITEM_SIZE = 2048;   // BYTES, not characters
 const MIGRATION_KEY = '@token/secure_migrated_v1';
 const AVAILABILITY_TEST_KEY = '__secure_store_test__';
 
-interface StoredCredentials {
-  accessToken: string;
-  refreshToken: string;
-}
-
 export class SecureTokenStore {
-  private available: boolean | null = null;
-
   /**
-   * Check if SecureStore is functional on this device.
-   * Cache the result — it won't change during a session.
+   * Is the Keychain readable right now?
+   *
+   * Deliberately NOT cached. The Keychain is unavailable before the first
+   * unlock after a reboot and available afterwards, so this genuinely
+   * changes during a session — and a cached false at startup would keep
+   * the app locked out until it was killed and relaunched.
    */
   async isAvailable(): Promise<boolean> {
-    if (this.available !== null) return this.available;
-
     try {
       await SecureStore.setItemAsync(AVAILABILITY_TEST_KEY, 'test');
       await SecureStore.deleteItemAsync(AVAILABILITY_TEST_KEY);
-      this.available = true;
+      return true;
     } catch {
-      this.available = false;
+      return false;
     }
-    return this.available;
   }
 
   /**
    * Store a value, splitting across keys if it exceeds 2048 bytes.
    */
-  async set(key: string, value: string): Promise<void> {
+  // The options argument is forwarded, not dropped. Without it every item
+  // gets DEFAULT accessibility, and the identity key then syncs to iCloud
+  // Keychain — the exact failure the WHEN_UNLOCKED_THIS_DEVICE_ONLY section
+  // above spends four paragraphs on.
+  async set(
+    key: string,
+    value: string,
+    options?: SecureStore.SecureStoreOptions
+  ): Promise<void> {
     if (!(await this.isAvailable())) {
       throw new Error('SecureStore is not available on this device');
     }
 
-    if (value.length <= MAX_ITEM_SIZE) {
-      await SecureStore.setItemAsync(key, value);
+    // planChunks measures BYTES and never splits a character.
+    const chunks = planChunks(value, MAX_ITEM_SIZE);
+
+    if (chunks.length <= 1) {
+      await SecureStore.setItemAsync(key, chunks[0] ?? '', options);
       // Clean up any previous chunks
       await this.removeChunks(key);
-    } else {
-      // Split into chunks
-      const chunks = Math.ceil(value.length / MAX_ITEM_SIZE);
-      await SecureStore.setItemAsync(key + '__meta', JSON.stringify({ chunks }));
-      for (let i = 0; i < chunks; i++) {
-        const chunk = value.slice(i * MAX_ITEM_SIZE, (i + 1) * MAX_ITEM_SIZE);
-        await SecureStore.setItemAsync(key + '__chunk_' + i, chunk);
-      }
+      return;
     }
+
+    // Write the parts BEFORE the meta key: a crash halfway leaves orphaned
+    // chunks, which are harmless, rather than a meta key promising parts
+    // that are not there, which reads as corruption.
+    for (let i = 0; i < chunks.length; i++) {
+      await SecureStore.setItemAsync(key + '__chunk_' + i, chunks[i], options);
+    }
+    await SecureStore.setItemAsync(
+      key + '__meta',
+      JSON.stringify({ chunks: chunks.length }),
+      options
+    );
   }
 
   /**
    * Retrieve a value, reassembling chunks if necessary.
    */
+  // Throws when the Keychain cannot be read, and returns null ONLY when the
+  // key is genuinely absent. Collapsing the two is how a locked Keychain at
+  // startup reads as "logged out" — and, for the identity key, as "generate
+  // a new one", which orphans every message already on the device.
   async get(key: string): Promise<string | null> {
-    if (!(await this.isAvailable())) return null;
+    if (!(await this.isAvailable())) {
+      throw new Error('SecureStore is not readable right now — try again later');
+    }
 
     // Check for chunked storage first
     const metaRaw = await SecureStore.getItemAsync(key + '__meta');
@@ -571,7 +842,14 @@ export class SecureTokenStore {
       let value = '';
       for (let i = 0; i < chunks; i++) {
         const chunk = await SecureStore.getItemAsync(key + '__chunk_' + i);
-        if (!chunk) return null; // Corrupted
+        // A missing part is corruption, not absence. Returning null here
+        // would tell the caller "no such key" and invite it to write a new
+        // one over the surviving parts.
+        if (chunk === null) {
+          throw new Error(
+            'Chunk ' + i + ' of "' + key + '" is missing — the value is incomplete'
+          );
+        }
         value += chunk;
       }
       return value;

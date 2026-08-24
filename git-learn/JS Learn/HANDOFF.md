@@ -3037,3 +3037,91 @@ right answer** while the code beside it did something else. The module went
 from one verified lesson to five.
 
 **Result: 88 verified, 13 `unverifiable`.** Audit green, six suites pass.
+
+---
+
+### Session of 2026-08-24 (continued) — a10/0001, and a check that could not see its own bug
+
+First of the A10 pair. M3: `planChunks` — 14 self-checks, 7 wrong-cases, 3
+correct alternatives.
+
+#### A second pattern, alongside A7's
+
+A7's four lessons all had the right answer sitting in their own quiz. This one
+is the same failure with a different geometry: **the lesson body is sound
+throughout — genuinely well argued, matching `CLAUDE.md` — and every single
+defect is in the revealed solution.**
+
+- `set(key, value)` took two parameters while `saveRefreshToken` called it with
+  three, so `keychainAccessible` was silently dropped and every item got
+  *default* accessibility. The body spends four paragraphs on why the identity
+  key needs `WHEN_UNLOCKED_THIS_DEVICE_ONLY` or it syncs to iCloud Keychain and
+  gives Apple a copy of the key ADR-0002 depends on. **The class the lesson told
+  you to build could not pass the option at all.**
+- `value.length <= MAX_ITEM_SIZE` measured UTF-16 code units against a byte
+  limit — the exact mistake the wrapper a few hundred lines up warns about in a
+  comment, using `नमस्ते` as the example.
+- `isAvailable()` cached its result, commented *"it won't change during a
+  session"*. It does: the Keychain is unavailable before the first unlock after
+  a reboot.
+- A `StoredCredentials { accessToken, refreshToken }` type against the body's
+  *"the access token is not stored at all"*.
+
+So the review move to add: **read the revealed solution against the prose.**
+Both A7's and A10's failures are the same underlying thing — a lesson gets
+corrected in one place and the code beside it does not — but they need
+different reading passes to find.
+
+#### The self-check that could not see the bug it was written for
+
+This is the part worth keeping. Slicing a string by index can cut a surrogate
+pair in half, and the obvious assertion is that the chunks rejoin to the
+original. **That assertion passes on the broken implementation**, because in
+pure JavaScript `s.slice(0,5) + s.slice(5)` reproduces `s` exactly — the two
+lone surrogates recombine on concatenation.
+
+The corruption happens at **encode** time. A lone surrogate has no UTF-8
+representation, so `TextEncoder` emits **U+FFFD** and the write succeeds. The
+value goes in, comes back, and is not the value.
+
+My first version of the self-check made exactly that mistake, and only the
+wrong-cases exposed it: the case built from the lesson's own shipped code
+passed the round-trip check. The checks now model what the Keychain actually
+does — encode going in, decode coming back. **A test of a storage layer has to
+include the storage, or it is testing the wrong boundary.**
+
+Worth noting why it survives real testing too: a refresh token is base64, so
+every chunk boundary in it is safe. The bug needs a multi-byte character near a
+boundary — which, for an app built for the Indian market, is a matter of when.
+
+#### Three corruptions, and the check order is what separates them
+
+Index-slicing corrupts emoji but not Devanagari, which is entirely BMP.
+Byte-slicing corrupts both. Counting `.length` corrupts neither and merely
+produces over-sized chunks. Running the checks as *Devanagari round-trip →
+emoji round-trip → Devanagari byte limit* makes each of the three trip a
+different check first; every other ordering collapses two of them onto the same
+name. That took three attempts to get right and is commented in place so nobody
+tidies it back.
+
+Two of the seven cases trip eight checks each. That is deliberate: they are
+whole-strategy substitutions rather than one-line slips, and case 0 is the
+lesson's shipped implementation copied verbatim. Narrowing it for tidier output
+would stop it being that. The four ASCII checks pass in both — which is the
+argument the whole exercise is making.
+
+#### The backtick trap, walked into while quoting it
+
+`CLAUDE.md` documents that a backtick inside a `createSolution` solution string
+terminates the template literal. My edits introduced three — a `` `false` `` in
+a prose comment, an `` `options` ``, and a nested template literal inside a
+thrown error. The whole script block stopped parsing and the error pointed at a
+token forty lines away.
+
+Second instance this week of the same meta-lesson, after the verification-log
+deletion: **writing a trap down does not stop you walking into it**, because
+the habit that causes it — marking up an identifier in a comment — is correct
+everywhere else in the repo. The only thing that catches it is running the
+verifier, which is why it is cheap to run often.
+
+**Result: 89 verified, 12 `unverifiable`.** Audit green, six suites pass.

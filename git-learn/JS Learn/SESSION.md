@@ -22,14 +22,14 @@ how far it got.
 **Nothing in flight.** Working tree clean, everything committed.
 
 **Started the `unverifiable` cluster** — the recommended body of work in
-*Next action*. **A7 is finished** — all five verified. 13 to go. See below.
+*Next action*. A7 is finished and A10 is half done. 12 to go. See below.
 
 **State as of 2026-08-23** — run `node scripts/audit.mjs` before trusting any
 of it:
 
 - **101 lessons.** Audit **green**, 2 warnings, six suites pass.
 - **Every lesson has been executed at least once.** The verification log has
-  no absent entries: **88 verified, 13 `unverifiable`** with a stated reason,
+  no absent entries: **89 verified, 12 `unverifiable`** with a stated reason,
   1 `nothing-to-verify`. All four remaining A7 lessons moved across on
   2026-08-23/24.
 - **`known-issues.json` is down to one entry** — `calls`, gated on B6.
@@ -40,6 +40,73 @@ of it:
 
 **Nothing is blocked.** See *Next action* for the four candidate bodies of
 work and why the `unverifiable` cluster is the recommendation.
+
+### a10/0001 — the body was right and the exercise was wrong, four times (2026-08-24)
+
+M3: **`planChunks`**. 14 self-checks, 7 wrong-cases, 3 correct alternatives.
+The lesson already had 5 executable quiz questions.
+
+**A new pattern, and worth checking for directly from now on: the prose was
+sound throughout and every defect was in the revealed solution.** A7's lessons
+had the answer in the quiz; this one has it in the body, a few hundred lines
+above the code that contradicts it.
+
+- **`set(key, value)` took two parameters and `saveRefreshToken` called it
+  with three**, so `keychainAccessible` was silently dropped and everything
+  got *default* accessibility. The lesson spends four paragraphs explaining
+  that the identity key needs `WHEN_UNLOCKED_THIS_DEVICE_ONLY` or it syncs to
+  iCloud and hands Apple a copy of the key ADR-0002 depends on. **The class it
+  told you to build could not pass the option at all.**
+- **`value.length <= MAX_ITEM_SIZE` measured UTF-16 units against a byte
+  limit** — the exact mistake the `secureStorage` wrapper earlier in the same
+  file warns about, with a comment about `नमस्ते` being 6 units and 18 bytes.
+- **`isAvailable()` cached**, commented *"it won't change during a session"*.
+  The Keychain is unavailable before first unlock and available after.
+- **`StoredCredentials { accessToken, refreshToken }`** against the body's
+  *"the access token is not stored at all"*. The methods were right; the type
+  was a contradicting leftover — `a3/0002`'s root cause again.
+
+Also fixed `get()`, which returned `null` both for *absent* and for *Keychain
+unreadable*. It now throws on unreadable. Collapsing those means a locked
+Keychain at startup reads as "logged out" — and for the identity key, as
+"generate a new one", which orphans every message on the device.
+
+### The bug is at encode time, which is why the obvious check cannot see it
+
+Slicing a string by index can cut a surrogate pair in half. But **in pure
+JavaScript `s.slice(0,5) + s.slice(5)` reproduces `s` exactly**, even across
+that pair — so a plain `join()` round-trip assertion passes on the broken
+implementation.
+
+The corruption happens when the chunk is **encoded to UTF-8** to be stored: a
+lone surrogate has no UTF-8 representation, so it becomes **U+FFFD**, and the
+write *succeeds*. My first self-check missed the very bug it was written for,
+and only the wrong-cases showed it. The checks now model what the Keychain
+actually does — encode going in, decode coming back.
+
+**A refresh token is base64, so every boundary in it is safe.** The corruption
+needs a multi-byte character near a chunk boundary, which is why an app for the
+Indian market should assume it rather than hope.
+
+### Three corruptions, kept distinguishable by check order
+
+Index-slicing corrupts emoji but **not** Devanagari, which is all BMP.
+Byte-slicing corrupts both. Counting `.length` corrupts neither and just
+produces over-sized chunks. Ordering the checks *Devanagari round-trip → emoji
+round-trip → Devanagari byte limit* is what makes each of the three trip a
+different check first; any other order collapses two of them together.
+
+### I walked into the backtick trap I have been quoting all session
+
+`CLAUDE.md` documents it: **a backtick inside a `createSolution` solution
+string terminates the template literal.** My edits put three in — a
+`` `false` `` in a comment, an `` `options` ``, and a nested template literal
+in a thrown error. The whole script block stopped parsing and the error named
+a token forty lines away.
+
+Same lesson as the verification-log deletion: **writing the trap down does not
+stop you walking into it**, because the habit that causes it — marking up code
+in a comment — is the correct habit everywhere else.
 
 ### a7/0004 — the phantom call, and A7 is finished (2026-08-24)
 
@@ -1802,29 +1869,30 @@ executed; the log is 84 verified, 17 `unverifiable` with a reason, 1
 
 What is left, in no forced order:
 
-1. **The `unverifiable` lessons — started 2026-08-23; all of A7 done,
-   13 left.**
+1. **The `unverifiable` lessons — started 2026-08-23; all of A7 plus
+   `a10/0001` done, 12 left.**
    `CLAUDE.md` warns that the reflex to reach for that flag is wrong more often
    than it is right, and this pass proved it again — nine lessons that looked
    unrunnable produced nine exercises, and `a7/0001` then produced a tenth
-   plus two real defects. Remaining clusters: **B9 (3), X1 (3), A10 (2),
-   B6 (2)**, plus `a9/0001`, `b1/0003`, `b8/0001`. Each needs the same
+   plus two real defects. Remaining clusters: **B9 (3), X1 (3), B6 (2)**,
+   plus `a10/0002`, `a9/0001`, `b1/0003`, `b8/0001`. Each needs the same
    move: find the plain function, excuse the rest per-exercise, **and add the
-   `createExplain` prompt** — the 13 without one are exactly the 13 still
+   `createExplain` prompt** — the 12 without one are exactly the 12 still
    excused.
 
-   **Next in this cluster: `a10-device-security` (2 lessons).** It is the
-   smallest remaining cluster and the one closest to a decided architecture
-   — `CLAUDE.md` is explicit that private keys live in `expo-secure-store`
-   and never `AsyncStorage`, and that the biometric app-lock is the control
-   for a stolen unlocked phone rather than session expiry. Both are claims a
-   lesson can contradict. Expect the plain function to be a
-   storage-key-routing or lock-state decision.
+   **Next in this cluster: `a10/0002-biometric-app-lock.html`**, which
+   finishes A10. `CLAUDE.md` is explicit that the biometric app-lock is the
+   control for a stolen unlocked phone *instead of* session expiry, and that
+   the session never expires — so a lesson that ties the lock to a session
+   timeout contradicts a decision, not a detail. Expect a lock-state or
+   grace-period function.
 
-   **Carry the A7 result into it:** four for four, every lesson in that
-   module hid a **precedence, three-state, or exactly-once** problem, and in
-   three of the four the lesson's own quiz already stated the right answer.
-   Read the quiz against the code before reading either alone.
+   **Two results to carry in.** A7 was four for four on **precedence,
+   three-state, or exactly-once** problems, with the lesson's own quiz
+   holding the right answer in three of them. And `a10/0001` adds a second
+   pattern worth checking directly: **the lesson body was right and every
+   defect was in the exercise solution.** Read the revealed solution against
+   the prose, not just the prose.
 2. **The C-modules.** C0–C4 and C6–C9, roughly 34 lessons, none written. C0 is
    architecture and was planned to come *before* B1, so it is already out of
    order.
