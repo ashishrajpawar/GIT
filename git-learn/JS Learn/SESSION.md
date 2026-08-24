@@ -22,14 +22,14 @@ how far it got.
 **Nothing in flight.** Working tree clean, everything committed.
 
 **Started the `unverifiable` cluster** — the recommended body of work in
-*Next action*. A7 and A10 are finished; X1 is one of three. 10 to go.
+*Next action*. A7 and A10 are finished; X1 is two of three. 9 to go.
 
 **State as of 2026-08-23** — run `node scripts/audit.mjs` before trusting any
 of it:
 
 - **101 lessons.** Audit **green**, 2 warnings, six suites pass.
 - **Every lesson has been executed at least once.** The verification log has
-  no absent entries: **91 verified, 10 `unverifiable`** with a stated reason,
+  no absent entries: **92 verified, 9 `unverifiable`** with a stated reason,
   1 `nothing-to-verify`. All four remaining A7 lessons moved across on
   2026-08-23/24.
 - **`known-issues.json` is down to one entry** — `calls`, gated on B6.
@@ -40,6 +40,59 @@ of it:
 
 **Nothing is blocked.** See *Next action* for the four candidate bodies of
 work and why the `unverifiable` cluster is the recommendation.
+
+### x1/0002 — the check that cries wolf, and the one that stays silent (2026-08-24)
+
+M3: **`findConflicts`**. 14 self-checks, 8 wrong-cases, 2 new executable quiz
+questions.
+
+**The defect: `git add .` in the conflict-resolution recipe.** Git will stage
+and commit a file still containing `<<<<<<<` without a word — conflict markers
+stop being special to git the moment the merge is over. The recipe now runs
+`git diff --check` and adds files by name.
+
+### A detector has two ways to be useless, and this one is unusual in testing both
+
+Almost every wrong-case in this course so far fails in one direction. Here
+they split:
+
+- **Too eager.** Searching lines for `=======` fires on Markdown setext
+  heading underlines, ASCII table borders and comment banners. The new quiz
+  question runs it over eight lines of ordinary Markdown and gets **three
+  false positives and zero conflicts**. A check like that is switched off
+  within a week, and then the real one goes unread.
+- **Too quiet.** Missing the diff3 `|||||||` base section, missing markers
+  behind a trailing `\r`, dropping a conflict left open at EOF.
+
+**This repo has the scar for the first kind:** `check-pre-blocks.mjs` fired 71
+times on its first run and every hit was wrong.
+
+**The fix is not a cleverer test for the divider.** It is that only
+`<<<<<<<` opens a conflict — everything else is ordinary text until something
+has opened. One rule, and every false positive above disappears.
+
+### Two fixtures that proved nothing until they were sharpened
+
+Both found by a wrong-case tripping the wrong check:
+
+- **The CRLF fixture used *labelled* markers.** `<<<<<<< HEAD\r` still has a
+  space at index 7, so it survives the stray carriage return by luck — and an
+  implementation that never strips anything passed. Only the **bare** form,
+  where index 7 *is* the `\r`, tells them apart.
+- **The embedded-marker fixture had no embedded *opener*.** It contained a
+  `=======` and a `>>>>>>>` inside lines, and since neither can open a
+  conflict, the `includes`-based mistake passed it happily.
+
+### And the self-check caught one of my own alternatives
+
+The reduce-based "correct alternative" **never reported a conflict left open
+at EOF** — reduce has no natural place for the after-the-loop step, so the
+first draft simply dropped it. The self-check failed it, correctly.
+
+Worth recording because it is the mechanism running the other way: the
+alternatives exist to prove the check accepts different *styles*, and this
+time the check proved one of the styles was not a correct implementation at
+all.
 
 ### x1/0001 — .gitignore is not configuration (2026-08-24)
 
@@ -1978,22 +2031,24 @@ executed; the log is 84 verified, 17 `unverifiable` with a reason, 1
 What is left, in no forced order:
 
 1. **The `unverifiable` lessons — started 2026-08-23; all of A7, all of A10
-   and `x1/0001` done, 10 left.**
+   and two of X1 done, 9 left.**
    `CLAUDE.md` warns that the reflex to reach for that flag is wrong more often
    than it is right, and this pass proved it again — nine lessons that looked
    unrunnable produced nine exercises, and `a7/0001` then produced a tenth
-   plus two real defects. Remaining clusters: **B9 (3), X1 (2), B6 (2)**,
-   plus `a9/0001`, `b1/0003`, `b8/0001`. Each needs the same
+   plus two real defects. Remaining clusters: **B9 (3), B6 (2)**, plus `x1/0003`,
+   `a9/0001`, `b1/0003`, `b8/0001`. Each needs the same
    move: find the plain function, excuse the rest per-exercise, **and add the
-   `createExplain` prompt** — the 10 without one are exactly the 10 still
+   `createExplain` prompt** — the 9 without one are exactly the 9 still
    excused.
 
-   **Next: `x1/0002-github-workflow.html`, then `x1/0003`.** `0001` settled
-   the question for this module — the "git and shell setup" excuse was wrong,
-   and `.gitignore` turned out to be a pattern language with a tree walk.
-   Likely plain functions: for `0002` a merge-conflict-marker parser or a
-   branch-name validator; for `0003` the tsconfig path-alias resolution its
-   monorepo section already describes, or `.nvmrc`-versus-semver matching.
+   **Next: `x1/0003-dev-environment.html`**, which finishes X1. Its monorepo
+   section already describes tsconfig path aliases, so the likely plain
+   function is alias resolution — `@shared/*` to a real path, longest-prefix
+   wins, `baseUrl` relative. `.nvmrc`-versus-semver matching is the fallback.
+
+   Both X1 lessons so far were excused as *"git and shell setup rather than
+   runnable code"* and both turned out to contain an algorithm with a
+   precedence order. **Assume `0003` does too.**
 
    **Three results to carry in**, now confirmed across six lessons:
 

@@ -126,11 +126,83 @@ git pull</code></pre>
 git switch feature/token-generation
 git pull origin main
 
-# If there are conflicts, git marks them in the files.
-# Fix them, then:
-git add .
+# If there are conflicts, git marks them in the files. Fix them, then:
+git diff --check          # refuses to stay quiet about leftover markers
+git add app/src/Thing.tsx # name the files you actually resolved
 git commit -m "Resolve merge conflicts with main"
 git push</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">Nothing stops you committing a conflict
+      marker</div>
+      <p>The obvious recipe ends <code>git add .</code> and a commit. <strong>Git
+      will stage and commit a file that still contains
+      <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code> without a word.</strong>
+      Conflict markers are not special to git once the merge is over — they are
+      just text you left in a file, and <code>git add .</code> stages
+      everything including the file you had not finished.</p>
+      <p>It usually surfaces as a syntax error in CI, which is the good case.
+      The bad case is a marker inside a string, a Markdown file or a config
+      file, where nothing fails and the text is simply wrong in production.</p>
+      <p><code>git diff --check</code> is git's own answer and costs nothing to
+      run. Adding files by name rather than with <code>.</code> is the other
+      half: it makes "which files did I actually resolve?" a question you have
+      to answer.</p>
+    </div>
+
+    <h2>What a conflict actually looks like, including the part people miss</h2>
+
+    <p>The familiar shape has three markers:</p>
+
+    <pre><code>&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD
+const MAX_USES = 5;
+=======
+const MAX_USES = null;
+&gt;&gt;&gt;&gt;&gt;&gt;&gt; main</code></pre>
+
+    <p>But git has a second conflict style, and newer versions default to it.
+    With <code>merge.conflictStyle = diff3</code> or <code>zdiff3</code> there
+    is a <strong>fourth marker</strong> showing the common ancestor:</p>
+
+    <pre><code>&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD
+const MAX_USES = 5;
+||||||| merged common ancestor
+const MAX_USES = 1;
+=======
+const MAX_USES = null;
+&gt;&gt;&gt;&gt;&gt;&gt;&gt; main</code></pre>
+
+    <p>That base section is genuinely useful — it tells you what both sides
+    changed <em>from</em>, which is often the difference between resolving a
+    conflict and guessing at one. It also means <strong>a checker that knows
+    only three markers walks straight past the middle of a diff3
+    conflict.</strong></p>
+
+    <h3>Why the marker alone is not evidence</h3>
+
+    <p>The tempting way to write the check is to search each line for
+    <code>=======</code>. Try that on a repository and it will fire constantly,
+    because seven equals signs is also:</p>
+
+    <ul>
+      <li>a <strong>Markdown setext heading underline</strong> — the line under
+      a title</li>
+      <li>a separator in a comment banner</li>
+      <li>ASCII table borders, changelog rules, ASCII art</li>
+    </ul>
+
+    <p>This course has already learned that lesson from the other end.
+    <code>scripts/check-pre-blocks.mjs</code> fired <strong>71 times on its
+    first run and every one was wrong</strong>, because shell comments say
+    things like "see what's changed" and it was hunting unbalanced quotes.
+    A check that cries wolf gets switched off, and then the real one goes
+    unread.</p>
+
+    <p><strong>So a conflict is a sequence, not a symbol.</strong> Only
+    <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code> opens one; everything else is
+    ordinary text until something has opened. That single rule removes every
+    false positive above, because a Markdown underline has no
+    <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code> in front of it.</p>
 
     <h2>Useful GitHub features</h2>
 
@@ -156,9 +228,21 @@ git push</code></pre>
 
     <hr>
 
+    <h2>Now build it yourself</h2>
+
+    <div id="exercise-conflicts"></div>
+
+    <div id="pg-exercise-conflicts"></div>
+
+    <hr>
+
     <h2>Exercise</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="explain-x1-0002"></div>
 
     <hr>
 
@@ -172,12 +256,254 @@ git push</code></pre>
   </div>
 
   <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
+    createSolution("exercise-conflicts", {
+      exercise: "Write findConflicts(text) — find every leftover merge conflict in a file, without firing on ordinary text that happens to contain the same characters.\n\nReturn an array of { start, end, hasBase }:\n  start   — the 1-based line number of the <<<<<<< line\n  end     — the 1-based line number of the >>>>>>> line, or null if the conflict is never closed\n  hasBase — true if a ||||||| section was present (diff3 / zdiff3 style)\n\nThe rules:\n\n1. A marker is EXACTLY seven of its character, at the very start of a line, followed by either the end of the line or a space. '<<<<<<< HEAD' is a marker. '<<<<<<<<' is eight and is not. An indented '  <<<<<<<' is not.\n\n2. ONLY <<<<<<< opens a conflict. A =======, ||||||| or >>>>>>> found when no conflict is open is ordinary text and must be ignored. This single rule is what stops the check firing on Markdown heading underlines and comment banners.\n\n3. ======= must be seven equals signs and NOTHING else on the line. Git writes it bare, so '======= foo' is not a marker.\n\n4. Inside an open conflict, ||||||| sets hasBase, ======= is the divider, and >>>>>>> closes it and records the end line.\n\n5. A conflict still open at the end of the file is reported with end: null. A half-resolved file is worth knowing about.\n\n6. A file can contain more than one conflict.\n\n7. Lines may end with a carriage return. A file written on Windows split on \\n leaves a trailing \\r on every line, and a marker check that misses that finds nothing at all on half the machines in the world.",
+      hints: [
+        "Split on \\n and strip a single trailing \\r from each line before doing anything else. Getting that out of the way first means every rule below can assume a clean line.",
+        "Write one small helper that answers 'is this line the marker for character c?' and use it four times. The seven-exactly and followed-by-space-or-end rules then live in one place.",
+        "Track whether a conflict is currently open. Rule 2 is entirely a consequence of that flag: outside a conflict, three of the four markers are just text."
+      ],
+      solution: `// A marker is exactly seven of its character at the very start of the line,
+// followed by end-of-line or a space. Git never writes six or eight.
+function isMarker(line, ch) {
+  if (line.slice(0, 7) !== ch.repeat(7)) return false;
+  if (line.length === 7) return true;
+  return line[7] === " " && line[8] !== ch;
+}
+
+// ======= is the one git writes bare, so anything after it means this is not
+// a divider -- it is a line of text that happens to start with equals signs.
+function isDivider(line) {
+  return line === "=======";
+}
+
+function findConflicts(text) {
+  // A single trailing \\r, stripped once. Without this a file written on
+  // Windows produces "=======\\r", which matches nothing.
+  const lines = String(text).split("\\n").map(function (l) {
+    return l.endsWith("\\r") ? l.slice(0, -1) : l;
+  });
+
+  const conflicts = [];
+  let open = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineNo = i + 1;
+
+    if (open === null) {
+      // ONLY <<<<<<< opens one. Everything else here is ordinary text --
+      // which is the whole reason a Markdown underline does not fire.
+      if (isMarker(line, "<")) {
+        open = { start: lineNo, end: null, hasBase: false };
+      }
+      continue;
+    }
+
+    if (isMarker(line, "|")) {
+      open.hasBase = true;
+    } else if (isMarker(line, ">")) {
+      open.end = lineNo;
+      conflicts.push(open);
+      open = null;
+    }
+    // isDivider(line) needs no branch: the divider tells us nothing the
+    // opener has not already told us. It is checked only so the rule is
+    // written down somewhere.
+    else if (isDivider(line)) {
+      // no state change
+    }
+  }
+
+  // Still open at the end of the file: half-resolved, and worth reporting.
+  if (open !== null) conflicts.push(open);
+
+  return conflicts;
+}`
+    });
+
+    createPlayground("pg-exercise-conflicts", `// Write findConflicts(text) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function lines(arr) { return arr.join("\\n"); }
+function shape(list) {
+  return JSON.stringify((list || []).map(function (c) {
+    return [c.start, c.end, c.hasBase];
+  }));
+}
+
+const OPEN = "<".repeat(7);
+const BASE = "|".repeat(7);
+const MID  = "=".repeat(7);
+const CLOSE = ">".repeat(7);
+
+try {
+  if (typeof findConflicts !== "function") throw new Error("not written yet");
+
+  try {
+    const r = findConflicts(lines(["const a = 1;", "const b = 2;"]));
+    check("a clean file has no conflicts",
+          shape(r) === "[]",
+          "got " + shape(r));
+  } catch (e) { check("a clean file has no conflicts", false, "threw " + e.message); }
+
+  try {
+    const r = findConflicts(lines([
+      "before",
+      OPEN + " HEAD",
+      "ours",
+      MID,
+      "theirs",
+      CLOSE + " main",
+      "after",
+    ]));
+    check("a two-way conflict is found with its line numbers",
+          shape(r) === "[[2,6,false]]",
+          "got " + shape(r) + " -- 1-based, opener at 2 and closer at 6");
+  } catch (e) { check("a two-way conflict is found with its line numbers", false, "threw " + e.message); }
+
+  try {
+    // THE false-positive case. This is a Markdown setext heading, which is
+    // the single commonest seven-equals line in any repository.
+    const r = findConflicts(lines(["Release Notes", MID, "", "- fixed a thing"]));
+    check("a Markdown heading underline is not a conflict",
+          shape(r) === "[]",
+          "got " + shape(r) + " -- only <<<<<<< opens one; a check that fires here gets switched off");
+  } catch (e) { check("a Markdown heading underline is not a conflict", false, "threw " + e.message); }
+
+  try {
+    const r = findConflicts(lines(["text", CLOSE + " main", BASE, MID, "more"]));
+    check("closers and dividers with nothing open are ordinary text",
+          shape(r) === "[]",
+          "got " + shape(r));
+  } catch (e) { check("closers and dividers with nothing open are ordinary text", false, "threw " + e.message); }
+
+  try {
+    const r = findConflicts(lines([
+      OPEN + " HEAD",
+      "ours",
+      BASE + " merged common ancestor",
+      "base",
+      MID,
+      "theirs",
+      CLOSE + " main",
+    ]));
+    check("a diff3 conflict is found and reports hasBase",
+          shape(r) === "[[1,7,true]]",
+          "got " + shape(r) + " -- newer git defaults to zdiff3, which writes the base section");
+  } catch (e) { check("a diff3 conflict is found and reports hasBase", false, "threw " + e.message); }
+
+  try {
+    const r = findConflicts(lines([OPEN, "ours", MID, "theirs", CLOSE]));
+    check("bare markers with no labels still count",
+          shape(r) === "[[1,5,false]]",
+          "got " + shape(r) + " -- git writes a label, but the marker alone is legal");
+  } catch (e) { check("bare markers with no labels still count", false, "threw " + e.message); }
+
+  try {
+    const r = findConflicts(lines([OPEN + " HEAD", "ours", MID, "theirs"]));
+    check("a conflict left open at EOF is reported with end null",
+          shape(r) === "[[1,null,false]]",
+          "got " + shape(r) + " -- a half-resolved file is exactly what you want to hear about");
+  } catch (e) { check("a conflict left open at EOF is reported with end null", false, "threw " + e.message); }
+
+  try {
+    const r = findConflicts(lines([
+      OPEN, "a", MID, "b", CLOSE,
+      "middle",
+      OPEN, "c", MID, "d", CLOSE,
+    ]));
+    check("two conflicts in one file are both found",
+          shape(r) === "[[1,5,false],[7,11,false]]",
+          "got " + shape(r));
+  } catch (e) { check("two conflicts in one file are both found", false, "threw " + e.message); }
+
+  try {
+    // Marker characters appearing INSIDE lines, which is what a naive
+    // indexOf/includes search trips over.
+    //
+    // The first line has to embed an OPENER specifically: a fixture with
+    // only an embedded divider or closer proves nothing, because nothing
+    // has opened and those two are ignored anyway.
+    const r = findConflicts(lines([
+      "const banner = '" + OPEN + "';",
+      "const shift = a " + CLOSE + " 2;",
+    ]));
+    check("markers inside a line are not markers",
+          shape(r) === "[]",
+          "got " + shape(r) + " -- the marker has to START the line");
+  } catch (e) { check("markers inside a line are not markers", false, "threw " + e.message); }
+
+  try {
+    const r = findConflicts(lines(["  " + OPEN + " HEAD", "ours", MID, "theirs", "  " + CLOSE]));
+    check("an indented marker is not a marker",
+          shape(r) === "[]",
+          "got " + shape(r) + " -- git writes them flush to the left margin");
+  } catch (e) { check("an indented marker is not a marker", false, "threw " + e.message); }
+
+  try {
+    const eight = "<".repeat(8);
+    const six = "<".repeat(6);
+    const r1 = findConflicts(lines([eight + " HEAD", "x", MID, "y", CLOSE]));
+    const r2 = findConflicts(lines([six + " HEAD", "x", MID, "y", CLOSE]));
+    check("exactly seven characters, not six and not eight",
+          shape(r1) === "[]" && shape(r2) === "[]",
+          "eight=" + shape(r1) + " six=" + shape(r2));
+  } catch (e) { check("exactly seven characters, not six and not eight", false, "threw " + e.message); }
+
+  try {
+    // Git writes ======= bare. A line with trailing content is a separator
+    // somebody typed, and treating it as a divider is a false positive
+    // waiting inside an otherwise real conflict.
+    const r = findConflicts(lines([OPEN, "ours", MID + " not a divider", "theirs", CLOSE]));
+    check("a divider with trailing content is still not a divider",
+          shape(r) === "[[1,5,false]]",
+          "got " + shape(r) + " -- the conflict is still found; the line is just content");
+  } catch (e) { check("a divider with trailing content is still not a divider", false, "threw " + e.message); }
+
+  try {
+    // Windows line endings. Split on \\n and every line keeps a trailing \\r.
+    //
+    // The markers here are BARE on purpose. A labelled marker survives the
+    // stray \\r by accident -- '<<<<<<< HEAD\\r' still has a space at index 7
+    // -- so a fixture using labels would pass an implementation that never
+    // strips anything. Only the unlabelled form, where index 7 IS the \\r,
+    // can tell the two apart.
+    const crlf = [OPEN, "ours", MID, "theirs", CLOSE].join("\\r\\n");
+    const r = findConflicts(crlf);
+    check("CRLF line endings do not hide the markers",
+          shape(r) === "[[1,5,false]]",
+          "got " + shape(r) + " -- a bare marker plus \\\\r is 8 characters, and matches nothing");
+  } catch (e) { check("CRLF line endings do not hide the markers", false, "threw " + e.message); }
+
+  try {
+    const r = findConflicts("");
+    check("empty input gives an empty list",
+          shape(r) === "[]",
+          "got " + shape(r));
+  } catch (e) { check("empty input gives an empty list", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write findConflicts(text) above, then press Run. (" + e.message + ")");
+}`);
+
+    createExplain("explain-x1-0002", {
+      prompt: "A conflict checker that searches every line for <code>=======</code> will fire on this course's own <code>HANDOFF.md</code> repeatedly, and never find a real conflict that nobody has already noticed. Explain why the rule has to be a <em>sequence</em> rather than a symbol — and what happens to a check that cries wolf."
+    });
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is a GitHub repository, SSH keys and a pull request",
       exercise: "Create a GitHub repository for Token and push your local repo to it. Then create a feature branch, add a README.md to the repo root describing the project in 2-3 sentences, commit it on the branch, push, and open a pull request on GitHub.",
       hints: [
         "Generate an SSH key first if you haven't already — GitHub won't accept password auth for git operations.",
@@ -454,6 +780,20 @@ git pull`
         ],
         correct: 1,
         explanation: "origin is just a conventional name for your primary remote repository. When you clone a repo, git automatically names the source 'origin'. It's an alias for the full URL — you can rename it or add multiple remotes."
+      },
+      {
+        type: "predict-output",
+        question: "The naive conflict check — search every line for seven equals signs — run over a short Markdown file. How many lines does it flag?",
+        code: "const file = [\n  'Release Notes',\n  '=======',            // a setext heading underline\n  '',\n  '## Config',\n  '| key   | value |',\n  '|=======|=======|',   // an ASCII table border\n  '',\n  '// =======  section 2  =======',\n].join('\\n');\n\nconst hits = file.split('\\n').filter((l) => l.includes('======='));\n\nconsole.log(hits.length + ' false positives, 0 real conflicts');",
+        answer: "3 false positives, 0 real conflicts",
+        explanation: "Three warnings in eight lines, and not one of them is a conflict. That is the shape of a check nobody keeps: it is switched off within a week, and then the real conflict goes unread. This repository has the scar — scripts/check-pre-blocks.mjs fired 71 times on its first run and every hit was wrong. The fix is not a cleverer test for the divider. It is to notice that ONLY <<<<<<< opens a conflict, so nothing above is even considered."
+      },
+      {
+        type: "predict-output",
+        question: "A file with Windows line endings, split on newline. This is what each marker line actually looks like to your checker. What prints?",
+        code: "const file = '<<<<<<<\\r\\nours\\r\\n=======\\r\\ntheirs\\r\\n>>>>>>>';\n\nconst lines = file.split('\\n');\n\nconsole.log(JSON.stringify(lines[0]) + ' length ' + lines[0].length);",
+        answer: "\"<<<<<<<\\r\" length 8",
+        explanation: "Eight characters, not seven, so an exact comparison against seven '<' finds nothing at all — on every file authored on Windows. Note which markers this hits: a LABELLED marker like '<<<<<<< HEAD\\r' still has a space at index 7 and survives by luck, so a test using labelled markers passes an implementation that never strips the carriage return. Only the bare form exposes it, which is why the self-check above uses bare markers for this case specifically."
       }
     ]);
   </script>

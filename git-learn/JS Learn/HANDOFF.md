@@ -3279,3 +3279,77 @@ anchoring. Eighth time a wrong-case has found a gap in the self-check beside
 it.
 
 **Result: 91 verified, 10 `unverifiable`.** Audit green, six suites pass.
+
+---
+
+### Session of 2026-08-24 (continued) — x1/0002, and a detector's two ways of being useless
+
+Second of the X1 trio. M3: `findConflicts` — 14 self-checks, 8 wrong-cases,
+2 new executable quiz questions.
+
+#### The defect
+
+The conflict-resolution recipe ended `git add .` followed by a commit. **Git
+will stage and commit a file that still contains `<<<<<<<` without a word** —
+conflict markers stop being special to git the moment the merge is over; after
+that they are just text somebody left in a file. The good outcome is a syntax
+error in CI. The bad one is a marker inside a string, a Markdown file or a
+config file, where nothing fails and the text is simply wrong in production.
+
+The recipe now runs `git diff --check` — git's own answer, free — and adds
+files by name, which forces "which files did I actually resolve?" to be a
+question with an answer.
+
+#### Both directions, for once
+
+Almost every wrong-case written in this course so far fails in a single
+direction. A detector has two, and this exercise is built on the tension:
+
+- **Too eager.** The obvious implementation searches each line for
+  `=======`. The new quiz question runs exactly that over eight lines of
+  ordinary Markdown — a setext heading underline, an ASCII table border, a
+  comment banner — and reports **three false positives and zero conflicts**.
+  A check like that gets switched off within a week, and then the real
+  conflict goes unread. This repository has the scar already:
+  `check-pre-blocks.mjs` fired 71 times on its first run and every hit was
+  wrong.
+- **Too quiet.** Missing the diff3 `|||||||` base section (newer git defaults
+  to `zdiff3`, which writes one), missing every marker behind a trailing
+  `\r`, or dropping a conflict left open at the end of the file.
+
+**The resolution is not a cleverer test for the divider.** It is that only
+`<<<<<<<` opens a conflict — a divider or a closer with nothing open is
+ordinary text. One rule, and every false positive above stops existing,
+because a Markdown underline has no opener in front of it. *A conflict is a
+sequence, not a symbol.*
+
+#### Two fixtures that proved nothing until a wrong-case sharpened them
+
+Both were found the same way — a mistake tripping a check other than the one
+it was written for:
+
+- **The CRLF fixture used labelled markers.** `<<<<<<< HEAD\r` still has a
+  space at index 7, so it survives the stray carriage return *by luck*, and an
+  implementation that never strips anything passed the test written to catch
+  it. Only the bare form — where index 7 **is** the `\r` — separates them.
+- **The embedded-marker fixture had no embedded opener.** It contained a
+  `=======` and a `>>>>>>>` inside lines, and since neither of those can open
+  a conflict, the `includes`-based mistake sailed through.
+
+Both are the same underlying error on my part: writing a fixture that
+*contains* the dangerous ingredient without putting it where it can do
+anything.
+
+#### The self-check caught one of my own "correct" alternatives
+
+The reduce-based alternative **never reported a conflict left open at EOF**.
+Reduce has no natural place for an after-the-loop step, so the first draft
+simply omitted it, and the self-check failed it — correctly.
+
+That is the mechanism running in the other direction and is worth recording as
+such. The `alternatives` exist to prove the self-check accepts different
+*styles* rather than one shape; this time the self-check proved that one of the
+styles was not a correct implementation. Both roles are useful, and only
+running them tells you which one you are getting.
+
+**Result: 92 verified, 9 `unverifiable`.** Audit green, six suites pass.
