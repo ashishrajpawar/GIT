@@ -123,8 +123,34 @@ USER token
 EXPOSE 3000
 ENV NODE_ENV=production
 
-# Start the server
-CMD ["node", "dist/server.js"]</code></pre>
+# Start the server.
+#
+# NOTE THE PATH. x1/0003 sets "rootDir": ".." so that shared/ can be an
+# input, and TypeScript mirrors the tree below rootDir into outDir. The
+# build context here is api/ with shared/ copied in beside src/, so the
+# compiled entry point is dist/api/src/server.js -- not dist/server.js.
+CMD ["node", "dist/api/src/server.js"]</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">The entry path is decided by a tsconfig two
+      folders away</div>
+      <p>
+        <code>dist/server.js</code> is what everybody writes, and it is right
+        only for a project whose sources all sit under one directory. Token
+        shares <code>shared/</code> as source, so <code>rootDir</code> has to
+        sit above both folders and <strong>the output mirrors the tree beneath
+        it</strong>. Change <code>rootDir</code> and this <code>CMD</code>
+        breaks, with a container that builds cleanly and exits instantly on
+        <code>MODULE_NOT_FOUND</code>.
+      </p>
+      <p>
+        This is the argument for <code>rootDir</code> being set explicitly
+        rather than inferred, which <code>x1/0003</code> makes at length: an
+        inferred root is computed from whichever files are inputs, and it comes
+        out <em>differently inside this Dockerfile</em> than it does on your
+        laptop, because the layout being copied in is not the repo layout.
+      </p>
+    </div>
 
     <h3>Why Multi-Stage?</h3>
     <p>The builder stage has TypeScript, devDependencies, and source files &mdash; all things you don't
@@ -352,10 +378,14 @@ async function shutdown(signal: string) {
   shuttingDown = true;
   logger.info({ signal }, 'shutting down');
 
+  // Everything below has to finish inside Docker's grace period. planShutdown
+  // divides it up and, crucially, hands the leftover to the drain.
+  const plan = planShutdown(Number(process.env.STOP_GRACE_MS) || 10000);
+
   // 1. Fail readiness first, so the proxy stops sending new requests
   //    BEFORE we start refusing them. Out of rotation, then closing.
   setNotReady();
-  await sleep(2000);
+  await sleep(plan.readinessMs);
 
   // 2. Tell WebSocket clients to reconnect. They will land on another
   //    replica - or on the new container a moment later.
@@ -365,9 +395,20 @@ async function shutdown(signal: string) {
   }
 
   // 3. Stop accepting connections and let in-flight requests finish.
-  await new Promise&lt;void&gt;((resolve) =&gt; server.close(() =&gt; resolve()));
+  //
+  //    server.close() waits for every open connection, and a keep-alive
+  //    socket sitting idle counts as open - so on its own this can wait
+  //    for ever. Both halves are needed: hurry the idle ones along, and
+  //    put a hard ceiling on the rest.
+  server.closeIdleConnections();
+  await Promise.race([
+    new Promise&lt;void&gt;((resolve) =&gt; server.close(() =&gt; resolve())),
+    sleep(plan.drainMs),
+  ]);
 
   // 4. Now the dependencies, in the order that cannot strand work.
+  //    This runs whether or not the drain finished, because a pool closed
+  //    late is better than a pool not closed at all.
   await pool.end();
   await redis.quit();
 
@@ -394,6 +435,63 @@ process.on('SIGINT', () =&gt; shutdown('SIGINT'));     // Ctrl-C locally</code><
         returned. It looks like it works, because the new container comes up.
       </p>
     </div>
+
+    <h3>A shutdown sequence without a total is not a plan</h3>
+
+    <p>
+      Read those four steps again as a stopwatch rather than a list. Docker
+      sends <code>SIGKILL</code> ten seconds after <code>SIGTERM</code>, and
+      <code>SIGKILL</code> cannot be caught. So the sequence has a
+      <strong>budget</strong>, and the first version of it above quietly
+      exceeded the budget in two different ways.
+    </p>
+
+    <p>
+      <code>await sleep(2000)</code> is fine on its own. Then
+      <code>server.close()</code> waits for every open connection to finish —
+      and <strong>an idle keep-alive socket counts as open.</strong> A browser
+      that made one request and is holding the connection for the next keeps
+      the server "busy" indefinitely, so on its own this step can wait for
+      ever. That is why the corrected version does two things: hurry the idle
+      connections along with <code>closeIdleConnections()</code>, and race the
+      whole drain against a hard ceiling.
+    </p>
+
+    <div class="callout danger">
+      <div class="callout-title">The handler exits the way it exists to
+      prevent</div>
+      <p>
+        With no ceiling, one slow request or one idle keep-alive socket means
+        <code>server.close()</code> has not resolved at the ten-second mark.
+        <code>pool.end()</code> and <code>redis.quit()</code> are still queued
+        behind it. <code>SIGKILL</code> arrives, and you get <strong>exactly
+        the ungraceful exit the handler was written to avoid</strong> — sockets
+        severed with no close frame, database connections dropped rather than
+        returned — with the added insult that it took the full ten seconds
+        first.
+      </p>
+      <p>
+        And it looks like it works, because the new container comes up. Deploys
+        that consistently take a fraction over ten seconds are the symptom, and
+        nobody reads a deploy timing as a bug report.
+      </p>
+    </div>
+
+    <p>Which phases may be shortened is a real design question, and the answer
+    is not "shorten them equally":</p>
+
+    <ul>
+      <li><strong>The readiness wait is an optimisation and fully
+      compressible.</strong> It exists so the proxy takes us out of rotation
+      before we start refusing anything. Cut it to nothing and some in-flight
+      requests fail — bad, not corrupting.</li>
+      <li><strong>Closing the pool and Redis is not compressible.</strong> That
+      is the step that stops work being stranded, and it is the whole reason
+      for a graceful shutdown in the first place. It gets its budget first.</li>
+      <li><strong>Leftover time belongs to the drain</strong>, not to a longer
+      wait. Extra seconds spent finishing real requests are worth more than
+      extra seconds spent standing still.</li>
+    </ul>
 
     <hr>
 
@@ -535,8 +633,14 @@ RUN apk add --no-cache --virtual .build python3 make g++ \
     <h2>Playground: Docker Layer Caching</h2>
     <div id="playground-1"></div>
 
+    <h2>Now build it yourself</h2>
+    <div id="exercise-shutdown"></div>
+    <div id="pg-exercise-shutdown"></div>
+
     <h2>Exercise: Write Docker Configuration for Token</h2>
     <div id="exercise-1"></div>
+
+    <div id="explain-b9-0001"></div>
 
     <h2>Quiz</h2>
     <div id="lesson-quiz"></div>
@@ -549,6 +653,7 @@ RUN apk add --no-cache --virtual .build python3 make g++ \
     <script src="../../assets/quiz.js"></script>
     <script src="../../assets/playground.js"></script>
     <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
     <script src="../../assets/progress.js"></script>
     <script src="../../assets/copy-code.js"></script>
     <script>
@@ -587,7 +692,201 @@ simulateBuild(layers, "package.json");
 console.log("\\n=== Scenario 3: No changes ===");
 simulateBuild(layers, "README.md");`);
 
+        createSolution("exercise-shutdown", {
+            exercise: "Write planShutdown(graceMs) — divide Docker's grace period between the four shutdown phases, so the container exits before SIGKILL rather than because of it.\n\nReturn { readinessMs, socketsMs, drainMs, depsMs, total, willBeKilled }.\n\nThe four phases, in the order they run:\n\n  readiness — fail the readiness probe and wait for the proxy to notice. Ideally 2000ms. FULLY COMPRESSIBLE: it is an optimisation, and cutting it only means some in-flight requests fail.\n  sockets   — send the close frames to WebSocket clients. Needs 250ms and cannot go below that; you have to actually send them.\n  drain     — let in-flight HTTP requests finish. Needs at least 500ms.\n  deps      — close the Postgres pool and Redis. Needs 500ms and cannot go below it. This is the step that stops work being stranded, so it is the reason the whole handler exists.\n\nThe rules:\n\n1. Keep a SAFETY MARGIN of 500ms. The plan must finish before SIGKILL, not at the same moment. available = graceMs - 500.\n\n2. Reserve the three incompressible minimums first: sockets 250, drain 500, deps 500 — 1250 in total.\n\n3. readiness gets whatever is left over, up to its ideal of 2000. It is the first thing cut and the last thing grown.\n\n4. ANY REMAINING SLACK GOES TO drain. Time spent finishing real requests is worth more than time spent standing still, so the leftover must not go back to readiness.\n\n5. If available is less than 1250, the minimums do not fit. Return them anyway — a plan that gives up entirely is worse than one that does what it can — and set willBeKilled: true.\n\n6. total is the sum of the four phases. willBeKilled is true exactly when total exceeds available.\n\n7. A graceMs that is not a finite number above zero is treated as 0.",
+            hints: [
+                "Work out `available` and the reserved minimums as named values before allocating anything. Rules 3 and 4 are then two lines, and rule 6 is a comparison rather than a special case.",
+                "Rule 4 is the one that is easy to get subtly wrong: after giving readiness its share, the slack that is STILL left belongs to drain. Adding it to readiness instead produces a plan that waits longer and finishes less.",
+                "Compute willBeKilled from the total you actually produced, not from a separate branch. Two places deciding the same thing is how they come to disagree."
+            ],
+            solution: `const IDEAL_READINESS = 2000;
+const MIN_SOCKETS = 250;
+const MIN_DRAIN = 500;
+const MIN_DEPS = 500;
+const SAFETY_MARGIN = 500;
+
+function planShutdown(graceMs) {
+  const grace =
+    typeof graceMs === "number" && Number.isFinite(graceMs) && graceMs > 0
+      ? graceMs
+      : 0;
+
+  // Finish BEFORE SIGKILL, not at the same instant.
+  const available = grace - SAFETY_MARGIN;
+  const reserved = MIN_SOCKETS + MIN_DRAIN + MIN_DEPS;
+
+  // Not enough room even for the incompressible steps. Do what can be done
+  // and say plainly that it will not finish -- a plan that gives up is
+  // worse than one that runs out of time.
+  if (available < reserved) {
+    const total = reserved;
+    return {
+      readinessMs: 0,
+      socketsMs: MIN_SOCKETS,
+      drainMs: MIN_DRAIN,
+      depsMs: MIN_DEPS,
+      total: total,
+      willBeKilled: total > available,
+    };
+  }
+
+  let spare = available - reserved;
+
+  // readiness is the compressible one, so it is filled from the spare and
+  // capped at its ideal -- never allowed to eat into the reserved minimums.
+  const readinessMs = Math.min(IDEAL_READINESS, spare);
+  spare -= readinessMs;
+
+  // Everything still left goes to the DRAIN. Finishing real requests beats
+  // waiting longer at a readiness probe that has already done its job.
+  const drainMs = MIN_DRAIN + spare;
+
+  const total = readinessMs + MIN_SOCKETS + drainMs + MIN_DEPS;
+
+  return {
+    readinessMs: readinessMs,
+    socketsMs: MIN_SOCKETS,
+    drainMs: drainMs,
+    depsMs: MIN_DEPS,
+    total: total,
+    // One source of truth, compared against what was actually produced.
+    willBeKilled: total > available,
+  };
+}`
+        });
+
+        createPlayground("pg-exercise-shutdown", `// Write planShutdown(graceMs) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(p) { return JSON.stringify(p); }
+
+try {
+  if (typeof planShutdown !== "function") throw new Error("not written yet");
+
+  try {
+    // Docker's default. 10000 - 500 margin = 9500 to spend.
+    const p = planShutdown(10000);
+    check("the default 10s budget is fully allocated and fits",
+          p.total === 9500 && p.willBeKilled === false,
+          "got " + show(p) + " -- total must be graceMs minus the 500ms margin");
+  } catch (e) { check("the default 10s budget is fully allocated and fits", false, "threw " + e.message); }
+
+  try {
+    const p = planShutdown(10000);
+    check("the phases sum to the total",
+          p.readinessMs + p.socketsMs + p.drainMs + p.depsMs === p.total,
+          "got " + show(p));
+  } catch (e) { check("the phases sum to the total", false, "threw " + e.message); }
+
+  try {
+    const p = planShutdown(10000);
+    check("readiness is capped at its ideal even when there is room to spare",
+          p.readinessMs === 2000,
+          "got " + show(p) + " -- more waiting is not more useful");
+  } catch (e) { check("readiness is capped at its ideal even when there is room to spare", false, "threw " + e.message); }
+
+  try {
+    // 9500 available, 1250 reserved, 2000 to readiness -> 6250 spare, and
+    // ALL of it belongs to the drain: 500 + 6250.
+    const p = planShutdown(10000);
+    check("every leftover millisecond goes to the drain",
+          p.drainMs === 6750,
+          "got drainMs " + p.drainMs + " -- finishing requests beats standing still");
+  } catch (e) { check("every leftover millisecond goes to the drain", false, "threw " + e.message); }
+
+  try {
+    // 2000 - 500 = 1500 available, 1250 reserved, 250 spare. Readiness is
+    // the compressible one, so it takes the cut.
+    const p = planShutdown(2000);
+    check("a tight budget cuts readiness first",
+          p.readinessMs === 250 && p.socketsMs === 250 && p.drainMs === 500 && p.depsMs === 500,
+          "got " + show(p) + " -- the incompressible three keep their minimums");
+  } catch (e) { check("a tight budget cuts readiness first", false, "threw " + e.message); }
+
+  try {
+    const p = planShutdown(2000);
+    check("a tight budget still fits, and says so",
+          p.total === 1500 && p.willBeKilled === false,
+          "got " + show(p));
+  } catch (e) { check("a tight budget still fits, and says so", false, "threw " + e.message); }
+
+  try {
+    // 1750 - 500 = 1250 available, exactly the reserved minimum. Readiness
+    // gets nothing and it still fits -- the boundary, inclusive.
+    const p = planShutdown(1750);
+    check("exactly enough for the minimums is enough",
+          p.readinessMs === 0 && p.total === 1250 && p.willBeKilled === false,
+          "got " + show(p) + " -- available === reserved is not a failure");
+  } catch (e) { check("exactly enough for the minimums is enough", false, "threw " + e.message); }
+
+  try {
+    // One millisecond short.
+    const p = planShutdown(1749);
+    check("one millisecond short is reported as doomed",
+          p.willBeKilled === true,
+          "got " + show(p));
+    check("a doomed plan still runs the incompressible steps",
+          p.socketsMs === 250 && p.drainMs === 500 && p.depsMs === 500,
+          "got " + show(p) + " -- giving up entirely is worse than running out of time");
+  } catch (e) { check("one millisecond short is reported as doomed", false, "threw " + e.message); }
+
+  try {
+    const p = planShutdown(1000);
+    check("a budget far too small never produces a negative phase",
+          p.readinessMs >= 0 && p.socketsMs >= 0 && p.drainMs >= 0 && p.depsMs >= 0,
+          "got " + show(p) + " -- a negative sleep is an instant one, which hides the problem");
+  } catch (e) { check("a budget far too small never produces a negative phase", false, "threw " + e.message); }
+
+  try {
+    const p = planShutdown(10000);
+    check("the safety margin is real -- the plan ends before SIGKILL",
+          p.total < 10000,
+          "got total " + p.total + " -- finishing AT the deadline is finishing after it");
+  } catch (e) { check("the safety margin is real -- the plan ends before SIGKILL", false, "threw " + e.message); }
+
+  try {
+    const p = planShutdown(30000);
+    check("a generous budget grows the drain, not the wait",
+          p.readinessMs === 2000 && p.drainMs === 26750,
+          "got " + show(p));
+  } catch (e) { check("a generous budget grows the drain, not the wait", false, "threw " + e.message); }
+
+  try {
+    const bad = [0, -5000, NaN, undefined, "10000", null];
+    const allDoomed = bad.every(function (v) { return planShutdown(v).willBeKilled === true; });
+    check("an unusable graceMs is treated as zero and reported as doomed",
+          allDoomed,
+          "one of " + JSON.stringify(bad) + " did not come back doomed -- including the STRING, which is what an env var actually is");
+  } catch (e) { check("an unusable graceMs is treated as zero and reported as doomed", false, "threw " + e.message); }
+
+  try {
+    const p = planShutdown(10000);
+    check("deps keep their full minimum even when the budget is generous",
+          p.depsMs === 500,
+          "got " + show(p) + " -- closing the pool is a fixed cost, not a share of the slack");
+  } catch (e) { check("deps keep their full minimum even when the budget is generous", false, "threw " + e.message); }
+
+  try {
+    const tight = planShutdown(1749);
+    check("willBeKilled agrees with the numbers rather than being set separately",
+          tight.willBeKilled === (tight.total > 1749 - 500),
+          "got " + show(tight) + " -- two places deciding this is how they come to disagree");
+  } catch (e) { check("willBeKilled agrees with the numbers rather than being set separately", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write planShutdown(graceMs) above, then press Run. (" + e.message + ")");
+}`);
+
+        createExplain("explain-b9-0001", {
+            prompt: "A shutdown handler with no total budget fails in a particular way: the deploy still succeeds, the new container still comes up, and the only visible symptom is that deploys take a little over ten seconds. Explain what has actually happened to the connections and the database pool in those ten seconds — and why <code>server.close()</code> on its own can wait for ever."
+        });
+
         createSolution("exercise-1", {
+            unverifiable: "the deliverable is Dockerfiles and compose files needing Docker installed",
             exercise: "Write the complete Docker setup for the Token project:\n\n1. A multi-stage Dockerfile for `api/` that compiles TypeScript, then produces a minimal production image running as a non-root user.\n2. A `.dockerignore` file that excludes node_modules, .git, .env files, and other non-essential files.\n3. A `docker-compose.yml` that runs the API, Postgres, and Redis — with a health check on Postgres so the API doesn't start until the database is ready.\n4. The API should be accessible on port 3000, Postgres on 5432, Redis on 6379.",
             hints: [
                 "Use node:20-alpine as the base — Alpine images are ~5x smaller than the default.",

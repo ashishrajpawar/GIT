@@ -3426,3 +3426,78 @@ in the case file rather than quietly dropped:
   case that appears to cover it.
 
 **Result: 93 verified, 8 `unverifiable`.** Audit green, six suites pass.
+
+---
+
+### Session of 2026-08-24 (continued) — b9/0001, and correcting myself an hour later
+
+First of the B9 trio. M3: `planShutdown` — 15 self-checks, 7 wrong-cases. The
+lesson already had a layer-caching playground and three executable questions,
+so the M3 went where the real defect was.
+
+#### A sequence with no total is not a plan
+
+The graceful-shutdown handler was genuinely well argued — fail readiness
+first, notify WebSocket clients with a 1012 close, drain, then close
+dependencies in the order that cannot strand work. Read it as a stopwatch
+rather than a list, though, and it has no budget. Docker sends `SIGKILL` ten
+seconds after `SIGTERM`, and `SIGKILL` cannot be caught.
+
+`server.close()` waits for every open connection, and **an idle keep-alive
+socket counts as open** — a browser that made one request and is holding the
+connection for its next keeps the server "busy" indefinitely. So the drain step
+can wait for ever, `pool.end()` and `redis.quit()` are still queued behind it
+when the ten seconds elapse, and **the handler written to prevent an ungraceful
+exit produces exactly one** — with the added insult of taking the full ten
+seconds first.
+
+The symptom is a deploy that consistently takes a fraction over ten seconds.
+Nobody reads a deploy timing as a bug report.
+
+Fixed with `closeIdleConnections()` — hurry the idle ones along — plus a race
+against a hard ceiling, and the ceiling comes from `planShutdown`.
+
+#### Which phase may be cut is a design decision, not an average
+
+The exercise is the allocation, and the interesting part is that the phases are
+not equal:
+
+- **Readiness is fully compressible.** It exists so the proxy takes you out of
+  rotation before you start refusing things. Cut it and some in-flight requests
+  fail — bad, not corrupting.
+- **Closing the pool and Redis is not compressible.** That is the step that
+  stops work being stranded, and it is the whole reason for a graceful shutdown
+  in the first place, so it gets its budget first.
+- **Leftover time belongs to the drain.** One wrong-case sends it to the
+  readiness wait instead: the plan still fits, still exits cleanly, and spends
+  six and a half seconds standing still while real requests get the minimum.
+
+#### And a correction to x1/0003, written an hour earlier in this session
+
+`x1/0003` told the reader to **remove** `rootDir` to fix `TS6059`. That works,
+and it is the weaker of the two fixes. Deleting the option makes TypeScript
+*infer* the root as the common ancestor of whatever files happen to be inputs —
+which means:
+
+- adding an import from `shared/` to a project that had none **moves every
+  output file**, and
+- the same calculation runs again inside Docker against a different layout, so
+  **the same source produces a different output path depending on where it was
+  built**.
+
+`b9/0001`'s `CMD ["node", "dist/server.js"]` is the proof. In the repo the
+inferred root is the repo root; in the container, where `api/` is copied to
+`/app` and `shared/` beside it, the root is `/app`. Both lessons now use
+`"rootDir": ".."` — explicit and deterministic — and the `CMD` reads
+`dist/api/src/server.js`, with a callout on each side saying why.
+
+**The rule: an inferred value feeding a hard-coded path is a coincidence
+waiting to be noticed.**
+
+Worth recording how it surfaced. Not by re-reading `x1/0003`, and not by any
+check — by the next lesson's Dockerfile disagreeing with it. That is the
+sibling-lesson pattern that found `a7/0003`'s ternary, except the sibling this
+time was my own work from an hour before. **When a lesson changes a decision,
+grep the modules downstream of it in the same session.**
+
+**Result: 94 verified, 7 `unverifiable`.** Audit green, six suites pass.

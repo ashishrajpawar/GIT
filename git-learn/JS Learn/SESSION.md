@@ -22,14 +22,14 @@ how far it got.
 **Nothing in flight.** Working tree clean, everything committed.
 
 **Started the `unverifiable` cluster** — the recommended body of work in
-*Next action*. **A7, A10 and X1 are all finished.** 8 to go. See below.
+*Next action*. A7, A10 and X1 are finished; B9 is one of three. 7 to go.
 
 **State as of 2026-08-23** — run `node scripts/audit.mjs` before trusting any
 of it:
 
 - **101 lessons.** Audit **green**, 2 warnings, six suites pass.
 - **Every lesson has been executed at least once.** The verification log has
-  no absent entries: **93 verified, 8 `unverifiable`** with a stated reason,
+  no absent entries: **94 verified, 7 `unverifiable`** with a stated reason,
   1 `nothing-to-verify`. All four remaining A7 lessons moved across on
   2026-08-23/24.
 - **`known-issues.json` is down to one entry** — `calls`, gated on B6.
@@ -40,6 +40,60 @@ of it:
 
 **Nothing is blocked.** See *Next action* for the four candidate bodies of
 work and why the `unverifiable` cluster is the recommendation.
+
+### b9/0001 — a shutdown sequence with no total, and a correction to x1/0003 (2026-08-24)
+
+M3: **`planShutdown`**. 15 self-checks, 7 wrong-cases. The lesson already had
+a layer-caching playground and 3 executable questions, so the M3 went to the
+part with a real defect.
+
+**The shutdown handler was well argued and had no budget.** Docker sends
+SIGKILL ten seconds after SIGTERM, and `server.close()` is unbounded — worse,
+**it does not close idle keep-alive connections at all**, so a browser holding
+a connection open for its next request keeps the server "busy" indefinitely.
+The handler written to prevent an ungraceful exit produces exactly one, and
+takes the full ten seconds doing it.
+
+**The symptom is a deploy that takes a fraction over ten seconds**, which
+nobody reads as a bug report.
+
+Fixed with `closeIdleConnections()` plus a race against a hard ceiling, and
+the ceiling comes from `planShutdown`.
+
+### Which phase may be cut is a design decision, not an average
+
+- **Readiness is fully compressible** — it is an optimisation, and cutting it
+  only means some in-flight requests fail.
+- **Closing the pool and Redis is not** — that is the step that stops work
+  being stranded, which is the entire reason for a graceful shutdown.
+- **Slack goes to the drain**, never back to the wait. One wrong-case does
+  exactly that: it fits, it exits cleanly, and it spends six seconds standing
+  still while real requests get the minimum.
+
+### ⚠ A correction to x1/0003, made an hour after writing it
+
+**I recommended removing `rootDir`, and that was the weaker of the two
+fixes.** Deleting it makes TypeScript *infer* the root as the common ancestor
+of whatever files happen to be inputs — so:
+
+- adding an import from `shared/` to a project that had none **moves every
+  output file**, and
+- the calculation runs again inside Docker against a different layout, giving
+  **a different output path from the same source**.
+
+`b9/0001`'s `CMD ["node", "dist/server.js"]` is the proof: in the repo the
+inferred root is the repo root, in the container it is `/app`. Now
+`"rootDir": ".."` — explicit, deterministic, and the `CMD` says
+`dist/api/src/server.js` with a callout explaining why.
+
+**The general rule: an inferred value feeding a hard-coded path is a
+coincidence waiting to be noticed.** Both lessons now say so, and both were
+re-verified.
+
+**Worth noting how it was caught** — not by re-reading `x1/0003`, but by the
+next lesson's Dockerfile disagreeing with it. That is the sibling-lesson
+pattern again, and this time the sibling I had to check against was my own
+work from an hour earlier.
 
 ### x1/0003 — paths is a router, not a dictionary, and X1 is finished (2026-08-24)
 
@@ -2087,22 +2141,28 @@ executed; the log is 84 verified, 17 `unverifiable` with a reason, 1
 What is left, in no forced order:
 
 1. **The `unverifiable` lessons — started 2026-08-23; all of A7, A10 and X1
-   done, 8 left.**
+   plus `b9/0001` done, 7 left.**
    `CLAUDE.md` warns that the reflex to reach for that flag is wrong more often
    than it is right, and this pass proved it again — nine lessons that looked
    unrunnable produced nine exercises, and `a7/0001` then produced a tenth
-   plus two real defects. Remaining clusters: **B9 (3), B6 (2)**, plus `a9/0001`,
+   plus two real defects. Remaining clusters: **B9 (2), B6 (2)**, plus `a9/0001`,
    `b1/0003`, `b8/0001`. Each needs the same
    move: find the plain function, excuse the rest per-exercise, **and add the
-   `createExplain` prompt** — the 8 without one are exactly the 8 still
+   `createExplain` prompt** — the 7 without one are exactly the 7 still
    excused.
 
-   **Next: `b9-docker-deployment` (3 lessons)** — the largest remaining
-   cluster, excused as needing Docker, a VPS, Coolify and DNS. Expect the
-   same result X1 just produced three times over: a Dockerfile is a layer
-   -cache algorithm, a compose file is a dependency graph, and `0003` is
-   already about logs and backups, where `b9/0003`'s redemption handler was
-   fixed on 2026-08-23 but nothing executable was added.
+   **Next: `b9/0002-coolify-setup.html`, then `b9/0003`.** `0002` is
+   deployment config, so look for a health-check or rollback decision, or the
+   env-var validation `CLAUDE.md` says must happen at startup. `0003` is logs
+   and backups — its redemption handler was fixed on 2026-08-23 but nothing
+   executable was added, and a retention/rotation policy is a precedence
+   problem.
+
+   **A fifth result to carry, new today:** `b9/0001` caught an error I had
+   introduced in `x1/0003` an hour earlier, because its Dockerfile disagreed
+   with it. **When a lesson changes a decision, grep the modules downstream
+   of it in the same session** — the sibling-lesson pattern applies to your
+   own edits, not just to what was there before.
 
    **Four results now carry forward**, confirmed across nine lessons:
 

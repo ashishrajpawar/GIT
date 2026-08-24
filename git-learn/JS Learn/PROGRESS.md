@@ -14,11 +14,11 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 101 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
 | Quiz questions (track) | 2739 |
-| Avg teaching prose per track lesson | 2156 words |
+| Avg teaching prose per track lesson | 2164 words |
 | Lessons with a playground | 100 / 101 |
 | Lessons with an exercise | 101 / 101 |
 | **Deepened** (all 3 spine sections) | 16 / 101 |
-| **Verified** (code executed) | 93 / 101 |
+| **Verified** (code executed) | 94 / 101 |
 | Ran clean but had nothing to run | 0 / 101 |
 | Errors | 0 |
 | Known and blocked | 1 |
@@ -94,9 +94,9 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b6-webrtc-signalling | 2 | 2052 | 2 | 2 | 52 | 1/2 | 0/2 |
 | b7-token-engine | 3 | 3451 | 7 | 6 | 78 | 3/3 | 3/3 |
 | b8-push-notifications | 1 | 1420 | 1 | 1 | 25 | 0/1 | 0/1 |
-| b9-docker-deployment | 3 | 2439 | 3 | 3 | 77 | 2/3 | 0/3 |
+| b9-docker-deployment | 3 | 2655 | 4 | 4 | 77 | 2/3 | 1/3 |
 | c5-end-to-end-encryption | 5 | 1671 | 10 | 10 | 126 | 0/5 | 5/5 |
-| x1-git-dev-environment | 3 | 1161 | 4 | 6 | 83 | 0/3 | 3/3 |
+| x1-git-dev-environment | 3 | 1201 | 4 | 6 | 83 | 0/3 | 3/3 |
 | x2-debugging | 2 | 1242 | 3 | 4 | 50 | 0/2 | 2/2 |
 
 ## Integrity checks
@@ -220,7 +220,7 @@ so they do not hold the audit red. They are **not** resolved.
 | b7-token-engine/0002-access-rules-engine.html | 3620 | 8 | 2 | 2 | 27 | yes | yes |
 | b7-token-engine/0003-revocation-pause.html | 2967 | 9 | 2 | 2 | 26 | yes | yes |
 | b8-push-notifications/0001-fcm-apns-expo.html | 1420 | 11 | 1 | 1 | 25 | — | n/a |
-| b9-docker-deployment/0001-docker-fundamentals.html | 2403 | 13 | 1 | 1 | 26 | yes | n/a |
+| b9-docker-deployment/0001-docker-fundamentals.html | 3051 | 13 | 2 | 2 | 26 | yes | yes |
 | b9-docker-deployment/0002-coolify-setup.html | 2663 | 12 | 1 | 1 | 26 | yes | n/a |
 | b9-docker-deployment/0003-logs-backups-monitoring.html | 2252 | 17 | 1 | 1 | 25 | — | n/a |
 | c5-end-to-end-encryption/0001-keys-on-the-device.html | 1371 | 5 | 2 | 2 | 26 | — | yes |
@@ -230,6 +230,6 @@ so they do not hold the audit red. They are **not** resolved.
 | c5-end-to-end-encryption/0005-single-device.html | 1386 | 2 | 2 | 2 | 25 | — | yes |
 | x1-git-dev-environment/0001-git-fundamentals.html | 1254 | 10 | 2 | 2 | 29 | — | yes |
 | x1-git-dev-environment/0002-github-workflow.html | 1170 | 9 | 1 | 2 | 27 | — | yes |
-| x1-git-dev-environment/0003-dev-environment.html | 1058 | 16 | 1 | 2 | 27 | — | yes |
+| x1-git-dev-environment/0003-dev-environment.html | 1178 | 16 | 1 | 2 | 27 | — | yes |
 | x2-debugging/0001-react-native-debugging.html | 1188 | 11 | 2 | 2 | 25 | — | yes |
 | x2-debugging/0002-nodejs-debugging.html | 1295 | 8 | 1 | 2 | 25 | — | yes |
