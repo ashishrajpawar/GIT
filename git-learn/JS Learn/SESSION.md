@@ -22,14 +22,14 @@ how far it got.
 **Nothing in flight.** Working tree clean, everything committed.
 
 **Started the `unverifiable` cluster** — the recommended body of work in
-*Next action*. A7, A10 and X1 are finished; B9 is one of three. 7 to go.
+*Next action*. A7, A10 and X1 are finished; B9 is two of three. 6 to go.
 
 **State as of 2026-08-23** — run `node scripts/audit.mjs` before trusting any
 of it:
 
 - **101 lessons.** Audit **green**, 2 warnings, six suites pass.
 - **Every lesson has been executed at least once.** The verification log has
-  no absent entries: **94 verified, 7 `unverifiable`** with a stated reason,
+  no absent entries: **95 verified, 6 `unverifiable`** with a stated reason,
   1 `nothing-to-verify`. All four remaining A7 lessons moved across on
   2026-08-23/24.
 - **`known-issues.json` is down to one entry** — `calls`, gated on B6.
@@ -40,6 +40,62 @@ of it:
 
 **Nothing is blocked.** See *Next action* for the four candidate bodies of
 work and why the `unverifiable` cluster is the recommendation.
+
+### b9/0002 — present is not usable, and a flag nobody read (2026-08-24)
+
+M3: **`checkEnv`**. 17 self-checks, 8 wrong-cases.
+
+**The downstream-grep rule earned its place on its first outing.** It found
+three leftover `dist/server.js` references from yesterday's `rootDir` change
+— two in `b9/0001` itself and one in `b3/0001`, which was re-verified.
+
+### The startup check tested presence, not shape
+
+The lesson says a container that boots with a bad secret *"turns a
+configuration mistake into an incident"* — and then checked only
+`!process.env[k]`.
+
+**The realistic failure is specific.** The pepper is 64 hex characters, the
+key is base64, both are "32 random bytes" from a one-line
+`crypto.randomBytes(32)`, and the two commands differ only in the encoding at
+the end. Paste the hex one into `TOKEN_CODE_KEY` and it is **48 bytes of
+perfectly valid base64** — present, non-empty, check passes, container starts,
+health check green, and `createCipheriv` throws on the first token created.
+
+**A check that only asks "is it set?" turns a missing variable into a clean
+refusal and a malformed one into a 3am page.** And the one you got wrong is
+the likelier mistake, because you had to be thinking about it to set it at
+all.
+
+### ADR-0007's rule generalises to config diagnostics
+
+The helpful message is *"expected 32 bytes, got 48 (aG0xN…)"*. That prints a
+production secret into a deploy log — read by more people than the database
+is, kept longer than anyone intends, shipped to whatever collects build
+output. **A diagnostic about a secret may name the variable and describe the
+fault, and must never quote the value.** "got 48" is enough to fix it.
+
+### And b9/0001's first shutdown step was a no-op
+
+`b9/0001` opens its handler with *"fail readiness first, so the proxy stops
+sending new requests"*, calls `setNotReady()`, and waits two seconds.
+**`b9/0002`'s `/health` never read that flag.** So the proxy noticed nothing,
+kept routing for the whole two seconds, and kept routing while the pool
+closed.
+
+Neither file is wrong alone — one sets a flag, the other answers a question,
+and they never agreed it was the same flag. **The most carefully reasoned step
+in the shutdown sequence was a two-second pause that achieved nothing.**
+Fourth time this session a defect has existed only *between* two lessons.
+
+### Two self-check holes, both about unreachable code
+
+- **The `break`-at-first-fault mistake passed everything**, because I put the
+  break at the *bottom* of the loop and every branch `continue`s before
+  reaching it. Moved to the top.
+- **My "not a URL" fixture was a valid URL.** `new URL("pgbouncer:6432/token")`
+  parses happily — `pgbouncer:` is a legal scheme — so the fixture never
+  reached the throwing path it existed to test. Now `"not a url at all"`.
 
 ### b9/0001 — a shutdown sequence with no total, and a correction to x1/0003 (2026-08-24)
 
@@ -2141,22 +2197,23 @@ executed; the log is 84 verified, 17 `unverifiable` with a reason, 1
 What is left, in no forced order:
 
 1. **The `unverifiable` lessons — started 2026-08-23; all of A7, A10 and X1
-   plus `b9/0001` done, 7 left.**
+   plus two of B9 done, 6 left.**
    `CLAUDE.md` warns that the reflex to reach for that flag is wrong more often
    than it is right, and this pass proved it again — nine lessons that looked
    unrunnable produced nine exercises, and `a7/0001` then produced a tenth
-   plus two real defects. Remaining clusters: **B9 (2), B6 (2)**, plus `a9/0001`,
+   plus two real defects. Remaining clusters: **B6 (2)**, plus `b9/0003`, `a9/0001`,
    `b1/0003`, `b8/0001`. Each needs the same
    move: find the plain function, excuse the rest per-exercise, **and add the
-   `createExplain` prompt** — the 7 without one are exactly the 7 still
+   `createExplain` prompt** — the 6 without one are exactly the 6 still
    excused.
 
-   **Next: `b9/0002-coolify-setup.html`, then `b9/0003`.** `0002` is
-   deployment config, so look for a health-check or rollback decision, or the
-   env-var validation `CLAUDE.md` says must happen at startup. `0003` is logs
-   and backups — its redemption handler was fixed on 2026-08-23 but nothing
-   executable was added, and a retention/rotation policy is a precedence
-   problem.
+   **Next: `b9/0003-logs-backups-monitoring.html`**, which finishes B9. Its
+   redemption handler was fixed on 2026-08-23 (the ADR-0007 sweep) but nothing
+   executable was added, so the log-redaction rule is asserted and untested.
+   A retention or rotation policy is a precedence problem; a backup schedule
+   is an exactly-once one. Check it against `b10/0002`'s retention table and
+   `x2/0002`'s `redactLogFields`, both of which already decided things it may
+   contradict.
 
    **A fifth result to carry, new today:** `b9/0001` caught an error I had
    introduced in `x1/0003` an hour earlier, because its Dockerfile disagreed

@@ -164,16 +164,69 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"</cod
     </p>
 
     <pre><code>// api/src/config.ts - runs before anything listens on a port
-const REQUIRED = [
-  'DATABASE_URL', 'REDIS_URL', 'JWT_SECRET', 'JWT_REFRESH_SECRET',
-  'TOKEN_CODE_PEPPER', 'TOKEN_CODE_KEY',
-];
+const SPEC = {
+  DATABASE_URL:       { required: true, kind: 'url', schemes: ['postgres:', 'postgresql:'] },
+  REDIS_URL:          { required: true, kind: 'url', schemes: ['redis:', 'rediss:'] },
+  JWT_SECRET:         { required: true, kind: 'hex',    bytes: 32 },
+  JWT_REFRESH_SECRET: { required: true, kind: 'hex',    bytes: 32 },
+  TOKEN_CODE_PEPPER:  { required: true, kind: 'hex',    bytes: 32 },
+  TOKEN_CODE_KEY:     { required: true, kind: 'base64', bytes: 32 },
+  CORS_ORIGIN:        { required: true, kind: 'url', schemes: ['https:'] },
+};
 
-const missing = REQUIRED.filter((k) =&gt; !process.env[k]);
-if (missing.length &gt; 0) {
-  console.error('Refusing to start. Missing: ' + missing.join(', '));
+const { ok, problems } = checkEnv(process.env, SPEC);
+if (!ok) {
+  // Names and reasons only. NEVER the values - this line goes to a deploy
+  // log that more people can read than can read the database.
+  for (const p of problems) console.error('config: ' + p.name + ' - ' + p.problem);
   process.exit(1);          // health check never passes, old container stays
 }</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">Present is not the same as usable</div>
+      <p>
+        The version everybody writes is
+        <code>REQUIRED.filter((k) =&gt; !process.env[k])</code> &mdash; is it
+        set? That catches the variable you forgot and misses the one you got
+        wrong, and <strong>the one you got wrong is the likelier
+        mistake</strong>, because you had to be thinking about it to set it at
+        all.
+      </p>
+      <p>
+        Here is the specific way it happens. The pepper is 64 hex characters
+        and the key is base64. Both are "32 random bytes", both come from a
+        one-line <code>crypto.randomBytes(32)</code> command, and the two
+        commands differ only in the encoding at the end. Paste the hex one into
+        <code>TOKEN_CODE_KEY</code> and you have <strong>48 bytes of perfectly
+        valid base64</strong>. It is present, it is non-empty, the check
+        passes, the container starts, the health check goes green &mdash; and
+        <code>createCipheriv</code> throws on the first token anybody tries to
+        create.
+      </p>
+      <p>
+        Which is exactly the incident the paragraph above promises to prevent.
+        <strong>A startup check that only asks "is it set?" turns a missing
+        variable into a clean refusal and a malformed one into a 3am
+        page.</strong>
+      </p>
+    </div>
+
+    <div class="callout warning">
+      <div class="callout-title">And the message must not contain the value</div>
+      <p>
+        The obvious helpful message is <em>"TOKEN_CODE_KEY must decode to 32
+        bytes, got 48"</em> &mdash; followed, helpfully, by the offending
+        string. That prints a production secret into a deploy log, which is
+        read by more people than the database is, kept for longer than anybody
+        intends, and shipped to whatever collects your build output.
+      </p>
+      <p>
+        ADR-0007 makes this point about token codes in log lines, and it
+        generalises: <strong>a diagnostic about a secret may name the variable
+        and describe the problem, and must never quote the value.</strong>
+        "expected 32 bytes, got 48" is entirely sufficient to fix it.
+      </p>
+    </div>
 
     <div class="callout warning">
       <div class="callout-title">These two secrets are not like the others</div>
@@ -204,10 +257,19 @@ if (missing.length &gt; 0) {
     <pre><code>// api/src/routes/health.ts
 import { Router } from 'express';
 import { db } from '../db';
+import { isReady } from '../lifecycle';
 
 const router = Router();
 
 router.get('/health', async (req, res) => {
+  // Read the shutdown flag FIRST. b9/0001's handler calls setNotReady() and
+  // then waits, and this is the only thing that makes that wait mean
+  // anything - without it the proxy keeps sending work to a container that
+  // is closing its database pool.
+  if (!isReady()) {
+    return res.status(503).json({ status: 'shutting_down' });
+  }
+
   try {
     await db.query('SELECT 1');
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -220,6 +282,26 @@ export default router;</code></pre>
 
     <p>Configure Coolify to use <code>/health</code> as the health check path. It will only route
     traffic to the new container after it responds 200.</p>
+
+    <div class="callout danger">
+      <div class="callout-title">Without that first check, the graceful
+      shutdown's first step does nothing</div>
+      <p>
+        <code>b9/0001</code>'s handler opens with <em>"fail readiness first, so
+        the proxy stops sending new requests BEFORE we start refusing
+        them"</em>, calls <code>setNotReady()</code>, and waits two seconds for
+        the proxy to notice. The endpoint above, as it was originally written,
+        <strong>never read that flag</strong>. So the proxy noticed nothing,
+        kept routing traffic for the whole two seconds, and then kept routing
+        it while the pool was closing.
+      </p>
+      <p>
+        Neither file is wrong on its own. The handler sets a flag; the endpoint
+        answers a question. They simply never agreed that it was the same flag
+        &mdash; and the cost is that the most carefully reasoned step in the
+        shutdown sequence was a two-second pause that achieved nothing.
+      </p>
+    </div>
 
     <h2>Step 6: Deploy the Web Page</h2>
     <ol>
@@ -512,7 +594,15 @@ rclone copy /backups remote:token-backups</code></pre>
     <div id="playground-1"></div>
 
     <h2>Exercise: Plan Your Production Deployment</h2>
+    <h2>Now build it yourself</h2>
+    <div id="exercise-env"></div>
+    <div id="pg-exercise-env"></div>
+
+    <hr>
+
     <div id="exercise-1"></div>
+
+    <div id="explain-b9-0002"></div>
 
     <h2>Quiz</h2>
     <div id="lesson-quiz"></div>
@@ -525,6 +615,7 @@ rclone copy /backups remote:token-backups</code></pre>
     <script src="../../assets/quiz.js"></script>
     <script src="../../assets/playground.js"></script>
     <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
     <script src="../../assets/progress.js"></script>
     <script src="../../assets/copy-code.js"></script>
     <script>
@@ -565,7 +656,270 @@ deploy([
   { name: "Health check", success: false, detail: "GET /health → 503 (migration failed)" },
 ]);`);
 
+        createSolution("exercise-env", {
+            exercise: "Write checkEnv(env, spec) — the startup check that refuses to bring the container up, and reports everything wrong in one go.\n\nenv is an object of environment variables. spec maps a variable name to { required, kind, bytes?, schemes? }, where kind is 'hex', 'base64', 'url' or 'text'.\n\nReturn { ok, problems }, where problems is an array of { name, problem } and ok is true only when it is empty.\n\nThe rules:\n\n1. A required variable that is absent, empty, or only whitespace has the problem 'missing'. An env var set to the empty string is the commonest compose mistake there is, and it is not 'present'.\n\n2. A variable that is not required and not set is skipped entirely — no problem, no check.\n\n3. kind 'hex' with bytes: n must be exactly 2n hex characters, either case. Anything else is 'expected N bytes of hex'.\n\n4. kind 'base64' with bytes: n must decode to exactly n bytes. Anything that fails to decode, or decodes to the wrong length, is 'expected N bytes of base64, got M'.\n\n5. kind 'url' must parse and its scheme must be in schemes. Otherwise 'expected a URL with scheme <list>'.\n\n6. kind 'text' only has to be present.\n\n7. REPORT EVERY PROBLEM, not the first. A check that reveals one fault per restart costs a deploy cycle per variable.\n\n8. NO PROBLEM MESSAGE MAY CONTAIN THE VALUE. Name the variable, describe the fault, and stop. These go to a deploy log. 'expected 32 bytes, got 48' is enough to fix it; the 48 bytes are a production secret.\n\n9. Problems come back in the order the spec lists them, so two runs of the same broken config read the same.",
+            hints: [
+                "Iterate Object.keys(spec), not the env. The spec is the list of things you care about AND the thing with a defined order, so rules 7 and 9 both fall out of that one choice.",
+                "Trim once, at the top, and compare against the empty string. Rule 1 then covers absent, empty and whitespace in a single branch instead of three.",
+                "Wrap atob and new URL so they return a sentinel instead of throwing. A startup check that crashes while reporting a bad config has reported nothing."
+            ],
+            solution: `function byteLength(base64) {
+  // Returns -1 for anything that is not valid base64, so the caller has one
+  // branch instead of a try/catch around its own logic.
+  try {
+    return atob(base64).length;
+  } catch {
+    return -1;
+  }
+}
+
+function checkEnv(env, spec) {
+  const problems = [];
+
+  // Object.keys(spec), not Object.keys(env): the spec is the thing with a
+  // defined order, and it is also the list of what we actually care about.
+  for (const name of Object.keys(spec)) {
+    const rule = spec[name];
+    const raw = env[name];
+    const value = typeof raw === "string" ? raw.trim() : "";
+
+    if (value === "") {
+      // A variable set to the empty string is missing, whatever the shape of
+      // the object says. docker compose produces these constantly.
+      if (rule.required) problems.push({ name: name, problem: "missing" });
+      continue;
+    }
+
+    if (rule.kind === "hex") {
+      const expected = rule.bytes * 2;
+      if (value.length !== expected || !/^[0-9a-fA-F]+$/.test(value)) {
+        problems.push({
+          name: name,
+          problem: "expected " + rule.bytes + " bytes of hex",
+        });
+      }
+      continue;
+    }
+
+    if (rule.kind === "base64") {
+      const got = byteLength(value);
+      if (got !== rule.bytes) {
+        // The COUNT is safe to print. The value is not.
+        problems.push({
+          name: name,
+          problem:
+            "expected " + rule.bytes + " bytes of base64, got " +
+            (got < 0 ? "invalid base64" : got),
+        });
+      }
+      continue;
+    }
+
+    if (rule.kind === "url") {
+      let scheme = null;
+      try {
+        scheme = new URL(value).protocol;
+      } catch {
+        scheme = null;
+      }
+      if (scheme === null || rule.schemes.indexOf(scheme) === -1) {
+        problems.push({
+          name: name,
+          problem: "expected a URL with scheme " + rule.schemes.join(" or "),
+        });
+      }
+      continue;
+    }
+
+    // 'text' and anything unrecognised: presence was the whole requirement.
+  }
+
+  return { ok: problems.length === 0, problems: problems };
+}`
+        });
+
+        createPlayground("pg-exercise-env", `// Write byteLength(base64) and checkEnv(env, spec) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+
+// 32 bytes as hex (64 chars) and the SAME 32 bytes as base64 (44 chars).
+const HEX32 = "a".repeat(64);
+const B64_32 = btoa("x".repeat(32));
+
+const SPEC = {
+  DATABASE_URL:      { required: true, kind: "url", schemes: ["postgres:", "postgresql:"] },
+  JWT_SECRET:        { required: true, kind: "hex", bytes: 32 },
+  TOKEN_CODE_PEPPER: { required: true, kind: "hex", bytes: 32 },
+  TOKEN_CODE_KEY:    { required: true, kind: "base64", bytes: 32 },
+  SENTRY_DSN:        { required: false, kind: "url", schemes: ["https:"] },
+};
+
+function goodEnv(overrides) {
+  return Object.assign({
+    DATABASE_URL: "postgres://token:pw@pgbouncer:6432/token_prod",
+    JWT_SECRET: HEX32,
+    TOKEN_CODE_PEPPER: HEX32,
+    TOKEN_CODE_KEY: B64_32,
+  }, overrides || {});
+}
+function names(r) { return (r.problems || []).map(function (p) { return p.name; }); }
+function problemFor(r, n) {
+  const hit = (r.problems || []).find(function (p) { return p.name === n; });
+  return hit ? hit.problem : null;
+}
+
+try {
+  if (typeof checkEnv !== "function") throw new Error("not written yet");
+
+  try {
+    const r = checkEnv(goodEnv(), SPEC);
+    check("a complete, well-formed config passes",
+          r.ok === true && r.problems.length === 0,
+          "got " + JSON.stringify(r));
+  } catch (e) { check("a complete, well-formed config passes", false, "threw " + e.message); }
+
+  try {
+    const env = goodEnv();
+    delete env.JWT_SECRET;
+    const r = checkEnv(env, SPEC);
+    check("an absent required variable is 'missing'",
+          problemFor(r, "JWT_SECRET") === "missing" && r.ok === false,
+          "got " + JSON.stringify(r.problems));
+  } catch (e) { check("an absent required variable is 'missing'", false, "threw " + e.message); }
+
+  try {
+    // The commonest compose accident: the variable exists and is empty.
+    const r = checkEnv(goodEnv({ JWT_SECRET: "" }), SPEC);
+    check("an empty string is missing, not present",
+          problemFor(r, "JWT_SECRET") === "missing",
+          "got " + JSON.stringify(r.problems) + " -- set-but-empty is what a blank compose line produces");
+  } catch (e) { check("an empty string is missing, not present", false, "threw " + e.message); }
+
+  try {
+    const r = checkEnv(goodEnv({ JWT_SECRET: "   " }), SPEC);
+    check("whitespace only is missing too",
+          problemFor(r, "JWT_SECRET") === "missing",
+          "got " + JSON.stringify(r.problems) + " -- a trailing space in a UI field is invisible");
+  } catch (e) { check("whitespace only is missing too", false, "threw " + e.message); }
+
+  try {
+    const r = checkEnv(goodEnv(), SPEC);
+    check("an optional variable that is absent is not a problem",
+          names(r).indexOf("SENTRY_DSN") === -1,
+          "got " + JSON.stringify(r.problems));
+  } catch (e) { check("an optional variable that is absent is not a problem", false, "threw " + e.message); }
+
+  try {
+    const r = checkEnv(goodEnv({ SENTRY_DSN: "http://sentry.example" }), SPEC);
+    check("an optional variable that IS set is still checked",
+          names(r).indexOf("SENTRY_DSN") !== -1,
+          "got " + JSON.stringify(r.problems) + " -- optional means may be absent, not may be wrong");
+  } catch (e) { check("an optional variable that IS set is still checked", false, "threw " + e.message); }
+
+  try {
+    const r = checkEnv(goodEnv({ JWT_SECRET: "a".repeat(63) }), SPEC);
+    check("hex one character short is rejected",
+          problemFor(r, "JWT_SECRET") === "expected 32 bytes of hex",
+          "got " + JSON.stringify(r.problems));
+  } catch (e) { check("hex one character short is rejected", false, "threw " + e.message); }
+
+  try {
+    const r = checkEnv(goodEnv({ TOKEN_CODE_PEPPER: "z".repeat(64) }), SPEC);
+    check("the right length of the wrong alphabet is rejected",
+          problemFor(r, "TOKEN_CODE_PEPPER") === "expected 32 bytes of hex",
+          "got " + JSON.stringify(r.problems) + " -- 64 characters is not the same as 64 hex characters");
+  } catch (e) { check("the right length of the wrong alphabet is rejected", false, "threw " + e.message); }
+
+  try {
+    const r = checkEnv(goodEnv({ JWT_SECRET: HEX32.toUpperCase() }), SPEC);
+    check("uppercase hex is fine",
+          names(r).indexOf("JWT_SECRET") === -1,
+          "got " + JSON.stringify(r.problems));
+  } catch (e) { check("uppercase hex is fine", false, "threw " + e.message); }
+
+  try {
+    // THE realistic mistake: the 64-hex pepper pasted into the base64 key.
+    // It is valid base64 and decodes to 48 bytes.
+    const r = checkEnv(goodEnv({ TOKEN_CODE_KEY: HEX32 }), SPEC);
+    check("64 hex characters in the base64 field decode to 48 bytes and are rejected",
+          problemFor(r, "TOKEN_CODE_KEY") === "expected 32 bytes of base64, got 48",
+          "got " + JSON.stringify(r.problems) + " -- valid base64, non-empty, and createCipheriv throws on first use");
+  } catch (e) { check("64 hex characters in the base64 field decode to 48 bytes and are rejected", false, "threw " + e.message); }
+
+  try {
+    const r = checkEnv(goodEnv({ TOKEN_CODE_KEY: "not base64!!" }), SPEC);
+    check("something that is not base64 at all is rejected without throwing",
+          problemFor(r, "TOKEN_CODE_KEY") === "expected 32 bytes of base64, got invalid base64",
+          "got " + JSON.stringify(r.problems));
+  } catch (e) { check("something that is not base64 at all is rejected without throwing", false, "threw " + e.message); }
+
+  try {
+    const r = checkEnv(goodEnv({ DATABASE_URL: "mysql://host/db" }), SPEC);
+    check("a URL with the wrong scheme is rejected",
+          problemFor(r, "DATABASE_URL") === "expected a URL with scheme postgres: or postgresql:",
+          "got " + JSON.stringify(r.problems));
+  } catch (e) { check("a URL with the wrong scheme is rejected", false, "threw " + e.message); }
+
+  try {
+    // Genuinely unparseable. Note that "pgbouncer:6432/token" is NOT -- the
+    // URL parser reads pgbouncer: as a scheme and returns happily, so a
+    // fixture using it never reaches the throwing path at all.
+    const r = checkEnv(goodEnv({ DATABASE_URL: "not a url at all" }), SPEC);
+    check("something that is not a URL is rejected without throwing",
+          names(r).indexOf("DATABASE_URL") !== -1,
+          "got " + JSON.stringify(r.problems) + " -- new URL() throws, and a startup check must not");
+  } catch (e) { check("something that is not a URL is rejected without throwing", false, "threw " + e.message); }
+
+  try {
+    // Three faults at once. A check that stops at the first costs one deploy
+    // cycle per variable, and there are seven of them.
+    const r = checkEnv(goodEnv({ JWT_SECRET: "", TOKEN_CODE_KEY: HEX32, DATABASE_URL: "mysql://h/d" }), SPEC);
+    check("every problem is reported, not just the first",
+          r.problems.length === 3,
+          "got " + JSON.stringify(names(r)) + " -- one fault per restart is a deploy cycle per variable");
+  } catch (e) { check("every problem is reported, not just the first", false, "threw " + e.message); }
+
+  try {
+    const r = checkEnv(goodEnv({ JWT_SECRET: "", TOKEN_CODE_KEY: HEX32, DATABASE_URL: "mysql://h/d" }), SPEC);
+    check("problems come back in spec order, so two runs read the same",
+          JSON.stringify(names(r)) === JSON.stringify(["DATABASE_URL", "JWT_SECRET", "TOKEN_CODE_KEY"]),
+          "got " + JSON.stringify(names(r)));
+  } catch (e) { check("problems come back in spec order, so two runs read the same", false, "threw " + e.message); }
+
+  try {
+    // THE rule. Every problem message, against every kind of bad value.
+    const secret = "s3cr3t-va1ue-that-must-not-be-logged";
+    const r = checkEnv(
+      goodEnv({ JWT_SECRET: secret, TOKEN_CODE_KEY: secret, DATABASE_URL: secret }),
+      SPEC
+    );
+    const leaked = r.problems.filter(function (p) { return p.problem.indexOf(secret) !== -1; });
+    check("no problem message contains the value",
+          leaked.length === 0,
+          "leaked in " + JSON.stringify(leaked) + " -- this line goes to a deploy log");
+  } catch (e) { check("no problem message contains the value", false, "threw " + e.message); }
+
+  try {
+    const r = checkEnv(goodEnv(), SPEC);
+    check("ok is false exactly when there are problems",
+          r.ok === (r.problems.length === 0),
+          "got " + JSON.stringify(r));
+  } catch (e) { check("ok is false exactly when there are problems", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write checkEnv(env, spec) above, then press Run. (" + e.message + ")");
+}`);
+
+        createExplain("explain-b9-0002", {
+            prompt: "The startup check said it existed to stop a configuration mistake becoming an incident, and then only asked whether each variable was set. Explain what happens end to end when the 64-character hex pepper is pasted into <code>TOKEN_CODE_KEY</code> &mdash; every step from the deploy going green to the thing that finally fails &mdash; and why the obvious, helpful error message would be its own separate incident."
+        });
+
         createSolution("exercise-1", {
+            unverifiable: "the deliverable is a VPS running Coolify, with DNS and a domain",
             exercise: "Plan and write the complete deployment configuration for Token:\n\n1. Write a health check endpoint (`/health`) that verifies database connectivity and returns the appropriate status code.\n2. Write the DNS records needed (as a comment/documentation block).\n3. List all environment variables the API needs in production with explanations.\n4. Write a migration runner script (`api/src/migrate.ts`) that runs all pending SQL migrations before the server starts, and exits with code 1 on failure.",
             hints: [
                 "The health check should try a simple database query (SELECT 1) and return 503 if it fails.",

@@ -3501,3 +3501,85 @@ time was my own work from an hour before. **When a lesson changes a decision,
 grep the modules downstream of it in the same session.**
 
 **Result: 94 verified, 7 `unverifiable`.** Audit green, six suites pass.
+
+---
+
+### Session of 2026-08-24 (continued) — b9/0002, and a readiness flag nobody read
+
+Second of the B9 trio. M3: `checkEnv` — 17 self-checks, 8 wrong-cases.
+
+#### The downstream-grep rule paid for itself immediately
+
+Yesterday's `rootDir` correction ended with a new standing rule: when a lesson
+changes a decision, grep the modules downstream of it in the same session.
+Running it found three leftover `dist/server.js` references — two in `b9/0001`
+itself, one in `b3/0001`'s package.json `start` script. `b3/0001` was
+re-verified after the edit.
+
+#### Present is not usable
+
+The lesson states that a container booting with a bad secret *"turns a
+configuration mistake into an incident"*, and then implements
+`REQUIRED.filter((k) => !process.env[k])` — is it set?
+
+That catches the variable you forgot and misses the one you got wrong, and
+**the one you got wrong is the likelier mistake**, because you had to be
+thinking about a variable to set it at all.
+
+The specific path is worth writing down because it is so easy to walk. The
+pepper is 64 hex characters and the key is base64. Both are "32 random bytes".
+Both come from a one-line `crypto.randomBytes(32)` command, and the two
+commands differ only in the encoding at the end. Paste the hex one into
+`TOKEN_CODE_KEY` and you have **48 bytes of perfectly valid base64** — present,
+non-empty, check passes, container starts, health check green, deploy declared
+a success. Then `createCipheriv` throws on the first token anybody creates.
+
+Which is exactly the incident the paragraph promised to prevent, reached
+*through* the check.
+
+#### ADR-0007's logging rule generalises to config diagnostics
+
+The obvious helpful message is *"TOKEN_CODE_KEY must decode to 32 bytes, got 48
+(aG0xN…)"*. That prints a production secret into a deploy log — read by more
+people than the database is, kept longer than anybody intends, and shipped to
+whatever collects build output.
+
+**A diagnostic about a secret may name the variable and describe the fault, and
+must never quote the value.** "expected 32 bytes, got 48" is entirely
+sufficient to fix it. One wrong-case does nothing but add the value to the
+message, and it is the one most likely to be written by somebody trying to be
+helpful.
+
+#### b9/0001's most careful step was a no-op
+
+`b9/0001` opens its shutdown handler with *"fail readiness first, so the proxy
+stops sending new requests BEFORE we start refusing them"*, calls
+`setNotReady()`, and waits two seconds for the proxy to notice.
+
+`b9/0002`'s `/health` endpoint never read that flag.
+
+So the proxy noticed nothing, kept routing traffic for the whole two seconds,
+and kept routing it while the database pool was closing. Neither file is wrong
+read on its own — one sets a flag, the other answers a question, and they never
+agreed that it was the same flag. **The most carefully reasoned step in the
+sequence was a two-second pause that achieved nothing.**
+
+That is the fourth defect this session that exists only *between* two lessons,
+after `a8/0004`'s `localId`, `a7/0003`'s missing `call:media`, and `a7/0004`'s
+unsent `call:accept`. The pattern is stable enough to state as a rule: **when
+two lessons implement two halves of one mechanism, read them together or the
+mechanism is untested.**
+
+#### Two self-check holes, both unreachable code
+
+- The **break-at-first-fault** mistake passed everything, because I put the
+  break at the bottom of the loop and every branch `continue`s before reaching
+  it. The mistake was real; the code expressing it was dead.
+- My **"not a URL" fixture was a valid URL.** `new URL("pgbouncer:6432/token")`
+  parses without complaint — `pgbouncer:` is a legal scheme — so the fixture
+  written to exercise the throwing path never reached it.
+
+Both are the same shape as the fixture problems in `x1/0003`: the test looked
+right, ran green, and exercised nothing.
+
+**Result: 95 verified, 6 `unverifiable`.** Audit green, six suites pass.
