@@ -2951,3 +2951,89 @@ camera-off rule at all. Seven of ten mistakes now trip exactly one check, and
 each of the three multi-trips is a single removed or moved rule.
 
 **Result: 87 verified, 14 `unverifiable`.** Audit green, six suites pass.
+
+---
+
+### Session of 2026-08-24 — a7/0004 finishes A7, and a bug that only exists between two files
+
+Fourth and last of the A7 cluster. M3: `decideIncoming` — 21 self-checks, 10
+wrong-cases, 3 new executable quiz questions. **A7 is complete: five of five
+verified.**
+
+#### The invariant is a resource balance, not a display rule
+
+The previous three A7 lessons all turned out to be about deriving what to show.
+This one is about a pairing: **a call reported to CallKit must be ended exactly
+once.** Miss it and iOS keeps showing the system call screen for a call that is
+over — not a notification you can swipe, sometimes surviving until the phone
+restarts. Call it twice and `endCall` fires against a UUID CallKit has already
+forgotten.
+
+The lesson shipped `reportIncomingCall` and `endCallFromApp` with **nothing
+pairing them up**, so declining in the app while CallKit was also ringing left
+the phantom behind.
+
+#### "Always end" and "never end" are each exactly half right
+
+This is the part worth keeping. Declining **in the app** owes CallKit an
+`endCall`, because nothing else will send one. Declining **on the native
+screen** owes it nothing, because CallKit ended the call itself before it told
+you. Two actions that are identical from the user's side, one line apart in the
+code, with opposite correct answers.
+
+Accepting is a third answer again — an in-app accept needs
+`answerIncomingCall`, not `endCall` (which hangs up the call just taken) and
+not silence (which leaves the system screen ringing over the top of it).
+
+A ringing call has **six exits** and a seventh event that is not an exit: the
+same call arriving twice, by VoIP push and again over the socket when the app
+foregrounds. **Two endings arriving for one call is the normal case, not the
+edge case** — the caller hanging up and the callee declining happen together
+constantly. So the terminal guard sits before the switch rather than inside
+each branch: six branches each remembering to check is six chances to forget,
+and the one that forgets is whichever was added last.
+
+#### The defect that exists only between two files
+
+`handleReject` sent `call:reject`. `handleAccept` sent **nothing** — it
+navigated. But `0002`'s caller side subscribes and waits for `call:accepted`
+before it builds its peer connection.
+
+**Nobody was sending the message the caller was waiting for.** The callee's
+screen would open and sit at "Connecting…" while the caller had not started
+negotiating at all. Each file is correct read on its own; the gap is only
+visible reading them against each other — the same move that found
+`a8/0004`'s unsent `localId` and `0003`'s missing `call:media`. That is now
+three times in this module, and it is worth stating as a review habit rather
+than a coincidence: **when two lessons implement two ends of one protocol,
+read them together or the protocol is untested.**
+
+#### What the trip-count found this time
+
+Two defects in my own self-check, both of the kind a green run hides:
+
+- **One check was doing two jobs.** *"Accepting in-app ANSWERS the native call,
+  it does not end it"* covered two different mistakes — ending it, and doing
+  nothing — with different consequences, and reported them identically. Split
+  into two.
+- **A sequence check tested nothing.** *"Decline in-app, then CallKit's own
+  endCall"* passes even with the terminal guard removed, because the native
+  branch contributes no `end-native` either way. Replaced with the reversed
+  order, which is the one that bites in practice: CallKit ends the call from
+  the lock screen, then the app mounts and a stray in-app decline follows.
+  Both orders are checked now.
+
+Also a generation artifact worth noting for anyone writing cases this way: an
+empty fragment interpolated into an array literal left an **elision**, so a
+"removed the action" mistake produced `["stop-ringtone", null, …]` rather than
+a clean list. It tripped the right check for the wrong reason. Fragments now
+carry their own trailing comma.
+
+#### A7 in summary — four for four
+
+Every lesson in the module hid a **precedence, three-state, or exactly-once**
+problem, and in three of the four **the lesson's own quiz already stated the
+right answer** while the code beside it did something else. The module went
+from one verified lesson to five.
+
+**Result: 88 verified, 13 `unverifiable`.** Audit green, six suites pass.

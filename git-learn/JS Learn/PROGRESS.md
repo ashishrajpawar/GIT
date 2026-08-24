@@ -4,7 +4,7 @@
      Regenerate with: node scripts/audit.mjs
      Hand-written session state lives in SESSION.md, never here. -->
 
-Generated 2026-08-23 from the files on disk. Where any other document disagrees
+Generated 2026-08-24 from the files on disk. Where any other document disagrees
 with this one, this one is right — everything below is measured, not asserted.
 
 ## Summary
@@ -13,12 +13,12 @@ with this one, this one is right — everything below is measured, not asserted.
 |---|---|
 | Token-track lessons | 101 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
-| Quiz questions (track) | 2727 |
-| Avg teaching prose per track lesson | 2129 words |
+| Quiz questions (track) | 2730 |
+| Avg teaching prose per track lesson | 2135 words |
 | Lessons with a playground | 98 / 101 |
 | Lessons with an exercise | 101 / 101 |
 | **Deepened** (all 3 spine sections) | 16 / 101 |
-| **Verified** (code executed) | 87 / 101 |
+| **Verified** (code executed) | 88 / 101 |
 | Ran clean but had nothing to run | 0 / 101 |
 | Errors | 0 |
 | Known and blocked | 1 |
@@ -63,7 +63,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Type | Count |
 |---|---|
 | multiple-choice | 817 |
-| predict-output | 511 |
+| predict-output | 514 |
 | fill-blank | 461 |
 | spot-the-bug | 376 |
 | which-breaks | 283 |
@@ -82,7 +82,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a4-auth-client | 3 | 1400 | 3 | 6 | 80 | 1/3 | 3/3 |
 | a5-core-token-features | 5 | 2599 | 10 | 10 | 148 | 2/5 | 5/5 |
 | a6-chat-realtime | 3 | 1912 | 6 | 6 | 78 | 0/3 | 3/3 |
-| a7-voice-video | 5 | 1750 | 9 | 9 | 147 | 0/5 | 4/5 |
+| a7-voice-video | 5 | 1885 | 10 | 10 | 150 | 0/5 | 5/5 |
 | a8-redemption-web | 4 | 1807 | 8 | 8 | 115 | 0/4 | 4/4 |
 | a9-deep-linking | 2 | 1395 | 3 | 3 | 53 | 0/2 | 1/2 |
 | b1-sql-fundamentals | 4 | 1326 | 3 | 7 | 103 | 0/4 | 3/4 |
@@ -187,7 +187,7 @@ so they do not hold the audit red. They are **not** resolved.
 | a7-voice-video/0001-webrtc-refresher.html | 2514 | 10 | 2 | 2 | 32 | — | yes |
 | a7-voice-video/0002-voice-call.html | 1500 | 9 | 2 | 2 | 30 | — | yes |
 | a7-voice-video/0003-video-call.html | 1564 | 8 | 2 | 2 | 29 | — | yes |
-| a7-voice-video/0004-incoming-calls.html | 1217 | 9 | 1 | 1 | 29 | — | n/a |
+| a7-voice-video/0004-incoming-calls.html | 1892 | 9 | 2 | 2 | 32 | — | yes |
 | a7-voice-video/0005-relay-only-privacy.html | 1957 | 7 | 2 | 2 | 27 | — | yes |
 | a8-redemption-web/0001-vite-react-setup.html | 991 | 12 | 2 | 2 | 29 | — | yes |
 | a8-redemption-web/0002-token-redemption-flow.html | 2223 | 6 | 2 | 2 | 30 | — | yes |

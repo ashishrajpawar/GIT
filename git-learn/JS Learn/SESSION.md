@@ -22,23 +22,88 @@ how far it got.
 **Nothing in flight.** Working tree clean, everything committed.
 
 **Started the `unverifiable` cluster** — the recommended body of work in
-*Next action*. `a7/0001`-`0003` are done; 14 to go. See below.
+*Next action*. **A7 is finished** — all five verified. 13 to go. See below.
 
 **State as of 2026-08-23** — run `node scripts/audit.mjs` before trusting any
 of it:
 
 - **101 lessons.** Audit **green**, 2 warnings, six suites pass.
 - **Every lesson has been executed at least once.** The verification log has
-  no absent entries: **87 verified, 14 `unverifiable`** with a stated reason,
-  1 `nothing-to-verify`. `a7/0001`-`0003` moved across on 2026-08-23.
+  no absent entries: **88 verified, 13 `unverifiable`** with a stated reason,
+  1 `nothing-to-verify`. All four remaining A7 lessons moved across on
+  2026-08-23/24.
 - **`known-issues.json` is down to one entry** — `calls`, gated on B6.
 - `render-as-authored` is **0**, and this time it means it (see *The `variant`
   blind spot*).
-- **Complete modules:** 01, 02, A2, A3, A4, B1, B2, B3, B4, B7, B10, A11, C5,
-  X1, X2.
+- **Complete modules:** 01, 02, A2, A3, A4, **A7**, B1, B2, B3, B4, B7, B10,
+  A11, C5, X1, X2.
 
 **Nothing is blocked.** See *Next action* for the four candidate bodies of
 work and why the `unverifiable` cluster is the recommendation.
+
+### a7/0004 — the phantom call, and A7 is finished (2026-08-24)
+
+M3: **`decideIncoming`**. 21 self-checks, 10 wrong-cases, 3 new executable
+quiz questions. **A7 is complete — five of five verified.**
+
+**The A7 shape held for the fourth time**, and here it is a *resource balance*
+rather than a display rule: **a call reported to CallKit is ended exactly
+once.**
+
+- Miss it and iOS goes on showing the system call screen for a call that is
+  over — sometimes until the phone restarts.
+- Do it twice and `endCall` fires against a UUID CallKit has already forgotten.
+
+The lesson had `reportIncomingCall` and `endCallFromApp` and **nothing pairing
+them**, so an in-app Decline left CallKit ringing for ever.
+
+### "Always end" and "never end" are each exactly half right
+
+Declining **in-app** owes CallKit an `endCall`, because nothing else will send
+one. Declining **natively** owes it nothing, because CallKit ended the call
+itself before telling you. **Identical from the user's side, one line apart,
+opposite correct answers.**
+
+Accepting is a third answer again: an in-app accept needs
+`answerIncomingCall` — not `endCall`, which hangs up the call you just took,
+and not silence, which leaves the system screen ringing over it.
+
+### Six exits, and the guard belongs at the top
+
+A ringing call can end from six places — accept in-app, accept native, decline
+in-app, decline native, caller cancels, 30s timeout — plus a seventh event that
+is not an ending: the same call arriving twice, once by VoIP push and once over
+the socket when the app foregrounds.
+
+**Two endings for one call is the normal case, not the edge case.** The
+terminal guard therefore sits before the switch, not inside each branch: six
+branches each remembering to check is six chances to forget, and the one that
+forgets is whichever was added last.
+
+### Accept was silent while decline was not
+
+`handleReject` sent `call:reject`; `handleAccept` sent **nothing** — and
+`0002`'s caller side subscribes and waits for `call:accepted` before building
+its peer connection. **Nobody was sending the message the caller was waiting
+for.** Both files read correctly alone; the gap exists only between them. Same
+move that found `a8/0004`'s unsent `localId`. `send` was also used in the
+screen and never imported.
+
+### Two self-check defects the trip-count exposed
+
+- **One check was doing two jobs.** *"Accepting in-app ANSWERS the native call,
+  it does not end it"* conflated two different mistakes — ending it, and doing
+  nothing — which have different consequences and were reported alike. Split.
+- **A sequence check tested nothing.** *"Decline in-app, then CallKit's own
+  endCall"* stays correct even without the terminal guard, because the native
+  branch contributes no `end-native` either way. Replaced with the **reversed**
+  order, which is the one that actually bites: CallKit ends the call from the
+  lock screen, then the app mounts and a stray in-app decline follows. Both
+  orders are now checked.
+
+Also fixed a generation artifact: an empty action fragment was leaving an
+**array hole**, so a "removed the action" mistake produced `[..., null, ...]`
+rather than a clean list. Fragments now carry their own trailing comma.
 
 ### a7/0003 — a black rectangle is not a state (2026-08-23)
 
@@ -1737,23 +1802,29 @@ executed; the log is 84 verified, 17 `unverifiable` with a reason, 1
 
 What is left, in no forced order:
 
-1. **The `unverifiable` lessons — started 2026-08-23; `a7/0001`-`0003`
-   done, 14 left.**
+1. **The `unverifiable` lessons — started 2026-08-23; all of A7 done,
+   13 left.**
    `CLAUDE.md` warns that the reflex to reach for that flag is wrong more often
    than it is right, and this pass proved it again — nine lessons that looked
    unrunnable produced nine exercises, and `a7/0001` then produced a tenth
    plus two real defects. Remaining clusters: **B9 (3), X1 (3), A10 (2),
-   B6 (2)**, plus `a7/0004`, `a9/0001`, `b1/0003`, `b8/0001`. Each needs the same
+   B6 (2)**, plus `a9/0001`, `b1/0003`, `b8/0001`. Each needs the same
    move: find the plain function, excuse the rest per-exercise, **and add the
-   `createExplain` prompt** — the 14 without one are exactly the 14 still
+   `createExplain` prompt** — the 13 without one are exactly the 13 still
    excused.
 
-   **Next in this cluster: `a7/0004-incoming-calls.html`**, which finishes
-   A7. Two things to carry into it. It is the ringing/accept/decline screen,
-   so the plain function is probably the incoming-call state machine — and
-   all three A7 lessons so far hid a **precedence or three-state** problem,
-   which is the shape to look for. Also check whether it needs the
-   `call:media` message `0003` introduced.
+   **Next in this cluster: `a10-device-security` (2 lessons).** It is the
+   smallest remaining cluster and the one closest to a decided architecture
+   — `CLAUDE.md` is explicit that private keys live in `expo-secure-store`
+   and never `AsyncStorage`, and that the biometric app-lock is the control
+   for a stolen unlocked phone rather than session expiry. Both are claims a
+   lesson can contradict. Expect the plain function to be a
+   storage-key-routing or lock-state decision.
+
+   **Carry the A7 result into it:** four for four, every lesson in that
+   module hid a **precedence, three-state, or exactly-once** problem, and in
+   three of the four the lesson's own quiz already stated the right answer.
+   Read the quiz against the code before reading either alone.
 2. **The C-modules.** C0–C4 and C6–C9, roughly 34 lessons, none written. C0 is
    architecture and was planned to come *before* B1, so it is already out of
    order.

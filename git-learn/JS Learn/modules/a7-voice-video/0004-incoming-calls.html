@@ -200,32 +200,71 @@ Notifications.registerTaskAsync(INCOMING_CALL_TASK);</code></pre>
     <pre><code>// app/src/screens/IncomingCall.tsx
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import InCallManager from 'react-native-incall-manager';
-import { useEffect } from 'react';
+import RNCallKeep from 'react-native-callkeep';
+import { useEffect, useRef, useState } from 'react';
+import { send, subscribe } from '../ws/connection';
+import { decideIncoming } from '../calls/decideIncoming';
 
 export function IncomingCallScreen({ route, navigation }) {
-  const { callId, callerName, type } = route.params;
+  const { callId, callerName, type, reported } = route.params;
+
+  // `reported` says whether this call was already shown to CallKit — true
+  // when it arrived by VoIP push, false when it came in over the socket
+  // with the app already open. Everything below depends on knowing which.
+  const callRef = useRef({ status: 'ringing', reported: !!reported, type });
 
   useEffect(() =&gt; {
-    // Play ringtone + vibrate
     InCallManager.startRingtone('_DEFAULT_');
-    return () =&gt; InCallManager.stopRingtone();
+
+    const unsub = subscribe((msgType, payload) =&gt; {
+      if (payload.callId !== callId) return;
+      if (msgType === 'call:cancel') apply({ kind: 'caller-cancelled' });
+      if (msgType === 'call:timeout') apply({ kind: 'timeout' });
+    });
+
+    RNCallKeep.addEventListener('answerCall', () =&gt; apply({ kind: 'accept-native' }));
+    RNCallKeep.addEventListener('endCall', () =&gt; apply({ kind: 'decline-native' }));
+
+    return () =&gt; {
+      unsub();
+      RNCallKeep.removeEventListener('answerCall');
+      RNCallKeep.removeEventListener('endCall');
+      InCallManager.stopRingtone();
+    };
   }, []);
 
+  // One place decides; this only carries the decisions out. Every path in
+  // and out of a ringing call goes through here, which is what makes
+  // "ended exactly once" checkable.
+  function apply(event) {
+    const { call, actions } = decideIncoming(callRef.current, event);
+    callRef.current = call;
+
+    for (const action of actions) {
+      if (action === 'stop-ringtone') InCallManager.stopRingtone();
+      else if (action === 'report-native') reportIncomingCall(callId, callerName, type === 'video');
+      else if (action === 'answer-native') RNCallKeep.answerIncomingCall(callId);
+      else if (action === 'end-native') RNCallKeep.endCall(callId);
+      else if (action === 'send:call:accept') send('call:accept', { callId });
+      else if (action === 'send:call:reject') send('call:reject', { callId });
+      else if (action === 'dismiss') navigation.goBack();
+      else if (action.startsWith('navigate:')) {
+        navigation.replace(action.slice('navigate:'.length), {
+          callId,
+          conversationId: route.params.conversationId,
+          isCaller: false,
+          tokenLabel: callerName,
+        });
+      }
+    }
+  }
+
   function handleAccept() {
-    InCallManager.stopRingtone();
-    const screen = type === 'video' ? 'VideoCall' : 'VoiceCall';
-    navigation.replace(screen, {
-      callId,
-      conversationId: route.params.conversationId,
-      isCaller: false,
-      tokenLabel: callerName,
-    });
+    apply({ kind: 'accept-in-app' });
   }
 
   function handleReject() {
-    InCallManager.stopRingtone();
-    send('call:reject', { callId });
-    navigation.goBack();
+    apply({ kind: 'decline-in-app' });
   }
 
   return (
@@ -256,6 +295,70 @@ const styles = StyleSheet.create({
   acceptBtn: { width: 72, height: 72, borderRadius: 36, backgroundColor: '#22c55e', justifyContent: 'center', alignItems: 'center' },
   btnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
 });</code></pre>
+
+    <h2>Six ways a ringing call ends, and one of them must fire exactly once</h2>
+
+    <p>Look at how many things can finish a call that is currently ringing:</p>
+
+    <ul>
+      <li>The user taps <strong>Accept in the app</strong></li>
+      <li>The user taps <strong>Accept on the native CallKit screen</strong> —
+      a different code path, reached from the lock screen</li>
+      <li>The user taps <strong>Decline in the app</strong></li>
+      <li>The user taps <strong>Decline on the native screen</strong></li>
+      <li>The <strong>caller hangs up</strong> before it is answered</li>
+      <li>The <strong>30-second timeout</strong> expires</li>
+    </ul>
+
+    <p>Plus a seventh event that is not an ending: the <em>same</em> call
+    arriving twice, once by VoIP push and once over the WebSocket when the app
+    comes back to the foreground.</p>
+
+    <p>Six exits and one duplicate, all racing, and the code above has
+    <code>reportIncomingCall</code> and <code>endCallFromApp</code> with
+    nothing pairing them up. That pairing is the whole problem:</p>
+
+    <div class="callout danger">
+      <div class="callout-title">The phantom call — and its mirror image</div>
+      <p><strong>Report a call to CallKit and never end it, and iOS keeps
+      showing a call.</strong> Not a notification you can swipe away: the
+      system call screen, with the green status bar, sometimes surviving until
+      the phone is restarted. It happens the moment a user declines in the app
+      while CallKit is also ringing, because the in-app path never calls
+      <code>endCall</code>.</p>
+      <p>The obvious fix — always call <code>endCall</code> — creates the
+      opposite bug. <strong>When the user declines on the <em>native</em>
+      screen, CallKit has already ended the call itself.</strong> Your
+      <code>endCall</code> is a second one, against a UUID the system no longer
+      has.</p>
+      <p>So the rule is not "always end" or "never end". It is
+      <strong>every call reported is ended exactly once</strong>, and which
+      events count depends on who ended it. That is a property of a
+      <em>sequence</em> of events, which is exactly the kind of thing you
+      cannot check by reading one handler.</p>
+    </div>
+
+    <p>And accepting is a third case again. A call answered from inside the app
+    while CallKit is ringing needs
+    <code>RNCallKeep.answerIncomingCall(callId)</code> — <strong>not</strong>
+    <code>endCall</code>, which would hang up the call you just took, and not
+    silence either, which leaves the system screen ringing over the top of your
+    call.</p>
+
+    <h3>Accept was silent and decline was not</h3>
+
+    <p>One more, easy to miss because the two handlers sit side by side.
+    <code>handleReject</code> sends <code>call:reject</code>. The original
+    <code>handleAccept</code> sent <strong>nothing</strong> — it just navigated.
+    But look back at <code>0002</code>'s caller side: it subscribes and waits
+    for <code>call:accepted</code> before building its peer connection.</p>
+
+    <p><strong>Nobody was sending the message the caller was waiting for.</strong>
+    The callee's screen would open and sit at "Connecting…" while the caller
+    never started negotiating at all. Both files read correctly on their own;
+    the gap only exists between them — the same
+    read-the-two-sides-together move that found <code>a8/0004</code>'s unsent
+    <code>localId</code>.</p>
 
     <h2>Server-side: triggering the push</h2>
 
@@ -298,9 +401,21 @@ if (!calleeSockets || calleeSockets.size === 0) {
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>Now build it yourself</h2>
+
+    <div id="exercise-incoming"></div>
+
+    <div id="pg-exercise-incoming"></div>
+
+    <hr>
+
+    <h2>Then wire it into the app</h2>
 
     <div id="exercise-1"></div>
+
+    <hr>
+
+    <div id="explain-a7-0004"></div>
 
     <hr>
 
@@ -316,6 +431,7 @@ if (!calleeSockets || calleeSockets.size === 0) {
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -346,33 +462,480 @@ for (const [platform, info] of Object.entries(platforms)) {
   console.log('');
 }`);
 
+    createSolution("exercise-incoming", {
+      exercise: "Write decideIncoming(call, event) — the one place that decides what happens to a ringing call. Six things can end it and they race, so the decision has to live somewhere a test can drive it.\n\ncall is { status, reported, type }.\n  status is 'ringing', 'accepted' or 'ended'.\n  reported is whether this call has been shown to CallKit.\n  type is 'voice' or 'video'.\n\nevent is { kind }, one of:\n  'notify'           the call arrived (possibly again, by the other channel)\n  'accept-in-app'    Accept tapped on your screen\n  'accept-native'    Accept tapped on the CallKit screen\n  'decline-in-app'   Decline tapped on your screen\n  'decline-native'   Decline tapped on the CallKit screen\n  'caller-cancelled' the caller hung up first\n  'timeout'          30 seconds passed\n\nReturn { call, actions } — the new call, and an ordered list of action strings from: 'report-native', 'answer-native', 'end-native', 'stop-ringtone', 'send:call:accept', 'send:call:reject', 'dismiss', 'navigate:VoiceCall', 'navigate:VideoCall'.\n\nThe rules:\n\n1. Once status is 'ended', every later event produces NO actions and no change. Terminal is terminal.\n\n2. 'notify' when not reported: report it, set reported. 'notify' when already reported: nothing at all. The same call arrives by VoIP push AND over the socket, and reporting twice shows two call screens.\n\n3. 'accept-in-app': stop the ringtone, and if reported tell CallKit the call was ANSWERED, not ended. Then send call:accept and navigate to the screen for the call type. Status becomes 'accepted'.\n\n4. 'accept-native': the same, WITHOUT any native action — CallKit is the thing that was tapped, so it already knows.\n\n5. 'decline-in-app': stop the ringtone, end-native IF reported, send call:reject, dismiss. Status 'ended'.\n\n6. 'decline-native': the same but with NO end-native. CallKit has already ended the call on its own side and a second endCall is against a UUID it no longer has.\n\n7. 'caller-cancelled' and 'timeout': stop the ringtone, end-native if reported, dismiss. NO call:reject — the caller hung up or the server timed the call out, so in both cases the other side already knows.\n\n8. Accepting again once accepted produces nothing.\n\n9. Never mutate the call you were given.\n\nstop-ringtone always comes first in the list: the phone should stop making a noise before anything else is attempted.\n\nThe invariant all of this exists to protect: A CALL REPORTED TO CALLKIT IS ENDED EXACTLY ONCE. Never end one that was never reported, never end one twice, and never leave a reported one un-ended.",
+      hints: [
+        "Handle the terminal case first and return early. Every rule below then only sees a call that is still live, which is what makes the double-end impossible rather than merely unlikely.",
+        "Three of the branches differ only in whether they contribute 'end-native' and whether they send a reject. Write out what each of the six exits owes CallKit and owes the caller, as two columns, before writing any code.",
+        "For the conditional action, a spread of a ternary keeps the list flat: ...(call.reported ? ['end-native'] : [])."
+      ],
+      solution: `function decideIncoming(call, event) {
+  const nothing = { call: call, actions: [] };
+
+  // Terminal is terminal. Every later event is a duplicate of something
+  // already handled, and acting twice is exactly how CallKit receives a
+  // second endCall for a UUID it has already forgotten.
+  if (call.status === "ended") return nothing;
+
+  const screen = call.type === "video" ? "VideoCall" : "VoiceCall";
+
+  switch (event.kind) {
+    case "notify":
+      // The same call reaches us by VoIP push and again over the socket
+      // when the app foregrounds. Reporting twice shows two call screens.
+      if (call.reported) return nothing;
+      return {
+        call: { ...call, reported: true },
+        actions: ["report-native"],
+      };
+
+    case "accept-in-app":
+      if (call.status === "accepted") return nothing;
+      return {
+        call: { ...call, status: "accepted" },
+        actions: [
+          "stop-ringtone",
+          // ANSWERED, not ended. endCall here hangs up the call we just
+          // took; doing nothing leaves the system screen ringing over it.
+          ...(call.reported ? ["answer-native"] : []),
+          "send:call:accept",
+          "navigate:" + screen,
+        ],
+      };
+
+    case "accept-native":
+      if (call.status === "accepted") return nothing;
+      // No native action: CallKit is the thing that was tapped.
+      return {
+        call: { ...call, status: "accepted" },
+        actions: ["stop-ringtone", "send:call:accept", "navigate:" + screen],
+      };
+
+    case "decline-in-app":
+      return {
+        call: { ...call, status: "ended" },
+        actions: [
+          "stop-ringtone",
+          ...(call.reported ? ["end-native"] : []),
+          "send:call:reject",
+          "dismiss",
+        ],
+      };
+
+    case "decline-native":
+      // No end-native. CallKit ended it on its own side already.
+      return {
+        call: { ...call, status: "ended" },
+        actions: ["stop-ringtone", "send:call:reject", "dismiss"],
+      };
+
+    case "caller-cancelled":
+    case "timeout":
+      // No reject: the caller hung up, or the server's own 30s timeout
+      // fired. Either way the other side already knows.
+      return {
+        call: { ...call, status: "ended" },
+        actions: [
+          "stop-ringtone",
+          ...(call.reported ? ["end-native"] : []),
+          "dismiss",
+        ],
+      };
+
+    default:
+      return nothing;
+  }
+}`
+    });
+
+    createPlayground("pg-exercise-incoming", `// Write decideIncoming(call, event) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+
+// Reported ON PURPOSE in the base: an unreported call owes CallKit nothing,
+// so it cannot show a missing or doubled end-native at all.
+function ringing(overrides) {
+  return Object.assign(
+    { status: "ringing", reported: true, type: "voice" },
+    overrides || {}
+  );
+}
+function same(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+
+// Drive a sequence of events and collect every action, so the invariant can
+// be asked of the whole run rather than of one handler.
+function run(start, kinds) {
+  let call = start;
+  let actions = [];
+  for (const kind of kinds) {
+    const out = decideIncoming(call, { kind: kind });
+    call = out.call;
+    actions = actions.concat(out.actions);
+  }
+  return { call: call, actions: actions };
+}
+function count(actions, name) {
+  return actions.filter(function (a) { return a === name; }).length;
+}
+
+try {
+  if (typeof decideIncoming !== "function") throw new Error("not written yet");
+
+  try {
+    const r = decideIncoming(ringing({ reported: false }), { kind: "notify" });
+    check("an unreported call is reported to CallKit",
+          same(r.actions, ["report-native"]) && r.call.reported === true,
+          "got " + JSON.stringify(r));
+  } catch (e) { check("an unreported call is reported to CallKit", false, "threw " + e.message); }
+
+  try {
+    const r = run(ringing({ reported: false }), ["notify", "notify"]);
+    check("the same call arriving twice is reported once",
+          count(r.actions, "report-native") === 1,
+          "got " + JSON.stringify(r.actions) + " -- VoIP push and the socket both deliver it");
+  } catch (e) { check("the same call arriving twice is reported once", false, "threw " + e.message); }
+
+  try {
+    const r = decideIncoming(ringing({}), { kind: "accept-in-app" });
+    // Split deliberately: ending and doing-nothing are DIFFERENT mistakes
+    // with different consequences, and one check would report them alike.
+    check("accepting in-app must not END the native call",
+          r.actions.indexOf("end-native") === -1,
+          "got " + JSON.stringify(r.actions) + " -- endCall here hangs up the call you just took");
+    check("accepting in-app ANSWERS the native call",
+          r.actions.indexOf("answer-native") !== -1,
+          "got " + JSON.stringify(r.actions) + " -- silence leaves the system screen ringing over your call");
+    check("accepting in-app tells the caller and navigates",
+          same(r.actions, ["stop-ringtone", "answer-native", "send:call:accept", "navigate:VoiceCall"]),
+          "got " + JSON.stringify(r.actions));
+  } catch (e) { check("accepting in-app answers the native call", false, "threw " + e.message); }
+
+  try {
+    const r = decideIncoming(ringing({}), { kind: "accept-native" });
+    check("accepting on the native screen needs no native action back",
+          r.actions.indexOf("answer-native") === -1 && r.actions.indexOf("end-native") === -1,
+          "got " + JSON.stringify(r.actions) + " -- CallKit is the thing that was tapped");
+    check("accepting on the native screen still tells the caller",
+          r.actions.indexOf("send:call:accept") !== -1,
+          "got " + JSON.stringify(r.actions) + " -- 0002's caller is waiting on exactly this");
+  } catch (e) { check("accepting on the native screen needs no native action back", false, "threw " + e.message); }
+
+  try {
+    const r = decideIncoming(ringing({}), { kind: "decline-in-app" });
+    check("declining in-app ends the native call exactly once",
+          count(r.actions, "end-native") === 1,
+          "got " + JSON.stringify(r.actions) + " -- missing it leaves iOS showing a call that is over");
+    check("declining in-app tells the caller and dismisses",
+          same(r.actions, ["stop-ringtone", "end-native", "send:call:reject", "dismiss"]),
+          "got " + JSON.stringify(r.actions));
+  } catch (e) { check("declining in-app ends the native call exactly once", false, "threw " + e.message); }
+
+  try {
+    const r = decideIncoming(ringing({}), { kind: "decline-native" });
+    check("declining on the native screen must NOT end it again",
+          count(r.actions, "end-native") === 0,
+          "got " + JSON.stringify(r.actions) + " -- CallKit already ended it; this endCall has no UUID to match");
+    check("declining on the native screen still rejects and dismisses",
+          same(r.actions, ["stop-ringtone", "send:call:reject", "dismiss"]),
+          "got " + JSON.stringify(r.actions));
+  } catch (e) { check("declining on the native screen must NOT end it again", false, "threw " + e.message); }
+
+  try {
+    const r = decideIncoming(ringing({ reported: false }), { kind: "decline-in-app" });
+    check("a call never reported is never ended",
+          count(r.actions, "end-native") === 0,
+          "got " + JSON.stringify(r.actions) + " -- endCall on a UUID CallKit never received");
+  } catch (e) { check("a call never reported is never ended", false, "threw " + e.message); }
+
+  try {
+    const r = decideIncoming(ringing({}), { kind: "caller-cancelled" });
+    check("a cancelled call ends natively but sends no reject",
+          count(r.actions, "end-native") === 1 && r.actions.indexOf("send:call:reject") === -1,
+          "got " + JSON.stringify(r.actions) + " -- they hung up; they know");
+  } catch (e) { check("a cancelled call ends natively but sends no reject", false, "threw " + e.message); }
+
+  try {
+    const r = decideIncoming(ringing({}), { kind: "timeout" });
+    check("a timed-out call ends natively but sends no reject",
+          count(r.actions, "end-native") === 1 && r.actions.indexOf("send:call:reject") === -1,
+          "got " + JSON.stringify(r.actions) + " -- the server ran the same 30s clock");
+  } catch (e) { check("a timed-out call ends natively but sends no reject", false, "threw " + e.message); }
+
+  try {
+    // The lock-screen race, in the order that actually bites: CallKit ends
+    // the call itself, then the app mounts and a stray in-app decline
+    // follows. CallKit is owed nothing by either event.
+    const r = run(ringing({}), ["decline-native", "decline-in-app"]);
+    check("after CallKit ends a call itself, a later in-app decline sends nothing",
+          count(r.actions, "end-native") === 0 && count(r.actions, "send:call:reject") === 1,
+          "got " + JSON.stringify(r.actions) + " -- one ending, one reject, and no endCall at all");
+  } catch (e) { check("after CallKit ends a call itself, a later in-app decline sends nothing", false, "threw " + e.message); }
+
+  try {
+    // The same race the other way round. Here the in-app decline legitimately
+    // owes CallKit one endCall, and the event behind it owes nothing.
+    const r = run(ringing({}), ["decline-in-app", "decline-native"]);
+    check("a decline followed by CallKit's own endCall still ends it once",
+          count(r.actions, "end-native") === 1,
+          "got " + JSON.stringify(r.actions));
+  } catch (e) { check("a decline followed by CallKit's own endCall still ends it once", false, "threw " + e.message); }
+
+  try {
+    const r = run(ringing({}), ["decline-in-app", "caller-cancelled", "timeout"]);
+    check("nothing after the first ending does anything",
+          count(r.actions, "end-native") === 1 && count(r.actions, "dismiss") === 1,
+          "got " + JSON.stringify(r.actions) + " -- three endings arrive for one call, routinely");
+  } catch (e) { check("nothing after the first ending does anything", false, "threw " + e.message); }
+
+  try {
+    const r = run(ringing({}), ["accept-in-app", "accept-native"]);
+    check("accepting twice navigates once",
+          count(r.actions, "navigate:VoiceCall") === 1 && count(r.actions, "send:call:accept") === 1,
+          "got " + JSON.stringify(r.actions) + " -- a double navigate pushes two call screens");
+  } catch (e) { check("accepting twice navigates once", false, "threw " + e.message); }
+
+  try {
+    // Accepted, then the caller hangs up. The call is live now, so this one
+    // DOES owe CallKit an end.
+    const r = run(ringing({}), ["accept-in-app", "caller-cancelled"]);
+    check("a call that ends after being accepted still ends natively once",
+          count(r.actions, "end-native") === 1,
+          "got " + JSON.stringify(r.actions) + " -- accepted is not terminal; the call is in progress");
+  } catch (e) { check("a call that ends after being accepted still ends natively once", false, "threw " + e.message); }
+
+  try {
+    const r = decideIncoming(ringing({ type: "video" }), { kind: "accept-in-app" });
+    check("a video call navigates to VideoCall",
+          r.actions.indexOf("navigate:VideoCall") !== -1,
+          "got " + JSON.stringify(r.actions));
+  } catch (e) { check("a video call navigates to VideoCall", false, "threw " + e.message); }
+
+  try {
+    const r = decideIncoming(ringing({}), { kind: "decline-in-app" });
+    check("the ringtone stops before anything else is attempted",
+          r.actions[0] === "stop-ringtone",
+          "got " + JSON.stringify(r.actions) + " -- the phone should go quiet first");
+  } catch (e) { check("the ringtone stops before anything else is attempted", false, "threw " + e.message); }
+
+  try {
+    const start = ringing({});
+    const before = JSON.stringify(start);
+    decideIncoming(start, { kind: "decline-in-app" });
+    check("the call you were given is not mutated",
+          JSON.stringify(start) === before,
+          "it became " + JSON.stringify(start));
+  } catch (e) { check("the call you were given is not mutated", false, "threw " + e.message); }
+
+  try {
+    const r = decideIncoming(ringing({}), { kind: "something-else" });
+    check("an unrecognised event does nothing",
+          r.actions.length === 0,
+          "got " + JSON.stringify(r.actions));
+  } catch (e) { check("an unrecognised event does nothing", false, "threw " + e.message); }
+
+} catch (e) {
+  console.log("Write decideIncoming(call, event) above, then press Run. (" + e.message + ")");
+}`);
+
+    createExplain("explain-a7-0004", {
+      prompt: "Declining in the app and declining on the CallKit screen look like the same action to the user, and the correct code for them differs by one line. Explain what each one owes CallKit and why — then say why this is a bug you cannot find by reading either handler on its own."
+    });
+
     createSolution("exercise-1", {
-      exercise: "Implement incoming call handling for both platforms:\n\n1. Set up react-native-callkeep: configure for iOS (CallKit) and Android (selfManaged). Listen for answerCall and endCall events.\n\n2. Create `reportIncomingCall(callId, callerName, hasVideo)`: reports to the native call system so the OS shows the call UI.\n\n3. Create `IncomingCallScreen`: shows caller name, call type, ringtone/vibration, accept (green) and decline (red) buttons.\n\n4. Server side: when callee is offline during call:initiate, send a push notification (VoIP for iOS, FCM high-priority for Android).\n\n5. Handle the wake-up flow: push arrives → app wakes → reportIncomingCall → user accepts → navigate to VoiceCall/VideoCall screen.\n\n6. Test: close the app on device B, call from device A, verify the phone rings and the call UI appears.",
+      unverifiable: "the deliverable is CallKit, VoIP push and an Android foreground service, needing two devices with EAS development builds, an Apple Developer account and FCM credentials",
+      exercise: "Implement incoming call handling for both platforms, with decideIncoming as the only place that decides anything:\n\n1. Set up react-native-callkeep: configure for iOS (CallKit) and Android (selfManaged). Listen for answerCall and endCall events.\n\n2. Create reportIncomingCall(callId, callerName, hasVideo): reports to the native call system so the OS shows the call UI.\n\n3. Create IncomingCallScreen: caller name, call type, ringtone, accept (green) and decline (red) buttons. Every button, every CallKit event and every signalling message goes through decideIncoming — the screen only carries out the actions it returns.\n\n4. Track whether this call was already reported to CallKit. A VoIP push reports it before your screen exists; a socket call:incoming with the app open does not. The correct behaviour on decline differs between the two.\n\n5. Server side: when callee is offline during call:initiate, send a push notification (VoIP for iOS, FCM high-priority for Android).\n\n6. Send call:accept on accept, from BOTH the in-app and the native path. The caller in 0002 is waiting for it before it builds its peer connection.\n\n7. Unsubscribe and remove the CallKit listeners on unmount.\n\n8. Test: close the app on device B, call from device A, verify the phone rings and the call UI appears. Then test the ugly ones — decline in-app while CallKit is ringing, and have the caller hang up mid-ring. Neither may leave a call on the iOS lock screen.",
       hints: [
         "iOS VoIP pushes must use the .voip topic suffix and pushType: 'voip'. Regular pushes won't wake the app for calls.",
         "Android needs USE_FULL_SCREEN_INTENT permission and a MAX importance notification channel.",
         "InCallManager.startRingtone('_DEFAULT_') plays the system ringtone. Always stopRingtone() on accept or reject.",
-        "The 30-second ring timeout on the server still applies — if no answer, both parties get call:timeout."
+        "The 30-second ring timeout on the server still applies — if no answer, both parties get call:timeout.",
+        "Keep the call state in a ref, not in useState. The CallKit listeners and the socket subscription are registered once on mount, so a state variable they close over would be the value it had at mount for ever — 0002's stale-closure question, in a place where it silently breaks the terminal check."
       ],
-      solution: `// See the lesson code above for full implementations.
-// Architecture:
+      solution: `// app/src/calls/decideIncoming.ts
+//
+// Pure. Every path in and out of a ringing call goes through here, which is
+// what makes "a reported call is ended exactly once" a property you can
+// test rather than a rule you remember.
+export type IncomingCall = {
+  status: 'ringing' | 'accepted' | 'ended';
+  reported: boolean;
+  type: 'voice' | 'video';
+};
 
-// iOS flow:
-// APNs VoIP push → app wakes → VoIP push handler →
-// RNCallKeep.displayIncomingCall() → native call UI shown →
-// user accepts → answerCall event → navigate to call screen
+export function decideIncoming(call, event) {
+  const nothing = { call, actions: [] };
 
-// Android flow:
-// FCM high-priority → background handler →
-// full-screen notification (MAX importance) →
-// user taps accept → IncomingCall screen → navigate to call screen
+  if (call.status === 'ended') return nothing;
 
-// Server decision tree in handleCallInitiate:
-// if (callee has WebSocket) → send call:incoming via WS
-// else → send push notification, keep call state, wait 30s timeout
+  const screen = call.type === 'video' ? 'VideoCall' : 'VoiceCall';
 
-// Both platforms use react-native-callkeep for unified API
-// CallKit is mandatory on iOS; Android uses selfManaged mode`
+  switch (event.kind) {
+    case 'notify':
+      if (call.reported) return nothing;
+      return { call: { ...call, reported: true }, actions: ['report-native'] };
+
+    case 'accept-in-app':
+      if (call.status === 'accepted') return nothing;
+      return {
+        call: { ...call, status: 'accepted' },
+        actions: [
+          'stop-ringtone',
+          ...(call.reported ? ['answer-native'] : []),
+          'send:call:accept',
+          'navigate:' + screen,
+        ],
+      };
+
+    case 'accept-native':
+      if (call.status === 'accepted') return nothing;
+      return {
+        call: { ...call, status: 'accepted' },
+        actions: ['stop-ringtone', 'send:call:accept', 'navigate:' + screen],
+      };
+
+    case 'decline-in-app':
+      return {
+        call: { ...call, status: 'ended' },
+        actions: [
+          'stop-ringtone',
+          ...(call.reported ? ['end-native'] : []),
+          'send:call:reject',
+          'dismiss',
+        ],
+      };
+
+    case 'decline-native':
+      return {
+        call: { ...call, status: 'ended' },
+        actions: ['stop-ringtone', 'send:call:reject', 'dismiss'],
+      };
+
+    case 'caller-cancelled':
+    case 'timeout':
+      return {
+        call: { ...call, status: 'ended' },
+        actions: [
+          'stop-ringtone',
+          ...(call.reported ? ['end-native'] : []),
+          'dismiss',
+        ],
+      };
+
+    default:
+      return nothing;
+  }
+}
+
+
+// app/src/screens/IncomingCall.tsx
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import InCallManager from 'react-native-incall-manager';
+import RNCallKeep from 'react-native-callkeep';
+import { useEffect, useRef } from 'react';
+import { send, subscribe } from '../ws/connection';
+import { decideIncoming } from '../calls/decideIncoming';
+import { reportIncomingCall } from '../calls/callkeep';
+
+export function IncomingCallScreen({ route, navigation }) {
+  const { callId, callerName, type, reported } = route.params;
+
+  // A ref, not state: the listeners below are registered once and would
+  // otherwise close over the value this had at mount.
+  const callRef = useRef({ status: 'ringing', reported: !!reported, type });
+
+  useEffect(() => {
+    InCallManager.startRingtone('_DEFAULT_');
+
+    const unsub = subscribe((msgType, payload) => {
+      if (payload.callId !== callId) return;
+      if (msgType === 'call:cancel') apply({ kind: 'caller-cancelled' });
+      if (msgType === 'call:timeout') apply({ kind: 'timeout' });
+    });
+
+    RNCallKeep.addEventListener('answerCall', () => apply({ kind: 'accept-native' }));
+    RNCallKeep.addEventListener('endCall', () => apply({ kind: 'decline-native' }));
+
+    return () => {
+      unsub();
+      RNCallKeep.removeEventListener('answerCall');
+      RNCallKeep.removeEventListener('endCall');
+      InCallManager.stopRingtone();
+    };
+  }, []);
+
+  function apply(event) {
+    const { call, actions } = decideIncoming(callRef.current, event);
+    callRef.current = call;
+
+    for (const action of actions) {
+      if (action === 'stop-ringtone') InCallManager.stopRingtone();
+      else if (action === 'report-native') reportIncomingCall(callId, callerName, type === 'video');
+      else if (action === 'answer-native') RNCallKeep.answerIncomingCall(callId);
+      else if (action === 'end-native') RNCallKeep.endCall(callId);
+      else if (action === 'send:call:accept') send('call:accept', { callId });
+      else if (action === 'send:call:reject') send('call:reject', { callId });
+      else if (action === 'dismiss') navigation.goBack();
+      else if (action.startsWith('navigate:')) {
+        navigation.replace(action.slice('navigate:'.length), {
+          callId,
+          conversationId: route.params.conversationId,
+          isCaller: false,
+          tokenLabel: callerName,
+        });
+      }
+    }
+  }
+
+  return (
+    <View style={styles.container}>
+      <Text style={styles.callerName}>{callerName}</Text>
+      <Text style={styles.callType}>Incoming {type} call</Text>
+
+      <View style={styles.actions}>
+        <TouchableOpacity
+          style={styles.rejectBtn}
+          onPress={() => apply({ kind: 'decline-in-app' })}
+        >
+          <Text style={styles.btnText}>Decline</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.acceptBtn}
+          onPress={() => apply({ kind: 'accept-in-app' })}
+        >
+          <Text style={styles.btnText}>Accept</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#1e293b',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  callerName: { fontSize: 28, fontWeight: '600', color: '#fff', marginBottom: 8 },
+  callType: { fontSize: 16, color: '#94a3b8', marginBottom: 60 },
+  actions: { flexDirection: 'row', gap: 48 },
+  rejectBtn: {
+    width: 72, height: 72, borderRadius: 36,
+    backgroundColor: '#ef4444',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  acceptBtn: {
+    width: 72, height: 72, borderRadius: 36,
+    backgroundColor: '#22c55e',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  btnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+});`
     });
 
     createQuiz("lesson-quiz", [
@@ -684,6 +1247,27 @@ for (const [platform, info] of Object.entries(platforms)) {
         code: "RNCallKeep.addEventListener('___', ({ callUUID }) => {\n  navigateToCallScreen(callUUID);\n});",
         answer: "answerCall",
         explanation: "The 'answerCall' event fires when the user taps Accept on the native CallKit UI (or slides to answer on the lock screen). The corresponding event for declining is 'endCall'. These events bridge the native call UI actions back to your JavaScript code."
+      },
+      {
+        type: "predict-output",
+        question: "A user declines in the app, and a moment later the caller's cancel arrives. This runs that sequence with and without the terminal guard. What prints?",
+        code: "function endCalls(guard) {\n  let status = 'ringing';\n  let ends = 0;\n\n  function handle() {\n    if (guard && status === 'ended') return;\n    status = 'ended';\n    ends++;                       // stands in for RNCallKeep.endCall\n  }\n\n  handle();   // Decline tapped in the app\n  handle();   // caller-cancelled arrives 40ms later\n  return ends;\n}\n\nconsole.log(endCalls(true) + ' vs ' + endCalls(false));",
+        answer: "1 vs 2",
+        explanation: "Two endings for one call is the normal case, not the edge case — the caller hanging up and the callee declining happen at the same moment all the time. Without the guard, the second one calls endCall against a UUID CallKit has already forgotten. Note where the guard has to live: at the top, before the switch, not inside each branch. Six exits each remembering to check is six chances to forget, and the one that forgets is whichever was added last."
+      },
+      {
+        type: "predict-output",
+        question: "Two ways to include an action only when the call was reported. reported is false here. What prints?",
+        code: "const reported = false;\n\nconst spread  = ['stop-ringtone', ...(reported ? ['end-native'] : []), 'dismiss'];\nconst ternary = ['stop-ringtone', reported ? 'end-native' : undefined, 'dismiss'];\n\nconsole.log(spread.length + ' ' + ternary.length + ' ' + String(ternary[1]));",
+        answer: "2 3 undefined",
+        explanation: "The spread of an empty array contributes nothing, so the list is exactly the actions to perform. The ternary always contributes an element, so the list carries an undefined in the middle — and the loop that carries actions out will hit it. Whether that throws or is silently skipped depends on how the loop is written, which means the bug's visibility depends on code somewhere else. A list of things to do should contain only things to do."
+      },
+      {
+        type: "predict-output",
+        question: "For a call that WAS reported to CallKit, which of the six exits owe it an endCall? What prints?",
+        code: "const exits = {\n  'accept-in-app':    'answer',   // answered, not ended\n  'accept-native':    null,       // CallKit did it itself\n  'decline-in-app':   'end',\n  'decline-native':   null,       // CallKit did it itself\n  'caller-cancelled': 'end',\n  'timeout':          'end',\n};\n\nconst ends = Object.keys(exits).filter((k) => exits[k] === 'end');\nconsole.log(ends.length + ': ' + ends.join(' '));",
+        answer: "3: decline-in-app caller-cancelled timeout",
+        explanation: "Three of the six owe an endCall, one owes an answerIncomingCall, and two owe nothing at all — and the two that owe nothing are the two the user reaches from the native screen, because CallKit acted before it told you. This is why neither 'always end' nor 'never end' is the rule. The property to hold onto is not about any single handler: a call reported to CallKit is ended exactly once, and you can only check that over a whole sequence of events."
       }
     ]);
   </script>
