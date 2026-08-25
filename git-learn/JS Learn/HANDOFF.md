@@ -3583,3 +3583,162 @@ Both are the same shape as the fixture problems in `x1/0003`: the test looked
 right, ran green, and exercised nothing.
 
 **Result: 95 verified, 6 `unverifiable`.** Audit green, six suites pass.
+
+---
+
+### Session of 2026-08-25 — the `unverifiable` cluster is closed, and so is `known-issues.json`
+
+Six lessons: `b9/0003`, `b1/0003`, `a9/0001`, `b8/0001`, `b6/0001`, `b6/0002`.
+Four modules finished — B9, B1, A9, B8 — and then B6, which was the last of it.
+
+Two things ended today that had been open for weeks. **Every lesson in the
+course now executes something and passes its own self-check**, so the
+`unverifiable` flag covers nothing; and **`known-issues.json` holds no
+entries**, so nothing is gated, deferred or carried. Run `node
+scripts/audit.mjs` for the state — per the rule at the top of this file, the
+numbers are not repeated here.
+
+> **The previous entry broke that rule and it is worth naming.** It ended
+> *"Result: 95 verified, 6 `unverifiable`."* That is exactly the kind of
+> sentence this file removed sections for on 2026-08-16. It was true when
+> written and false within a day. **Point at `PROGRESS.md`; do not quote it.**
+
+#### What the pass actually settled
+
+The cluster began on 2026-08-23 with 17 excused lessons and five more that had
+never been executed at all. It ends with none, and the result worth carrying
+forward is blunt: **the reflex to call a lesson unrunnable was wrong 22 times
+out of 22.**
+
+Every single one — an Express route, a React Native screen, a Dockerfile, a
+`.gitignore`, a coturn config, a set of `CREATE INDEX` statements — turned out
+to contain a plain function with a precedence order, a three-state problem, or
+an exactly-once problem inside it. Not one lesson resisted. The flag is still
+there and the next lesson written may earn one honestly; what was unreliable
+was the *reflex*, not the mechanism.
+
+#### The finding that repeated in five of six lessons
+
+The exercise was always predictable from the topic. **The defect never was —
+it lived between two lessons, not inside one.**
+
+- `b9/0003`: the backup retention was enforced in one directory. `rclone copy`
+  and `rsync -az` never delete at the destination, so every dump the nightly
+  prune destroyed was still off-site, permanently — against a sentence
+  `b10/0002` publishes to users.
+- `b1/0003`: the redemption transaction counted *after* it inserted, so a token
+  with `max_uses = 0` got exactly one use and then marked itself exhausted.
+  `b7/0001` gets the order right; the two were never read together.
+- `a9/0001`: `a9/0002`'s exercise text has said for months that *"the lesson
+  above got this wrong"* — and the lesson above still had the bug. **A sibling
+  can be right about a defect nobody fixed, and the confident past tense is
+  what stops anyone checking.**
+- `b8/0001`: `notifyNewMessage` took a `preview` the server cannot produce,
+  because `b2/0002` stores ciphertext and holds no key. The callout directly
+  beneath it warns against putting a token *code* in a payload.
+- `b6/0001`: the `calls` table had been an audit orphan for weeks, which reads
+  as *somebody forgot the migration*. It was the reverse — **the readers
+  existed and the writer never did**, so `contact_limit`'s call cap counted an
+  empty table and permitted unlimited calls.
+
+The habit that found all five is the same one: **predict the exercise from the
+topic, then find the defect by reading the siblings.** It is now the standing
+instruction in `SESSION.md`'s *Next action*.
+
+#### The decision that cost the most to get wrong
+
+`b6/0002` offered relay-only ICE as *"a user-configurable option. Default to
+normal ICE (best quality), let privacy-conscious users enable relay-only
+mode."* `CLAUDE.md` says the opposite, in bold, and has for months.
+
+What settles it is not a preference about privacy. **It is that the person who
+bears the cost is not the person who chooses.** A token holder is a delivery
+company or a shop; if either side gathers a host or `srflx` candidate, the
+exchange hands the *issuer's* home IP to *them* — and the issuer is the person
+who went to the trouble of not giving out their phone number. It is also not a
+choice anyone can evaluate: "better call quality" is legible, "the courier
+learns roughly where you live" is not, and it is invisible when it happens.
+
+**Then it propagated.** The same wrong default produced *"only ~15% of calls
+use TURN"* in the bandwidth section, sized a 1TB VPS against that, and missed
+the second multiplier as well — relayed traffic crosses the server twice, in
+from one peer and out to the other. The corrected figure is roughly 2,200
+hours of 480p video on 1TB, and under 750 at 720p.
+
+**A default nobody notices does not stay a default. It reaches the capacity
+plan, and that is where it finally surfaces, as a bill.**
+
+Three lines above it, the lesson listed *"no third-party dependency"* as the
+first reason to self-host TURN — and the `iceServers` array contained Google's
+public STUN server, commented *"free STUN fallback"*. It was free of money, and
+what it spent was the thing the product sells. Under relay-only it also does
+nothing at all, since STUN exists to produce the very candidate being
+discarded: pure disclosure, zero function.
+
+#### The self-checks failed in one way, over and over
+
+Nine fixtures across the six lessons could not express the rule they were
+written for, and every one was caught the same way — by a wrong-case tripping a
+different check than it named. Two are worth stating as rules:
+
+- **A mutation check needs input that is visibly out of order.** `b9/0003` and
+  `b6/0001` both used an already-sorted list, so an implementation that sorts
+  the caller's array in place changed nothing and passed. Twice in one session,
+  hours apart.
+- **A check must assert what it is about, and nothing else.** `b6/0001`'s
+  "first ending wins" also asserted the exact reason string, so two mistakes
+  about *naming* the reason tripped it before reaching their own checks. The
+  a7/0004 lesson — one check doing two jobs reports the wrong one — recurred.
+
+And for the third time, **a wrong-case turned out not to be a mistake at all.**
+`list.find(...) || {}` is harmless once the guards exist: an empty object has
+no `initiatedBy` and is refused a line later. It passed everything by being
+correct, exactly as `b1/0004`'s `hasOwnProperty` and `a9/0002`'s `O`→`0` did.
+**A case that passes everything is either a hole in the self-check or not a
+mistake, and the only way to tell is to look.**
+
+`b8/0001` produced the sharpest version of the same lesson in the other
+direction: the allow-list check was asserting the *absence* of `code`, which a
+spread-with-one-delete passes while shipping every other field. **Asserting the
+absence of one dangerous thing is deny-list thinking inside the check written
+to prevent it.** It now asserts the exact key set.
+
+#### Two things I got wrong
+
+**The audit caught me committing the defect I had just fixed.** An hour after
+correcting `getUnreadCount` for reading a column `b2/0002` does not create, my
+own receipt reconciler queried a `push_receipts` table nothing created. It
+failed the build as an ERROR, not a warning, which is the entire argument for
+keeping the audit green rather than living with known noise: a red exit code
+that means something turned a latent defect into a two-minute fix.
+
+**I walked into the backtick trap twice**, both times writing `` `code` `` as
+markup inside a comment in a template literal, which terminates the string and
+reports an error ninety lines away. `CLAUDE.md` documents it; I have quoted the
+documentation in two previous sessions. The habit that causes it — marking up
+an identifier in prose — is the correct habit everywhere else, which is why
+writing it down does not stop it.
+
+#### Decisions recorded with their costs
+
+Three, all now in `CLAUDE.md` where they can be overturned on evidence:
+
+- **A floor under backup retention that knowingly keeps personal data past a
+  published promise**, and reports it as a breach rather than hiding it.
+  Rejected: silently deleting your last good backup to stay compliant is a
+  data-loss incident chosen on purpose. `minVerified: 0` reverses it.
+- **`token_id` denormalised onto `calls`, made safe by a composite foreign
+  key** so the copies cannot disagree. Cost: a unique index on `conversations`
+  that is redundant for lookups and exists only as a foreign-key target.
+  Rejected: storing `conversation_id` alone and joining, which is simpler and
+  puts a join on an authorisation path.
+- **TURN credentials at a one-hour TTL rather than twenty-four**, matched to
+  `b6/0001`'s Redis call TTL so there is one number to reason about.
+
+#### What is left
+
+`SESSION.md`'s *Next action* now has one real item on it: **the C-modules —
+C0–C4 and C6–C9, roughly 34 lessons, none written.** C0 is architecture and was
+planned to come before B1, so it is already out of sequence. That is a writing
+job, not a retrofit, and it is the first time in months that the next thing to
+do is *new material* rather than repair.

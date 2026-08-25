@@ -207,16 +207,29 @@ modules/
                                        palette removed 2026-08-18 — four `chat`/
                                        `avatar` mentions remain ON PURPOSE (the
                                        "Token cannot show a face" contrasts)
-  x1-git-dev-environment/           ← 3 lessons, complete
-  a2-typescript/                    ← 3 lessons, complete
-  x2-debugging/                     ← 2 lessons, complete
-  b1-sql-fundamentals/              ← 4 lessons, complete
-  b2-schema-design/                 ← 3 lessons, complete
-  b3-node-http-server/              ← 4 lessons, complete
-  b4-auth-server/                   ← 3 lessons, complete
-  a3-api-consumption/               ← 4 lessons; M3 pass 2026-08-18 (0002 is
-                                       TypeScript, so it cannot be executed)
-  a4-auth-client/                   ← 3 lessons; M3 pass 2026-08-18
+  x1-git-dev-environment/           ← 3 lessons
+  x2-debugging/                     ← 2 lessons
+  a2-typescript/                    ← 3 lessons
+  a3-api-consumption/               ← 4 lessons
+  a4-auth-client/                   ← 3 lessons
+  a5-core-token-features/           ← 5 lessons
+  a6-chat-realtime/                 ← 3 lessons
+  a7-voice-video/                   ← 5 lessons
+  a8-redemption-web/                ← 4 lessons
+  a9-deep-linking/                  ← 2 lessons
+  a10-device-security/              ← 2 lessons
+  a11-polish-publish/               ← 5 lessons
+  b1-sql-fundamentals/              ← 4 lessons
+  b2-schema-design/                 ← 3 lessons
+  b3-node-http-server/              ← 4 lessons
+  b4-auth-server/                   ← 3 lessons
+  b5-websocket-server/              ← 3 lessons
+  b6-webrtc-signalling/             ← 2 lessons; defines the `calls` table
+  b7-token-engine/                  ← 3 lessons
+  b8-push-notifications/            ← 1 lesson
+  b9-docker-deployment/             ← 3 lessons
+  b10-security-compliance/          ← 2 lessons
+  c5-end-to-end-encryption/         ← 5 lessons; the only C-module written
   (03-firebase-backend/)           ← DELETED 2026-08-16. Firebase is out of
                                       scope; Track B replaces it
   (04 … 09/)                        ← DELETED 2026-08-22, 40 pre-pivot lessons.
@@ -224,6 +237,15 @@ modules/
                                       salvageable" since the pivot and nobody
                                       ever salvaged any of it. All in git
                                       history if ever wanted back
+```
+
+**The counts above are a map, not a status.** What is verified, what carries
+practice, and how many questions exist are all in `PROGRESS.md`, which is
+generated — this list exists so you can find a module, not so you can report
+on one. **The C-modules other than C5 do not exist yet**; `TOKEN-TRACK.md` has
+the plan for them.
+
+```
 assets/
   styles.css                        ← shared stylesheet
   quiz.js                           ← createQuiz() widget (multi-type)
@@ -907,15 +929,96 @@ help when the problem is the migration that ran just before it.
   touches it: **every** call goes through TURN including two people in one room,
   relay bandwidth is the likeliest surprise on the bill, and a coturn outage
   becomes a *total* call outage rather than a degraded one. `a8/0003` is the
-  worked version. **`a7-voice-video` was checked on 2026-08-23 and does not
+  worked version.
+- **It is not a setting, and `b6/0002` offered it as one until 2026-08-25** —
+  *"default to normal ICE (best quality), let privacy-conscious users enable
+  relay-only mode."* **The person who bears the cost is not the person who
+  chooses:** a holder is a delivery company, and a direct path hands them the
+  *issuer's* home IP. It is also not a choice anyone can evaluate — "better
+  call quality" is legible, "the courier learns roughly where you live" is not,
+  and it is invisible when it happens.
+- **No `stun:` entry in `iceServers`, of yours or anybody's.** STUN exists to
+  produce the `srflx` candidate that relay-only discards, so it is a round trip
+  that discloses your public address and buys nothing. Google's public STUN was
+  in that list for months, three lines under the lesson's own *"no third-party
+  dependency"* selling point, commented "free STUN fallback" — **free of money,
+  and what it spent was the thing the product sells.**
+- **Size the bandwidth on 100% of calls, crossing the server twice.** In from
+  one peer, out to the other. `b6/0002` said "only ~15% of calls use TURN" and
+  sized a VPS against it, which is wrong by nearly seven times before the
+  doubling. **A default nobody notices propagates into the capacity plan, and
+  that is where it finally surfaces, as a bill.**
+- **TURN credentials are minted per caller, and a holder is not a user.** The
+  identity is namespaced (`owner:<id>` / `holder:<conversationId>`), because
+  coturn's allocation log has only that string to tell two principals apart.
+  The expiry in the username is in **seconds** — `Date.now()` is milliseconds,
+  and a millisecond value there mints a credential valid until roughly the year
+  57000, which coturn accepts without complaint. **`a7-voice-video` was checked on 2026-08-23 and does not
   need the retrofit** — `0001` constructs with the literal and states the three
   costs, `0005` is the whole lesson, and `0002`–`0004` never build an
   `RTCPeerConnection` of their own, so there is no second place for it to go
   missing
 
+### What a call leaves behind — the `calls` table (decided 2026-08-25)
+
+**`b6/0001` defines it**, because what a call record persists is a signalling
+question. It had been an orphan the audit reported for weeks — queried by
+`b7/0002` and `b7/0003`, created by nobody — and **the orphan was the symptom,
+not the defect: the readers existed and the writer never did.** The whole
+lifecycle lived in Redis behind a TTL, so `contact_limit`'s call cap counted an
+empty table and permitted unlimited calls.
+
+- **Redis stays the live registry; the row is what outlives the process.** They
+  are joined by a `dbId` on the Redis record and nothing else.
+- **`token_id` is denormalised onto `calls`, and a composite foreign key makes
+  it impossible to get wrong** — `conversations` carries
+  `UNIQUE (id, token_id)` and `calls` references both, so Postgres refuses a
+  call whose token disagrees with its conversation's. *Cost:* a unique index
+  that is redundant for lookups and exists only as a foreign-key target.
+  *Rejected:* storing only `conversation_id` and joining, which is simpler and
+  puts a join on an authorisation path. Reversible with a small migration.
+- **Three states out of two nullable columns.** Both null is ringing;
+  `answered_at NULL` with `ended_at NOT NULL` is **missed**, which is the
+  record rather than a gap in it. A biconditional `CHECK` ties `end_reason` to
+  `ended_at`, exactly as `b2/0001` ties `revoked_at` to `status`.
+- **The first ending wins**, enforced by `AND ended_at IS NULL` on every
+  update. A token revoked half an hour after a call ended does not rewrite why
+  that call ended.
+- **No SDP and no ICE candidates, ever.** Structural, not tidiness: an ICE
+  candidate **is** an IP address, and relay-only exists so neither party learns
+  the other's. Persisting one defeats the policy from the far side, in a table
+  nobody thinks of as sensitive.
+- **No duration column** (it is a subtraction — the `use_count` argument), no
+  recording and nowhere to put one, and no partitioning, unlike `messages`.
+
 ### Push notifications
 - FCM + APNs via Expo Notifications (the only unavoidable third party — only
   Apple and Google can wake a backgrounded app)
+
+**A notification can never contain a message** (decided 2026-08-25). The server
+holds ciphertext and no key, so there is no preview to truncate — the parameter
+cannot be filled, not merely should not be. `b8/0001` shipped a `preview`
+argument for months, in the lesson whose own callout forbids putting a token
+*code* in a payload. **A leaked code is a capability and revoking the token
+takes it back; a leaked message body is what ADR-0002 exists to protect.**
+
+- **Rich previews are a device capability, not a server one.** The payload
+  carries the sealed bytes plus `mutableContent`, and an iOS Notification
+  Service Extension — or an Android data-only message — decrypts and rewrites
+  the notification on the device. It needs EAS Build, like WebRTC.
+- **The privacy setting is enforced by withholding the bytes**, not by trusting
+  the extension. Under a sender-only setting the ciphertext does not go out.
+- **The fallback must be publishable as sent.** An extension can time out or
+  not exist on an older build, and what the user sees then is exactly the
+  `title` and `body` the server wrote.
+- **`data` is an allow-list built key by key**, never a copy with deletions —
+  absence of one dangerous field is not evidence of an allow-list.
+- **The badge is an absolute count.** Omitting it leaves it alone and `0`
+  clears it: different instructions, only one of them falsy. Never default it.
+- **Delivery is a two-phase result.** A ticket says Expo accepted the message;
+  only the *receipt*, fetched later by ticket id, says the device still exists.
+  `DeviceNotRegistered` arrives there, so a handler wired to the ticket never
+  clears a token for someone who uninstalled.
 
 ### Deployment
 - Coolify on a VPS, deploy from git
@@ -1277,17 +1380,35 @@ The pattern this unlocks is Phase 1.5's: **find the plain function inside the
 lesson and give it its own exercise.** `a3/0004` is the worked example — the
 screen is excused, and `applyPage` (stale responses, refresh-replaces-append,
 overlapping pages, `hasMore`) is written, self-checked and covered by seven
-wrong-cases. Roughly 25 of the remaining `unverifiable` lessons look like this.
-Four cannot be helped this way at all: `a2/*` and `a3/0002` are TypeScript, and
-the runner executes JavaScript.
+wrong-cases.
+
+> **The cluster is finished, 2026-08-25.** This paragraph used to say *"roughly
+> 25 of the remaining `unverifiable` lessons look like this, and four cannot be
+> helped at all — `a2/*` and `a3/0002` are TypeScript."* Both halves are now
+> wrong: the TypeScript runner landed on 2026-08-23, and the last excused
+> lesson was retrofitted on 2026-08-25. **`PROGRESS.md` has the live count;
+> do not trust a number written here.**
+>
+> **What the pass actually settled: the reflex to reach for `--unverifiable`
+> was wrong 22 times out of 22.** Every lesson that looked unrunnable — an
+> Express route, a React Native screen, a coturn config, a Dockerfile, a
+> `.gitignore` — turned out to contain a plain function with a precedence
+> order, a three-state problem, or an exactly-once problem in it. **Keep
+> reaching for the plain function first.** The flag still exists and the next
+> lesson written may earn one; it is the *reflex* that was unreliable, not the
+> mechanism.
 
 **Staged exercises** — a page that builds one program in several steps names its
 exercises `exercise-<stage>` and their self-checks `pg-exercise-<stage>`
 (`exercise-gen` → `pg-exercise-gen`). One-exercise lessons keep the original
 `pg-exercise` and are unaffected. The matching `--wrong` file exports `stages`
-keyed by stage name instead of a flat `alternatives`/`mistakes` pair. Only
-`0013` does this so far; three staged exercises beat one 100-line exercise for
-a build a beginner is meant to finish.
+keyed by stage name instead of a flat `alternatives`/`mistakes` pair.
+
+`0013` was the first, where three staged exercises beat one 100-line exercise
+for a build a beginner is meant to finish. **It is now the ordinary shape for
+any retrofit**, because the per-exercise `unverifiable` opt-out produces it
+naturally: the untestable deliverable stays as `exercise-1` with its reason,
+and the plain function gets its own named stage beside it.
 
 Three traps this has already caught:
 

@@ -58,7 +58,9 @@ and out of scope — nothing Firebase, Agora, Twilio or Prisma belongs below.*
   The mobile WebRTC binding. Requires EAS Build; will not run in Expo Go.
 
 - [coturn](https://github.com/coturn/coturn)
-  Self-hosted TURN server. Use for: relaying when direct connection fails.
+  Self-hosted TURN server. **Not a fallback in Token** — relay-only ICE means
+  it carries every call, so it is on the critical path and its bandwidth is a
+  line item. See `CLAUDE.md` § Communication.
 
 - [ws](https://github.com/websockets/ws)
   The WebSocket server library for chat and signalling.

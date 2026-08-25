@@ -18,14 +18,16 @@
 > 2. **B2 and B5 need rewriting, not deepening.** E2EE lands in v1, so the
 >    messaging schema stores ciphertext; and the WebSocket layer is multi-node
 >    from the start rather than single-node-then-fixed.
-> 3. **B2.2 under-delivered — and two of the three orphans are now closed.**
+> 3. **B2.2 under-delivered — and all three orphans are now closed.**
 >    The row below promises "conversations, messages, participants,
 >    read_receipts" and the lesson creates only the first two.
 >    `deletion_queue` was **defined** once `b10/0002` settled the erasure
 >    policy; `participants` was **deleted** by `c5/0005`, because a conversation
 >    has exactly two parties and the holder is not a user, so half of every row
->    could never have been filled in. Only **`calls`** remains, gated on B6.
->    Run `node scripts/audit.mjs` for the live list.
+>    could never have been filled in; and `calls` was **defined by `b6/0001`**
+>    on 2026-08-25, which is where it belonged, since what a call record
+>    persists is a signalling question. Run `node scripts/audit.mjs` for the
+>    live list.
 > 4. **The timeline was for an MVP by someone who already codes.** With E2EE in
 >    v1 and a scale-out architecture, the realistic figure is **12–18 months and
 >    ~145 lessons**, not the 3–4 months below.
@@ -119,7 +121,7 @@ from this one git repo.
 | B5 | | 2. Message routing | Routing a message to the right socket(s), fan-out | Delivering chat messages in real time | Replaces Firestore listeners |
 | B5 | | 3. Presence & typing | Ephemeral state, Redis pub/sub (optional for v1) | Online indicators, typing bubbles | NEW |
 | B6 | WebRTC Signalling | 1. Signalling server | Offer/answer/ICE relay over your WS, room concept | Replacing Firestore-based signalling from old Module 5 | Rewrites Module 5 |
-| B6 | | 2. coturn setup | Installation, configuration, relay mode, credentials, bandwidth | TURN fallback for restrictive networks | NEW |
+| B6 | | 2. coturn setup | Installation, configuration, time-limited credentials, and the bandwidth arithmetic that follows from relaying **every** call | Not a fallback: relay-only is the baseline, so TURN is on the critical path and its bandwidth is a line item | NEW |
 | B7 | Token Engine | 1. Token generation & redemption | Crypto-random codes, redemption endpoint, validation | The core backend logic — issue, validate, redeem | NEW |
 | B7 | | 2. Access rules engine | Evaluating rules (time, count, category), deny-by-default | The product's value prop — rules enforced server-side | NEW |
 | B7 | | 3. Revocation & pause | Instant revocation, pause/resume, propagation to active sessions | Security guarantee — revoked tokens never honoured | NEW |
