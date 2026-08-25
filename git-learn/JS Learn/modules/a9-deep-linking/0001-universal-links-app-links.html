@@ -28,6 +28,30 @@
       <p><code>tokn.app/t/CODE</code> must open the mobile app if installed, or fall back to the web page if not. This seamless routing is done via Universal Links (iOS) and App Links (Android) — OS-level features that associate your domain with your app. Without this, holders always land on the web page, even if they have the app installed.</p>
     </div>
 
+    <div class="callout warning">
+      <div class="callout-title">This URL is the one place a token code is
+      allowed to live in a path</div>
+      <p>
+        ADR-0007 keeps codes out of URL paths, because a path reaches the proxy
+        access log, browser history, the <code>Referer</code> header and crash
+        reports before your code ever runs. Owner endpoints take an
+        <code>:id</code>; redemption takes the code in a POST body. <strong>The
+        single exception is this one</strong> &mdash; the page URL a QR code
+        encodes &mdash; for the unavoidable reason that a browser has to be
+        given somewhere to go.
+      </p>
+      <p>
+        So the exception is paid for with headers rather than avoided:
+        <code>Referrer-Policy: no-referrer</code>,
+        <code>Cache-Control: no-store</code>, and a per-path
+        <code>X-Robots-Tag</code> from nginx &mdash; never a <code>robots</code>
+        meta tag, which one SPA <code>index.html</code> would apply to the whole
+        site. <code>a8/0004</code> builds the rule that decides which paths get
+        which; this lesson is where the path itself is created, so it is worth
+        knowing what it costs before you start pointing operating systems at it.
+      </p>
+    </div>
+
     <h2>How the OS decides where to send a link</h2>
 
     <p>When a user taps a <code>tokn.app/t/MERC-8GH2-KP4X</code> link (in a message, email, or anywhere), the operating system checks:</p>
@@ -76,6 +100,73 @@
     <div class="callout warning">
       <div class="callout-title">Critical detail</div>
       <p>Apple caches the AASA file. It is NOT fetched every time a link is tapped. iOS checks it when the app is installed or updated. Changes can take hours or days to propagate. Test thoroughly before shipping.</p>
+    </div>
+
+    <h3>Not claiming a path is a feature, and it has a keyword</h3>
+
+    <p>
+      <code>components</code> is an ordered list, <strong>the first entry that
+      matches decides</strong>, and an entry carrying
+      <code>"exclude": true</code> decides <em>against</em> opening the app.
+      That is how you claim <code>/t/*</code> without swallowing a URL under it
+      that the app has no screen for:
+    </p>
+
+    <pre><code>"components": [
+  {
+    "/": "/t/demo*",
+    "exclude": true,
+    "comment": "The interactive demo is a web page. Never open the app."
+  },
+  {
+    "/": "/t/*",
+    "?": { "web": "1" },
+    "exclude": true,
+    "comment": "?web=1 is the 'open in browser instead' escape hatch."
+  },
+  {
+    "/": "/t/*",
+    "comment": "Everything else under /t/ is a redemption link."
+  }
+]</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">Put the general rule first and the exclusions
+      never run</div>
+      <p>
+        Move <code>{"/": "/t/*"}</code> to the top of that array and both
+        exclusions become dead entries &mdash; matching stops at the first hit,
+        so nothing below it is ever consulted. <strong>Exclusions go above the
+        claim they carve out of, always.</strong>
+      </p>
+      <p>
+        This is worth holding next to <code>x1/0001</code>, because the two
+        resolve in <em>opposite</em> directions and the files look alike:
+        <strong><code>.gitignore</code> is last-match-wins, so the negation goes
+        at the bottom; AASA is first-match-wins, so the exclusion goes at the
+        top.</strong> Write one the way you write the other and it silently
+        does nothing &mdash; and in both cases the symptom is a rule that
+        appears to be there and is not.
+      </p>
+    </div>
+
+    <div class="callout warning">
+      <div class="callout-title">Android has no exclusion at all</div>
+      <p>
+        Intent filters only ever <em>add</em> claims. There is no
+        <code>exclude</code>, no negative <code>pathPrefix</code>, and no
+        ordering that can subtract from what an earlier filter matched
+        &mdash; <strong>any matching filter claims the URL, and that is the end
+        of it</strong>. So the carve-outs above exist on iOS and cannot exist on
+        Android.
+      </p>
+      <p>
+        Which means the exclusion has to be designed into the <em>path
+        layout</em> rather than the manifest: put anything the app must not
+        open on a path that is not under <code>/t/</code> at all, and both
+        platforms agree for free. The exercise below is about noticing when
+        they do not.
+      </p>
     </div>
 
     <h2>Android — Digital Asset Links (assetlinks.json)</h2>
@@ -237,10 +328,25 @@ npx uri-scheme open "tokn://t/TEST-CODE-1234" --android</code></pre>
       <li><strong>Wrong fingerprint</strong> — If you use EAS Build, the signing key is different from your local debug keystore. Use <code>eas credentials</code> to get the right one.</li>
       <li><strong>Redirect on .well-known</strong> — Neither Apple nor Google follows redirects to these files. They must be served directly at the path.</li>
       <li><strong>Missing autoVerify</strong> — Without it, Android shows a disambiguation dialog instead of opening your app directly.</li>
-      <li><strong>Claiming too much</strong> — Only claim paths your app handles (<code>/t/</code>). Don't claim the entire domain or the web page won't load for other routes.</li>
+      <li><strong>Claiming too much</strong> — Only claim paths your app handles (<code>/t/</code>). Don't claim the entire domain or the web page won't load for other routes. On iOS you can carve a hole with <code>"exclude": true</code>; on Android you cannot, so the two configs drift apart exactly where you were being careful.</li>
     </ul>
 
     <div id="playground-1"></div>
+
+    <h2>Now build it yourself: does this app claim this URL?</h2>
+
+    <p>
+      Every mismatch in this lesson has the same symptom &mdash; the link opens
+      the browser instead of the app, or the app instead of the browser &mdash;
+      with no error anywhere, on one platform only, and behind an Apple cache
+      that can take days to clear. The only way to see it before shipping is to
+      ask both configs the same question and compare their answers.
+    </p>
+
+    <div id="exercise-claims"></div>
+    <div id="pg-exercise-claims"></div>
+
+    <div id="explain-a9-0001"></div>
 
     <hr>
 
@@ -262,6 +368,7 @@ npx uri-scheme open "tokn://t/TEST-CODE-1234" --android</code></pre>
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -278,8 +385,10 @@ function routeLink(url, appInstalled, domainVerified) {
 
   if (appInstalled && domainVerified) {
     console.log("-> OPEN APP with URL:", url);
-    // Extract token code from /t/XXXX-XXXX-XXXX
-    const tokenCode = path.replace("/t/", "");
+    // Take the code from the /t/ PREFIX, not by deleting "/t/" wherever it
+    // happens to appear. a9/0002 builds the real parser; this is only
+    // enough to show what the OS hands over.
+    const tokenCode = path.startsWith("/t/") ? path.slice(3) : null;
     console.log("-> Token code:", tokenCode);
   } else {
     console.log("-> OPEN BROWSER (web fallback)");
@@ -296,9 +405,355 @@ routeLink("https://tokn.app/t/MERC-8GH2-KP4X", false, true);
 console.log("---");
 
 // Scenario 3: domain not verified (broken config)
-routeLink("https://tokn.app/t/MERC-8GH2-KP4X", true, false);`);
+routeLink("https://tokn.app/t/MERC-8GH2-KP4X", true, false);
+console.log("---");
+
+// Scenario 4: the reason line 4 above is a startsWith and not a replace.
+// This path is not a redemption link at all, and the version this
+// playground shipped until 2026-08-25 -- path.replace("/t/", "") --
+// deleted the first "/t/" wherever it sat and returned something
+// code-shaped from it.
+routeLink("https://tokn.app/settings/t/theme", true, true);`);
+
+    createSolution("exercise-claims", {
+      exercise: "Write claimsUrl(url, config) — ask both platform configs whether this app opens for this URL, and compare their answers.\n\nconfig is:\n\n  {\n    ios: {\n      domains: ['tokn.app'],            // mirrors associatedDomains\n      components: [                      // the AASA components array\n        { '/': '/t/demo*', exclude: true },\n        { '/': '/t/*', '?': { web: '1' }, exclude: true },\n        { '/': '/t/*' }\n      ]\n    },\n    android: {\n      intentFilters: [\n        { autoVerify: true,\n          data: [{ scheme: 'https', host: 'tokn.app', pathPrefix: '/t/' }] }\n      ]\n    }\n  }\n\nReturn { ios, android, agree } — two booleans and whether they match.\n\nThe rules:\n\niOS — AASA components:\n\n1. THE URL MUST BE https AND ITS HOST MUST BE IN ios.domains. Anything else is not claimed. A domain you did not declare cannot point at your app, which is the whole reason the verification file exists.\n\n2. WALK components IN ORDER AND STOP AT THE FIRST MATCH. If that component has exclude: true the app does NOT open; otherwise it does. This is the rule most worth internalising, because it is the OPPOSITE of .gitignore in x1/0001 — that one is last-match-wins, so its negations go at the bottom, and this one is first-match-wins, so its exclusions go at the top. Written the wrong way round the rule is silently dead.\n\n3. NO COMPONENT MATCHES MEANS NOT CLAIMED. Deny by default.\n\n4. A COMPONENT MATCHES WHEN EVERY PART IT SPECIFIES MATCHES, and a part it omits matches anything. '/' is tested against the path, '?' against the query, '#' against the fragment. A component with only a '/' says nothing about the query and must not be read as requiring an empty one.\n\n5. '?' IS AN OBJECT OF PARAM -> PATTERN. Every named parameter must be present AND its value must match. A parameter the component does not name is ignored.\n\n6. WILDCARDS: * matches zero or more characters, ? matches exactly one. Note the two meanings of ? — a component KEY '?' is the query, and a ? inside a pattern VALUE is a single-character wildcard.\n\n7. MATCHING IS CASE-SENSITIVE. /T/CODE is not /t/CODE.\n\nAndroid — intent filters:\n\n8. A FILTER CLAIMS THE URL WHEN autoVerify IS TRUE AND ONE OF ITS data ENTRIES MATCHES: scheme equal, host equal, and the path rule satisfied. Without autoVerify Android shows a disambiguation dialog rather than opening you, which is not the app opening — treat it as not claimed.\n\n9. PATH RULES, ONE PER data ENTRY: path is exact, pathPrefix is a starts-with. AN ENTRY THAT SPECIFIES NEITHER MATCHES EVERY PATH ON THAT HOST. That last one is the 'claiming the entire domain' mistake, and it does not look like a mistake — it looks like a shorter config.\n\n10. ANY MATCHING FILTER CLAIMS IT. There is no exclusion, no negative prefix, and no ordering that subtracts. This is the asymmetry the whole exercise exists for: every carve-out you can express on iOS is inexpressible here.\n\nBoth:\n\n11. agree IS ios === android, INCLUDING WHEN BOTH ARE FALSE. Two platforms agreeing to ignore a URL is agreement.\n\n12. A URL THAT WILL NOT PARSE IS CLAIMED BY NEITHER, and must not throw. This function runs over a list of URLs in a pre-release check; one bad entry must not take the check down.\n\n13. DO NOT MUTATE config.\n\nWhat this models and what it does not: the components format also has caseSensitive and percentEncoded flags, and Android has pathPattern with its own glob dialect. They are left out because a rule you are not sure of is worse than a rule you left out — and none of them change the asymmetry in rule 10, which is the finding.",
+      hints: [
+        "Write the glob first and test it on its own. Escape the regex metacharacters in the literal parts, then let * become 'zero or more' and ? become 'exactly one'. A path like /t/file.txt will find an unescaped dot.",
+        "Rule 2 is a for loop with a return inside it, not a filter followed by a decision. The moment you collect all matching components you have lost the thing that decides.",
+        "Rule 4 is the one that reads as an accident: iterate over the keys the component actually has, rather than checking path/query/fragment unconditionally. A component with no '?' must not be treated as requiring an empty query."
+      ],
+      solution: `// app/src/linking/claimsUrl.js
+//
+// Both platform configs answer the same question in different dialects.
+// Running them side by side is the only way to see where they disagree,
+// because on a device you only ever observe one of them at a time.
+
+function claimsUrl(url, config) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch (err) {
+    // Rule 12: a list of URLs is being checked; one bad entry is not a
+    // reason to take the check down.
+    return { ios: false, android: false, agree: true };
+  }
+
+  const path = parsed.pathname;
+  const fragment = parsed.hash.replace(/^#/, "");
+  const queryParams = {};
+  parsed.searchParams.forEach(function (value, key) {
+    if (!(key in queryParams)) queryParams[key] = value;
+  });
+
+  // Rule 6. * is zero or more, ? is exactly one, and everything else is a
+  // literal -- including the dots that a path is full of.
+  function globMatches(pattern, value) {
+    let source = "^";
+    for (const ch of String(pattern)) {
+      if (ch === "*") source += "[\\\\s\\\\S]*";
+      else if (ch === "?") source += "[\\\\s\\\\S]";
+      else source += ch.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&");
+    }
+    return new RegExp(source + "$").test(String(value));
+  }
+
+  // ---- iOS ----------------------------------------------------------
+  function iosClaims() {
+    const ios = config.ios || {};
+    // Rule 1.
+    if (parsed.protocol !== "https:") return false;
+    if (!(ios.domains || []).includes(parsed.hostname)) return false;
+
+    for (const component of ios.components || []) {
+      // Rule 4: only the parts the component actually specifies.
+      if ("/" in component && !globMatches(component["/"], path)) continue;
+      if ("#" in component && !globMatches(component["#"], fragment)) continue;
+      if ("?" in component) {
+        const wanted = component["?"];
+        let ok = true;
+        for (const key of Object.keys(wanted)) {
+          // Rule 5: named parameters must be present AND match.
+          if (!(key in queryParams) || !globMatches(wanted[key], queryParams[key])) {
+            ok = false;
+            break;
+          }
+        }
+        if (!ok) continue;
+      }
+      // Rule 2: the FIRST match decides, in whichever direction it points.
+      return !component.exclude;
+    }
+    // Rule 3.
+    return false;
+  }
+
+  // ---- Android ------------------------------------------------------
+  function androidClaims() {
+    const android = config.android || {};
+    for (const filter of android.intentFilters || []) {
+      // Rule 8: a chooser dialog is not the app opening.
+      if (!filter.autoVerify) continue;
+      for (const entry of filter.data || []) {
+        if (entry.scheme !== undefined && entry.scheme + ":" !== parsed.protocol) continue;
+        if (entry.host !== undefined && entry.host !== parsed.hostname) continue;
+        if (entry.path !== undefined) {
+          if (entry.path !== path) continue;
+        } else if (entry.pathPrefix !== undefined) {
+          if (!path.startsWith(entry.pathPrefix)) continue;
+        }
+        // Rule 9: neither given means every path on this host.
+        // Rule 10: one match is enough, and nothing can take it back.
+        return true;
+      }
+    }
+    return false;
+  }
+
+  const ios = iosClaims();
+  const android = androidClaims();
+  // Rule 11.
+  return { ios: ios, android: android, agree: ios === android };
+}`
+    });
+
+    createPlayground("pg-exercise-claims", `// Write claimsUrl(url, config) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+
+// Token's real shape: claim /t/, carve out the demo page and the
+// "open in the browser instead" escape hatch. The EXCLUSIONS COME FIRST --
+// move them below the general claim and they stop existing.
+function TOKEN() {
+  return {
+    ios: {
+      domains: ["tokn.app"],
+      components: [
+        { "/": "/t/demo*", exclude: true },
+        { "/": "/t/*", "?": { web: "1" }, exclude: true },
+        { "/": "/t/*" },
+      ],
+    },
+    android: {
+      intentFilters: [
+        { autoVerify: true, data: [{ scheme: "https", host: "tokn.app", pathPrefix: "/t/" }] },
+      ],
+    },
+  };
+}
+
+function show(r) { return JSON.stringify(r); }
+
+try {
+  if (typeof claimsUrl !== "function") throw new Error("not written yet");
+
+  try {
+    const r = claimsUrl("https://tokn.app/t/MERC-8GH2-KP4X", TOKEN());
+    check("an ordinary redemption link is claimed by both platforms",
+          r.ios === true && r.android === true && r.agree === true,
+          show(r));
+  } catch (e) { check("an ordinary redemption link is claimed by both platforms", false, "threw " + e.message); }
+
+  try {
+    const r = claimsUrl("https://tokn.app/privacy", TOKEN());
+    check("a path outside /t/ is claimed by neither, and that is agreement",
+          r.ios === false && r.android === false && r.agree === true,
+          show(r) + " -- two platforms agreeing to ignore a URL is agreement");
+  } catch (e) { check("a path outside /t/ is claimed by neither, and that is agreement", false, "threw " + e.message); }
+
+  try {
+    // THE HEADLINE. iOS can exclude; Android cannot express it at all.
+    // NOT the bare "/t/demo": that would need the * to match zero
+    // characters, which is a DIFFERENT rule with its own check below, and
+    // a one-or-more * would then trip this one instead of that one.
+    const r = claimsUrl("https://tokn.app/t/demo-page", TOKEN());
+    check("an iOS exclusion has no Android equivalent, so the platforms disagree",
+          r.ios === false && r.android === true && r.agree === false,
+          show(r) + " -- the carve-out exists on one platform only");
+  } catch (e) { check("an iOS exclusion has no Android equivalent, so the platforms disagree", false, "threw " + e.message); }
+
+  try {
+    const r = claimsUrl("https://tokn.app/t/MERC-8GH2-KP4X?web=1", TOKEN());
+    check("a query-based exclusion also has no Android equivalent",
+          r.ios === false && r.android === true && r.agree === false,
+          show(r) + " -- Android intent filters do not look at the query at all");
+  } catch (e) { check("a query-based exclusion also has no Android equivalent", false, "threw " + e.message); }
+
+  try {
+    // Same component, no matching query: the exclusion must NOT fire, and
+    // the general claim below it must.
+    const r = claimsUrl("https://tokn.app/t/MERC-8GH2-KP4X?ref=qr", TOKEN());
+    check("a query exclusion fires only when its parameter is actually there",
+          r.ios === true,
+          show(r) + " -- ?ref=qr does not carry web=1, so the entry below decides");
+  } catch (e) { check("a query exclusion fires only when its parameter is actually there", false, "threw " + e.message); }
+
+  try {
+    // The parameter IS present and its value is wrong. Nothing else in this
+    // file distinguishes "the key is there" from "the key matches".
+    const r = claimsUrl("https://tokn.app/t/MERC-8GH2-KP4X?web=0", TOKEN());
+    check("a query exclusion checks the VALUE, not just that the key exists",
+          r.ios === true,
+          show(r) + " -- web=0 is not web=1, so the exclusion must not fire");
+  } catch (e) { check("a query exclusion checks the VALUE, not just that the key exists", false, "threw " + e.message); }
+
+  try {
+    // A component naming no query must not be read as requiring an empty one.
+    const r = claimsUrl("https://tokn.app/t/MERC-8GH2-KP4X?utm_source=poster", TOKEN());
+    check("a component that says nothing about the query matches any query",
+          r.ios === true,
+          show(r) + " -- an omitted part matches anything; it is not a demand for absence");
+  } catch (e) { check("a component that says nothing about the query matches any query", false, "threw " + e.message); }
+
+  try {
+    // The SAME entries with the general claim hoisted above the exclusions.
+    const c = TOKEN();
+    c.ios.components = [
+      { "/": "/t/*" },
+      { "/": "/t/demo*", exclude: true },
+    ];
+    const r = claimsUrl("https://tokn.app/t/demo", c);
+    check("first match wins: an exclusion below the claim is dead",
+          r.ios === true,
+          show(r) + " -- .gitignore is LAST-match-wins and this is FIRST; one of them ends up backwards");
+  } catch (e) { check("first match wins: an exclusion below the claim is dead", false, "threw " + e.message); }
+
+  try {
+    const r = claimsUrl("http://tokn.app/t/MERC-8GH2-KP4X", TOKEN());
+    check("plain http is not a universal link",
+          r.ios === false && r.android === false,
+          show(r));
+  } catch (e) { check("plain http is not a universal link", false, "threw " + e.message); }
+
+  try {
+    const r = claimsUrl("https://evil.example/t/MERC-8GH2-KP4X", TOKEN());
+    check("a domain you never declared cannot point at your app",
+          r.ios === false && r.android === false,
+          show(r) + " -- this is what the verification file exists to prevent");
+  } catch (e) { check("a domain you never declared cannot point at your app", false, "threw " + e.message); }
+
+  try {
+    const r = claimsUrl("https://tokn.app/T/MERC-8GH2-KP4X", TOKEN());
+    check("path matching is case-sensitive",
+          r.ios === false,
+          show(r));
+  } catch (e) { check("path matching is case-sensitive", false, "threw " + e.message); }
+
+  try {
+    const r = claimsUrl("https://tokn.app/t/", TOKEN());
+    check("* matches zero characters, so /t/ matches /t/*",
+          r.ios === true,
+          show(r));
+  } catch (e) { check("* matches zero characters, so /t/ matches /t/*", false, "threw " + e.message); }
+
+  try {
+    const c = TOKEN();
+    c.ios.components = [{ "/": "/t/?" }];
+    const one = claimsUrl("https://tokn.app/t/A", c).ios;
+    const two = claimsUrl("https://tokn.app/t/AB", c).ios;
+    const none = claimsUrl("https://tokn.app/t/", c).ios;
+    check("? matches exactly one character, never zero and never two",
+          one === true && two === false && none === false,
+          "/t/A=" + one + " /t/AB=" + two + " /t/=" + none);
+  } catch (e) { check("? matches exactly one character, never zero and never two", false, "threw " + e.message); }
+
+  try {
+    // A path full of regex metacharacters. An unescaped dot matches anything.
+    const c = TOKEN();
+    c.ios.components = [{ "/": "/t/a.b" }];
+    const literal = claimsUrl("https://tokn.app/t/a.b", c).ios;
+    const wildcarded = claimsUrl("https://tokn.app/t/axb", c).ios;
+    check("a dot in a pattern is a dot, not a wildcard",
+          literal === true && wildcarded === false,
+          "/t/a.b=" + literal + " /t/axb=" + wildcarded);
+  } catch (e) { check("a dot in a pattern is a dot, not a wildcard", false, "threw " + e.message); }
+
+  try {
+    const c = TOKEN();
+    c.ios.components = [{ "#": "chat" }];
+    const withHash = claimsUrl("https://tokn.app/t/MERC-8GH2-KP4X#chat", c).ios;
+    const without = claimsUrl("https://tokn.app/t/MERC-8GH2-KP4X", c).ios;
+    check("a fragment component is matched against the fragment",
+          withHash === true && without === false,
+          "with=" + withHash + " without=" + without);
+  } catch (e) { check("a fragment component is matched against the fragment", false, "threw " + e.message); }
+
+  try {
+    const c = TOKEN();
+    c.android.intentFilters = [
+      { autoVerify: false, data: [{ scheme: "https", host: "tokn.app", pathPrefix: "/t/" }] },
+    ];
+    const r = claimsUrl("https://tokn.app/t/MERC-8GH2-KP4X", c);
+    check("without autoVerify Android offers a chooser, which is not the app opening",
+          r.android === false,
+          show(r));
+  } catch (e) { check("without autoVerify Android offers a chooser, which is not the app opening", false, "threw " + e.message); }
+
+  try {
+    const c = TOKEN();
+    c.android.intentFilters = [
+      { autoVerify: true, data: [{ scheme: "https", host: "tokn.app", path: "/t/exactly-this" }] },
+      { autoVerify: true, data: [{ scheme: "https", host: "tokn.app", pathPrefix: "/t/" }] },
+    ];
+    const r = claimsUrl("https://tokn.app/t/MERC-8GH2-KP4X", c);
+    check("any matching filter claims it; there is no ordering and no veto",
+          r.android === true,
+          show(r) + " -- the first filter does not match and cannot prevent the second");
+  } catch (e) { check("any matching filter claims it; there is no ordering and no veto", false, "threw " + e.message); }
+
+  try {
+    const c = TOKEN();
+    c.android.intentFilters = [
+      { autoVerify: true, data: [{ scheme: "https", host: "tokn.app", path: "/t/one" }] },
+    ];
+    // The URL EXTENDS the exact path. A URL that merely differs from it
+    // (/t/two) is rejected by exact and prefix alike, so it proves nothing.
+    const r = claimsUrl("https://tokn.app/t/one-more", c);
+    check("path is exact, not a prefix",
+          r.android === false,
+          show(r) + " -- /t/one-more starts with /t/one and is not equal to it");
+  } catch (e) { check("path is exact, not a prefix", false, "threw " + e.message); }
+
+  try {
+    // The shorter config that looks tidier and claims the whole domain.
+    const c = TOKEN();
+    c.android.intentFilters = [
+      { autoVerify: true, data: [{ scheme: "https", host: "tokn.app" }] },
+    ];
+    const r = claimsUrl("https://tokn.app/privacy", c);
+    check("a data entry with no path rule claims every path on the host",
+          r.android === true && r.ios === false && r.agree === false,
+          show(r) + " -- the privacy page now opens an app with no screen for it");
+  } catch (e) { check("a data entry with no path rule claims every path on the host", false, "threw " + e.message); }
+
+  try {
+    const r = claimsUrl("not a url at all", TOKEN());
+    check("an unparseable URL is claimed by neither, and does not throw",
+          r.ios === false && r.android === false && r.agree === true,
+          show(r) + " -- one bad entry must not take a pre-release check down");
+  } catch (e) { check("an unparseable URL is claimed by neither, and does not throw", false, "threw " + e.message); }
+
+  try {
+    const c = TOKEN();
+    const before = JSON.stringify(c);
+    claimsUrl("https://tokn.app/t/MERC-8GH2-KP4X?web=1", c);
+    check("the config is not mutated",
+          JSON.stringify(c) === before,
+          "the same config is asked about every URL in the list");
+  } catch (e) { check("the config is not mutated", false, "threw " + e.message); }
+} catch (e) {
+  console.log("Nothing to check yet -- write claimsUrl above. (" + e.message + ")");
+}`);
+
+    createExplain("explain-a9-0001", {
+      prompt: "Token's AASA excludes <code>/t/demo*</code>, and the Android config has no way to express that exclusion. Explain why this is a real problem rather than a cosmetic one &mdash; what an Android user actually experiences &mdash; and why <em>moving the demo off the <code>/t/</code> path entirely</em> is a better fix than anything you could write in either config file."
+    });
 
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is an AASA file, an assetlinks.json and an Expo app.config.js — verifying them needs a published HTTPS domain and a signed build on a device",
       exercise: "Create the complete deep linking setup for Token: (1) Write the apple-app-site-association file claiming /t/* paths, (2) Write the assetlinks.json file with a placeholder fingerprint, (3) Write the Expo app.config.js section that registers both iOS and Android for these URLs. Place the verification files in the correct directory structure for your web/ Vite project.",
       hints: [
         "AASA goes in web/public/.well-known/apple-app-site-association (no file extension).",
@@ -370,6 +825,30 @@ export default {
     });
 
     createQuiz("lesson-quiz", [
+      {
+        type: "predict-output",
+        code: "// An AASA components array, with the general claim written first.\nconst components = [\n  { pattern: '/t/',     exclude: false },\n  { pattern: '/t/demo', exclude: true  },\n];\n\n// Matching stops at the FIRST entry that matches.\nconst path = '/t/demo-page';\nconst hit = components.find(c => path.startsWith(c.pattern));\n\nconsole.log(hit.pattern + '  ->  ' + (hit.exclude ? 'browser' : 'app'));",
+        answer: "/t/  ->  app",
+        explanation: "The exclusion never runs, because something above it already matched and matching stops there. This is the trap for anyone who has written a .gitignore: that file is LAST-match-wins, so its negations belong at the bottom, and AASA is first-match-wins, so its exclusions belong at the top. Write one the way you write the other and the rule is silently dead — present in the file, reviewed, approved, and doing nothing."
+      },
+      {
+        type: "predict-output",
+        code: "const path = '/t/demo-page';\n\n// iOS can carve a hole in a claim.\nconst iosExclusions = ['/t/demo'];\n// Android intent filters have no exclusion mechanism at all.\nconst androidExclusions = [];\n\nconst opens = (exclusions) => !exclusions.some(p => path.startsWith(p));\n\nconsole.log('iOS opens the app:     ' + opens(iosExclusions));\nconsole.log('Android opens the app: ' + opens(androidExclusions));",
+        answer: "iOS opens the app:     false\nAndroid opens the app: true",
+        explanation: "The same URL, the same product, two different outcomes — and you only ever observe one of them at a time, because you are holding one phone. The empty array is not an oversight in this snippet: Android has no exclude, no negative pathPrefix, and no ordering that subtracts, so any matching filter claims the URL and nothing can take it back. The fix is not in either config file — move the demo off the /t/ path and both platforms agree for free."
+      },
+      {
+        type: "predict-output",
+        code: "// Turning a glob into a regex by replacing the wildcards, and\n// forgetting that the literal parts are regex too.\nconst pattern = '/t/a.b';\nconst naive = new RegExp('^' + pattern.replace(/\\*/g, '.*') + '$');\n\nconsole.log('exact match:    ' + naive.test('/t/a.b'));\nconsole.log('different path: ' + naive.test('/t/axb'));",
+        answer: "exact match:    true\ndifferent path: true",
+        explanation: "The pattern contains no *, so the replace does nothing and the string goes into the RegExp untouched — including the dot, which is a regex wildcard and now matches any character. The second line is the finding: a pattern written to claim exactly one path also claims every path with any character in that position. Note the direction of the failure. This mistake claims MORE than you wrote, so the symptom is your app opening for a URL you never meant it to handle, which is the half nobody tests. Escaping the literal parts is what makes a pattern mean what it says."
+      },
+      {
+        type: "predict-output",
+        code: "// * means zero or more characters. The commonest mis-reading is\n// 'there must be something there'.\nconst star = /^\\/t\\/[\\s\\S]*$/;   // correct\nconst plus = /^\\/t\\/[\\s\\S]+$/;   // * mistaken for one-or-more\n\nconsole.log('/t/       star:' + star.test('/t/')       + '  plus:' + plus.test('/t/'));\nconsole.log('/t/MERC   star:' + star.test('/t/MERC')   + '  plus:' + plus.test('/t/MERC'));",
+        answer: "/t/       star:true  plus:false\n/t/MERC   star:true  plus:true",
+        explanation: "Both behave identically on every URL that carries a code, which is every URL you would think to test with. They differ only on the bare /t/ landing page — so the mistake ships, and the one link it breaks is the one nobody generated a QR code for."
+      },
       {
         question: "The app is installed, but .well-known/apple-app-site-association returns 404. The user taps https://tokn.app/t/MERC-8GH2-KP4X. What does iOS do?",
         options: [

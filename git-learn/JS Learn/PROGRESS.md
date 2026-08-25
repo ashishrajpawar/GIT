@@ -13,12 +13,12 @@ with this one, this one is right — everything below is measured, not asserted.
 |---|---|
 | Token-track lessons | 101 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
-| Quiz questions (track) | 2747 |
-| Avg teaching prose per track lesson | 2195 words |
+| Quiz questions (track) | 2751 |
+| Avg teaching prose per track lesson | 2201 words |
 | Lessons with a playground | 101 / 101 |
 | Lessons with an exercise | 101 / 101 |
 | **Deepened** (all 3 spine sections) | 16 / 101 |
-| **Verified** (code executed) | 97 / 101 |
+| **Verified** (code executed) | 98 / 101 |
 | Ran clean but had nothing to run | 0 / 101 |
 | Errors | 0 |
 | Known and blocked | 1 |
@@ -63,7 +63,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Type | Count |
 |---|---|
 | multiple-choice | 817 |
-| predict-output | 531 |
+| predict-output | 535 |
 | fill-blank | 461 |
 | spot-the-bug | 376 |
 | which-breaks | 283 |
@@ -84,7 +84,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a6-chat-realtime | 3 | 1912 | 6 | 6 | 78 | 0/3 | 3/3 |
 | a7-voice-video | 5 | 1885 | 10 | 10 | 150 | 0/5 | 5/5 |
 | a8-redemption-web | 4 | 1807 | 8 | 8 | 115 | 0/4 | 4/4 |
-| a9-deep-linking | 2 | 1395 | 3 | 3 | 53 | 0/2 | 1/2 |
+| a9-deep-linking | 2 | 1696 | 4 | 4 | 57 | 0/2 | 2/2 |
 | b1-sql-fundamentals | 4 | 1683 | 5 | 8 | 107 | 0/4 | 4/4 |
 | b10-security-compliance | 2 | 4022 | 5 | 4 | 53 | 1/2 | 2/2 |
 | b2-schema-design | 3 | 2363 | 3 | 6 | 82 | 0/3 | 3/3 |
@@ -193,7 +193,7 @@ so they do not hold the audit red. They are **not** resolved.
 | a8-redemption-web/0002-token-redemption-flow.html | 2223 | 6 | 2 | 2 | 30 | — | yes |
 | a8-redemption-web/0003-browser-webrtc-ws.html | 1768 | 8 | 2 | 2 | 29 | — | yes |
 | a8-redemption-web/0004-no-app-experience.html | 2244 | 9 | 2 | 2 | 27 | — | yes |
-| a9-deep-linking/0001-universal-links-app-links.html | 1112 | 7 | 1 | 1 | 28 | — | n/a |
+| a9-deep-linking/0001-universal-links-app-links.html | 1714 | 8 | 2 | 2 | 32 | — | yes |
 | a9-deep-linking/0002-in-app-deep-link-handling.html | 1678 | 10 | 2 | 2 | 25 | — | yes |
 | b1-sql-fundamentals/0001-tables-insert-select.html | 1816 | 10 | 1 | 2 | 26 | — | yes |
 | b1-sql-fundamentals/0002-joins-relationships.html | 1110 | 10 | 1 | 2 | 25 | — | yes |

@@ -19,28 +19,102 @@ how far it got.
 > files either.** Make no claims about progress at all — not in prose, not in
 > a commit message, not as a reason for prioritising anything.
 
-**Nothing in flight.** `b9/0003` and `b1/0003` both landed 2026-08-25.
-**B9 and B1 are complete.**
+**Nothing in flight.** `b9/0003`, `b1/0003` and `a9/0001` all landed
+2026-08-25. **B9, B1 and A9 are complete.**
 
 **Started the `unverifiable` cluster** — the recommended body of work in
-*Next action*. A7, A10, X1, **B9** and **B1** are finished. **4 to go:**
-B6 (2), `a9/0001`, `b8/0001`.
+*Next action*. A7, A10, X1, **B9**, **B1** and **A9** are finished.
+**3 to go:** B6 (2) and `b8/0001`.
 
 **State as of 2026-08-25** — run `node scripts/audit.mjs` before trusting any
 of it:
 
 - **101 lessons.** Audit **green**, 2 warnings, six suites pass.
 - **Every lesson has been executed at least once.** The verification log has
-  no absent entries: **97 verified, 4 `unverifiable`** with a stated reason,
+  no absent entries: **98 verified, 3 `unverifiable`** with a stated reason,
   1 `nothing-to-verify`.
 - **`known-issues.json` is down to one entry** — `calls`, gated on B6.
 - `render-as-authored` is **0**, and this time it means it (see *The `variant`
   blind spot*).
-- **Complete modules:** 01, 02, A2, A3, A4, **A7**, **A10**, B1, B2, B3, B4,
-  B7, **B9**, B10, A11, C5, X1, X2.
+- **Complete modules:** 01, 02, A2, A3, A4, **A7**, **A9**, **A10**, B1, B2,
+  B3, B4, B7, **B9**, B10, A11, C5, X1, X2.
 
 **Nothing is blocked.** See *Next action* for the four candidate bodies of
 work and why the `unverifiable` cluster is the recommendation.
+
+### a9/0001 — iOS can carve a hole and Android cannot, and A9 is finished (2026-08-25)
+
+M3: **`claimsUrl`**. 21 self-checks, 16 wrong-cases, 3 correct alternatives,
+4 new executable quiz questions where the lesson had **none**. **A9 is
+complete.** The `unverifiable` cluster is down to 3.
+
+**The ground either side was already taken, and that decided the exercise.**
+`a9/0002` owns `parseTokenLink` — extraction, alphabet, canonicalisation — and
+`a8/0004` owns `headersFor`, the `no-referrer` / `no-store` / `X-Robots-Tag`
+rules. What nothing covered was the OS-level *claim*: does this app open for
+this URL, on each platform, and **do the two answers agree**.
+
+### The finding: every carve-out you can express on iOS is inexpressible on Android
+
+AASA `components` is an ordered list, first match wins, and
+`"exclude": true` decides *against* opening the app. Android intent filters
+only ever **add** claims — no exclusion, no negative `pathPrefix`, no ordering
+that subtracts. So `/t/demo*` is excluded on iOS and claimed on Android, and
+**you only ever observe one of those at a time, because you are holding one
+phone.**
+
+The fix is in neither config file: move the demo off the `/t/` path and both
+platforms agree for free. `agree` exists to make that visible before you ship.
+
+**Why it has to be a function rather than a careful read.** Every mistake in
+the case file produces the identical symptom — a link opens the browser
+instead of the app, or the other way round — with no error anywhere, on one
+platform, behind an Apple cache that can take days to clear. **You cannot
+bisect it**, because each build re-fetches the AASA at install time and the
+answer changes underneath you.
+
+### The ordering rule is the exact inverse of x1/0001's, and the files look alike
+
+**`.gitignore` is last-match-wins, so negations belong at the bottom. AASA is
+first-match-wins, so exclusions belong at the top.** Write one the way you
+write the other and the rule is silently dead — in the file, reviewed,
+approved, doing nothing. Worth having the two lessons name each other, which
+they now do.
+
+Also added, because the lesson's own pitfall list ended with *"Claiming too
+much — don't claim the entire domain"* and gave **no mechanism for not
+claiming something**: `exclude` was never mentioned anywhere on the page.
+
+### The sibling documented the bug and the lesson still shipped it
+
+`a9/0002`'s exercise text has said for months that *"this is the one the
+lesson above got wrong: `replace('t/', '')` removes the first match wherever
+it sits"*. **`a9/0001`'s playground still had it.** The mirror of the
+believe-the-quiz rule: a sibling can be right about a defect that was never
+actually fixed, and the confident past tense is what stops anyone checking.
+`a9/0002`'s sentence now says when it was fixed, so the next reader who goes
+to look finds what the note promises.
+
+### Two fixtures could not express the rule they were written for
+
+Third session running this has been the main source of self-check defects, and
+both were found by a wrong-case tripping the wrong check:
+
+- **The exclusion check used the bare `/t/demo` against `/t/demo*`**, so it
+  needed the `*` to match **zero** characters — a different rule with its own
+  check. A one-or-more `*` therefore tripped the exclusion check instead of
+  the wildcard one. Now `/t/demo-page`, where the `*` has something to match.
+- **The Android exact-vs-prefix check used `path: '/t/one'` against `/t/two`**,
+  which exact and prefix **both** reject, so it proved nothing. Now
+  `/t/one-more`, which only a prefix test accepts.
+
+13 of 16 mistakes trip exactly one check; the three that trip more are one
+rule each, recorded in the case file.
+
+**Scope stated in the lesson rather than silently narrowed:** `caseSensitive`,
+`percentEncoded` and Android's `pathPattern` are deliberately not modelled —
+a rule I am not sure of is worse than a rule left out, and none of them change
+the asymmetry that is the finding.
 
 ### b1/0003 — the limit was enforced after the fact, and B1 is finished (2026-08-25)
 
@@ -2393,36 +2467,38 @@ executed; the log is 84 verified, 17 `unverifiable` with a reason, 1
 What is left, in no forced order:
 
 1. **The `unverifiable` lessons — started 2026-08-23; all of A7, A10, X1,
-   B9 and B1 done, 4 left.**
+   B9, B1 and A9 done, 3 left.**
    `CLAUDE.md` warns that the reflex to reach for that flag is wrong more often
    than it is right, and this pass proved it again — nine lessons that looked
    unrunnable produced nine exercises, and `a7/0001` then produced a tenth
-   plus two real defects. Remaining clusters: **B6 (2)**, plus `b9/0003`, `a9/0001`,
-   `b1/0003`, `b8/0001`. Each needs the same
-   move: find the plain function, excuse the rest per-exercise, **and add the
-   `createExplain` prompt** — the 4 without one are exactly the 4 still
+   plus two real defects. Remaining: **`b8/0001`** and **B6 (2)**. Each needs the
+   same move: find the plain function, excuse the rest per-exercise, **and add
+   the `createExplain` prompt** — the 3 without one are exactly the 3 still
    excused.
 
-   **Next: `a9/0001-universal-links-app-links.html`.** Its excuse is *"native
-   link configuration needing a device and a published domain"*, and the
-   configuration is not the interesting half: **deciding whether an incoming
-   URL is one this app should claim, and what to do with it, is pure string
-   work with a precedence order** — path patterns, the `apple-app-site-association`
-   match rules, and the cold-start-versus-warm-start branch. Check it against
-   `a2/0003`'s `readRouteParams`, which already decided that a deep link is
-   annotated-not-checked input, and against ADR-0007: **the redemption page
-   URL is the one place a code legitimately appears in a path**, so the
-   handling of that path is exactly where a leak would be.
+   **Next: `b8/0001-fcm-apns-expo.html`.** Its excuse is *"needs FCM/APNs
+   credentials and a real device"*, which is true of the delivery and of
+   nothing else on the page. **Deciding what a push notification is allowed to
+   SAY is the whole exercise, and it is a Token-specific one**: under ADR-0002
+   the server holds ciphertext, so it cannot put the message in the payload
+   even if it wanted to, and under ADR-0007 it must not put the code there
+   either. What is left — a title, a conversation id, a badge count — is a
+   precedence problem over notification categories plus the same
+   allow-list discipline as `x2/0002`'s `redactLogFields`. Check it against
+   `a8/0004` (what the holder JWT already carries, so the payload need not
+   repeat it) and `b10/0002`'s retention table.
 
-   Then `b8/0001`, and **B6 (2 lessons) last** — it is the one genuinely
-   blocked cluster and also what gates the final `known-issues.json` entry, so
-   writing it closes two things at once.
+   Then **B6 (2 lessons) last** — it is the one genuinely blocked cluster and
+   also what gates the final `known-issues.json` entry, so writing it closes
+   two things at once.
 
-   **Two for two on the prediction so far:** `b9/0003`'s retention and
-   `b1/0003`'s index selection were both the precedence problem *Next action*
-   guessed. In both cases the sharper finding was still cross-lesson rather
-   than in-lesson — the off-site prune, and the count-after-insert. **Predict
-   the exercise from the topic; find the defect by reading the siblings.**
+   **Three for three on the prediction so far:** `b9/0003`'s retention,
+   `b1/0003`'s index selection and `a9/0001`'s claim matching were all the
+   precedence problem *Next action*
+   guessed. In all three the sharper finding was still cross-lesson rather
+   than in-lesson — the off-site prune, the count-after-insert, and a sibling
+   that documented a bug nobody had actually fixed. **Predict the exercise
+   from the topic; find the defect by reading the siblings.**
 
    **A fifth result to carry, new today:** `b9/0001` caught an error I had
    introduced in `x1/0003` an hour earlier, because its Dockerfile disagreed
