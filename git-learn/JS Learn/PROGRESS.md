@@ -14,11 +14,11 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 101 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
 | Quiz questions (track) | 2751 |
-| Avg teaching prose per track lesson | 2230 words |
+| Avg teaching prose per track lesson | 2244 words |
 | Lessons with a playground | 101 / 101 |
 | Lessons with an exercise | 101 / 101 |
 | **Deepened** (all 3 spine sections) | 16 / 101 |
-| **Verified** (code executed) | 100 / 101 |
+| **Verified** (code executed) | 101 / 101 |
 | Ran clean but had nothing to run | 0 / 101 |
 | Errors | 0 |
 | Known and blocked | 0 |
@@ -91,7 +91,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b3-node-http-server | 4 | 2120 | 5 | 8 | 117 | 2/4 | 4/4 |
 | b4-auth-server | 3 | 3014 | 6 | 6 | 81 | 2/3 | 3/3 |
 | b5-websocket-server | 3 | 1961 | 6 | 6 | 77 | 0/3 | 3/3 |
-| b6-webrtc-signalling | 2 | 2671 | 3 | 3 | 52 | 1/2 | 1/2 |
+| b6-webrtc-signalling | 2 | 3368 | 4 | 4 | 52 | 1/2 | 2/2 |
 | b7-token-engine | 3 | 3478 | 7 | 6 | 78 | 3/3 | 3/3 |
 | b8-push-notifications | 1 | 3020 | 2 | 2 | 25 | 0/1 | 1/1 |
 | b9-docker-deployment | 3 | 3199 | 6 | 6 | 81 | 2/3 | 3/3 |
@@ -206,8 +206,8 @@ None.
 | b5-websocket-server/0001-ws-connection-lifecycle.html | 1928 | 11 | 2 | 2 | 25 | — | yes |
 | b5-websocket-server/0002-message-routing.html | 1850 | 10 | 2 | 2 | 26 | — | yes |
 | b5-websocket-server/0003-presence-typing.html | 2105 | 10 | 2 | 2 | 26 | — | yes |
-| b6-webrtc-signalling/0001-signalling-server.html | 4196 | 10 | 2 | 2 | 26 | yes | yes |
-| b6-webrtc-signalling/0002-coturn-setup.html | 1145 | 9 | 1 | 1 | 26 | — | n/a |
+| b6-webrtc-signalling/0001-signalling-server.html | 4237 | 10 | 2 | 2 | 26 | yes | yes |
+| b6-webrtc-signalling/0002-coturn-setup.html | 2499 | 9 | 2 | 2 | 26 | — | yes |
 | b7-token-engine/0001-token-generation-redemption.html | 3766 | 12 | 3 | 2 | 25 | yes | yes |
 | b7-token-engine/0002-access-rules-engine.html | 3620 | 8 | 2 | 2 | 27 | yes | yes |
 | b7-token-engine/0003-revocation-pause.html | 3047 | 9 | 2 | 2 | 26 | yes | yes |

@@ -25,7 +25,7 @@
 
     <div class="callout">
       <div class="callout-title">Why this matters for Token</div>
-      <p>STUN tells each peer its public IP address. That's enough when both users can reach each other directly. But when one user is behind a strict corporate NAT or a carrier-grade NAT (common in India with Jio/Airtel), direct connections fail. TURN relays the actual media traffic through your server as a fallback. Without TURN, ~15% of calls would simply fail to connect. coturn is the open-source TURN server you run yourself — no third-party dependency, no per-minute fees.</p>
+      <p>In most WebRTC apps TURN is a fallback for the ~15% of calls that cannot connect directly. <strong>In Token it carries all of them.</strong> An ICE candidate is an IP address, so any direct path hands a delivery company the issuer's home address — which is what <code>iceTransportPolicy: 'relay'</code> exists to prevent. That makes coturn load-bearing rather than a safety net: <strong>if it is down, nobody can call anybody</strong>, and its bandwidth is a line item rather than a rounding error. It is the open-source TURN server you run yourself, which is what keeps the media inside your own infrastructure.</p>
     </div>
 
     <h2>STUN vs. TURN — when each is used</h2>
@@ -38,16 +38,22 @@
         <tr><td>Purpose</td><td>Discover your public IP:port</td><td>Relay all media traffic</td></tr>
         <tr><td>Data flow</td><td>Only during ICE (discovery)</td><td>Entire call duration</td></tr>
         <tr><td>Bandwidth cost</td><td>Negligible (few KB)</td><td>Same as the call (audio/video)</td></tr>
-        <tr><td>When used</td><td>Always (first attempt)</td><td>Fallback when direct fails</td></tr>
+        <tr><td>When used <em>generally</em></td><td>Always (first attempt)</td><td>Fallback when direct fails</td></tr>
+        <tr><td><strong>When used in Token</strong></td><td><strong>Never</strong> &mdash; a srflx candidate is the thing being suppressed</td><td><strong>Every call, both peers</strong></td></tr>
         <tr><td>Latency</td><td>None (P2P after discovery)</td><td>Added hop through server</td></tr>
-        <tr><td>Cost</td><td>Free (Google provides public STUN)</td><td>You pay for bandwidth</td></tr>
+        <tr><td>Cost</td><td>Free of money. Google's public STUN is a third party learning that this device is about to place a call</td><td>You pay for bandwidth, on 100% of calls</td></tr>
       </tbody>
     </table>
 
-    <pre><code>// ICE candidate priority (WebRTC tries in this order):
-// 1. host      — direct LAN connection (fastest, free)
-// 2. srflx     — public IP via STUN (still P2P, free)
-// 3. relay     — through TURN server (guaranteed to work, costs bandwidth)</code></pre>
+    <pre><code>// ICE candidate priority, as WebRTC normally works:
+// 1. host      -- direct LAN connection (fastest, free)
+// 2. srflx     -- public IP via STUN (still P2P, free)
+// 3. relay     -- through TURN server (guaranteed to work, costs bandwidth)
+//
+// Under iceTransportPolicy: 'relay', which is how every Token client is
+// constructed, THE FIRST TWO ARE NEVER GATHERED AT ALL. There is no
+// priority list to walk -- there is one kind of candidate, and the table
+// above is describing a configuration Token does not run.</code></pre>
 
     <h2>Why self-host TURN?</h2>
 
@@ -55,7 +61,7 @@
       <li><strong>No third-party dependency</strong> — Token's architecture avoids external services</li>
       <li><strong>No per-minute fees</strong> — Twilio/Xirsys charge per GB of TURN traffic. Self-hosted = your VPS bandwidth cost only</li>
       <li><strong>Data sovereignty</strong> — media never leaves your infrastructure (important for Indian DPDP compliance)</li>
-      <li><strong>Privacy</strong> — relay-only mode (A7 lesson 5) hides user IPs, matching Token's privacy ethos</li>
+      <li><strong>Privacy</strong> — relay-only is the baseline, not a mode, and it is why TURN sits on the critical path rather than beside it</li>
     </ul>
 
     <h2>Installing coturn</h2>
@@ -109,8 +115,16 @@ denied-peer-ip=172.16.0.0-172.31.255.255
 denied-peer-ip=192.168.0.0-192.168.255.255
 
 # Bandwidth (per-session limits)
-max-bps=1000000        # 1 Mbps per session
-total-quota=100        # max 100 concurrent sessions
+#
+# 2 Mbps, not 1. 720p video is ~1.5 Mbps, so a 1 Mbps cap does not
+# protect you from abuse -- it throttles every ordinary video call and
+# is reported as "the app's video is bad on your network".
+max-bps=2000000
+#
+# total-quota counts ALLOCATIONS, and a relayed call needs one per peer.
+# Under relay-only that is two allocations per call, so this number is
+# HALF the concurrent calls you can carry: 200 = 100 calls.
+total-quota=200
 
 # TLS (use Let's Encrypt cert from Coolify)
 cert=/etc/letsencrypt/live/turn.tokn.app/fullchain.pem
@@ -128,8 +142,8 @@ pkey=/etc/letsencrypt/live/turn.tokn.app/privkey.pem</code></pre>
         <tr><td><code>use-auth-secret</code></td><td>Time-limited credentials (not static passwords)</td></tr>
         <tr><td><code>static-auth-secret</code></td><td>Shared secret between your API and coturn</td></tr>
         <tr><td><code>denied-peer-ip</code></td><td>Prevents TURN from relaying to private networks (security)</td></tr>
-        <tr><td><code>max-bps</code></td><td>Bandwidth cap per session — prevents abuse</td></tr>
-        <tr><td><code>total-quota</code></td><td>Max concurrent relay sessions — protects server resources</td></tr>
+        <tr><td><code>max-bps</code></td><td>Bandwidth cap per session. Must sit <em>above</em> your highest real bitrate or it is not an abuse limit, it is a quality bug</td></tr>
+        <tr><td><code>total-quota</code></td><td>Max concurrent <strong>allocations</strong>. A relayed call uses two, so divide by two to get concurrent calls</td></tr>
       </tbody>
     </table>
 
@@ -146,11 +160,20 @@ const router = Router();
 const TURN_SECRET = process.env.TURN_SECRET!; // same as static-auth-secret in coturn config
 const TURN_SERVER = process.env.TURN_SERVER || 'turn.tokn.app';
 
-router.get('/turn/credentials', requireAuth, (req, res) =&gt; {
-  // Credentials valid for 24 hours
-  const ttl = 86400;
+// requireCaller accepts EITHER an owner's session or a holder's
+// conversation-scoped JWT. Both make calls; only one of them is a user.
+router.get('/turn/credentials', requireCaller, (req, res) =&gt; {
+  const ttl = 3600;                                   // one hour, see below
   const timestamp = Math.floor(Date.now() / 1000) + ttl;
-  const username = `${timestamp}:${req.user.id}`;
+
+  // Namespaced, because a holder on conversation 42 and a user with id 42
+  // are different principals and coturn's log has only this string to
+  // tell them apart.
+  const identity = req.caller.kind === 'holder'
+    ? `holder:${req.caller.conversationId}`
+    : `owner:${req.caller.userId}`;
+
+  const username = `${timestamp}:${identity}`;
 
   // HMAC-SHA1 of username with the shared secret
   const credential = createHmac('sha1', TURN_SECRET)
@@ -161,17 +184,19 @@ router.get('/turn/credentials', requireAuth, (req, res) =&gt; {
     data: {
       iceServers: [
         {
+          // NO stun: entry, of ours or anybody's. Under relay-only the
+          // client never gathers a srflx candidate, so a STUN server is
+          // at best a wasted round trip -- and asking one for your public
+          // IP is the precise thing this configuration exists to avoid.
           urls: [
-            `stun:${TURN_SERVER}:3478`,
             `turn:${TURN_SERVER}:3478?transport=udp`,
             `turn:${TURN_SERVER}:3478?transport=tcp`,
+            // TLS on 5349 for networks that block UDP outright, which is
+            // most corporate WiFi and some Indian mobile carriers.
             `turns:${TURN_SERVER}:5349?transport=tcp`,
           ],
           username,
           credential,
-        },
-        {
-          urls: ['stun:stun.l.google.com:19302'],  // free STUN fallback
         },
       ],
       ttl,
@@ -180,6 +205,41 @@ router.get('/turn/credentials', requireAuth, (req, res) =&gt; {
 });
 
 export default router;</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">There was a Google STUN server in this list,
+      three lines below "no third-party dependency"</div>
+
+      <p>
+        The response used to end with
+        <code>{ urls: ['stun:stun.l.google.com:19302'] }</code>, commented
+        <em>"free STUN fallback"</em>. The <em>Why self-host TURN?</em> section
+        at the top of this page gives <strong>"no third-party dependency"</strong>
+        as reason one. Both were true at once for months.
+      </p>
+      <p>
+        It is wrong twice over, and the second reason is the one that matters:
+      </p>
+      <ul>
+        <li>
+          <strong>It is a third party in the call path</strong>, contacted by
+          every client before every call — so Google learns that this device is
+          about to make one, and from which IP, in a product whose entire
+          proposition is not handing that out.
+        </li>
+        <li>
+          <strong>Under relay-only it does nothing at all.</strong> STUN's job
+          is to discover your public address so you can offer a
+          <code>srflx</code> candidate. Relay-only suppresses exactly that
+          candidate. So the request is pure disclosure with no function —
+          the worst possible ratio.
+        </li>
+      </ul>
+      <p>
+        <strong>"Free" was doing the work in that comment.</strong> It was free
+        of money, and the thing being spent was the thing the product sells.
+      </p>
+    </div>
 
     <h3>How time-limited credentials work</h3>
 
@@ -192,6 +252,48 @@ export default router;</code></pre>
     </ol>
 
     <p>The API server and coturn share the same <code>static-auth-secret</code>. They never communicate directly — the credential is self-validating.</p>
+
+    <div class="callout danger">
+      <div class="callout-title"><code>req.user.id</code> &mdash; and the holder
+      is not a user</div>
+      <p>
+        This route used to be <code>requireAuth</code> with
+        <code>${'${timestamp}'}:${'${req.user.id}'}</code>. Half of every
+        Token call is made by a <strong>holder</strong>, who redeemed a code on
+        the web page and gets a JWT scoped to one conversation. <strong>They
+        never become a row in <code>users</code></strong> &mdash; that is
+        <code>b7/0001</code>'s decision, and <code>b6/0001</code> spends a
+        whole section on the same defect appearing in the signalling handlers.
+        So <code>req.user</code> is undefined for exactly the caller who is
+        standing outside your door, and the route 500s or mints
+        <code>...:undefined</code>.
+      </p>
+      <p>
+        The namespaced identity is not decoration either. Without the prefix,
+        owner 42 and conversation 42 produce the identical TURN username, so
+        coturn's allocation log cannot distinguish them &mdash; and a log you
+        cannot attribute is the one you need during an abuse investigation.
+      </p>
+    </div>
+
+    <div class="callout warning">
+      <div class="callout-title">Why one hour rather than twenty-four</div>
+      <p>
+        The TTL here was <code>86400</code>. A TURN credential is a
+        <strong>bearer capability to relay traffic through your server</strong>
+        &mdash; that is all it is &mdash; so its lifetime is how long a stolen
+        one is worth having. The client caches at half the TTL, so an hour
+        costs one extra credential request every thirty minutes of app use,
+        which is nothing next to establishing a call.
+      </p>
+      <p>
+        <strong>The floor is not arbitrary:</strong> the credential has to
+        still be valid when a call <em>starts</em>, and
+        <code>b6/0001</code>'s Redis registry already uses one hour as its
+        deliberate upper bound on how long a call can be live. Matching them
+        means one number to reason about instead of two that can disagree.
+      </p>
+    </div>
 
     <h2>Firewall / ports to open</h2>
 
@@ -267,29 +369,130 @@ export async function getIceServers(): Promise&lt;IceServer[]&gt; {
       </tbody>
     </table>
 
-    <p>Only ~15% of calls use TURN (the rest connect P2P via STUN). On a typical VPS with 1TB/month transfer, that supports thousands of hours of relay per month.</p>
+    <div class="callout danger">
+      <div class="callout-title">Two multipliers this table left out, and the
+      sentence under it was wrong by about seven times</div>
 
-    <h2>Relay-only mode (privacy feature)</h2>
+      <p>
+        It used to read: <em>"Only ~15% of calls use TURN (the rest connect
+        P2P via STUN). On a typical VPS with 1TB/month transfer, that supports
+        thousands of hours of relay per month."</em> Both halves inherit the
+        default this lesson used to get backwards.
+      </p>
+      <ul>
+        <li>
+          <strong>100% of calls use TURN, not 15%.</strong> That is what
+          <code>iceTransportPolicy: 'relay'</code> means. The figure is
+          <strong>6.7&times;</strong> what the sentence assumed.
+        </li>
+        <li>
+          <strong>Relayed traffic crosses the server twice.</strong> It arrives
+          from one peer and leaves to the other, so a 500 kbps stream is 500
+          kbps <em>in</em> and 500 kbps <em>out</em>. Most hosts bill egress
+          only; some bill both, and either way you are moving double what the
+          bitrate column says.
+        </li>
+      </ul>
+      <p>
+        Worked, for one 480p video call at ~500 kbps: 225 MB/hour per
+        direction per participant, and there are two participants sending.
+        <strong>Call it ~900 MB of relay traffic per hour of video call</strong>,
+        of which ~450 MB is egress. A 1 TB/month allowance is therefore
+        <strong>roughly 2,200 hours of 480p video</strong> — not "thousands of
+        hours" as a comfortable margin, but a hard ceiling you can reach with
+        about 70 users doing an hour a day.
+      </p>
+      <p>
+        At 720p it is <strong>under 750 hours</strong>. This is the number
+        <code>b9/0002</code> means when it calls relay bandwidth the likeliest
+        surprise on the invoice, and it is the direct cost of the privacy
+        decision above. Voice-only calls are cheap by comparison — about 30 MB
+        an hour all told — which is worth knowing when you decide what the
+        product nudges people towards.
+      </p>
+    </div>
 
-    <p>Token is a privacy app. Direct P2P connections expose both parties' IP addresses to each other. For maximum privacy, force all traffic through TURN:</p>
+    <h2>Relay-only is the baseline, not a mode</h2>
 
-    <pre><code>// Force relay — no direct connections
-const pc = new RTCPeerConnection({
+    <p>
+      Direct P2P connections expose both parties' IP addresses to each other,
+      because <strong>an ICE candidate <em>is</em> an IP address</strong> —
+      that is what the protocol exchanges. So every Token client, mobile and
+      web, is constructed like this and there is no setting:
+    </p>
+
+    <pre><code>const pc = new RTCPeerConnection({
   iceServers: await getIceServers(),
-  iceTransportPolicy: 'relay',  // ONLY use TURN, never direct
+  iceTransportPolicy: 'relay',  // TURN only. Never a direct path.
 });</code></pre>
 
-    <p><strong>Trade-off:</strong></p>
+    <div class="callout danger">
+      <div class="callout-title">This section used to call it an option, and
+      default it OFF</div>
+
+      <p>
+        The sentence here was: <em>"This should be a user-configurable option.
+        Default to normal ICE (best quality), let privacy-conscious users
+        enable relay-only mode."</em> That is the decided architecture exactly
+        inverted, and it is worth being precise about why it is not a
+        reasonable trade to offer.
+      </p>
+      <p>
+        <strong>The person who bears the cost is not the person who chooses.</strong>
+        A token holder is a delivery company, a shop, an estate agent. If
+        either side gathers a host or <code>srflx</code> candidate, the
+        exchange hands the <em>issuer's</em> home IP address to <em>them</em>
+        — and the issuer is the one who went to the trouble of not giving out
+        their phone number. A default that leaks it undoes the hashed codes,
+        the labels and the E2EE in a single call.
+      </p>
+      <p>
+        It is also not a setting a user can evaluate. "Better call quality" is
+        legible; "the courier learns roughly where you live" is not, and it is
+        not visible when it happens.
+      </p>
+      <p>
+        <strong>And the same inversion made the bandwidth section wrong by
+        nearly seven times</strong> — see below. A default nobody notices
+        propagates into the capacity plan, and that is where it finally
+        surfaces, as a bill.
+      </p>
+    </div>
+
+    <p><strong>What it costs, stated plainly:</strong></p>
     <ul>
-      <li><strong>Pro:</strong> Neither party ever learns the other's IP address. Full privacy.</li>
-      <li><strong>Con:</strong> ALL traffic goes through your server. Higher latency (~50-100ms extra), and you pay bandwidth for every call.</li>
+      <li><strong>Every call is relayed</strong>, including two people sitting
+      in the same room. There is no P2P fast path to fall back to.</li>
+      <li><strong>Latency</strong>: roughly 50–100 ms extra, on every call.</li>
+      <li><strong>A coturn outage is a total call outage</strong>, not a
+      degraded one. With direct paths available, losing TURN costs you the
+      ~15% of calls that need it; here it costs you all of them.</li>
+      <li><strong>Bandwidth is the headline number</strong>, and it is 100% of
+      call traffic through your VPS, both directions.</li>
     </ul>
 
-    <p>This should be a user-configurable option. Default to normal ICE (best quality), let privacy-conscious users enable relay-only mode. Covered in detail in A7 lesson 5.</p>
+    <p>
+      <code>a8/0003</code> is the worked client-side version, and
+      <code>a7/0001</code> constructs the peer connection with the literal.
+    </p>
 
     <div id="playground-1"></div>
 
     <hr>
+
+    <h2>Now build it yourself: mint a TURN credential</h2>
+
+    <p>
+      A TURN credential is a bearer capability to relay traffic through your
+      server. It is handed to a client you do not control, over a network, and
+      then presented to coturn by something that may or may not be your app.
+      Everything below is about what goes into it and what must not.
+    </p>
+
+    <div id="exercise-turn"></div>
+    <div id="pg-exercise-turn"></div>
+
+    <div id="explain-b6-0002"></div>
 
     <h2>Exercise</h2>
 
@@ -309,6 +512,7 @@ const pc = new RTCPeerConnection({
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -327,11 +531,16 @@ function generateTurnCredentials(userId, secret) {
   return {
     iceServers: [
       {
-        urls: ['stun:turn.tokn.app:3478', 'turn:turn.tokn.app:3478?transport=udp'],
+        // turn: and turns:, and no stun: at all. Relay-only discards the
+        // srflx candidate that STUN exists to produce.
+        urls: [
+          'turn:turn.tokn.app:3478?transport=udp',
+          'turn:turn.tokn.app:3478?transport=tcp',
+          'turns:turn.tokn.app:5349?transport=tcp',
+        ],
         username: username,
         credential: credential,
-      },
-      { urls: ['stun:stun.l.google.com:19302'] }
+      }
     ],
     ttl: ttl
   };
@@ -350,8 +559,285 @@ creds.iceServers.forEach(s => {
 console.log('');
 console.log('Expires:', new Date((parseInt(creds.iceServers[0].username) * 1000)).toISOString());`);
 
+    createSolution("exercise-turn", {
+      exercise: "Write turnCredentials(ctx, config, sign) -- mint a time-limited TURN credential.\n\nctx is who is asking and when:\n\n  { caller: { kind: 'owner', userId: 42 }, now: 1756000000000 }\n  { caller: { kind: 'holder', conversationId: 77 }, now: ... }\n\nconfig is { secret, host, ttlSeconds, relayOnly }.\n\nsign(secret, message) is GIVEN to you and returns the base64 HMAC-SHA1. It is a library call, and every defect this exercise is about lives in what surrounds it.\n\nReturn { username, credential, iceServers, ttl, expiresAt, refreshAfterMs }, or null.\n\nThe rules:\n\n1. THE USERNAME IS the expiry IN SECONDS, a colon, then the identity. coturn parses the part before the colon as a unix timestamp in seconds and compares it to its own clock. Date.now() is MILLISECONDS -- pass that and every credential you mint is valid until roughly the year 57000, which coturn accepts without complaint because it is a perfectly good timestamp.\n\n2. THE IDENTITY IS NAMESPACED: owner:<userId> or holder:<conversationId>. A holder has no user id and never will -- they redeemed a code and hold a JWT scoped to one conversation. Without the prefix, owner 42 and conversation 42 mint the same string, and coturn's allocation log is the only place either of them appears.\n\n3. THE CREDENTIAL IS sign(config.secret, username). Nothing else is signed, and the username you sign is the exact string you return -- sign one thing and hand over another and coturn computes a different HMAC and rejects every call.\n\n4. THE SECRET APPEARS NOWHERE IN THE RESULT. Not in iceServers, not in a debug field, not concatenated into anything. It is shared with coturn and with nothing else; a client that receives it can mint its own credentials for ever.\n\n5. UNDER relayOnly THERE IS NO stun: URL AT ALL -- not yours, not Google's. Relay-only suppresses the srflx candidate, which is the only thing STUN produces, so a STUN server is a round trip that discloses your public address and buys nothing. When relayOnly is false a stun: entry for YOUR OWN host is allowed, and a third-party one never is.\n\n6. THE URL LIST ALWAYS INCLUDES A turns: ENTRY on port 5349. UDP is blocked outright on a lot of corporate WiFi and some Indian mobile networks, and TURN over TLS on 5349 is what gets a call through those. Leaving it out does not fail in testing; it fails for a subset of users you cannot reproduce.\n\n7. expiresAt IS THE ABSOLUTE SECONDS VALUE and refreshAfterMs IS HALF THE TTL IN MILLISECONDS. The client caches, so it has to come back before the credential dies rather than after -- and half is margin, not arithmetic elegance.\n\n8. REFUSE, RETURNING null: a ttlSeconds of zero or less (already expired), a secret shorter than 32 characters, and a caller whose kind is neither owner nor holder. The short secret is the same discipline as b9/0002's checkEnv -- this is another shared secret with a shape, and a weak one is worse than a missing one, because it starts cleanly and is brute-forced later.\n\n9. DO NOT MUTATE ctx OR config.",
+      hints: [
+        "Rule 1 is the one that will not show up in testing. Both a seconds value and a milliseconds value are accepted by coturn -- one of them just never expires. Divide by 1000 and floor before you add the ttl.",
+        "Rule 4 is easiest to guarantee structurally: the secret should appear exactly once in your function, as the first argument to sign. If it appears twice, one of those is a leak.",
+        "Rule 5 is about building the url list conditionally, not filtering one afterwards. A list you build from nothing cannot contain a host you never typed."
+      ],
+      solution: `// api/src/turn/turnCredentials.js
+//
+// coturn and this function never talk to each other. They share a secret
+// and agree on a format, and that agreement is the entire protocol -- so
+// every rule here is really "what does coturn expect", and getting one
+// wrong produces a call that fails to connect with no error anywhere.
+
+const MIN_SECRET_LENGTH = 32;
+
+function turnCredentials(ctx, config, sign) {
+  const caller = ctx && ctx.caller;
+  if (!caller) return null;
+
+  // Rule 8. Refuse what cannot work, here, where it is one return.
+  if (!(config.ttlSeconds > 0)) return null;
+  if (typeof config.secret !== "string" || config.secret.length < MIN_SECRET_LENGTH) {
+    return null;
+  }
+
+  // Rule 2. A holder is not a user, and the prefix is what keeps the two
+  // namespaces from colliding in coturn's log.
+  let identity;
+  if (caller.kind === "owner") identity = "owner:" + caller.userId;
+  else if (caller.kind === "holder") identity = "holder:" + caller.conversationId;
+  else return null;
+
+  // Rule 1. SECONDS. Date.now() is milliseconds, and coturn will happily
+  // accept a timestamp fifty thousand years out.
+  const expiresAt = Math.floor(ctx.now / 1000) + config.ttlSeconds;
+  const username = expiresAt + ":" + identity;
+
+  // Rules 3 and 4: sign exactly what we return, and the secret goes to
+  // sign and nowhere else.
+  const credential = sign(config.secret, username);
+
+  // Rules 5 and 6. Built from nothing, so it cannot contain a host that
+  // was never typed here.
+  const urls = [];
+  if (!config.relayOnly) urls.push("stun:" + config.host + ":3478");
+  urls.push("turn:" + config.host + ":3478?transport=udp");
+  urls.push("turn:" + config.host + ":3478?transport=tcp");
+  urls.push("turns:" + config.host + ":5349?transport=tcp");
+
+  return {
+    username: username,
+    credential: credential,
+    iceServers: [{ urls: urls, username: username, credential: credential }],
+    ttl: config.ttlSeconds,
+    expiresAt: expiresAt,
+    // Rule 7: come back at half life, not after death.
+    refreshAfterMs: config.ttlSeconds * 500,
+  };
+}`
+    });
+
+    createPlayground("pg-exercise-turn", `// Write turnCredentials(ctx, config, sign) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+
+// 40 characters, so it clears the 32 floor with room to spare.
+const SECRET = "s3cr3t-" + "x".repeat(33);
+const NOW = 1756000000000;          // milliseconds, like Date.now()
+const NOW_SECONDS = 1756000000;
+
+// A fake signer: records what it was handed, and returns something
+// recognisable so a signed value can be told from a copied one.
+let signCalls = [];
+function sign(secret, message) {
+  signCalls.push({ secret: secret, message: message });
+  return "HMAC(" + message + ")";
+}
+
+function cfg(over) {
+  return Object.assign({
+    secret: SECRET, host: "turn.tokn.app", ttlSeconds: 3600, relayOnly: true,
+  }, over || {});
+}
+function owner(over) {
+  return Object.assign({ caller: { kind: "owner", userId: 42 }, now: NOW }, over || {});
+}
+function holder(over) {
+  return Object.assign({ caller: { kind: "holder", conversationId: 77 }, now: NOW }, over || {});
+}
+function show(r) { return JSON.stringify(r); }
+function everything(r) { return JSON.stringify(r === null ? {} : r); }
+function allUrls(r) {
+  return (r.iceServers || []).reduce(function (acc, srv) {
+    return acc.concat(srv.urls || []);
+  }, []);
+}
+
+try {
+  if (typeof turnCredentials !== "function") throw new Error("not written yet");
+
+  try {
+    signCalls = [];
+    const r = turnCredentials(owner(), cfg(), sign);
+    check("the expiry is in SECONDS, not milliseconds",
+          r.expiresAt === NOW_SECONDS + 3600,
+          show(r.expiresAt) + " -- Date.now() is ms, and a ms value here mints a credential good until the year 57000");
+  } catch (e) { check("the expiry is in SECONDS, not milliseconds", false, "threw " + e.message); }
+
+  try {
+    signCalls = [];
+    const r = turnCredentials(owner(), cfg(), sign);
+    check("the username is expiry:identity, namespaced by caller kind",
+          r.username === (NOW_SECONDS + 3600) + ":owner:42",
+          show(r.username));
+  } catch (e) { check("the username is expiry:identity, namespaced by caller kind", false, "threw " + e.message); }
+
+  try {
+    signCalls = [];
+    const r = turnCredentials(holder(), cfg(), sign);
+    check("a holder gets a credential, identified by conversation",
+          r !== null && r.username === (NOW_SECONDS + 3600) + ":holder:77",
+          show(r && r.username) + " -- holders never get a users row, and they make half the calls");
+  } catch (e) { check("a holder gets a credential, identified by conversation", false, "threw " + e.message); }
+
+  try {
+    signCalls = [];
+    const a = turnCredentials(owner({ caller: { kind: "owner", userId: 42 } }), cfg(), sign);
+    const b = turnCredentials(holder({ caller: { kind: "holder", conversationId: 42 } }), cfg(), sign);
+    check("owner 42 and conversation 42 are different principals",
+          a.username !== b.username,
+          a.username + " vs " + b.username + " -- coturn's log has only this string to tell them apart");
+  } catch (e) { check("owner 42 and conversation 42 are different principals", false, "threw " + e.message); }
+
+  try {
+    signCalls = [];
+    const r = turnCredentials(owner(), cfg(), sign);
+    check("the string that is signed is the string that is returned",
+          signCalls.length === 1 && signCalls[0].message === r.username,
+          "signed " + show(signCalls[0] && signCalls[0].message) + ", returned " + show(r.username) +
+          " -- sign one and send the other and coturn computes a different HMAC");
+  } catch (e) { check("the string that is signed is the string that is returned", false, "threw " + e.message); }
+
+  try {
+    signCalls = [];
+    const r = turnCredentials(owner(), cfg(), sign);
+    check("the credential is what sign returned",
+          r.credential === "HMAC(" + r.username + ")",
+          show(r.credential));
+  } catch (e) { check("the credential is what sign returned", false, "threw " + e.message); }
+
+  try {
+    signCalls = [];
+    const r = turnCredentials(owner(), cfg(), sign);
+    check("the secret reaches sign and NOTHING else",
+          signCalls[0].secret === SECRET && everything(r).indexOf(SECRET) === -1,
+          "the secret is in the response -- a client holding it can mint its own for ever");
+  } catch (e) { check("the secret reaches sign and NOTHING else", false, "threw " + e.message); }
+
+  try {
+    signCalls = [];
+    const r = turnCredentials(owner(), cfg({ relayOnly: true }), sign);
+    const stunUrls = allUrls(r).filter(function (u) { return u.indexOf("stun:") === 0; });
+    check("relay-only means no stun: URL at all",
+          stunUrls.length === 0,
+          show(stunUrls) + " -- relay-only suppresses the srflx candidate, which is all STUN produces");
+  } catch (e) { check("relay-only means no stun: URL at all", false, "threw " + e.message); }
+
+  try {
+    signCalls = [];
+    const r = turnCredentials(owner(), cfg({ relayOnly: false }), sign);
+    const stunUrls = allUrls(r).filter(function (u) { return u.indexOf("stun:") === 0; });
+    check("with relay-only off, a stun: entry for YOUR host is allowed",
+          stunUrls.length === 1 && stunUrls[0].indexOf("turn.tokn.app") !== -1,
+          show(stunUrls));
+  } catch (e) { check("with relay-only off, a stun: entry for YOUR host is allowed", false, "threw " + e.message); }
+
+  try {
+    signCalls = [];
+    const both = [
+      turnCredentials(owner(), cfg({ relayOnly: true }), sign),
+      turnCredentials(owner(), cfg({ relayOnly: false }), sign),
+    ];
+    const foreign = both.reduce(function (acc, r) {
+      return acc.concat(allUrls(r).filter(function (u) { return u.indexOf("turn.tokn.app") === -1; }));
+    }, []);
+    check("no third-party host appears in any URL, under any setting",
+          foreign.length === 0,
+          show(foreign) + " -- free STUN costs the one thing this product sells");
+  } catch (e) { check("no third-party host appears in any URL, under any setting", false, "threw " + e.message); }
+
+  try {
+    signCalls = [];
+    const r = turnCredentials(owner(), cfg(), sign);
+    const turns = allUrls(r).filter(function (u) { return u.indexOf("turns:") === 0; });
+    check("there is always a turns: entry on 5349",
+          turns.length === 1 && turns[0].indexOf(":5349") !== -1,
+          show(allUrls(r)) + " -- UDP is blocked outright on a lot of corporate WiFi");
+  } catch (e) { check("there is always a turns: entry on 5349", false, "threw " + e.message); }
+
+  try {
+    signCalls = [];
+    const r = turnCredentials(owner(), cfg(), sign);
+    const urls = allUrls(r);
+    check("both UDP and TCP turn: transports are offered",
+          urls.indexOf("turn:turn.tokn.app:3478?transport=udp") !== -1 &&
+          urls.indexOf("turn:turn.tokn.app:3478?transport=tcp") !== -1,
+          show(urls));
+  } catch (e) { check("both UDP and TCP turn: transports are offered", false, "threw " + e.message); }
+
+  try {
+    signCalls = [];
+    const r = turnCredentials(owner(), cfg({ ttlSeconds: 3600 }), sign);
+    check("refreshAfterMs is half the ttl, in milliseconds",
+          r.refreshAfterMs === 1800000,
+          show(r.refreshAfterMs) + " -- 3600s means refresh after 30 minutes, which is 1800000ms");
+  } catch (e) { check("refreshAfterMs is half the ttl, in milliseconds", false, "threw " + e.message); }
+
+  try {
+    signCalls = [];
+    const r = turnCredentials(owner(), cfg({ ttlSeconds: 3600 }), sign);
+    check("the client refreshes BEFORE the credential dies",
+          r.refreshAfterMs < r.ttl * 1000,
+          "refresh=" + r.refreshAfterMs + "ms ttl=" + (r.ttl * 1000) + "ms");
+  } catch (e) { check("the client refreshes BEFORE the credential dies", false, "threw " + e.message); }
+
+  try {
+    signCalls = [];
+    const bad = [
+      turnCredentials(owner(), cfg({ ttlSeconds: 0 }), sign),
+      turnCredentials(owner(), cfg({ ttlSeconds: -60 }), sign),
+    ];
+    check("a ttl of zero or less is refused, not minted",
+          bad.every(function (r) { return r === null; }),
+          show(bad) + " -- it is already expired the moment it is issued");
+  } catch (e) { check("a ttl of zero or less is refused, not minted", false, "threw " + e.message); }
+
+  try {
+    signCalls = [];
+    const r = turnCredentials(owner(), cfg({ secret: "short" }), sign);
+    check("a secret that is too short is refused, and never signed with",
+          r === null && signCalls.length === 0,
+          show(r) + " -- a weak shared secret starts cleanly and is brute-forced later");
+  } catch (e) { check("a secret that is too short is refused, and never signed with", false, "threw " + e.message); }
+
+  try {
+    signCalls = [];
+    const r = turnCredentials({ caller: { kind: "admin", userId: 1 }, now: NOW }, cfg(), sign);
+    check("a caller kind that is neither owner nor holder is refused",
+          r === null,
+          show(r) + " -- deny by default; there is no third kind of caller");
+  } catch (e) { check("a caller kind that is neither owner nor holder is refused", false, "threw " + e.message); }
+
+  try {
+    signCalls = [];
+    const c = cfg();
+    const x = owner();
+    const beforeC = JSON.stringify(c);
+    const beforeX = JSON.stringify(x);
+    turnCredentials(x, c, sign);
+    check("ctx and config are not mutated",
+          JSON.stringify(c) === beforeC && JSON.stringify(x) === beforeX,
+          "the same config object serves every caller on the server");
+  } catch (e) { check("ctx and config are not mutated", false, "threw " + e.message); }
+} catch (e) {
+  console.log("Nothing to check yet -- write turnCredentials above. (" + e.message + ")");
+}`);
+
+    createExplain("explain-b6-0002", {
+      prompt: "This lesson used to offer relay-only as a setting, defaulted OFF, described as being for &lt;em&gt;privacy-conscious users&lt;/em&gt;. Explain why that is not a reasonable choice to put in front of a user &mdash; think about &lt;strong&gt;who bears the cost and who makes the choice&lt;/strong&gt; &mdash; and then say how that one default ended up making the bandwidth estimate wrong by nearly seven times."
+    });
+
     createSolution("exercise-1", {
-      exercise: "Set up the complete TURN infrastructure:\n\n1. Write the coturn configuration file (turnserver.conf): listening ports, external IP, realm, auth secret, security settings (deny private IPs), and bandwidth limits.\n\n2. Create the `GET /turn/credentials` API endpoint: generate time-limited HMAC-SHA1 credentials, return iceServers array with STUN + TURN URLs.\n\n3. Create `app/src/webrtc/config.ts` with `getIceServers()`: fetches credentials from the API, caches them until half-TTL, returns the iceServers array.\n\n4. Document the firewall ports that need to be opened (3478, 5349, relay range).\n\n5. Explain how to test: use Trickle ICE web tool to verify both srflx (STUN working) and relay (TURN working) candidates appear.\n\n6. Show how iceTransportPolicy: 'relay' forces all traffic through TURN for privacy.",
+      unverifiable: "the deliverable is a coturn config, an Express route and a client module — verifying it needs a VPS with a public IP, DNS and a TLS certificate",
+      exercise: "Set up the complete TURN infrastructure:\n\n1. Write the coturn configuration file (turnserver.conf): listening ports, external IP, realm, auth secret, security settings (deny private IPs), and bandwidth limits. Size max-bps ABOVE your highest real bitrate, and remember total-quota counts allocations, of which a relayed call uses two.\n\n2. Create the `GET /turn/credentials` API endpoint: time-limited HMAC-SHA1 credentials, returning an iceServers array with TURN and TURNS URLs and NO stun: entry — see the exercise above for why, and note the route must serve holders as well as owners.\n\n3. Create `app/src/webrtc/config.ts` with `getIceServers()`: fetches credentials from the API, caches them until half-TTL, returns the iceServers array.\n\n4. Document the firewall ports that need to be opened (3478, 5349, relay range).\n\n5. Explain how to test: use the Trickle ICE web tool to verify a relay candidate appears. Under relay-only there is no srflx candidate to look for — its absence is the configuration working, not failing.\n\n6. Show how iceTransportPolicy: 'relay' is set on every client, and budget the bandwidth on the basis that 100% of calls are relayed.",
       hints: [
         "The static-auth-secret in coturn config must EXACTLY match the TURN_SECRET env var in your API.",
         "Username format is 'timestamp:userId' where timestamp is the expiry time in Unix seconds.",
@@ -562,7 +1048,7 @@ export default router;
       },
       {
         type: "predict-output",
-        question: "A user enables relay-only mode in Token settings. What ICE candidate types will appear in the WebRTC negotiation?",
+        question: "Every Token client is constructed this way — there is no setting. What ICE candidate types will appear in the WebRTC negotiation?",
         code: "const pc = new RTCPeerConnection({\n  iceServers: await getIceServers(),\n  iceTransportPolicy: 'relay',\n});\npc.onicecandidate = e => {\n  if (e.candidate) console.log(e.candidate.type);\n};",
         answer: "relay (only relay candidates are logged; host and srflx are suppressed)",
         explanation: "With iceTransportPolicy: 'relay', the WebRTC stack gathers all candidate types internally but only exposes 'relay' candidates to the application. Host candidates (LAN) and srflx candidates (public IP via STUN) are silently discarded. This guarantees neither IP leaks to the remote peer — all media must travel through your TURN server."

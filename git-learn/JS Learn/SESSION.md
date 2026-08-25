@@ -28,28 +28,114 @@ how far it got.
 > 2026-08-25. Every error the audit finds is now either fixed or absent —
 > there is nothing gated, nothing deferred, and nothing being carried.
 
-**One lesson left in the `unverifiable` cluster: `b6/0002-coturn-setup.html`.**
+**Nothing in flight.** Six lessons landed 2026-08-25: `b9/0003`, `b1/0003`,
+`a9/0001`, `b8/0001`, `b6/0001` and `b6/0002`.
 
-**Started the `unverifiable` cluster** — the recommended body of work in
-*Next action*. A7, A10, X1, **B9**, **B1**, **A9** and **B8** are finished,
-and `b6/0001` with them. **1 to go: `b6/0002`.**
+> ### The `unverifiable` cluster is closed, and the audit reads 101/101
+>
+> Every lesson in the course now executes something and passes its own
+> self-check. There are **no `unverifiable` entries left** — the flag that
+> covered 17 lessons on 2026-08-23 covers none.
+>
+> **`known-issues.json` is empty too.** Nothing is gated, deferred or carried.
+>
+> The standing warning about `--unverifiable` deleting a log entry is now
+> **moot for every lesson**: there is no excused entry left to destroy. Keep
+> the warning anyway — the next lesson written may earn one.
 
 **State as of 2026-08-25** — run `node scripts/audit.mjs` before trusting any
 of it:
 
 - **101 lessons.** Audit **green**, 2 warnings, six suites pass.
 - **Every lesson has been executed at least once.** The verification log has
-  no absent entries: **100 verified, 1 `unverifiable`** with a stated reason,
-  1 `nothing-to-verify`.
+  no absent entries: **101 verified, 0 `unverifiable`**, 1
+  `nothing-to-verify` (the A2 README, which has no lesson content).
 - **`known-issues.json` is EMPTY.** The `calls` entry was the last one and
   closed 2026-08-25. Nothing is gated, deferred or carried.
 - `render-as-authored` is **0**, and this time it means it (see *The `variant`
   blind spot*).
-- **Complete modules:** 01, 02, A2, A3, A4, **A7**, **A9**, **A10**, B1, B2,
-  B3, B4, B7, **B8**, **B9**, B10, A11, C5, X1, X2.
+- **Complete modules:** 01, 02, A2, A3, A4, A7, A9, A10, A11, B1, B2, B3,
+  B4, **B6**, B7, B8, B9, B10, C5, X1, X2 — **every module that exists.**
 
-**Nothing is blocked.** See *Next action* for the four candidate bodies of
-work and why the `unverifiable` cluster is the recommendation.
+**Nothing is blocked, and nothing is excused.** *Next action* now has one
+real item on it: **the C-modules, roughly 34 lessons that have never been
+written.**
+
+### b6/0002 — relay-only was a setting, defaulted off (2026-08-25)
+
+M3: **`turnCredentials`**. 18 self-checks, 14 wrong-cases, 3 alternatives.
+**B6 is complete, and with it the whole `unverifiable` cluster.**
+
+**The largest architecture contradiction found in the entire pass**, and it
+was one sentence: *"This should be a user-configurable option. Default to
+normal ICE (best quality), let privacy-conscious users enable relay-only
+mode."* `CLAUDE.md` says relay-only on both clients, always.
+
+**The argument that settles it is about who bears the cost.** A token holder
+is a delivery company or a shop. If either side gathers a host or `srflx`
+candidate, the exchange hands the **issuer's** home IP to **them** — and the
+issuer is the person who went to the trouble of not giving out their phone
+number. It is also not a choice anyone can evaluate: *"better call quality"*
+is legible, *"the courier learns roughly where you live"* is not, and it is
+invisible when it happens.
+
+### One wrong default propagated into the capacity plan
+
+The lesson said *"only ~15% of calls use TURN"* and sized a 1TB VPS against
+that. Under relay-only it is **100%**, and relayed traffic crosses the server
+**twice** — in from one peer, out to the other. Two multipliers, both missing.
+
+Corrected and worked: ~900 MB per hour of 480p video, so **1 TB is about
+2,200 hours** — reachable with roughly 70 users doing an hour a day — and
+**under 750 hours at 720p**. B9.2 already calls relay bandwidth the likeliest
+surprise on the invoice; this is the number it means.
+
+**A default nobody notices does not stay a default.** It propagates into the
+estimate, and the estimate is where it finally surfaces, as a bill.
+
+### And Google's STUN server was in the ICE list
+
+Three lines below the lesson's own *"no third-party dependency"* selling
+point, commented *"free STUN fallback"*. Wrong twice: it is a third party
+contacted before every call, learning that this device is about to make one —
+and **under relay-only it does nothing at all**, because STUN exists to
+produce the `srflx` candidate that relay-only discards. Pure disclosure, zero
+function.
+
+**"Free" was doing the work in that comment.** It was free of money, and what
+it spent was the thing the product sells.
+
+### Three more, and one is the sibling defect one lesson later
+
+- **`req.user.id` in the credential username.** Half of every Token call is
+  made by a **holder**, who has no `users` row and never will. `b6/0001`
+  documents this exact defect in its own signalling handlers, one lesson
+  earlier. The identity is now namespaced — `owner:42` and `holder:42` are
+  different principals, and coturn's allocation log has only that string to
+  tell them apart.
+- **`max-bps=1000000`** against 720p at 1.5 Mbps. A cap below your real
+  bitrate is not an abuse limit, it is a quality bug reported as *"video is
+  bad on your network"*.
+- **`total-quota` counts allocations, and a relayed call uses two.** The
+  number was half what it appeared to be.
+
+### The exercise is given its signer, on purpose
+
+`sign(secret, message)` is supplied rather than written. HMAC-SHA1 is a
+library call and **not one of the fourteen wrong-cases is in the
+cryptography** — they are all in what surrounds it. The sharpest is
+`ms-not-seconds`: `Date.now()` into a field coturn parses as seconds mints
+credentials valid until roughly the year 57000. Every call connects, every
+test passes, and time-limited credentials silently are not a feature.
+
+The worst is the quietest: returning the secret in the response changes
+nothing observable at all.
+
+**Trip counts are recorded as inherent for a structural reason worth
+keeping** — the username is a composite string, so anything that changes the
+expiry or the identity fails every check that reads it. The checks could
+assert the halves separately; they do not, because the string coturn parses
+is the whole thing.
 
 ### b6/0001 — the readers existed and the writer never did (2026-08-25)
 
@@ -2649,8 +2735,9 @@ executed; the log is 84 verified, 17 `unverifiable` with a reason, 1
 
 What is left, in no forced order:
 
-1. **The `unverifiable` lessons — started 2026-08-23; A7, A10, X1, B9, B1,
-   A9, B8 and `b6/0001` done. 1 left: `b6/0002`.**
+1. ~~**The `unverifiable` lessons**~~ — **DONE, 2026-08-25.** Started
+   2026-08-23 at 17 excused lessons and 5 more that had never been executed
+   at all; finished at zero.**
    `CLAUDE.md` warns that the reflex to reach for that flag is wrong more often
    than it is right, and this pass proved it again — nine lessons that looked
    unrunnable produced nine exercises, and `a7/0001` then produced a tenth
