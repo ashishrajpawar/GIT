@@ -129,6 +129,9 @@ a=rtpmap:96 VP8/90000</code></pre>
 import { redis } from '../redis';
 
 interface ActiveCall {
+  // The `calls` row this belongs to. Redis holds the live state and
+  // forgets it; the row is what b7/0002 counts and b7/0003 ends.
+  dbId: string;
   callerId: number;
   calleeId: number;
   conversationId: number;
@@ -147,19 +150,44 @@ export function createCallId(userId1: number, userId2: number): string {
 
 // Two keys per call: the record, and a marker per participant so "is this
 // person busy?" is one lookup rather than a scan of every call in the system.
-export async function startCall(callId: string, call: ActiveCall) {
+export async function startCall(
+  callId: string,
+  call: Omit&lt;ActiveCall, 'dbId'&gt;,
+  initiatedBy: 'owner' | 'holder',
+) {
+  // The DURABLE record comes first. Redis is where the call lives; this
+  // row is what survives it, and it is the only thing b7/0002 can count.
+  const { rows } = await pool.query(
+    `INSERT INTO calls (conversation_id, token_id, initiated_by, media)
+     VALUES ($1, $2, $3, $4) RETURNING id`,
+    [call.conversationId, call.tokenId, initiatedBy, call.type]
+  );
+  const withId: ActiveCall = { ...call, dbId: rows[0].id };
+
   await redis
     .multi()
-    .set(callId, JSON.stringify(call), 'EX', CALL_TTL_SECONDS)
+    .set(callId, JSON.stringify(withId), 'EX', CALL_TTL_SECONDS)
     .set(`busy:${call.callerId}`, callId, 'EX', CALL_TTL_SECONDS)
     .set(`busy:${call.calleeId}`, callId, 'EX', CALL_TTL_SECONDS)
     .exec();
+
+  return withId;
 }
 
-export async function endCall(callId: string) {
+export async function endCall(callId: string, reason: string) {
   const raw = await redis.get(callId);
   if (!raw) return;
   const call: ActiveCall = JSON.parse(raw);
+
+  // `AND ended_at IS NULL` is the exactly-once guard, in the one place it
+  // can actually be enforced. The first ending wins; a revoke arriving
+  // after a hangup changes nothing, which is what b7/0003 relies on.
+  await pool.query(
+    `UPDATE calls SET ended_at = NOW(), end_reason = $1
+      WHERE id = $2 AND ended_at IS NULL`,
+    [reason, call.dbId]
+  );
+
   await redis.del(callId, `busy:${call.callerId}`, `busy:${call.calleeId}`);
 }
 
@@ -174,6 +202,50 @@ export async function isInCall(userId: number): Promise&lt;boolean&gt; {
       explaining why. <strong>Every piece of state that a crash can orphan needs
       an expiry, chosen as a deliberate upper bound rather than left off.</strong>
     </p>
+
+    <div class="callout danger">
+      <div class="callout-title">Until 2026-08-25 nothing here wrote a row, and
+      that is why the daily call limit did not exist</div>
+
+      <p>
+        The whole lifecycle lived in Redis behind a one-hour TTL. Nothing ever
+        inserted into <code>calls</code>. Follow that through to the two
+        lessons that read the table:
+      </p>
+      <ul>
+        <li>
+          <code>b7/0002</code> enforces <code>contact_limit</code> with
+          <code>SELECT COUNT(*) FROM calls WHERE token_id = $1 AND
+          initiated_by = 'holder' AND created_at &gt;= $2</code>. Against an
+          empty table that is always <code>0</code>, so
+          <strong><code>max_calls_per_day</code> permitted an unlimited number
+          of calls</strong> — a rule the issuer set, that the UI showed as
+          active, and that could never fire.
+        </li>
+        <li>
+          <code>b7/0003</code> ends live calls on revoke with
+          <code>UPDATE calls ... WHERE id = $2</code>, passing
+          <code>activeCall.id</code> — which is the Redis key
+          <code>'call:3:7'</code>. That is not a row id and never was, so
+          against a <code>BIGSERIAL</code> column it does not quietly match
+          nothing, <strong>it raises a type error inside the revoke path.</strong>
+        </li>
+      </ul>
+      <p>
+        <strong>An orphan table is usually read as a table nobody got round to
+        creating. This one was the reverse: the readers existed and the writer
+        never did</strong>, so the missing table was the symptom and the
+        missing INSERT was the defect. That is why the audit's orphan-table
+        error is worth keeping loud rather than living with.
+      </p>
+      <p>
+        Note also what the fix does <em>not</em> do: it does not move call
+        state into Postgres. Redis stays the live registry, because that is
+        what the TTL and the busy markers are for. The row is the part that has
+        to outlive the process, and the two are joined by
+        <code>dbId</code> and nothing else.
+      </p>
+    </div>
 
     <h2>The signalling handlers</h2>
 
@@ -563,11 +635,133 @@ setTimeout(() =&gt; {
       users and conversations assumed both parties were users, and only one of
       them ever is.
     </p>
+    <h2 id="calls-table">The <code>calls</code> table</h2>
+
     <p>
-      What remains genuinely open here is the <code>calls</code> table, which
-      this module has to define, because what a call record needs to persist is
-      a B6 question and nobody else's.
+      This is the one B2 could not write, because what a call record needs to
+      persist is a signalling question. Two lessons already query it &mdash;
+      <code>b7/0002</code> counts calls to enforce <code>contact_limit</code>,
+      and <code>b7/0003</code> ends live calls when a token is revoked &mdash;
+      so the columns below are <strong>derived from what they ask for</strong>,
+      not invented.
     </p>
+
+    <pre><code>-- api/migrations/0009_calls.sql
+
+-- A call belongs to a conversation, and a conversation belongs to exactly
+-- one token. token_id here is therefore a SECOND COPY of a fact -- which
+-- this course allows only when something refuses to let the copies
+-- disagree. That something is the composite foreign key below, so
+-- conversations needs a key for it to point at:
+ALTER TABLE conversations ADD CONSTRAINT conversations_id_token_uniq
+  UNIQUE (id, token_id);
+
+CREATE TABLE calls (
+  id              BIGSERIAL PRIMARY KEY,
+  conversation_id INTEGER NOT NULL,
+  token_id        INTEGER NOT NULL,
+
+  -- Postgres now refuses any call whose token_id disagrees with its
+  -- conversation's. The denormalisation cannot drift, which is the only
+  -- condition under which it is allowed to exist.
+  FOREIGN KEY (conversation_id, token_id)
+    REFERENCES conversations (id, token_id) ON DELETE RESTRICT,
+
+  -- b7/0002 filters on this to count only calls the HOLDER started.
+  initiated_by    TEXT NOT NULL CHECK (initiated_by IN ('owner', 'holder')),
+  media           TEXT NOT NULL CHECK (media IN ('voice', 'video')),
+
+  -- Three states out of two nullable columns:
+  --   answered_at NULL, ended_at NULL     -> ringing right now
+  --   answered_at NULL, ended_at NOT NULL -> missed, and that is the record
+  --   both NOT NULL                       -> a call that happened
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  answered_at     TIMESTAMPTZ,
+  ended_at        TIMESTAMPTZ,
+
+  end_reason      TEXT CHECK (end_reason IN (
+                    'hangup_owner', 'hangup_holder', 'rejected',
+                    'timeout', 'disconnected', 'failed',
+                    'token_revoked', 'token_paused')),
+
+  -- A reason without an ending, or an ending without a reason, is not a
+  -- state this product has. Same biconditional discipline as b2/0001's
+  -- status/revoked_at pair.
+  CHECK ((ended_at IS NOT NULL) = (end_reason IS NOT NULL)),
+  -- And time only runs forwards.
+  CHECK (answered_at IS NULL OR answered_at &gt;= created_at),
+  CHECK (ended_at   IS NULL OR ended_at    &gt;= created_at)
+);
+
+-- b7/0002 runs on every call attempt:
+--   WHERE token_id = $1 AND initiated_by = 'holder' AND created_at &gt;= $2
+-- Equality columns first, the range column last -- b1/0003's rule, and
+-- the reason this is one index rather than three.
+CREATE INDEX idx_calls_token_initiator_created
+  ON calls (token_id, initiated_by, created_at);
+
+-- b7/0003 hangs up live calls on revoke. Live calls are a handful of rows
+-- out of every call ever made, so this is a partial index over exactly
+-- them and stays small for ever.
+CREATE INDEX idx_calls_live ON calls (token_id) WHERE ended_at IS NULL;</code></pre>
+
+    <h3>What is deliberately not in there</h3>
+
+    <ul>
+      <li>
+        <strong>No SDP and no ICE candidates.</strong> They are relayed and
+        never stored, and this is structural rather than tidy:
+        <strong>an ICE candidate <em>is</em> an IP address.</strong>
+        <code>iceTransportPolicy: 'relay'</code> exists so that neither party
+        learns where the other is &mdash; and writing the candidates into a
+        table hands both addresses to anyone who can read the database, which
+        undoes the whole policy from a different direction.
+      </li>
+      <li>
+        <strong>No duration column.</strong> It is
+        <code>ended_at - created_at</code>. A stored copy is a second version
+        of a fact that can drift, and the reasoning is the same one that
+        killed <code>use_count</code>.
+      </li>
+      <li>
+        <strong>No recording, and nowhere to put one.</strong> Media never
+        transits the API, so the server could not record a call if it were
+        asked to. That is worth stating in the schema rather than only in an
+        ADR &mdash; a table with no column for a thing is a stronger promise
+        than a policy saying you will not use one.
+      </li>
+      <li>
+        <strong>No partitioning</strong>, unlike <code>messages</code>. Calls
+        are orders of magnitude rarer than messages: a busy user might make a
+        few a day and receives dozens of messages an hour. Partition when the
+        row count justifies the operational cost, not because the table next
+        door is partitioned.
+      </li>
+    </ul>
+
+    <div class="callout">
+      <div class="callout-title">The cost of the composite foreign key, so it
+      can be reversed on evidence</div>
+      <p>
+        Carrying <code>token_id</code> on <code>calls</code> buys
+        <code>b7/0002</code> a count with no join, on a query that runs before
+        every single call is allowed to start. It costs a
+        <code>UNIQUE (id, token_id)</code> on <code>conversations</code>
+        &mdash; an index that is redundant for lookups, since
+        <code>id</code> alone is already unique, and exists only to be the
+        target of that foreign key.
+      </p>
+      <p>
+        <strong>The alternative was to store only
+        <code>conversation_id</code> and join</strong>, which has no
+        duplication at all and is genuinely simpler. It was rejected because
+        the join sits on an authorisation path, and because the composite key
+        makes the duplication <em>impossible to get wrong</em> rather than
+        merely unlikely &mdash; which is the bar <code>CLAUDE.md</code> sets.
+        If the extra constraint ever becomes a nuisance, dropping
+        <code>token_id</code> and adding the join is a small migration.
+      </p>
+    </div>
 
     <hr>
 
@@ -603,6 +797,19 @@ setTimeout(() =&gt; {
 
     <hr>
 
+    <h2>Now build it yourself: what the call leaves behind</h2>
+
+    <p>
+      Everything above is about getting two people connected. This is about
+      the single row that survives afterwards &mdash; and the row is decided by
+      a stream of events that can arrive twice, out of order, or stop halfway.
+    </p>
+
+    <div id="exercise-record"></div>
+    <div id="pg-exercise-record"></div>
+
+    <div id="explain-b6-0001"></div>
+
     <h2>Exercise</h2>
 
     <div id="exercise-1"></div>
@@ -621,6 +828,7 @@ setTimeout(() =&gt; {
   <script src="../../assets/quiz.js"></script>
   <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
@@ -651,7 +859,339 @@ log.forEach((msg, i) => console.log((i+1) + '. ' + msg));
 console.log('\\nTotal: ' + log.length + ' messages through the server');
 console.log('After that: 0 messages through the server (P2P)');`);
 
+    createSolution("exercise-record", {
+      exercise: "Write callRecord(events) — fold a signalling stream into the one row that gets persisted.\n\nevents is what the server saw, in arrival order. Every event has { kind, at } and some carry more:\n\n  { kind: 'initiate', at, conversationId, tokenId, initiatedBy, media }\n  { kind: 'offer',  at, sdp }          // relayed\n  { kind: 'answer', at, sdp }          // relayed, and the moment it connected\n  { kind: 'ice',    at, candidate }    // relayed\n  { kind: 'reject' | 'hangup' | 'timeout' | 'disconnect', at, by }\n  { kind: 'token_revoked' | 'token_paused', at }\n\nReturn the row, matching the calls table above:\n  { conversationId, tokenId, initiatedBy, media, createdAt, answeredAt, endedAt, endReason }\nor null if the stream cannot produce one.\n\nThe rules:\n\n1. THE ROW IS CREATED BY 'initiate', AND ONLY BY IT. createdAt is that event's time. Anything arriving before an initiate is dropped — there is nothing for it to be about. No initiate anywhere in the stream means return null.\n\n2. initiatedBy MUST BE 'owner' OR 'holder', AND media MUST BE 'voice' OR 'video'. Anything else returns null rather than guessing. The column has a CHECK constraint on exactly these values, so a row you cannot classify is a row the database will refuse; refusing it here gives you a clean failure instead of an exception three layers away.\n\n3. answeredAt IS SET BY 'answer', ONCE. A second answer does not move it. Both sides can send one — a retry, a race, a reconnect — and the time the call connected is not a thing that happens twice.\n\n4. endedAt IS SET EXACTLY ONCE, AND THE FIRST ENDING WINS. A ringing call can end from six places: reject, hangup, timeout, disconnect, token_revoked, token_paused. Later endings are ignored entirely — they do not overwrite endedAt and they do not overwrite endReason.\n\n5. THE FIRST ENDING WINS EVEN WHEN A LATER ONE SOUNDS MORE IMPORTANT. A call that ended by hangup at 10:00 and whose token was revoked at 10:30 ended by hangup. Recording the revocation would be a false record of a call that was already over, and it is the reason b7/0003's UPDATE carries `AND ended_at IS NULL`.\n\n6. THE REASON NAMES WHAT HAPPENED, NOT WHO WAS BLAMED:\n     reject     -> 'rejected'\n     hangup     -> 'hangup_owner' or 'hangup_holder', from the event's `by`\n     timeout    -> 'timeout'\n     disconnect -> 'disconnected'\n     token_revoked -> 'token_revoked'\n     token_paused  -> 'token_paused'\n\n7. A CALL THAT ENDED WITHOUT BEING ANSWERED IS A MISSED CALL, AND THAT IS THE RECORD. answeredAt stays null. Do not fill it in from endedAt to make the row look complete — 'nobody picked up' is the single most useful thing this table knows.\n\n8. 'offer', 'answer' AND 'ice' CONTRIBUTE NO DATA BEYOND A TIMESTAMP. No sdp, no candidate, not anywhere in the returned object. An ICE candidate IS an IP address: relay-only ICE exists so that neither party learns where the other is, and a candidate written into a database hands both addresses to whoever can read it. This one is not a style rule.\n\n9. AN UNRECOGNISED EVENT KIND IS IGNORED, NOT FATAL. Note that this is the OPPOSITE of b7/0002's unknown rule type, which must refuse — and the difference is what the unknown thing would do. An unknown rule type falling through to 'allowed' GRANTS something. An unknown signalling event grants nothing, so ignoring it costs nothing and lets an older server survive a newer client.\n\n10. DO NOT MUTATE events.",
+      hints: [
+        "Rules 3 and 4 are both 'once', and the guard is the same shape both times: if the field is already set, stop. Write it as an early `continue` rather than a condition wrapped around the assignment.",
+        "Rule 1 means you cannot build the row until you have seen the initiate. Either find it first and then fold the rest, or carry a null row and skip everything while it is still null.",
+        "Rule 8 is easiest to get right by never reading those fields at all. If your code never mentions `sdp` or `candidate`, it cannot leak them."
+      ],
+      solution: `// api/src/ws/callRecord.js
+//
+// The signalling stream is chatty, repetitive and unordered at the edges.
+// The row is one line in a table that outlives all of it, so everything
+// here is about deciding what earns a place in it.
+
+function callRecord(events) {
+  const list = Array.isArray(events) ? events : [];
+
+  // Rule 1: nothing exists until an initiate does.
+  const start = list.find(function (e) { return e && e.kind === "initiate"; });
+  if (!start) return null;
+
+  // Rule 2: refuse what the CHECK constraint would refuse, here, where
+  // the error can still say something useful.
+  if (start.initiatedBy !== "owner" && start.initiatedBy !== "holder") return null;
+  if (start.media !== "voice" && start.media !== "video") return null;
+
+  const row = {
+    conversationId: start.conversationId,
+    tokenId: start.tokenId,
+    initiatedBy: start.initiatedBy,
+    media: start.media,
+    createdAt: start.at,
+    answeredAt: null,
+    endedAt: null,
+    endReason: null,
+  };
+
+  // Rule 6. A table rather than a switch, so that adding an ending is
+  // adding a line and not editing a branch.
+  const ENDINGS = {
+    reject: function () { return "rejected"; },
+    hangup: function (e) { return e.by === "holder" ? "hangup_holder" : "hangup_owner"; },
+    timeout: function () { return "timeout"; },
+    disconnect: function () { return "disconnected"; },
+    token_revoked: function () { return "token_revoked"; },
+    token_paused: function () { return "token_paused"; },
+  };
+
+  let seenInitiate = false;
+
+  for (const event of list) {
+    if (!event) continue;
+
+    // Rule 1 again: events before the initiate are about nothing.
+    if (event === start) { seenInitiate = true; continue; }
+    if (!seenInitiate) continue;
+
+    if (event.kind === "answer") {
+      // Rule 3. Note it is NOT guarded on endedAt: a stream where the
+      // answer arrives after an ending is a broken stream, and the
+      // constraint that catches it is the database's, not ours.
+      if (row.answeredAt === null) row.answeredAt = event.at;
+      continue;
+    }
+
+    // Rule 8. offer and ice carry nothing this row is allowed to keep,
+    // and the surest way not to persist an IP address is never to read
+    // the field it lives in.
+    if (event.kind === "offer" || event.kind === "ice") continue;
+
+    const ending = ENDINGS[event.kind];
+    if (ending) {
+      // Rule 4 and rule 5: the first ending is the ending.
+      if (row.endedAt !== null) continue;
+      row.endedAt = event.at;
+      row.endReason = ending(event);
+      continue;
+    }
+
+    // Rule 9: an event we do not know grants nothing, so it costs
+    // nothing to ignore.
+  }
+
+  return row;
+}`
+    });
+
+    createPlayground("pg-exercise-record", `// Write callRecord(events) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+
+// A real SDP blob and a real-looking ICE candidate. Both are fixtures whose
+// entire job is to NOT appear in the output, so they are made distinctive.
+const SDP = "v=0 o=- 46117317 2 IN IP4 127.0.0.1";
+const CANDIDATE = "candidate:1 1 udp 2130706431 203.0.113.47 54321 typ srflx";
+
+function initiate(over) {
+  return Object.assign({
+    kind: "initiate", at: 1000,
+    conversationId: 77, tokenId: 42,
+    initiatedBy: "holder", media: "video",
+  }, over || {});
+}
+function show(r) { return JSON.stringify(r); }
+function everything(r) { return JSON.stringify(r === null ? {} : r); }
+
+try {
+  if (typeof callRecord !== "function") throw new Error("not written yet");
+
+  try {
+    const r = callRecord([initiate()]);
+    check("an initiate alone is a call that is ringing right now",
+          r.createdAt === 1000 && r.answeredAt === null && r.endedAt === null &&
+          r.endReason === null,
+          show(r));
+  } catch (e) { check("an initiate alone is a call that is ringing right now", false, "threw " + e.message); }
+
+  try {
+    const r = callRecord([initiate()]);
+    check("the row carries what the initiate said about it",
+          r.conversationId === 77 && r.tokenId === 42 &&
+          r.initiatedBy === "holder" && r.media === "video",
+          show(r));
+  } catch (e) { check("the row carries what the initiate said about it", false, "threw " + e.message); }
+
+  try {
+    const r = callRecord([
+      initiate(),
+      { kind: "answer", at: 1500, sdp: SDP },
+      { kind: "hangup", at: 9000, by: "owner" },
+    ]);
+    check("answeredAt is the answer, not the initiate",
+          r.answeredAt === 1500 && r.createdAt === 1000,
+          show(r) + " -- the gap between them is the time it rang");
+  } catch (e) { check("answeredAt is the answer, not the initiate", false, "threw " + e.message); }
+
+  try {
+    const r = callRecord([
+      initiate(),
+      { kind: "answer", at: 1500, sdp: SDP },
+      { kind: "answer", at: 1900, sdp: SDP },
+      { kind: "hangup", at: 9000, by: "owner" },
+    ]);
+    check("a second answer does not move the moment it connected",
+          r.answeredAt === 1500,
+          show(r.answeredAt) + " -- both sides can send one; connecting happens once");
+  } catch (e) { check("a second answer does not move the moment it connected", false, "threw " + e.message); }
+
+  try {
+    const r = callRecord([
+      initiate(),
+      { kind: "answer", at: 1500, sdp: SDP },
+      { kind: "hangup", at: 9000, by: "holder" },
+      { kind: "token_revoked", at: 30000 },
+    ]);
+    // Asserts WHICH ending won, and deliberately not which exact string
+    // the reason is -- the reason has its own checks below, and a check
+    // doing two jobs reports the wrong one.
+    check("the FIRST ending wins, even when a later one sounds more serious",
+          r.endedAt === 9000 && r.endReason !== "token_revoked",
+          show(r) + " -- the token was revoked half an hour after this call was over");
+  } catch (e) { check("the FIRST ending wins, even when a later one sounds more serious", false, "threw " + e.message); }
+
+  try {
+    // The same two events the other way round, to prove it is FIRST and
+    // not a severity ranking that happens to agree.
+    const r = callRecord([
+      initiate(),
+      { kind: "answer", at: 1500, sdp: SDP },
+      { kind: "token_revoked", at: 3000 },
+      { kind: "hangup", at: 3100, by: "holder" },
+    ]);
+    check("and it is first, not most severe: a revoke before a hangup wins too",
+          r.endedAt === 3000 && r.endReason === "token_revoked",
+          show(r));
+  } catch (e) { check("and it is first, not most severe: a revoke before a hangup wins too", false, "threw " + e.message); }
+
+  try {
+    const r = callRecord([
+      initiate(),
+      { kind: "timeout", at: 31000 },
+    ]);
+    check("a call nobody answered is a missed call, and answeredAt stays null",
+          r.answeredAt === null && r.endedAt === 31000 && r.endReason === "timeout",
+          show(r) + " -- 'nobody picked up' is the most useful thing this row knows");
+  } catch (e) { check("a call nobody answered is a missed call, and answeredAt stays null", false, "threw " + e.message); }
+
+  try {
+    const hangups = [
+      callRecord([initiate(), { kind: "hangup", at: 2000, by: "owner" }]).endReason,
+      callRecord([initiate(), { kind: "hangup", at: 2000, by: "holder" }]).endReason,
+    ];
+    check("a hangup records which side hung up",
+          hangups[0] === "hangup_owner" && hangups[1] === "hangup_holder",
+          show(hangups));
+  } catch (e) { check("a hangup records which side hung up", false, "threw " + e.message); }
+
+  try {
+    const reasons = ["reject", "timeout", "disconnect", "token_revoked", "token_paused"]
+      .map(function (k) {
+        return callRecord([initiate(), { kind: k, at: 2000 }]).endReason;
+      });
+    check("every ending maps to a value the CHECK constraint permits",
+          show(reasons) === show(["rejected", "timeout", "disconnected",
+                                  "token_revoked", "token_paused"]),
+          show(reasons));
+  } catch (e) { check("every ending maps to a value the CHECK constraint permits", false, "threw " + e.message); }
+
+  try {
+    const r = callRecord([
+      initiate(),
+      { kind: "answer", at: 1500, sdp: SDP },
+      { kind: "ice", at: 1600, candidate: CANDIDATE },
+      { kind: "hangup", at: 9000, by: "owner" },
+    ]);
+    check("an ICE candidate reaches the row NOWHERE",
+          everything(r).indexOf("203.0.113.47") === -1 &&
+          everything(r).indexOf("candidate") === -1,
+          show(r) + " -- an ICE candidate IS an IP address, which relay-only exists to hide");
+  } catch (e) { check("an ICE candidate reaches the row NOWHERE", false, "threw " + e.message); }
+
+  try {
+    const r = callRecord([
+      initiate(),
+      { kind: "offer", at: 1100, sdp: SDP },
+      { kind: "answer", at: 1500, sdp: SDP },
+      { kind: "hangup", at: 9000, by: "owner" },
+    ]);
+    check("SDP reaches the row nowhere either",
+          everything(r).indexOf("127.0.0.1") === -1 && everything(r).indexOf("v=0") === -1,
+          show(r) + " -- SDP is full of addresses and codec fingerprints; it is relayed, not kept");
+  } catch (e) { check("SDP reaches the row nowhere either", false, "threw " + e.message); }
+
+  try {
+    const withIce = callRecord([
+      initiate(),
+      { kind: "ice", at: 1600, candidate: CANDIDATE },
+      { kind: "offer", at: 1700, sdp: SDP },
+    ]);
+    check("offer and ice do not answer the call or end it",
+          withIce.answeredAt === null && withIce.endedAt === null,
+          show(withIce) + " -- they are traffic, not milestones");
+  } catch (e) { check("offer and ice do not answer the call or end it", false, "threw " + e.message); }
+
+  try {
+    const r = callRecord([
+      { kind: "ice", at: 10, candidate: CANDIDATE },
+      { kind: "hangup", at: 20, by: "owner" },
+      initiate({ at: 1000 }),
+      { kind: "answer", at: 1500, sdp: SDP },
+    ]);
+    check("events before the initiate are about nothing and are dropped",
+          r.createdAt === 1000 && r.endedAt === null && r.answeredAt === 1500,
+          show(r) + " -- that early hangup belonged to a call this row is not");
+  } catch (e) { check("events before the initiate are about nothing and are dropped", false, "threw " + e.message); }
+
+  try {
+    const r = callRecord([
+      { kind: "answer", at: 10, sdp: SDP },
+      { kind: "hangup", at: 20, by: "owner" },
+    ]);
+    check("a stream with no initiate produces no row at all",
+          r === null,
+          show(r));
+  } catch (e) { check("a stream with no initiate produces no row at all", false, "threw " + e.message); }
+
+  try {
+    const bad = [
+      callRecord([initiate({ initiatedBy: "admin" })]),
+      callRecord([initiate({ initiatedBy: undefined })]),
+      callRecord([initiate({ media: "screen" })]),
+    ];
+    check("a value the CHECK constraint would refuse is refused here instead",
+          bad.every(function (r) { return r === null; }),
+          show(bad) + " -- a clean null beats an exception three layers away");
+  } catch (e) { check("a value the CHECK constraint would refuse is refused here instead", false, "threw " + e.message); }
+
+  try {
+    const r = callRecord([
+      initiate(),
+      { kind: "call_quality_report", at: 2000, mos: 3.9 },
+      { kind: "answer", at: 2500, sdp: SDP },
+      { kind: "hangup", at: 9000, by: "owner" },
+    ]);
+    check("an unknown event kind is ignored rather than fatal",
+          r !== null && r.answeredAt === 2500 && r.endReason === "hangup_owner",
+          show(r) + " -- unlike an unknown RULE type, an unknown event grants nothing");
+  } catch (e) { check("an unknown event kind is ignored rather than fatal", false, "threw " + e.message); }
+
+  try {
+    const r = callRecord([initiate(), { kind: "hangup", at: 2000, by: "owner" }]);
+    check("there is no duration field, because it is a subtraction",
+          !("duration" in r) && !("durationSeconds" in r) && !("duration_seconds" in r),
+          show(r) + " -- a stored copy of endedAt minus createdAt is a second version of one fact");
+  } catch (e) { check("there is no duration field, because it is a subtraction", false, "threw " + e.message); }
+
+  try {
+    // NOT in ascending 'at' order, on purpose. A stream that is already
+    // sorted cannot tell a sort-in-place apart from doing nothing, which
+    // is how this exact check passed a mutating implementation in b9/0003.
+    // A late ICE candidate is also what really happens.
+    const input = [
+      initiate({ at: 1000 }),
+      { kind: "hangup", at: 9000, by: "owner" },
+      { kind: "ice", at: 1600, candidate: CANDIDATE },
+    ];
+    const before = JSON.stringify(input);
+    callRecord(input);
+    check("the event list is not mutated",
+          JSON.stringify(input) === before,
+          "was reordered -- the caller may still be replaying or auditing it, and " +
+          "'first' already meant arrival order");
+  } catch (e) { check("the event list is not mutated", false, "threw " + e.message); }
+
+  try {
+    const r = callRecord([]);
+    check("an empty stream is null, not a half-built row",
+          r === null,
+          show(r));
+  } catch (e) { check("an empty stream is null, not a half-built row", false, "threw " + e.message); }
+} catch (e) {
+  console.log("Nothing to check yet -- write callRecord above. (" + e.message + ")");
+}`);
+
+    createExplain("explain-b6-0001", {
+      prompt: "A call ends by hangup at 10:00, and the token it belonged to is revoked at 10:30. The record says <code>hangup_owner</code>, not <code>token_revoked</code>. Explain why recording the later, more dramatic reason would be a <em>false</em> record rather than a more complete one &mdash; and what <code>b7/0003</code>'s <code>AND ended_at IS NULL</code> has to do with it."
+    });
+
     createSolution("exercise-1", {
+      unverifiable: "the deliverable is a WebSocket signalling server needing Redis, a running API and two live clients",
       exercise: "Build the complete signalling server:\n\n1. Create `api/src/ws/calls.ts`: active call tracking with createCallId, startCall, endCall, isInCall, getActiveCall.\n\n2. Create `api/src/ws/handlers/call.ts` with handlers for: call:initiate (validate + create + notify callee), call:offer (relay SDP), call:answer (relay SDP), call:ice (relay candidates), call:hangup (notify + cleanup), call:reject (notify caller + cleanup).\n\n3. Add busy detection: if either party is already in a call, return call:busy.\n\n4. Add call timeout: if unanswered after 30 seconds, send call:timeout to both and clean up.\n\n5. Add disconnect cleanup: if a user disconnects mid-call, notify the other party with call:hangup.\n\n6. Register all handlers in the handler index.\n\n7. Test: use two wscat connections. Send call:initiate from one, verify call:incoming arrives on the other. Exchange offer/answer/ICE messages.",
       hints: [
         "createCallId should be deterministic — sort the two user IDs so call:1:5 and call:5:1 produce the same key.",

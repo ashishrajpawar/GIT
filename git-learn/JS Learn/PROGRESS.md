@@ -14,14 +14,14 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 101 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
 | Quiz questions (track) | 2751 |
-| Avg teaching prose per track lesson | 2217 words |
+| Avg teaching prose per track lesson | 2230 words |
 | Lessons with a playground | 101 / 101 |
 | Lessons with an exercise | 101 / 101 |
 | **Deepened** (all 3 spine sections) | 16 / 101 |
-| **Verified** (code executed) | 99 / 101 |
+| **Verified** (code executed) | 100 / 101 |
 | Ran clean but had nothing to run | 0 / 101 |
 | Errors | 0 |
-| Known and blocked | 1 |
+| Known and blocked | 0 |
 | Warnings | 2 |
 
 Student-completed lessons are **not** tracked here — that comes from the student
@@ -91,8 +91,8 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b3-node-http-server | 4 | 2120 | 5 | 8 | 117 | 2/4 | 4/4 |
 | b4-auth-server | 3 | 3014 | 6 | 6 | 81 | 2/3 | 3/3 |
 | b5-websocket-server | 3 | 1961 | 6 | 6 | 77 | 0/3 | 3/3 |
-| b6-webrtc-signalling | 2 | 2052 | 2 | 2 | 52 | 1/2 | 0/2 |
-| b7-token-engine | 3 | 3451 | 7 | 6 | 78 | 3/3 | 3/3 |
+| b6-webrtc-signalling | 2 | 2671 | 3 | 3 | 52 | 1/2 | 1/2 |
+| b7-token-engine | 3 | 3478 | 7 | 6 | 78 | 3/3 | 3/3 |
 | b8-push-notifications | 1 | 3020 | 2 | 2 | 25 | 0/1 | 1/1 |
 | b9-docker-deployment | 3 | 3199 | 6 | 6 | 81 | 2/3 | 3/3 |
 | c5-end-to-end-encryption | 5 | 1671 | 10 | 10 | 126 | 0/5 | 5/5 |
@@ -105,7 +105,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 |---|---|
 | Inline `<script>` blocks parse | ok |
 | Quiz structure valid | ok |
-| Tables queried but never created | calls |
+| Tables queried but never created | ok |
 | Broken relative links | ok |
 | search-index.json | 102 entries, 0 dead, 0 unindexed |
 | Example tokens valid under alphabet | 2 invalid |
@@ -114,14 +114,6 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 None.
 
-## Known and blocked (1)
-
-Real problems with a named gate, acknowledged in `scripts/known-issues.json`
-so they do not hold the audit red. They are **not** resolved.
-
-- schema: table "calls" is queried in 2 lesson(s) but never created
-  - **why:** Call records depend on what WebRTC signalling actually needs to persist, which B6 has not settled.
-  - **gate:** B6 (signalling), which has not been written. The B2 rewrite this used to name landed 2026-08-21 and did not touch call records. _(since 2026-08-18)_
 
 ## Warnings (2)
 
@@ -214,11 +206,11 @@ so they do not hold the audit red. They are **not** resolved.
 | b5-websocket-server/0001-ws-connection-lifecycle.html | 1928 | 11 | 2 | 2 | 25 | — | yes |
 | b5-websocket-server/0002-message-routing.html | 1850 | 10 | 2 | 2 | 26 | — | yes |
 | b5-websocket-server/0003-presence-typing.html | 2105 | 10 | 2 | 2 | 26 | — | yes |
-| b6-webrtc-signalling/0001-signalling-server.html | 2958 | 9 | 1 | 1 | 26 | yes | n/a |
+| b6-webrtc-signalling/0001-signalling-server.html | 4196 | 10 | 2 | 2 | 26 | yes | yes |
 | b6-webrtc-signalling/0002-coturn-setup.html | 1145 | 9 | 1 | 1 | 26 | — | n/a |
 | b7-token-engine/0001-token-generation-redemption.html | 3766 | 12 | 3 | 2 | 25 | yes | yes |
 | b7-token-engine/0002-access-rules-engine.html | 3620 | 8 | 2 | 2 | 27 | yes | yes |
-| b7-token-engine/0003-revocation-pause.html | 2967 | 9 | 2 | 2 | 26 | yes | yes |
+| b7-token-engine/0003-revocation-pause.html | 3047 | 9 | 2 | 2 | 26 | yes | yes |
 | b8-push-notifications/0001-fcm-apns-expo.html | 3020 | 12 | 2 | 2 | 25 | — | yes |
 | b9-docker-deployment/0001-docker-fundamentals.html | 3054 | 13 | 2 | 2 | 26 | yes | yes |
 | b9-docker-deployment/0002-coolify-setup.html | 3280 | 12 | 2 | 2 | 26 | yes | yes |

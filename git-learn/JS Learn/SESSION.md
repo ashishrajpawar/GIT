@@ -19,21 +19,30 @@ how far it got.
 > files either.** Make no claims about progress at all — not in prose, not in
 > a commit message, not as a reason for prioritising anything.
 
-**Nothing in flight.** `b9/0003`, `b1/0003`, `a9/0001` and `b8/0001` all
-landed 2026-08-25. **B9, B1, A9 and B8 are complete.**
+**Nothing in flight.** `b9/0003`, `b1/0003`, `a9/0001`, `b8/0001` and
+`b6/0001` all landed 2026-08-25.
+
+> ### `known-issues.json` is **empty**, for the first time in the project
+>
+> The `calls` entry was the last one, acknowledged 2026-08-18 and closed
+> 2026-08-25. Every error the audit finds is now either fixed or absent —
+> there is nothing gated, nothing deferred, and nothing being carried.
+
+**One lesson left in the `unverifiable` cluster: `b6/0002-coturn-setup.html`.**
 
 **Started the `unverifiable` cluster** — the recommended body of work in
-*Next action*. A7, A10, X1, **B9**, **B1**, **A9** and **B8** are finished.
-**2 to go, and they are the same cluster:** B6.
+*Next action*. A7, A10, X1, **B9**, **B1**, **A9** and **B8** are finished,
+and `b6/0001` with them. **1 to go: `b6/0002`.**
 
 **State as of 2026-08-25** — run `node scripts/audit.mjs` before trusting any
 of it:
 
 - **101 lessons.** Audit **green**, 2 warnings, six suites pass.
 - **Every lesson has been executed at least once.** The verification log has
-  no absent entries: **99 verified, 2 `unverifiable`** with a stated reason,
+  no absent entries: **100 verified, 1 `unverifiable`** with a stated reason,
   1 `nothing-to-verify`.
-- **`known-issues.json` is down to one entry** — `calls`, gated on B6.
+- **`known-issues.json` is EMPTY.** The `calls` entry was the last one and
+  closed 2026-08-25. Nothing is gated, deferred or carried.
 - `render-as-authored` is **0**, and this time it means it (see *The `variant`
   blind spot*).
 - **Complete modules:** 01, 02, A2, A3, A4, **A7**, **A9**, **A10**, B1, B2,
@@ -41,6 +50,94 @@ of it:
 
 **Nothing is blocked.** See *Next action* for the four candidate bodies of
 work and why the `unverifiable` cluster is the recommendation.
+
+### b6/0001 — the readers existed and the writer never did (2026-08-25)
+
+M3: **`callRecord`**. 19 self-checks, 15 wrong-cases, 3 correct alternatives.
+**The `calls` table is defined and `known-issues.json` is empty.**
+
+**The orphan table was the symptom, not the defect.** The audit had been
+saying for weeks that `calls` was queried by two lessons and created by none,
+and the obvious reading is *somebody forgot to write the migration*. The
+actual situation was the reverse: **the readers existed and the writer never
+did.** `b6/0001`'s whole call lifecycle lived in Redis behind a one-hour TTL
+and never inserted a row. Follow that through:
+
+- **`contact_limit`'s call cap did not exist.** `b7/0002` counts
+  `FROM calls WHERE token_id = $1 AND initiated_by = 'holder'`, which against
+  an empty table is always `0`. A rule the issuer set, that the UI renders as
+  active, that could never once fire.
+- **`b7/0003`'s revoke path raised a type error.** It passed
+  `activeCall.id` — the Redis key `'call:3:7'` — into
+  `WHERE id = $2` against a `BIGSERIAL`. Not a silent miss; a throw, inside
+  revocation.
+
+So the fix is an `INSERT` in `startCall`, a `dbId` on the Redis record joining
+the two, and an `UPDATE` in `endCall`. **Redis stays the live registry** — the
+TTL and the busy markers are what it is for — and the row is the part that has
+to outlive the process.
+
+### The schema was derived from its consumers, not invented
+
+Every column answers a query that already existed. Three decisions worth
+keeping:
+
+- **`token_id` on `calls` is a second copy of a fact**, and this course allows
+  that only when something refuses to let the copies disagree. That something
+  is a **composite foreign key** — `conversations` gains
+  `UNIQUE (id, token_id)` and `calls` points at both — so Postgres rejects a
+  call whose token disagrees with its conversation's. *Cost, stated:* a unique
+  index on `conversations` that is redundant for lookups and exists only to be
+  a foreign-key target. *Rejected alternative:* store only `conversation_id`
+  and join, which is simpler and has no duplication at all, but puts a join on
+  an authorisation path. Reversible with a small migration.
+- **Three states out of two nullable columns.** `answered_at NULL, ended_at
+  NULL` is ringing; `answered_at NULL, ended_at NOT NULL` is **missed**, and
+  that is the record rather than a gap in it. Plus a biconditional
+  `CHECK ((ended_at IS NOT NULL) = (end_reason IS NOT NULL))`, the same
+  discipline as `b2/0001`.
+- **The index is `(token_id, initiated_by, created_at)`** — equality columns
+  first, range last, which is `b1/0003`'s rule from three units ago, and the
+  reason it is one index rather than three. Plus a partial index over live
+  calls only.
+
+### What is deliberately absent, and one of them is structural
+
+**No SDP and no ICE candidates.** Not tidiness: **an ICE candidate *is* an IP
+address**, and `iceTransportPolicy: 'relay'` exists precisely so neither party
+learns where the other lives. Writing candidates into a table defeats that
+policy from the far side, silently, in a table nobody thinks of as sensitive.
+Two wrong-cases keep the candidate "for debugging connection failures", which
+is a real thing people want.
+
+Also absent: no duration column (it is a subtraction — the `use_count`
+argument), no recording and nowhere to put one, and no partitioning, with the
+reason stated so nobody copies `messages` out of habit.
+
+### The distinction that stops b7/0002's rule being over-applied
+
+An unknown **rule type** must be refused; an unknown **signalling event** must
+be ignored. They look like the same situation and are not: **an unknown rule
+falling through to `allowed` grants something, and an unknown event grants
+nothing.** Refusing the event instead would mean one new client message breaks
+call recording on every older server. Both directions have a wrong-case.
+
+### Three fixtures could not express their rule, and one "mistake" was not one
+
+- **The mutation check used an already-sorted event list**, so a
+  sort-in-place changed nothing and passed. **This is the second time that
+  exact fixture defect has appeared** — `b9/0003` had it a few hours earlier.
+  Worth treating as a standing rule: **a mutation check needs input that is
+  visibly out of order.**
+- **"First ending wins" was asserting the exact reason string as well**, so
+  two mistakes about *naming* the reason tripped it before reaching their own
+  checks. It now asserts `endReason !== 'token_revoked'` — what the check is
+  actually about.
+- **`list.find(...) || {}` turned out not to be a mistake at all.** With rule
+  2's guards present, an empty object has no `initiatedBy` and is refused a
+  line later. It passed everything because it was correct — the third time
+  this has happened, after `b1/0004`'s `hasOwnProperty` and `a9/0002`'s
+  `O`→`0`. Replaced with the missing null guard, which throws.
 
 ### b8/0001 — the notification carried the message, and B8 is finished (2026-08-25)
 
@@ -2552,34 +2649,40 @@ executed; the log is 84 verified, 17 `unverifiable` with a reason, 1
 
 What is left, in no forced order:
 
-1. **The `unverifiable` lessons — started 2026-08-23; all of A7, A10, X1,
-   B9, B1, A9 and B8 done, 2 left — and both are B6.**
+1. **The `unverifiable` lessons — started 2026-08-23; A7, A10, X1, B9, B1,
+   A9, B8 and `b6/0001` done. 1 left: `b6/0002`.**
    `CLAUDE.md` warns that the reflex to reach for that flag is wrong more often
    than it is right, and this pass proved it again — nine lessons that looked
    unrunnable produced nine exercises, and `a7/0001` then produced a tenth
-   plus two real defects. **Remaining: B6, and it is not the same job as the
-   other twelve.**
+   plus two real defects. **Remaining: `b6/0002`, and then the cluster is
+   closed.**
 
-   **B6 is the one genuinely blocked cluster**, and unlike everything else in
-   this pass it is blocked for a real reason rather than an excuse:
-   `b6/0001` and `b6/0002` are the *only* two lessons whose `unverifiable`
-   reason has held up. They also gate the last `known-issues.json` entry —
-   the `calls` table, queried by two lessons and created by none — so the
-   decision B6 has to make is a **schema** decision, not a retrofit:
-   **what does a call record persist, given that the media never touches the
-   server and the signalling is relayed?**
+   **Next: `b6/0002-coturn-setup.html`.** Its excuse is *"a signalling server
+   and coturn needing a VPS"*, and the VPS is genuinely needed to *run* it —
+   but a coturn config is a policy document, and policy is testable.
+   **The candidate exercise is TURN credential minting**: coturn's
+   `use-auth-secret` mode takes a username of `<expiry-timestamp>:<user>` and
+   an HMAC-SHA1 password derived from a shared secret, so `turnCredentials()`
+   is a pure function with an expiry, a secret that must never reach the
+   client, and a precedence question about how long a credential may live
+   against how long a call may last. Check it against `b9/0002`'s `checkEnv`
+   (the secret is another required environment variable with a shape) and
+   against `a8/0003`, which already argues the relay-only trade-off.
 
-   So B6 is a *writing* job, not an M3 job, and it should be treated as one.
-   Doing it closes the cluster and the known-issues file together.
+   **The other thing `b6/0002` has to carry** is the cost `b6/0001` names and
+   does not size: relay-only means **every** call's media crosses the TURN
+   server, and B9.2 flags that bandwidth as the likeliest surprise on the
+   bill. A worked number belongs there.
 
    **Four for four on the prediction:** `b9/0003`'s retention, `b1/0003`'s
    index selection, `a9/0001`'s claim matching and `b8/0001`'s payload
    allow-list were all the precedence problem *Next action* guessed. And in
-   all four the sharper finding was still **cross-lesson rather than
-   in-lesson** — the off-site prune, the count-after-insert, a sibling that
-   documented a bug nobody had fixed, and a body carrying a message the server
-   cannot read. **Predict the exercise from the topic; find the defect by
-   reading the siblings.**
+   all four — five now, with `b6/0001` — the sharper finding was still
+   **cross-lesson rather than in-lesson**: the off-site prune, the
+   count-after-insert, a sibling that documented a bug nobody had fixed, a
+   body carrying a message the server cannot read, and a table whose readers
+   existed while its writer never did. **Predict the exercise from the topic;
+   find the defect by reading the siblings.**
 
    **A fifth result to carry, new today:** `b9/0001` caught an error I had
    introduced in `x1/0003` an hour earlier, because its Dockerfile disagreed

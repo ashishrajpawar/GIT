@@ -306,11 +306,20 @@ export async function endCallByTokenId(
     activeCall.receiverSocket.send(hangupMessage);
   }
 
-  // Record call end in database
+  // Record call end in database.
+  //
+  // dbId, NOT activeCall.id. b6/0001's registry is keyed by a Redis
+  // string like 'call:3:7'; the calls row is a BIGSERIAL. Passing the
+  // key here does not quietly match nothing, it raises a type error
+  // inside the revoke path.
+  //
+  // `AND ended_at IS NULL` is the exactly-once guard: a call the users
+  // already hung up keeps the reason it actually ended for. Revoking a
+  // token half an hour later must not rewrite that history.
   await pool.query(
     `UPDATE calls SET ended_at = NOW(), end_reason = $1
      WHERE id = $2 AND ended_at IS NULL`,
-    [`token_${reason}`, activeCall.id]
+    [`token_${reason}`, activeCall.dbId]
   );
 
   // Remove from active call registry
