@@ -4,7 +4,7 @@
      Regenerate with: node scripts/audit.mjs
      Hand-written session state lives in SESSION.md, never here. -->
 
-Generated 2026-08-24 from the files on disk. Where any other document disagrees
+Generated 2026-08-25 from the files on disk. Where any other document disagrees
 with this one, this one is right — everything below is measured, not asserted.
 
 ## Summary
@@ -13,12 +13,12 @@ with this one, this one is right — everything below is measured, not asserted.
 |---|---|
 | Token-track lessons | 101 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
-| Quiz questions (track) | 2739 |
-| Avg teaching prose per track lesson | 2170 words |
+| Quiz questions (track) | 2743 |
+| Avg teaching prose per track lesson | 2181 words |
 | Lessons with a playground | 100 / 101 |
 | Lessons with an exercise | 101 / 101 |
 | **Deepened** (all 3 spine sections) | 16 / 101 |
-| **Verified** (code executed) | 95 / 101 |
+| **Verified** (code executed) | 96 / 101 |
 | Ran clean but had nothing to run | 0 / 101 |
 | Errors | 0 |
 | Known and blocked | 1 |
@@ -63,7 +63,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Type | Count |
 |---|---|
 | multiple-choice | 817 |
-| predict-output | 523 |
+| predict-output | 527 |
 | fill-blank | 461 |
 | spot-the-bug | 376 |
 | which-breaks | 283 |
@@ -86,7 +86,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a8-redemption-web | 4 | 1807 | 8 | 8 | 115 | 0/4 | 4/4 |
 | a9-deep-linking | 2 | 1395 | 3 | 3 | 53 | 0/2 | 1/2 |
 | b1-sql-fundamentals | 4 | 1326 | 3 | 7 | 103 | 0/4 | 3/4 |
-| b10-security-compliance | 2 | 3984 | 5 | 4 | 53 | 1/2 | 2/2 |
+| b10-security-compliance | 2 | 4022 | 5 | 4 | 53 | 1/2 | 2/2 |
 | b2-schema-design | 3 | 2363 | 3 | 6 | 82 | 0/3 | 3/3 |
 | b3-node-http-server | 4 | 2120 | 5 | 8 | 117 | 2/4 | 4/4 |
 | b4-auth-server | 3 | 3014 | 6 | 6 | 81 | 2/3 | 3/3 |
@@ -94,7 +94,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b6-webrtc-signalling | 2 | 2052 | 2 | 2 | 52 | 1/2 | 0/2 |
 | b7-token-engine | 3 | 3451 | 7 | 6 | 78 | 3/3 | 3/3 |
 | b8-push-notifications | 1 | 1420 | 1 | 1 | 25 | 0/1 | 0/1 |
-| b9-docker-deployment | 3 | 2846 | 5 | 5 | 77 | 2/3 | 2/3 |
+| b9-docker-deployment | 3 | 3199 | 6 | 6 | 81 | 2/3 | 3/3 |
 | c5-end-to-end-encryption | 5 | 1671 | 10 | 10 | 126 | 0/5 | 5/5 |
 | x1-git-dev-environment | 3 | 1201 | 4 | 6 | 83 | 0/3 | 3/3 |
 | x2-debugging | 2 | 1242 | 3 | 4 | 50 | 0/2 | 2/2 |
@@ -200,7 +200,7 @@ so they do not hold the audit red. They are **not** resolved.
 | b1-sql-fundamentals/0003-indexes-transactions-constraints.html | 972 | 11 | 0 | 1 | 26 | — | n/a |
 | b1-sql-fundamentals/0004-postgres-specifics.html | 1407 | 9 | 1 | 2 | 26 | — | yes |
 | b10-security-compliance/0001-security-hardening.html | 4007 | 20 | 2 | 2 | 25 | yes | yes |
-| b10-security-compliance/0002-dpdp-act.html | 3960 | 12 | 3 | 2 | 28 | — | yes |
+| b10-security-compliance/0002-dpdp-act.html | 4036 | 12 | 3 | 2 | 28 | — | yes |
 | b2-schema-design/0001-token-schema.html | 3257 | 10 | 1 | 2 | 27 | — | yes |
 | b2-schema-design/0002-messaging-schema.html | 2245 | 8 | 1 | 2 | 26 | — | yes |
 | b2-schema-design/0003-migrations.html | 1588 | 11 | 1 | 2 | 29 | — | yes |
@@ -221,8 +221,8 @@ so they do not hold the audit red. They are **not** resolved.
 | b7-token-engine/0003-revocation-pause.html | 2967 | 9 | 2 | 2 | 26 | yes | yes |
 | b8-push-notifications/0001-fcm-apns-expo.html | 1420 | 11 | 1 | 1 | 25 | — | n/a |
 | b9-docker-deployment/0001-docker-fundamentals.html | 3054 | 13 | 2 | 2 | 26 | yes | yes |
-| b9-docker-deployment/0002-coolify-setup.html | 3232 | 12 | 2 | 2 | 26 | yes | yes |
-| b9-docker-deployment/0003-logs-backups-monitoring.html | 2252 | 17 | 1 | 1 | 25 | — | n/a |
+| b9-docker-deployment/0002-coolify-setup.html | 3280 | 12 | 2 | 2 | 26 | yes | yes |
+| b9-docker-deployment/0003-logs-backups-monitoring.html | 3263 | 17 | 2 | 2 | 29 | — | yes |
 | c5-end-to-end-encryption/0001-keys-on-the-device.html | 1371 | 5 | 2 | 2 | 26 | — | yes |
 | c5-end-to-end-encryption/0002-publishing-fetching-keys.html | 1782 | 3 | 2 | 2 | 25 | — | yes |
 | c5-end-to-end-encryption/0003-verification-safety-numbers.html | 1462 | 4 | 2 | 2 | 25 | — | yes |

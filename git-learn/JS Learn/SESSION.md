@@ -19,27 +19,131 @@ how far it got.
 > files either.** Make no claims about progress at all — not in prose, not in
 > a commit message, not as a reason for prioritising anything.
 
-**Nothing in flight.** Working tree clean, everything committed.
+**Nothing in flight.** `b9/0003` landed 2026-08-25 and **B9 is complete**.
 
 **Started the `unverifiable` cluster** — the recommended body of work in
-*Next action*. A7, A10 and X1 are finished; B9 is two of three. 6 to go.
+*Next action*. A7, A10, X1 and **B9** are finished. **5 to go:** B6 (2),
+`a9/0001`, `b1/0003`, `b8/0001`.
 
-**State as of 2026-08-23** — run `node scripts/audit.mjs` before trusting any
+**State as of 2026-08-25** — run `node scripts/audit.mjs` before trusting any
 of it:
 
 - **101 lessons.** Audit **green**, 2 warnings, six suites pass.
 - **Every lesson has been executed at least once.** The verification log has
-  no absent entries: **95 verified, 6 `unverifiable`** with a stated reason,
-  1 `nothing-to-verify`. All four remaining A7 lessons moved across on
-  2026-08-23/24.
+  no absent entries: **96 verified, 5 `unverifiable`** with a stated reason,
+  1 `nothing-to-verify`.
 - **`known-issues.json` is down to one entry** — `calls`, gated on B6.
 - `render-as-authored` is **0**, and this time it means it (see *The `variant`
   blind spot*).
 - **Complete modules:** 01, 02, A2, A3, A4, **A7**, **A10**, B1, B2, B3, B4,
-  B7, B10, A11, C5, X1, X2.
+  B7, **B9**, B10, A11, C5, X1, X2.
 
 **Nothing is blocked.** See *Next action* for the four candidate bodies of
 work and why the `unverifiable` cluster is the recommendation.
+
+### b9/0003 — the retention was true of one directory, and B9 is finished (2026-08-25)
+
+M3: **`planPrune`**. 20 self-checks, 11 wrong-cases, 3 correct alternatives,
+4 new executable quiz questions. **B9 is complete — three of three**, and the
+`unverifiable` cluster is down to 5.
+
+**The prune ran nightly and the promise was false anyway.** `b10/0002`
+publishes a sentence to users — *"Copies in our encrypted backups are
+overwritten within 7 days"* — and the mechanism behind it was
+`find /backups/postgres -mtime +7 -delete`. The off-site copy went up with
+`rclone copy` and the second server with `rsync -az`, **neither of which ever
+deletes at the destination.** So every dump the prune destroyed was still in
+Backblaze, permanently, and nothing anywhere errored.
+
+**The reason it survives review is that it is the safe default.** `copy` and
+`-az` without `--delete` are what you reach for precisely *because* they
+cannot destroy anything at the far end. The property that makes them safe to
+run is the property that makes the retention a lie.
+
+**A retention is a property of the data, not of a directory** — which is why
+the exercise prunes a list of backups with a `location` field rather than a
+folder. Location is something a copy *has*; it is never a reason for that copy
+to expire on a different schedule.
+
+### The floor, and a decision worth flagging with its cost
+
+Age-based deletion with no floor destroys everything you own at exactly the
+moment your dumps have been failing for a fortnight — which is the moment you
+are about to need one. So `planPrune` keeps the `minVerified` most recent
+verified dumps whatever their age.
+
+**That means deliberately keeping personal data past a published promise, and
+the decision is to keep it and say so** — the dump is returned in `breaches`
+with how many days over it is. Cost of the option rejected: silently deleting
+your last good backup to stay compliant is a data-loss incident chosen on
+purpose, and silently keeping it is the lie. Recording it makes the breach a
+page rather than a document nobody checks. Same discipline as
+`known-issues.json` — an acknowledgement is not a fix — and reversible if the
+student would rather the promise win absolutely (`minVerified: 0` already does
+that).
+
+**`daysOver` rounds up.** A breach of half a day floors to `0`, and a `0` in a
+compliance list reads as compliance.
+
+### The three-state is verified / unchecked / corrupt, and both neighbours are wrong
+
+`unchecked` is not a promise the file is fine and not an accusation that it is
+broken — it is what almost every dump is, almost always. Two rules fall out
+and they pull opposite ways:
+
+- **It never counts toward the floor.** *"A backup you have never restored
+  from is not a backup"* is the lesson's own line, and this is where it stops
+  being a slogan.
+- **A `corrupt` copy still expires on the ordinary schedule.** It holds
+  exactly the same rows; being unreadable *by you* is not a licence to keep it
+  longer, and says nothing about who else can read it.
+
+Fifth appearance of this shape, after `a7/0003`'s `peerVideoEnabled`,
+`a2/0002`'s `Partial<T>`, `c5/0004`'s gone-vs-not-fetched and `b1/0001`'s
+`NULL` vs `''`.
+
+### The readiness endpoint had yesterday's bug, in a third file
+
+`b9/0002`'s `/health` was given `isReady()` on 2026-08-24. **`b9/0003`'s
+`/health/ready` — the endpoint it tells you to point UptimeRobot at — never
+got it**, so during the two-second drain Postgres and Redis are still
+perfectly reachable, every check passes, and a container closing its pool
+answers a confident 200.
+
+The fix made the lesson better rather than merely correct, because the split
+`0003` introduces is the right one and nobody had said why: **there are three
+answers, not two** — alive and ready, alive but not taking work, and not
+alive. A graceful shutdown spends its whole life in the middle one, which is
+the state a single `/health` cannot report. **Liveness must ignore the flag;
+readiness must read it**, and swapping them gets the container killed
+mid-drain.
+
+### The downstream grep found the same bug in the lesson before it
+
+Two for two now. Grepping `rclone|rsync` after changing the off-site
+commands turned up `b9/0002` doing `rclone copy /backups remote:token-backups`
+— the identical defect, one lesson earlier, and not on any list. Both are now
+`sync`, and `b10/0002` gained the sentence pointing at where its own 7-day
+number is enforced, so the loop closes from both ends.
+
+### Two fixtures could not express the rule they were written for
+
+Both found by a wrong-case tripping the wrong check, and both are the same
+failure `CLAUDE.md` names — *choose fixture values that differ from what a
+wrong answer would produce*:
+
+- **The boundary and the breach guard were entangled.** `d7` sat exactly on
+  the retention *and* was verified, so it was also in the floor — meaning a
+  `>=` mistake still **kept** it, as a rescue from outside the promise rather
+  than as something inside it. Making `d7` unchecked puts it outside the floor
+  and leaves `>` versus `>=` observable on its own.
+- **The mutation check used a list that was already sorted.** `baseSet()` is
+  newest-first, so `backups.sort(...)` in place changed nothing and an
+  implementation that mutates the caller's array passed. It now uses a
+  deliberately scrambled list, with a comment saying not to tidy it.
+
+8 of the 11 mistakes trip exactly one check; the three that trip two were run
+individually and are inherent, recorded in the case file.
 
 ### b9/0002 — present is not usable, and a flag nobody read (2026-08-24)
 
@@ -2196,24 +2300,33 @@ executed; the log is 84 verified, 17 `unverifiable` with a reason, 1
 
 What is left, in no forced order:
 
-1. **The `unverifiable` lessons — started 2026-08-23; all of A7, A10 and X1
-   plus two of B9 done, 6 left.**
+1. **The `unverifiable` lessons — started 2026-08-23; all of A7, A10, X1 and
+   B9 done, 5 left.**
    `CLAUDE.md` warns that the reflex to reach for that flag is wrong more often
    than it is right, and this pass proved it again — nine lessons that looked
    unrunnable produced nine exercises, and `a7/0001` then produced a tenth
    plus two real defects. Remaining clusters: **B6 (2)**, plus `b9/0003`, `a9/0001`,
    `b1/0003`, `b8/0001`. Each needs the same
    move: find the plain function, excuse the rest per-exercise, **and add the
-   `createExplain` prompt** — the 6 without one are exactly the 6 still
+   `createExplain` prompt** — the 5 without one are exactly the 5 still
    excused.
 
-   **Next: `b9/0003-logs-backups-monitoring.html`**, which finishes B9. Its
-   redemption handler was fixed on 2026-08-23 (the ADR-0007 sweep) but nothing
-   executable was added, so the log-redaction rule is asserted and untested.
-   A retention or rotation policy is a precedence problem; a backup schedule
-   is an exactly-once one. Check it against `b10/0002`'s retention table and
-   `x2/0002`'s `redactLogFields`, both of which already decided things it may
-   contradict.
+   **Next: `b1/0003-indexes-transactions-constraints.html`**, the cheapest of
+   the five — it is the last B1 lesson and the other three all produced a
+   working exercise on 2026-08-23. Its excuse is *"the solution is SQL needing
+   Postgres"*, which is the same excuse `b1/0001`, `b1/0002` and `b1/0004`
+   carried before each of them turned out to hold an algorithm. Index
+   *selection* is a precedence problem — which index a planner picks for a
+   given `WHERE` is a longest-usable-prefix question, the same shape as
+   `x1/0003`'s `paths`. Check it against `b2/0001`'s biconditional `CHECK`
+   constraints and `b7/0001`'s `FOR UPDATE`-then-count, both of which already
+   decided things it may contradict.
+
+   **`b9/0003` predicted the retention would be a precedence problem and it
+   was**, but the sharper finding was cross-lesson rather than in-lesson: see
+   the entry above. **B6 (2 lessons) is the one genuinely blocked cluster** —
+   it is also what gates the last `known-issues.json` entry, so writing it
+   closes two things at once.
 
    **A fifth result to carry, new today:** `b9/0001` caught an error I had
    introduced in `x1/0003` an hour earlier, because its Dockerfile disagreed

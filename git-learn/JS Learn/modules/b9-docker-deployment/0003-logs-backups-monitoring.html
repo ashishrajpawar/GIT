@@ -270,9 +270,16 @@ fi
 BACKUP_SIZE=$(du -h "${BACKUP_DIR}/${FILENAME}" | cut -f1)
 echo "Backup created: ${FILENAME} (${BACKUP_SIZE})"
 
-# Delete backups older than retention period
-find "$BACKUP_DIR" -name "*.dump" -mtime +${RETENTION_DAYS} -delete
-echo "Cleaned up backups older than ${RETENTION_DAYS} days"</code></pre>
+# Delete backups older than the retention period.
+#
+# Note the -1. `find -mtime +N` means "more than N whole days old", and this
+# script runs once a day -- so a row deleted just after the 03:00 dump sits
+# in that dump until the prune that is a whole day past the promise. Two
+# rounding errors in the same direction, against a number b10/0002 gives to
+# users in writing. RETENTION_DAYS stays the ONE number; the mechanism runs
+# a day ahead of it.
+find "$BACKUP_DIR" -name "*.dump" -mtime +$((RETENTION_DAYS - 1)) -delete
+echo "Cleaned up local backups older than ${RETENTION_DAYS} days"</code></pre>
 
     <h3>Scheduling with cron</h3>
     <pre><code># SSH into your VPS, then:
@@ -287,15 +294,61 @@ crontab -l</code></pre>
     <h3>Off-Site Backups</h3>
     <p>A backup on the same server as the database doesn't protect against disk failure or a
     compromised server. Copy backups off-site:</p>
-    <pre><code># Option 1: rsync to a second VPS or NAS
-rsync -az /backups/postgres/ backup-user@other-server:/backups/token/
+    <pre><code># Option 1: rsync to a second VPS or NAS.
+# --delete makes the destination MIRROR the source, so the prune that ran
+# above reaches here too. Without it this is a copy that only ever grows.
+rsync -az --delete /backups/postgres/ backup-user@other-server:/backups/token/
 
 # Option 2: Upload to S3-compatible storage (Backblaze B2, ~$0.005/GB)
 # Install rclone, configure a remote, then:
-rclone copy /backups/postgres/ b2:token-backups/postgres/
+#   `rclone copy` NEVER deletes at the destination. `rclone sync` does.
+rclone sync /backups/postgres/ b2:token-backups/postgres/
+
+# ...and if the bucket has versioning or a lifecycle rule of its own, the
+# delete above only hides the object. Expire it at the bucket too:
+#   B2:  lifecycle rule, daysFromHidingToDeleting = 1
+#   S3:  lifecycle rule on noncurrent versions
 
 # Option 3: Coolify's built-in backup feature (if using managed Postgres)
-# Configure in Coolify → Database → Backups → Enable S3</code></pre>
+# Configure in Coolify → Database → Backups → Enable S3
+# Set the retention there as well — it is a third copy with its own clock.</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">The copy you made so it would survive things is
+      the copy nobody expires</div>
+
+      <p>
+        Until 2026-08-25 this section said <code>rclone copy</code> and
+        <code>rsync -az</code>. Neither deletes anything at the destination
+        &mdash; that is what makes them safe to run, and it is the reason they
+        are what everyone reaches for. So the script above pruned
+        <code>/backups/postgres</code> faithfully every night, and
+        <strong>every dump it deleted was already sitting in Backblaze, for
+        ever.</strong>
+      </p>
+      <p>
+        On its own that is a storage bill. What makes it a defect is
+        <code>b10/0002</code>, which tells users in a published privacy notice:
+        <em>"Copies in our encrypted backups are overwritten within 7
+        days."</em> That sentence is a statement about <strong>every copy</strong>,
+        and the retention that backed it existed in exactly one of the three
+        places a dump ends up.
+      </p>
+      <p>
+        <strong>A retention policy is a property of the data, not of a
+        directory.</strong> Every location holding a dump needs the same clock
+        &mdash; the server, the off-site remote, the bucket's own versioning,
+        and Coolify's built-in backups if you also switched those on. This is
+        <code>CLAUDE.md</code>'s rule about a value modelled in two places,
+        arriving as four copies of a file: the one you forget is the one that
+        outlives the promise, and nothing anywhere errors.
+      </p>
+      <p>
+        It is also why the exercise below prunes a <em>list of backups</em>
+        rather than a folder. Location is something a copy <em>has</em>; it is
+        never a reason for that copy to expire on a different schedule.
+      </p>
+    </div>
 
     <h3>Testing Restores</h3>
     <p><strong>A backup you've never restored from is not a backup.</strong> Test quarterly:</p>
@@ -310,6 +363,17 @@ psql -U token -d token_restore_test -c "SELECT COUNT(*) FROM tokens;"
 # Clean up
 dropdb -U token token_restore_test</code></pre>
 
+    <p>
+      <strong>Record the result, because it is a third state and not a
+      boolean.</strong> A dump is <code>verified</code> once it has restored,
+      <code>corrupt</code> once it has failed to, and <code>unchecked</code>
+      until one of those happens &mdash; which is what almost every dump you
+      own is, almost all of the time. Those are the three values the exercise
+      below works from, and collapsing the middle one into either neighbour is
+      the whole of its third rule: <em>unchecked</em> is not a promise that the
+      file is fine, and it is not an accusation that it is broken.
+    </p>
+
     <h2>Health Checks &amp; Uptime Monitoring</h2>
     <p>You need to know when your app is down before your users tell you.</p>
 
@@ -321,16 +385,30 @@ dropdb -U token token_restore_test</code></pre>
 import { Router } from 'express';
 import { db } from '../db';
 import { redisClient } from '../redis';
+import { isReady } from '../lifecycle';
 
 const router = Router();
 
-// Simple liveness check — is the process running?
+// LIVENESS — is the process running?
+// This must keep answering 200 during a graceful shutdown. It is the answer
+// to "should you restart me", and the whole point of a graceful shutdown is
+// that you should NOT: the process is draining on purpose.
 router.get('/health/live', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-// Readiness check — can the app serve traffic?
+// READINESS — should the proxy send this container new work?
 router.get('/health/ready', async (req, res) => {
+  // The shutdown flag comes FIRST, and it is not a formality. b9/0001's
+  // handler calls setNotReady() and then waits two seconds for the proxy to
+  // notice; b9/0002's /health was given this same check on 2026-08-24 and
+  // this endpoint was not. Postgres and Redis are still perfectly reachable
+  // during those two seconds, so every check below passes and the answer is
+  // a confident 200 from a container that is closing its pool.
+  if (!isReady()) {
+    return res.status(503).json({ status: 'shutting_down' });
+  }
+
   const checks: Record&lt;string, 'ok' | 'fail'&gt; = {};
 
   try {
@@ -360,7 +438,40 @@ router.get('/health/ready', async (req, res) => {
 
 export default router;</code></pre>
 
-    <h3>External Uptime Monitoring</h3>
+    <div class="callout danger">
+      <div class="callout-title">Splitting the endpoint is the fix, not the
+      decoration &mdash; a single <code>/health</code> cannot express the state
+      a shutdown lives in</div>
+
+      <p>
+        There are three answers, not two: <strong>alive and ready</strong>,
+        <strong>alive but not taking work</strong>, and <strong>not
+        alive</strong>. A graceful shutdown spends its entire life in the
+        middle one, and that is exactly the state one endpoint cannot report.
+        <code>b9/0002</code> has a single <code>/health</code>, so its 503
+        during shutdown is simultaneously telling the proxy <em>stop routing</em>
+        (right) and telling anything watching liveness <em>restart me</em>
+        (wrong &mdash; it is closing the pool on purpose).
+      </p>
+      <p>
+        So the split is load-bearing, and the direction of each is the part
+        that gets written backwards. <strong>Liveness must ignore the
+        flag</strong>; <strong>readiness must read it</strong>. Swap them and
+        you get an orchestrator that kills the container mid-drain, which is
+        the ungraceful exit the whole sequence exists to avoid.
+      </p>
+      <p>
+        This lesson shipped <code>/health/ready</code> without the flag until
+        2026-08-25 &mdash; the same defect <code>b9/0002</code> was fixed for a
+        day earlier, in the file that introduces the better-shaped endpoint and
+        tells you to point <a href="#uptime">external monitoring</a> at it.
+        <strong>Neither file was wrong alone.</strong> One sets a flag, two
+        others answer a question, and the fix to one of them was never carried
+        to the other.
+      </p>
+    </div>
+
+    <h3 id="uptime">External Uptime Monitoring</h3>
     <p>An external service pings your health endpoint every minute. If it fails, you get an alert.
     Free options:</p>
     <ul>
@@ -487,7 +598,11 @@ setInterval(async () => {
 // ✓ Request correlation IDs (every log line traceable)
 // ✓ Health check endpoints (liveness + readiness)
 // ✓ Automated daily Postgres backups (pg_dump + cron)
-// ✓ 7-day backup retention + off-site copy
+// ✓ 7-day backup retention, applied in EVERY location a dump ends up:
+//     the server, the off-site remote, and the bucket's own versioning.
+//     One clock per copy, and they are all the same clock.
+// ✓ A floor under the retention, so a fortnight of failed dumps cannot
+//     leave you with nothing — and a breach report when it engages
 // ✓ External uptime monitoring (UptimeRobot or Uptime Kuma)
 // ✓ Alerting webhook (Slack/Discord/Telegram)
 // ✓ Slow request logging (&gt;1s)
@@ -496,6 +611,25 @@ setInterval(async () => {
 
     <h2>Playground: Log Analysis</h2>
     <div id="playground-1"></div>
+
+    <h2>Now build it yourself: prune the backups</h2>
+
+    <p>
+      Everything above decides what to <em>write</em>. This decides what to
+      <strong>destroy</strong> &mdash; and it is the only decision in the lesson
+      that is wrong in both directions. Delete too little and you break the
+      sentence <code>b10/0002</code> publishes to users. Delete too much and
+      the thing you delete is the last copy of their data.
+    </p>
+    <p>
+      Which is why it is a list of backups and not a folder: the shell script
+      could only ever see one of the places a dump lives.
+    </p>
+
+    <div id="exercise-prune"></div>
+    <div id="pg-exercise-prune"></div>
+
+    <div id="explain-b9-0003"></div>
 
     <h2>Exercise: Build the Ops Stack</h2>
     <div id="exercise-1"></div>
@@ -511,6 +645,7 @@ setInterval(async () => {
     <script src="../../assets/quiz.js"></script>
     <script src="../../assets/playground.js"></script>
     <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
     <script src="../../assets/progress.js"></script>
     <script src="../../assets/copy-code.js"></script>
     <script>
@@ -553,7 +688,359 @@ logs
   .filter(l => l.requestId === "req-003")
   .forEach(l => console.log("  [" + l.level + "] " + l.msg + " (" + l.duration_ms + "ms)"));`);
 
+        createSolution("exercise-prune", {
+            exercise: "Write planPrune(backups, options) — decide which backup files to destroy.\n\nEach entry in backups is one FILE:\n\n  {\n    id:       'token_prod_2026-08-18',      // the dump this is a copy of\n    location: 'local' | 'offsite' | 'bucket',\n    takenAt:  1755000000000,                // ms epoch, when the dump was taken\n    status:   'verified' | 'unchecked' | 'corrupt'\n  }\n\nTwo files with the same id are two copies of ONE dump — one point in time.\n\noptions is { now, retentionDays, minVerified }.\n\nReturn { keep, remove, breaches }.\n\nThe rules:\n\n1. AGE IS (now - takenAt) IN DAYS, AND A DUMP EXPIRES WHEN IT IS STRICTLY OLDER THAN retentionDays. Exactly retentionDays old is still inside the promise. The shell script above got this boundary wrong twice in the same direction: find -mtime +7 means more than 7 WHOLE days, and the dump runs once a day, so the real window was nearer nine.\n\n2. EXPIRY DOES NOT CARE WHERE A COPY LIVES. Every copy of an expired dump goes, in every location. Location is something a copy has; it is never a reason for that copy to expire on a different schedule. The version this replaces pruned the server faithfully and left Backblaze holding everything for ever.\n\n3. THE FLOOR: THE minVerified MOST RECENT VERIFIED DUMPS ARE KEPT WHATEVER THEIR AGE. Count DISTINCT DUMPS, not files. Two copies of one dump are one point in time — and if that dump is logically bad, because a broken migration ran just before it, a second copy of it is no help at all and an earlier dump is.\n\n4. ONLY 'verified' COUNTS TOWARD THE FLOOR, AND A DUMP IS VERIFIED IF ANY COPY OF IT IS. 'unchecked' is not 'corrupt', and it is not 'verified' either. This is where the lesson's line about a backup you have never restored from stops being a slogan: a pile of unchecked dumps must not satisfy the floor.\n\n5. A DUMP KEPT ONLY BY THE FLOOR, PAST ITS RETENTION, IS A BREACH. Push { id, daysOver } — kept, and said out loud. You do not silently destroy your last good backup to keep a promise, and you do not silently keep it and stay quiet; you make it a page rather than a lie. daysOver is (age - retentionDays) ROUNDED UP, because a breach is the one number you never round in your own favour. (Same discipline as scripts/known-issues.json — an acknowledgement is not a fix.)\n\n6. A CORRUPT COPY STILL EXPIRES ON THE ORDINARY SCHEDULE. It holds exactly the same rows; being unreadable is not a licence to keep it longer. It simply never counts toward the floor. Both halves matter, and they pull in opposite directions.\n\n7. DO NOT MUTATE backups. keep and remove are new arrays holding the SAME file objects, sorted newest first, ties broken by id and then location so two runs agree. breaches is sorted by id. Every input file appears exactly once across keep and remove.\n\nRule 5 is the one the exercise is for. Every other rule can be argued from first principles; that one is a decision about which promise you are willing to break, and the answer is that you break it in public.",
+            hints: [
+                "Group the files by id first. Every decision here is about a dump — a point in time — and only the final partition is about files.",
+                "Rule 3 is computed over ALL verified dumps, not only the expired ones. Three recent good dumps already cover you, and an ancient fourth is then just personal data you promised to delete.",
+                "A dump inside its retention is never a breach, even when it is also in the floor. The breach is the overshoot, not the membership."
+            ],
+            solution: `// api/src/ops/planPrune.js
+//
+// The shell script could only ever see one directory. This sees every copy,
+// which is the only level at which a retention promise is true or false.
+
+function planPrune(backups, options) {
+  const DAY = 24 * 60 * 60 * 1000;
+  const now = options.now;
+  const retentionDays = options.retentionDays;
+  const minVerified = options.minVerified || 0;
+
+  // Rule 4: fold the files into the dumps they are copies of. A dump is
+  // verified if ANY copy of it is -- the local one restored cleanly, the
+  // upload was truncated, and you still have a restorable point in time.
+  const dumps = new Map();
+  for (const file of backups) {
+    const seen = dumps.get(file.id);
+    if (seen) {
+      if (file.status === "verified") seen.verified = true;
+    } else {
+      dumps.set(file.id, {
+        id: file.id,
+        takenAt: file.takenAt,
+        verified: file.status === "verified",
+      });
+    }
+  }
+
+  function ageOf(dump) {
+    return (now - dump.takenAt) / DAY;
+  }
+  function isExpired(dump) {
+    // Rule 1: strictly older. Exactly retentionDays is still inside.
+    return ageOf(dump) > retentionDays;
+  }
+
+  // Rule 3: the floor is distinct DUMPS, newest first, and it is computed
+  // over all of the verified ones -- not only the expired ones. If three
+  // recent dumps already cover you, an ancient fourth is not a safety net,
+  // it is personal data you promised to delete.
+  const floor = new Set(
+    Array.from(dumps.values())
+      .filter(function (d) { return d.verified; })
+      .sort(function (a, b) {
+        return b.takenAt - a.takenAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+      })
+      .slice(0, minVerified)
+      .map(function (d) { return d.id; })
+  );
+
+  // Rule 5: kept, and said out loud. Note the isExpired guard -- being in
+  // the floor is not a breach, being in the floor PAST the promise is.
+  const breaches = [];
+  for (const dump of dumps.values()) {
+    if (!isExpired(dump) || !floor.has(dump.id)) continue;
+    breaches.push({
+      id: dump.id,
+      // Round the overshoot up. Rounding a breach down is how a compliance
+      // report comes out clean on the day you were in breach.
+      daysOver: Math.ceil(ageOf(dump) - retentionDays),
+    });
+  }
+
+  // Rule 2 + rule 7: every copy shares its dump's fate, and the input is
+  // left exactly as it was handed to us.
+  const keep = [];
+  const remove = [];
+  for (const file of backups) {
+    const dump = dumps.get(file.id);
+    if (!isExpired(dump) || floor.has(dump.id)) keep.push(file);
+    else remove.push(file);
+  }
+
+  function newestFirst(a, b) {
+    if (b.takenAt !== a.takenAt) return b.takenAt - a.takenAt;
+    if (a.id !== b.id) return a.id < b.id ? -1 : 1;
+    if (a.location !== b.location) return a.location < b.location ? -1 : 1;
+    return 0;
+  }
+  keep.sort(newestFirst);
+  remove.sort(newestFirst);
+  breaches.sort(function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; });
+
+  return { keep: keep, remove: remove, breaches: breaches };
+}`
+        });
+
+        createPlayground("pg-exercise-prune", `// Write planPrune(backups, options) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+
+const DAY = 24 * 60 * 60 * 1000;
+const NOW = Date.UTC(2026, 7, 25, 3, 0, 0);
+
+// ageDays is deliberately a parameter: several rules here differ from a wrong
+// answer ONLY at a specific age, so every fixture names its own.
+function f(id, ageDays, location, status) {
+  return { id: id, takenAt: NOW - ageDays * DAY, location: location, status: status };
+}
+
+// retentionDays 7, minVerified 2 throughout unless a fixture says otherwise.
+function opts(over) {
+  return Object.assign({ now: NOW, retentionDays: 7, minVerified: 2 }, over || {});
+}
+
+// Three values here are load-bearing and every one of them was wrong in the
+// first draft. Leave them alone unless you want two rules to stop being
+// distinguishable:
+//
+//   d7 is EXACTLY on the boundary and is UNCHECKED, so it is not in the
+//   floor. Make it verified and the floor rescues it anyway, which means a
+//   >= mistake still keeps it and the boundary stops being observable.
+//
+//   d0 and d2 fill the floor and are both INSIDE their retention, so a
+//   correct run reports no breach at all. That is what makes "floor
+//   membership is not a breach" a real assertion rather than a tautology.
+//
+//   d20 is verified and expired and NOT in the floor, because d0 and d2
+//   already filled it. That is the only shape that tells floor-over-all
+//   apart from floor-over-the-expired-ones.
+function baseSet() {
+  return [
+    f("d0",   0, "local",  "verified"),
+    f("d0",   0, "bucket", "unchecked"),
+    f("d2",   2, "local",  "verified"),
+    f("d3",   3, "local",  "corrupt"),
+    f("d7",   7, "local",  "unchecked"),
+    f("d9",   9, "local",  "unchecked"),
+    f("d9",   9, "bucket", "unchecked"),
+    f("d20", 20, "local",  "verified"),
+  ];
+}
+
+function has(list, id, location) {
+  return (list || []).some(function (x) { return x.id === id && x.location === location; });
+}
+function tags(list) {
+  return (list || []).map(function (x) { return x.id + "@" + x.location; }).sort().join(",");
+}
+function breachFor(r, id) {
+  const hit = (r.breaches || []).find(function (b) { return b.id === id; });
+  return hit ? hit.daysOver : null;
+}
+
+try {
+  if (typeof planPrune !== "function") throw new Error("not written yet");
+
+  try {
+    const r = planPrune(baseSet(), opts());
+    check("a dump inside its retention is kept",
+          has(r.keep, "d0", "local") && has(r.keep, "d3", "local"),
+          "kept " + tags(r.keep));
+  } catch (e) { check("a dump inside its retention is kept", false, "threw " + e.message); }
+
+  try {
+    const r = planPrune(baseSet(), opts());
+    check("a dump older than retention is removed",
+          has(r.remove, "d9", "local"),
+          "removed " + tags(r.remove));
+  } catch (e) { check("a dump older than retention is removed", false, "threw " + e.message); }
+
+  try {
+    // The headline. This is the copy the shell script never touched.
+    const r = planPrune(baseSet(), opts());
+    check("the OFF-SITE copy of an expired dump is removed too",
+          has(r.remove, "d9", "bucket"),
+          "removed " + tags(r.remove) + " -- a retention is a property of the data, not of a directory");
+  } catch (e) { check("the OFF-SITE copy of an expired dump is removed too", false, "threw " + e.message); }
+
+  try {
+    // d7 is outside the floor on purpose, so nothing can rescue it and this
+    // asks about the boundary and nothing else.
+    const r = planPrune(baseSet(), opts());
+    check("exactly retentionDays old is still inside the promise",
+          has(r.keep, "d7", "local"),
+          "removed " + tags(r.remove) + " -- 7 days at retentionDays 7 is inside it; > versus >=");
+  } catch (e) { check("exactly retentionDays old is still inside the promise", false, "threw " + e.message); }
+
+  try {
+    const r = planPrune(baseSet(), opts());
+    check("a corrupt copy inside its retention is kept like any other",
+          has(r.keep, "d3", "local"),
+          "kept " + tags(r.keep));
+  } catch (e) { check("a corrupt copy inside its retention is kept like any other", false, "threw " + e.message); }
+
+  try {
+    const r = planPrune(baseSet(), opts());
+    check("the floor is measured over ALL verified dumps, not only expired ones",
+          has(r.remove, "d20", "local"),
+          "kept " + tags(r.keep) + " -- d0 and d7 already fill minVerified 2");
+  } catch (e) { check("the floor is measured over ALL verified dumps, not only expired ones", false, "threw " + e.message); }
+
+  try {
+    // d0 and d7 are both in the floor and both INSIDE their retention, so a
+    // breach test that only asks about floor membership files two of them on
+    // a night when nothing is wrong. A list like that is ignored within a
+    // week, which is when the real one arrives.
+    const r = planPrune(baseSet(), opts());
+    check("floor membership is not a breach; being past the promise is",
+          Array.isArray(r.breaches) && r.breaches.length === 0,
+          "got " + JSON.stringify(r.breaches) + " -- nothing here is outside its retention");
+  } catch (e) { check("floor membership is not a breach; being past the promise is", false, "threw " + e.message); }
+
+  try {
+    const r = planPrune(baseSet(), opts());
+    check("every input file lands in exactly one of keep and remove",
+          tags((r.keep || []).concat(r.remove || [])) === tags(baseSet()),
+          "got " + tags((r.keep || []).concat(r.remove || [])));
+  } catch (e) { check("every input file lands in exactly one of keep and remove", false, "threw " + e.message); }
+
+  try {
+    const r = planPrune(baseSet(), opts());
+    let ordered = true;
+    for (let i = 1; i < r.keep.length; i++) {
+      if (r.keep[i].takenAt > r.keep[i - 1].takenAt) ordered = false;
+    }
+    check("keep comes back newest first",
+          ordered,
+          "got " + r.keep.map(function (x) { return x.id; }).join(","));
+  } catch (e) { check("keep comes back newest first", false, "threw " + e.message); }
+
+  try {
+    // NOT baseSet(): that one is already newest-first, so sorting it in place
+    // changes nothing and the check would pass an implementation that mutates.
+    // This order is scrambled on purpose -- leave it alone.
+    const input = [
+      f("m9",   9, "local",  "unchecked"),
+      f("m0",   0, "local",  "verified"),
+      f("m20", 20, "local",  "verified"),
+      f("m3",   3, "bucket", "verified"),
+    ];
+    const before = input.map(function (x) { return x.id + "@" + x.location; }).join(",");
+    planPrune(input, opts());
+    const after = input.map(function (x) { return x.id + "@" + x.location; }).join(",");
+    check("the input array is not mutated",
+          before === after,
+          "was [" + before + "], now [" + after + "] -- the caller still needs its own " +
+          "list, and sorting it in place is how this happens");
+  } catch (e) { check("the input array is not mutated", false, "threw " + e.message); }
+
+  // --- The floor, where nothing recent is any good ---
+  // junk is INSIDE retention and unchecked. If unchecked counted, the floor
+  // would be junk + old1 and old2 would be destroyed.
+  function starvedSet() {
+    return [
+      f("old1", 30, "local", "verified"),
+      f("old2", 40, "local", "verified"),
+      f("junk",  2, "local", "unchecked"),
+    ];
+  }
+
+  try {
+    const r = planPrune(starvedSet(), opts());
+    check("an unchecked dump never counts toward the floor",
+          has(r.keep, "old2", "local"),
+          "removed " + tags(r.remove) + " -- a backup you have never restored from is not a backup");
+  } catch (e) { check("an unchecked dump never counts toward the floor", false, "threw " + e.message); }
+
+  try {
+    const r = planPrune(starvedSet(), opts());
+    check("a dump kept only by the floor is reported as a breach",
+          breachFor(r, "old1") !== null,
+          "got " + JSON.stringify(r.breaches) + " -- kept quietly is the one option that is not available");
+  } catch (e) { check("a dump kept only by the floor is reported as a breach", false, "threw " + e.message); }
+
+  try {
+    const r = planPrune(starvedSet(), opts());
+    check("daysOver is the overshoot past retention, not the age",
+          breachFor(r, "old1") === 23,
+          "got " + breachFor(r, "old1") + " (30 = reported the age instead)");
+  } catch (e) { check("daysOver is the overshoot past retention, not the age", false, "threw " + e.message); }
+
+  // --- Rounding, on the only fixture where it is visible ---
+  try {
+    const r = planPrune([f("half", 7.5, "local", "verified")], opts({ minVerified: 1 }));
+    check("seven and a half days is outside a seven-day promise",
+          (r.remove || []).length === 0 && (r.breaches || []).length === 1,
+          "got remove=" + tags(r.remove) + " breaches=" + JSON.stringify(r.breaches));
+  } catch (e) { check("seven and a half days is outside a seven-day promise", false, "threw " + e.message); }
+
+  try {
+    const r = planPrune([f("half", 7.5, "local", "verified")], opts({ minVerified: 1 }));
+    check("daysOver rounds a breach UP, never in your own favour",
+          breachFor(r, "half") === 1,
+          "got " + breachFor(r, "half") + " (0 = rounded down, which reports a breach as compliance)");
+  } catch (e) { check("daysOver rounds a breach UP, never in your own favour", false, "threw " + e.message); }
+
+  // --- One dump, copies that disagree. The verified one is listed SECOND. ---
+  try {
+    const set = [f("dx", 10, "bucket", "unchecked"), f("dx", 10, "local", "verified")];
+    const r = planPrune(set, opts({ minVerified: 1 }));
+    check("a dump is verified if ANY copy of it is",
+          (r.keep || []).length === 2,
+          "kept " + tags(r.keep) + " -- the verified copy is the second one in the list");
+  } catch (e) { check("a dump is verified if ANY copy of it is", false, "threw " + e.message); }
+
+  try {
+    const set = [f("dx", 10, "bucket", "unchecked"), f("dx", 10, "local", "verified")];
+    const r = planPrune(set, opts({ minVerified: 1 }));
+    check("a dump kept by the floor keeps all of its copies",
+          has(r.keep, "dx", "bucket"),
+          "kept " + tags(r.keep) + " -- which copy to trust is a different question, asked somewhere else");
+  } catch (e) { check("a dump kept by the floor keeps all of its copies", false, "threw " + e.message); }
+
+  // --- dA has two copies, dB has one. Counting files fills the floor with dA. ---
+  try {
+    const set = [
+      f("dA", 10, "local",  "verified"),
+      f("dA", 10, "bucket", "verified"),
+      f("dB", 12, "local",  "verified"),
+    ];
+    const r = planPrune(set, opts());
+    check("the floor counts distinct dumps, not files",
+          has(r.keep, "dB", "local"),
+          "removed " + tags(r.remove) + " -- two copies of one dump are still one point in time");
+  } catch (e) { check("the floor counts distinct dumps, not files", false, "threw " + e.message); }
+
+  try {
+    const set = [f("c1", 30, "local", "corrupt"), f("c2", 40, "local", "corrupt")];
+    const r = planPrune(set, opts());
+    check("a corrupt dump past retention is removed, and never fills the floor",
+          (r.remove || []).length === 2 && (r.keep || []).length === 0 && (r.breaches || []).length === 0,
+          "keep=" + tags(r.keep) + " remove=" + tags(r.remove) +
+          " -- unreadable is not a licence to keep the same rows for longer");
+  } catch (e) { check("a corrupt dump past retention is removed, and never fills the floor", false, "threw " + e.message); }
+
+  try {
+    const r = planPrune([f("only", 30, "local", "verified")], opts({ minVerified: 0 }));
+    check("minVerified 0 means no floor: the promise wins and the last copy goes",
+          (r.remove || []).length === 1 && (r.breaches || []).length === 0,
+          "keep=" + tags(r.keep) + " breaches=" + JSON.stringify(r.breaches));
+  } catch (e) { check("minVerified 0 means no floor: the promise wins and the last copy goes", false, "threw " + e.message); }
+} catch (e) {
+  console.log("Nothing to check yet -- write planPrune above. (" + e.message + ")");
+}`);
+
+        createExplain("explain-b9-0003", {
+            prompt: "The prune keeps a backup that is 23 days past a 7-day promise, and records it as a breach rather than deleting it. Explain why <em>keeping it quietly</em> is the one option that was never available &mdash; and what the <code>breaches</code> list is actually for, given that it changes nothing about which files survive."
+        });
+
         createSolution("exercise-1", {
+            unverifiable: "the solution is a pino/pino-http wiring, a bash backup script and an Express readiness route — it needs a VPS running Coolify, Postgres, Redis and cron",
             exercise: "Build the complete ops infrastructure for Token:\n\n1. Create a pino logger configuration with child loggers for different services (api, websocket, push).\n2. Write a request logging middleware that assigns correlation IDs and skips health check logging.\n3. Write a backup script that dumps Postgres, verifies the dump is non-empty, and deletes backups older than 7 days.\n4. Write a readiness health check that verifies both Postgres and Redis are reachable.\n5. Add a slow-request detector that logs warnings for requests exceeding 1 second.",
             hints: [
                 "pino's child() method creates a new logger that inherits all parent fields plus the ones you add.",
@@ -684,6 +1171,30 @@ export default router;
         });
 
         createQuiz("lesson-quiz", [
+            {
+                type: "predict-output",
+                code: "const DAY = 86400000;\nconst now = Date.UTC(2026, 7, 25);\nconst takenAt = now - 7 * DAY;   // a dump taken exactly a week ago\nconst retentionDays = 7;\n\nconsole.log(((now - takenAt) / DAY) > retentionDays ? 'delete' : 'keep');",
+                answer: "keep",
+                explanation: "A dump that is exactly at the retention period is still inside it — 'we keep backups for 7 days' includes the seventh day. Swap the > for a >= and this destroys it a day early, which is the same one-character difference between a lock that respects its timeout and one that fires at zero. The shell script gets the boundary wrong in the other direction: find -mtime +7 means more than seven WHOLE days, and the dump only runs once a day, so its real window is nearer nine."
+            },
+            {
+                type: "predict-output",
+                code: "// Two copies of one expired dump: the server and the off-site bucket.\nconst files = [\n  { id: 'd9', location: 'local' },\n  { id: 'd9', location: 'bucket' },\n];\n\n// The prune as it was written — it only ever saw one directory.\nconst destroyed = files.filter(f => f.location === 'local');\n\nconsole.log(destroyed.length + ' of ' + files.length + ' copies destroyed');",
+                answer: "1 of 2 copies destroyed",
+                explanation: "This is what rclone copy and rsync without --delete leave you with, and it is why they feel safe to run: neither ever deletes at the destination. The nightly job reports success, the server stays tidy, and every dump it removed is still in the bucket — against a privacy notice that promises users backups are overwritten within seven days. A retention is a property of the data, not of a directory."
+            },
+            {
+                type: "predict-output",
+                code: "const dumps = [\n  { id: 'a', status: 'unchecked' },\n  { id: 'b', status: 'verified' },\n  { id: 'c', status: 'corrupt' },\n];\n\nconst notCorrupt = dumps.filter(d => d.status !== 'corrupt').length;\nconst restorable = dumps.filter(d => d.status === 'verified').length;\n\nconsole.log('floor thinks ' + notCorrupt + ', reality is ' + restorable);",
+                answer: "floor thinks 2, reality is 1",
+                explanation: "Three states, and testing for 'not corrupt' collapses two of them that mean opposite things. 'Unchecked' does not say the dump is fine, it says nobody has looked — which is the lesson's own line about a backup you have never restored from, arriving as a filter predicate. The cost is specific: a floor of two satisfied by one real backup and one unopened file, on the night you need to restore."
+            },
+            {
+                type: "predict-output",
+                code: "// A dump half a day past a seven-day promise.\nconst overshoot = 7.5 - 7;\n\nconsole.log('floor: ' + Math.floor(overshoot) + '  ceil: ' + Math.ceil(overshoot));",
+                answer: "floor: 0  ceil: 1",
+                explanation: "Rounding down turns a real breach into a zero, and a zero in a compliance list reads as compliance. This is the one number you never round in your own favour — the direction of the rounding is the whole finding, not a detail of the arithmetic."
+            },
             {
                 type: "predict-output",
                 code: "const log = { level: 'info', msg: 'token redeemed', requestId: 'req-42', duration_ms: 850 };\nconsole.log(log.duration_ms > 1000 ? 'SLOW' : 'OK');",

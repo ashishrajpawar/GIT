@@ -853,6 +853,46 @@ write "we store only ciphertext and hold no key".
 `c5/0003`'s verification screen remains reachable from settings for anyone who
 wants it, and is never prompted.
 
+### Backup retention is a property of the data, not of a directory (decided 2026-08-25)
+
+`b10/0002` publishes a sentence to users: **"Copies in our encrypted backups
+are overwritten within 7 days."** That is a claim about **every copy**, and
+until 2026-08-25 it was enforced in exactly one place. `b9/0003` pruned
+`/backups/postgres` nightly; the off-site copy went up with `rclone copy` and
+the second server with `rsync -az`, **neither of which ever deletes at the
+destination**. `b9/0002` had the identical line and was not on any list.
+
+**The reason it survives review is that it is the safe default** — `copy` and
+a bare `-az` are what you reach for precisely *because* they cannot destroy
+anything at the far end. The property that makes them safe to run is the
+property that makes the promise false, and nothing errors either way.
+
+So: **every location a dump reaches needs the same clock** — the server, the
+off-site remote, the bucket's own versioning or lifecycle rules, and Coolify's
+built-in backups if those are switched on too. Use `rclone sync` and
+`rsync --delete`. And note the window: `find -mtime +N` means *more than N
+whole days*, and a daily dump adds up to another 24 hours, so the mechanism
+must run a day tighter than the number you advertise.
+
+**Two decisions with their costs, so they can be overturned on evidence:**
+
+- **A floor sits under the retention, and it wins.** Age-based deletion with
+  nothing beneath it destroys every copy you own at precisely the moment your
+  dumps have been failing for a fortnight. The `minVerified` most recent
+  **verified** dumps are kept whatever their age. *Cost:* this knowingly keeps
+  personal data past a published promise.
+- **A dump kept only by the floor is reported, not hidden.** It comes back in
+  `breaches` with how many days over it is, rounded **up** — a breach of half
+  a day floored to `0` reads as compliance. *Cost of the option rejected:*
+  silently deleting your last good backup is a data-loss incident chosen on
+  purpose, and silently keeping it is the lie. `minVerified: 0` makes the
+  promise win absolutely if that is ever preferred.
+
+**The floor counts distinct dumps, not files**, and only `verified` counts —
+`unchecked` is neither a promise the file is fine nor an accusation that it is
+broken. Two copies of one dump are one point in time, and a second copy is no
+help when the problem is the migration that ran just before it.
+
 ### Communication
 - Chat: WebSocket on own server, routed across nodes through Redis pub/sub
 - Voice/video: WebRTC (`react-native-webrtc` on mobile, native APIs in browser)
