@@ -19,18 +19,19 @@ how far it got.
 > files either.** Make no claims about progress at all — not in prose, not in
 > a commit message, not as a reason for prioritising anything.
 
-**Nothing in flight.** `b9/0003` landed 2026-08-25 and **B9 is complete**.
+**Nothing in flight.** `b9/0003` and `b1/0003` both landed 2026-08-25.
+**B9 and B1 are complete.**
 
 **Started the `unverifiable` cluster** — the recommended body of work in
-*Next action*. A7, A10, X1 and **B9** are finished. **5 to go:** B6 (2),
-`a9/0001`, `b1/0003`, `b8/0001`.
+*Next action*. A7, A10, X1, **B9** and **B1** are finished. **4 to go:**
+B6 (2), `a9/0001`, `b8/0001`.
 
 **State as of 2026-08-25** — run `node scripts/audit.mjs` before trusting any
 of it:
 
 - **101 lessons.** Audit **green**, 2 warnings, six suites pass.
 - **Every lesson has been executed at least once.** The verification log has
-  no absent entries: **96 verified, 5 `unverifiable`** with a stated reason,
+  no absent entries: **97 verified, 4 `unverifiable`** with a stated reason,
   1 `nothing-to-verify`.
 - **`known-issues.json` is down to one entry** — `calls`, gated on B6.
 - `render-as-authored` is **0**, and this time it means it (see *The `variant`
@@ -40,6 +41,97 @@ of it:
 
 **Nothing is blocked.** See *Next action* for the four candidate bodies of
 work and why the `unverifiable` cluster is the recommendation.
+
+### b1/0003 — the limit was enforced after the fact, and B1 is finished (2026-08-25)
+
+M3: **`chooseIndex`**. 19 self-checks, 13 wrong-cases, 3 correct alternatives,
+4 new executable quiz questions where the lesson had **none**, plus a
+standalone playground. **B1 is complete — four of four.** The `unverifiable`
+cluster is down to 4.
+
+**The redemption transaction counted after it inserted.** `b7/0001` locks,
+counts, decides, then inserts; this one locked, inserted, then counted to
+decide whether to auto-revoke. Every statement is correct and the transaction
+is properly atomic. **A token with `max_uses = 0` — which CLAUDE.md is
+explicit permits *no* uses — got exactly one**, and was then marked exhausted,
+so the row afterwards is indistinguishable from a token used up legitimately.
+
+**Worth carrying: atomicity guarantees your steps happen together, and says
+nothing about whether they are in the right order.** A limit enforced after
+the fact is not a limit, it is a cleanup — and the reason it survives review
+is that the failing case is the *strictest* token, which nobody tests.
+
+### The lesson demonstrated the mistake it warned about, in the same block
+
+Two lines apart: `CREATE INDEX idx_tokens_code ON tokens(code);` followed by
+the comment *"Already covered by UNIQUE constraint — no need!"*, under a
+bullet warning against over-indexing. **A comment does not undo the statement
+above it**, and anyone pasting the block got the redundant index.
+
+### Index selection is a longest-usable-prefix problem, as predicted
+
+The prediction held. The lesson's advice was *"always index columns you filter
+on"*, which is exactly the advice that produces indexes the planner cannot
+use, and it never mentioned the leftmost-prefix rule at all.
+
+**Every mistake in the case file fails in the same direction — it claims an
+index will be used when it will not.** Nothing errors, the query returns the
+right rows, and the only symptom is a sequential scan that gets slower every
+month. That is the argument for writing the rule down as a function: you
+cannot see it by reading, and by the time you can measure it the table is too
+big to fix quietly.
+
+Three rules the exercise pins, all consequences of an index being one sorted
+list:
+
+- **`(user_id, status)` is worth nothing to `WHERE status = 'active'`.** The
+  column is *in* the index; the rows are scattered a few under every user.
+- **The first range ends the usable prefix.** Filter all three columns of
+  `(user_id, created_at, status)` with a range in the middle and you reach
+  two — which is what decides the *order* you declare a composite index in.
+- **Uniform `DESC` is free and mixed directions are not**, because a backwards
+  scan of one sorted list is a scan and a zigzag is not.
+
+**Flagged as a deliberate simplification:** the ranking puts more usable
+columns above a free sort, and a real planner costs plans against column
+statistics and will sometimes prefer a sequential scan outright. The lesson
+says so. What a planner will *never* do is enter an index from the middle, and
+that is the part that is structural.
+
+### Three fixture names are load-bearing, which is not obvious
+
+`idx_tokens_user_created` sorts before `idx_tokens_user_id` alphabetically,
+and `idx_tokens_created` before `idx_tokens_recent_active`. Those two facts
+are the only reason the width tie-break and the partial tie-break are
+observable at all — with friendlier names the wrong answer wins the tie by
+accident and the check passes. Both fixtures carry a comment saying so.
+
+### One wrong-case was too broad to be diagnostic
+
+Counting every filtered column wherever it appeared tripped **four** checks
+and simply subsumed the leftmost-prefix case. Narrowed to `continue` where the
+rule needs `break` — the same bug one keyword wide, and the keyword you
+actually reach for when the loop reads as *"count the columns we have filters
+for"*. 8 of 13 now trip exactly one check.
+
+The three leftmost-prefix mistakes still trip two or three each, and that is
+inherent rather than a diagnostics problem: **"entered from the second
+column", "a gap ends the prefix" and "zero usable is a seq scan" are one rule
+observed at three positions.** They stay separate because they read as three
+different surprises to someone learning it.
+
+### The downstream grep found the rename in two more lessons
+
+Three for three now. `issued_to` → `label` landed in `b1/0001` and `b1/0002`
+on 2026-08-23; **`b1/0003` and `b1/0004` still had it**, and `b1/0004` had
+been through the M3 pass in between. Also swept the revoke shape: `b1/0004`
+and `b2/0002` both set `status = 'revoked'` without `paused_at = NULL`, which
+`b2/0001`'s second biconditional refuses. All re-verified.
+
+**The `code` column in B1 stays.** `b1/0001` labels it a teaching
+simplification and B2 replaces it with `code_hash`; `b1/0002` carries a
+pointer saying so and `b1/0003` did not, so it has one now. Checking that
+before editing is the only reason it was not "fixed" into a contradiction.
 
 ### b9/0003 — the retention was true of one directory, and B9 is finished (2026-08-25)
 
@@ -2300,33 +2392,37 @@ executed; the log is 84 verified, 17 `unverifiable` with a reason, 1
 
 What is left, in no forced order:
 
-1. **The `unverifiable` lessons — started 2026-08-23; all of A7, A10, X1 and
-   B9 done, 5 left.**
+1. **The `unverifiable` lessons — started 2026-08-23; all of A7, A10, X1,
+   B9 and B1 done, 4 left.**
    `CLAUDE.md` warns that the reflex to reach for that flag is wrong more often
    than it is right, and this pass proved it again — nine lessons that looked
    unrunnable produced nine exercises, and `a7/0001` then produced a tenth
    plus two real defects. Remaining clusters: **B6 (2)**, plus `b9/0003`, `a9/0001`,
    `b1/0003`, `b8/0001`. Each needs the same
    move: find the plain function, excuse the rest per-exercise, **and add the
-   `createExplain` prompt** — the 5 without one are exactly the 5 still
+   `createExplain` prompt** — the 4 without one are exactly the 4 still
    excused.
 
-   **Next: `b1/0003-indexes-transactions-constraints.html`**, the cheapest of
-   the five — it is the last B1 lesson and the other three all produced a
-   working exercise on 2026-08-23. Its excuse is *"the solution is SQL needing
-   Postgres"*, which is the same excuse `b1/0001`, `b1/0002` and `b1/0004`
-   carried before each of them turned out to hold an algorithm. Index
-   *selection* is a precedence problem — which index a planner picks for a
-   given `WHERE` is a longest-usable-prefix question, the same shape as
-   `x1/0003`'s `paths`. Check it against `b2/0001`'s biconditional `CHECK`
-   constraints and `b7/0001`'s `FOR UPDATE`-then-count, both of which already
-   decided things it may contradict.
+   **Next: `a9/0001-universal-links-app-links.html`.** Its excuse is *"native
+   link configuration needing a device and a published domain"*, and the
+   configuration is not the interesting half: **deciding whether an incoming
+   URL is one this app should claim, and what to do with it, is pure string
+   work with a precedence order** — path patterns, the `apple-app-site-association`
+   match rules, and the cold-start-versus-warm-start branch. Check it against
+   `a2/0003`'s `readRouteParams`, which already decided that a deep link is
+   annotated-not-checked input, and against ADR-0007: **the redemption page
+   URL is the one place a code legitimately appears in a path**, so the
+   handling of that path is exactly where a leak would be.
 
-   **`b9/0003` predicted the retention would be a precedence problem and it
-   was**, but the sharper finding was cross-lesson rather than in-lesson: see
-   the entry above. **B6 (2 lessons) is the one genuinely blocked cluster** —
-   it is also what gates the last `known-issues.json` entry, so writing it
-   closes two things at once.
+   Then `b8/0001`, and **B6 (2 lessons) last** — it is the one genuinely
+   blocked cluster and also what gates the final `known-issues.json` entry, so
+   writing it closes two things at once.
+
+   **Two for two on the prediction so far:** `b9/0003`'s retention and
+   `b1/0003`'s index selection were both the precedence problem *Next action*
+   guessed. In both cases the sharper finding was still cross-lesson rather
+   than in-lesson — the off-site prune, and the count-after-insert. **Predict
+   the exercise from the topic; find the defect by reading the siblings.**
 
    **A fifth result to carry, new today:** `b9/0001` caught an error I had
    introduced in `x1/0003` an hour earlier, because its Dockerfile disagreed

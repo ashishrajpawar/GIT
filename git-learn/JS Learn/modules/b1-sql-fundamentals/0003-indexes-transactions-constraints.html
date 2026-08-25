@@ -40,19 +40,35 @@ SELECT * FROM tokens WHERE code = 'MERC-8GH2-KP4X';
 CREATE INDEX idx_tokens_code ON tokens(code);
 -- Now the same query uses the index — nearly instant regardless of table size.</code></pre>
 
+    <div class="callout">
+      <div class="callout-title">The <code>code</code> column here is B1's
+      labelled simplification</div>
+      <p>
+        Token never stores a code in the clear. <code>b1/0001</code> says so
+        and explains why the whole module does it anyway: you are here to learn
+        what an index <em>is</em>, and <code>WHERE code = 'MERC-8GH2-KP4X'</code>
+        reads better than <code>WHERE code_hash = '9f2a…'</code> while you do
+        it. B2 replaces it with <code>code_hash</code> for lookup and
+        <code>code_enc</code> for the one time the owner asks to see it.
+        <strong>Every rule on this page applies unchanged to the hash column</strong>
+        &mdash; it is still <code>UNIQUE</code>, so it is still already indexed.
+      </p>
+    </div>
+
     <h3>When to create indexes</h3>
 
     <ul>
-      <li><strong>Always index</strong>: columns you filter on frequently (WHERE), columns you join on, columns you sort by (ORDER BY)</li>
-      <li><strong>Already indexed</strong>: PRIMARY KEY and UNIQUE columns get automatic indexes</li>
-      <li><strong>Don't over-index</strong>: each index slows down INSERT/UPDATE (it must update the index too). Only index what you query.</li>
+      <li><strong>Index what you <em>query</em>, in the order you query it</strong> — not simply "every column that appears in a WHERE". See the leftmost-prefix rule below; it is the difference between an index and an index-shaped file the planner never opens.</li>
+      <li><strong>Already indexed</strong>: PRIMARY KEY and UNIQUE columns get automatic indexes. Creating your own on top is pure cost.</li>
+      <li><strong>Don't over-index</strong>: each index slows down INSERT/UPDATE (it must update the index too). One well-ordered composite index usually replaces three single-column ones.</li>
     </ul>
 
     <p>For Token, these indexes matter on day one:</p>
 
-    <pre><code>-- Token lookup by code (the redemption path — must be fast)
-CREATE INDEX idx_tokens_code ON tokens(code);
--- Already covered by UNIQUE constraint — no need!
+    <pre><code>-- Token lookup by code (the redemption path — must be fast).
+-- NOTHING TO DO: `code TEXT NOT NULL UNIQUE` already created an index.
+-- Adding CREATE INDEX idx_tokens_code here would build a second copy of
+-- the same B-tree, doubling the write cost of every INSERT to buy nothing.
 
 -- Tokens by user (the token list screen)
 CREATE INDEX idx_tokens_user_id ON tokens(user_id);
@@ -60,8 +76,83 @@ CREATE INDEX idx_tokens_user_id ON tokens(user_id);
 -- Messages by token (loading a conversation)
 CREATE INDEX idx_messages_token_id ON messages(token_id);
 
--- Redemption events by token
+-- Redemption events by token. Load-bearing rather than an optimisation:
+-- there is no use_count column, so the redemption transaction COUNTs
+-- these rows while holding a lock, on every single redemption.
 CREATE INDEX idx_redemptions_token_id ON redemption_events(token_id);</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">This page used to create
+      <code>idx_tokens_code</code> and then tell you not to, two lines
+      apart</div>
+      <p>
+        The block above genuinely ran <code>CREATE INDEX idx_tokens_code ON
+        tokens(code);</code> followed by the comment <em>"Already covered by
+        UNIQUE constraint &mdash; no need!"</em>. A comment does not undo the
+        statement above it, and anyone pasting the block got exactly the
+        redundant index the same page warns about in the bullet directly
+        overhead. <strong>The demonstration and the warning were in the same
+        code block, pointing opposite ways.</strong>
+      </p>
+    </div>
+
+    <h3>The leftmost-prefix rule — why a correct-looking index is never used</h3>
+
+    <p>
+      A composite index is one sorted list, ordered by its first column, then
+      by its second within each value of the first, and so on. That is the
+      whole data structure, and every rule below is a consequence of it.
+    </p>
+
+    <pre><code>CREATE INDEX idx_tokens_user_status ON tokens(user_id, status);
+
+-- USES IT. user_id is the first column, so the index narrows straight down.
+SELECT * FROM tokens WHERE user_id = 7 AND status = 'active';
+
+-- USES IT, partially. Everything for one user is contiguous.
+SELECT * FROM tokens WHERE user_id = 7;
+
+-- CANNOT USE IT AT ALL. Sequential scan.
+SELECT * FROM tokens WHERE status = 'active';</code></pre>
+
+    <p>
+      The last one is the whole lesson. <code>status</code> <em>is</em> in the
+      index, and the index is useless for it &mdash; the active tokens are
+      scattered through the list, a few under every user. <strong>An index can
+      only be entered from the left.</strong> There is no error, no warning and
+      no difference in the query; you find out from
+      <code>EXPLAIN</code>, or from the query getting slower every month.
+    </p>
+
+    <p>Two more consequences worth knowing before you design a schema:</p>
+
+    <ul>
+      <li>
+        <strong>The first inequality ends the usable prefix.</strong> With
+        <code>(user_id, created_at, status)</code>, a query filtering
+        <code>user_id = 7 AND created_at &gt; '2026-01-01' AND status =
+        'active'</code> uses the first two columns and then stops. Within a
+        <em>range</em> of <code>created_at</code>, <code>status</code> is not
+        sorted &mdash; so put your equality columns first and your range column
+        last.
+      </li>
+      <li>
+        <strong>An index can also supply the ORDER BY</strong>, which turns a
+        sort into nothing at all &mdash; but only where the sort columns follow
+        the equality-filtered ones, in index order. A backwards scan is free, so
+        <code>ORDER BY a DESC, b DESC</code> is fine; <code>a ASC, b DESC</code>
+        is not, because no single pass through one sorted list produces it.
+      </li>
+    </ul>
+
+    <h3>Try it yourself</h3>
+
+    <p>
+      Six queries against one index. Predict each answer before you press Run
+      &mdash; the ones people get wrong are the fourth and the sixth.
+    </p>
+
+    <div id="playground-prefix"></div>
 
     <h3>Checking if an index is used</h3>
 
@@ -77,33 +168,101 @@ EXPLAIN ANALYZE SELECT * FROM tokens WHERE user_id = 1;</code></pre>
 
     <p>A transaction groups multiple SQL statements into one atomic operation. Either ALL succeed or ALL are rolled back — no partial state.</p>
 
-    <pre><code>-- Token redemption: three things must happen together
+    <pre><code>-- Token redemption. The ORDER of these steps is the whole thing:
+-- lock, COUNT, decide, and only then insert.
 BEGIN;
 
--- 1. Verify the token is active
+-- 1. Lock the row. Take the id from here and use it below -- the whole
+--    point of the lock is that this row cannot change underneath you.
 SELECT id, status, max_uses FROM tokens
 WHERE code = 'MERC-8GH2-KP4X' AND status = 'active'
-FOR UPDATE;  -- lock this row so no other connection changes it
+FOR UPDATE;
+-- => id = 1. No row means paused, revoked or no such code: ROLLBACK.
 
--- 2. Record the redemption event
+-- 2. COUNT BEFORE YOU INSERT. This is the step that enforces the limit,
+--    and it only works while the token row above is locked.
+--    NULL max_uses is unlimited and skips this entirely; 0 is a real
+--    limit that permits nothing, and 0 >= 0 refuses the first attempt.
+SELECT COUNT(*) FROM redemption_events WHERE token_id = 1;
+-- => if max_uses IS NOT NULL AND count >= max_uses: ROLLBACK.
+
+-- 3. Only now does the redemption exist.
 INSERT INTO redemption_events (token_id, holder_name, holder_ip)
 VALUES (1, 'Delivery Person', '192.168.1.1');
 
--- 3. If max_uses reached, auto-revoke
+-- 4. If that was the last permitted use, retire the token.
+--    paused_at = NULL because a revoked token is not a paused one --
+--    b2/0001's CHECK constraints refuse the row otherwise.
 UPDATE tokens
-SET status = 'revoked', revoked_at = NOW()
-WHERE code = 'MERC-8GH2-KP4X'
-AND (SELECT COUNT(*) FROM redemption_events WHERE token_id = 1) >= max_uses
-AND max_uses IS NOT NULL;   -- NULL is unlimited. 0 is a limit, not the absence of one.
+SET status = 'revoked', revoked_at = NOW(), paused_at = NULL
+WHERE id = 1
+AND max_uses IS NOT NULL
+AND (SELECT COUNT(*) FROM redemption_events WHERE token_id = 1) >= max_uses;
 
-COMMIT;  -- all three succeed together</code></pre>
+COMMIT;</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">Counting after the INSERT gives a
+      <code>max_uses = 0</code> token exactly one free redemption</div>
+
+      <p>
+        Until 2026-08-25 step 3 came before step 2: insert the event, then
+        count, then auto-revoke if the count had reached the limit. Every
+        individual statement is correct and the transaction is properly atomic.
+        It still lets through the one thing it exists to prevent.
+      </p>
+      <p>
+        Walk a token with <code>max_uses = 0</code> through it. The status is
+        <code>active</code>, so the <code>SELECT</code> returns the row. The
+        <code>INSERT</code> runs &mdash; <strong>the redemption has now
+        happened</strong>. The count is 1, <code>1 &gt;= 0</code> is true, so
+        the token is revoked. Final state: a token that permits no uses at all
+        has been used once, and is now correctly marked as exhausted, so
+        nothing downstream will ever report it.
+      </p>
+      <p>
+        <code>CLAUDE.md</code> is explicit that <strong><code>NULL</code> is
+        unlimited and <code>0</code> permits nothing</strong>, and
+        <code>b7/0001</code>'s <code>canRedeem</code> gets the order right:
+        lock, count, decide, insert. <strong>An atomic transaction guarantees
+        that all your steps happen together. It does not check that they are
+        in the right order</strong> &mdash; and a limit enforced after the fact
+        is not a limit, it is a cleanup.
+      </p>
+    </div>
 
     <p>If any statement fails (or you call ROLLBACK), everything since BEGIN is undone:</p>
 
     <pre><code>BEGIN;
-UPDATE tokens SET status = 'revoked' WHERE code = 'MERC-8GH2-KP4X';
+UPDATE tokens
+SET status = 'revoked', revoked_at = NOW(), paused_at = NULL
+WHERE code = 'MERC-8GH2-KP4X';
 -- Oops, wrong token!
 ROLLBACK;  -- undoes the UPDATE — nothing happened</code></pre>
+
+    <div class="callout">
+      <div class="callout-title">Why the timestamps travel with the status,
+      even in a throwaway example</div>
+      <p>
+        This example used to be <code>SET status = 'revoked'</code> and nothing
+        else, which is the natural way to write it and which
+        <code>b2/0001</code>'s schema <strong>rejects</strong>. State is stored
+        twice on purpose &mdash; <code>status</code> is what you read,
+        <code>revoked_at</code> and <code>paused_at</code> are what you write
+        &mdash; and two biconditional constraints refuse any row where the two
+        disagree:
+      </p>
+      <pre><code>CHECK ((status = 'revoked') = (revoked_at IS NOT NULL)),
+CHECK ((status = 'paused')  = (paused_at  IS NOT NULL))</code></pre>
+      <p>
+        Note <code>paused_at = NULL</code> in the revoke. Pausing a token and
+        then revoking it is an ordinary sequence, and without that clause the
+        row claims to be both. <strong>The state machine's exclusivity is a
+        database fact here, not a convention</strong> &mdash; which is the
+        entire argument of this lesson, so an example that would not survive
+        the constraints is the wrong example to learn from.
+      </p>
+    </div>
 
     <h3>FOR UPDATE — row locking</h3>
 
@@ -119,16 +278,24 @@ ROLLBACK;  -- undoes the UPDATE — nothing happened</code></pre>
     <p>You've seen NOT NULL, UNIQUE, and CHECK. Here's the full picture:</p>
 
     <h3>NOT NULL — field must have a value</h3>
-    <pre><code>-- A token must always have an issued_to — who is it for?
-issued_to TEXT NOT NULL</code></pre>
+    <pre><code>-- A token must always have a label — what is it for? "Blinkit delivery"
+label TEXT NOT NULL</code></pre>
+
+    <p>
+      <code>NOT NULL</code> rejects <code>NULL</code> and <strong>nothing
+      else</strong>. It does not reject <code>''</code>, and
+      <code>b1/0001</code> spends a section on the difference &mdash; an empty
+      label satisfies this column and then renders as a blank row, because
+      <code>?? 'Unnamed'</code> catches <code>null</code> and not <code>''</code>.
+    </p>
 
     <h3>UNIQUE — no duplicates</h3>
     <pre><code>-- Two tokens can't have the same code
 code TEXT NOT NULL UNIQUE
 
--- Composite unique: one user can't have two tokens with the same issued_to
-ALTER TABLE tokens ADD CONSTRAINT unique_user_issued
-UNIQUE (user_id, issued_to);</code></pre>
+-- Composite unique: one user can't have two tokens with the same label
+ALTER TABLE tokens ADD CONSTRAINT unique_user_label
+UNIQUE (user_id, label);</code></pre>
 
     <h3>CHECK — custom validation rules</h3>
     <pre><code>-- Status must be one of three values
@@ -138,9 +305,43 @@ CHECK (status IN ('active', 'paused', 'revoked'))
 -- NULL passes a CHECK constraint, which is what we want here: unlimited.
 CHECK (max_uses >= 0)
 
--- allowed hours must be valid
-CHECK (allowed_start >= 0 AND allowed_start <= 23)
-CHECK (allowed_end >= 0 AND allowed_end <= 23)</code></pre>
+-- And the two that make the duplicated state safe rather than merely
+-- tolerated. Read them as "these two facts must agree, in BOTH
+-- directions" -- see the ROLLBACK callout above.
+CHECK ((status = 'revoked') = (revoked_at IS NOT NULL))
+CHECK ((status = 'paused')  = (paused_at  IS NOT NULL))</code></pre>
+
+    <div class="callout warning">
+      <div class="callout-title">A <code>CHECK</code> does not imply
+      <code>NOT NULL</code></div>
+      <p>
+        <code>CHECK (status IN ('active', 'paused', 'revoked'))</code> accepts
+        a <code>NULL</code> status happily. A check rejects only what it can
+        prove <strong>false</strong>, and a comparison against
+        <code>NULL</code> is <em>unknown</em>, which is not false. The same
+        three-valued logic is why <code>CHECK (max_uses &gt;= 0)</code> lets
+        <code>NULL</code> through &mdash; there it is exactly what we want, and
+        one line above it is a hole. <code>b1/0001</code> has the full table.
+      </p>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Time windows are rows, not columns</div>
+      <p>
+        This section used to carry
+        <code>CHECK (allowed_start &gt;= 0 AND allowed_start &lt;= 23)</code>,
+        against a pair of columns on <code>tokens</code>. A token's rules do
+        not live on the token: they are <code>access_rules</code> rows, one per
+        rule, with a constrained <code>rule_type</code> and a
+        <code>payload JSONB</code>. There are exactly three types &mdash;
+        <code>time_window</code>, <code>contact_limit</code> and
+        <code>channel_restrict</code> &mdash; and the deciding argument for
+        rows was precisely this one: <strong><code>rule_type</code> can be a
+        constrained column, so the database can refuse a rule the engine cannot
+        evaluate.</strong> A pair of hour columns has no layer at which that is
+        catchable. <code>b2/0001</code> builds it.
+      </p>
+    </div>
 
     <h3>FOREIGN KEY — referential integrity</h3>
     <pre><code>-- Every token must belong to a real user
@@ -175,7 +376,21 @@ max_uses INTEGER   -- nullable: NULL is unlimited, 0 permits nothing</code></pre
 
     <hr>
 
-    <h2>Exercise</h2>
+    <h2>Now build it yourself: which index does this query get?</h2>
+
+    <p>
+      The leftmost-prefix rule is short to state and almost impossible to apply
+      by eye once there are four indexes and a query with a range and an
+      <code>ORDER BY</code> in it. So write it down as a function and let it
+      answer.
+    </p>
+
+    <div id="exercise-index"></div>
+    <div id="pg-exercise-index"></div>
+
+    <div id="explain-b1-0003"></div>
+
+    <h2>Exercise: the redemption transaction</h2>
 
     <div id="exercise-1"></div>
 
@@ -191,37 +406,398 @@ max_uses INTEGER   -- nullable: NULL is unlimited, 0 permits nothing</code></pre
   </div>
 
   <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/playground.js"></script>
   <script src="../../assets/solution.js"></script>
+  <script src="../../assets/explain.js"></script>
   <script src="../../assets/progress.js"></script>
   <script src="../../assets/copy-code.js"></script>
 
   <script>
-    createSolution("exercise-1", {
-      exercise: "Write a complete token redemption transaction. It should: (1) BEGIN the transaction, (2) SELECT the token by code with FOR UPDATE to lock it, (3) Check that the token is active (if not, ROLLBACK), (4) INSERT a redemption_event, (5) If max_uses IS NOT NULL and the redemption count now equals it, UPDATE the token to 'revoked' -- note IS NOT NULL, not > 0: NULL means unlimited and 0 is a real limit, (6) COMMIT. Also: create the indexes Token needs for its most common queries.",
+    createPlayground("playground-prefix", `// CREATE INDEX idx ON tokens(user_id, created_at, status);
+const INDEX = ["user_id", "created_at", "status"];
+
+// How far into the index a query can reach. Walk from the LEFT, stop at the
+// first column with no filter, and stop AFTER the first range.
+function usableColumns(ops) {
+  let n = 0;
+  for (const column of INDEX) {
+    const op = ops[column];
+    if (!op) break;
+    n++;
+    if (op === "range") break;
+  }
+  return n;
+}
+
+const queries = [
+  ["WHERE user_id = 7",                                  { user_id: "eq" }],
+  ["WHERE user_id = 7 AND created_at > '2026-01-01'",    { user_id: "eq", created_at: "range" }],
+  ["WHERE user_id = 7 AND created_at = '2026-01-01'",    { user_id: "eq", created_at: "eq" }],
+  ["WHERE status = 'active'",                            { status: "eq" }],
+  ["WHERE user_id = 7 AND status = 'active'",            { user_id: "eq", status: "eq" }],
+  ["WHERE user_id = 7 AND created_at > '..' AND status = 'active'",
+                                                         { user_id: "eq", created_at: "range", status: "eq" }],
+];
+
+for (const [sql, ops] of queries) {
+  const n = usableColumns(ops);
+  const verdict = n === 0 ? "SEQ SCAN" : "uses " + n + " of " + INDEX.length;
+  console.log(verdict.padEnd(16) + sql);
+}
+
+// The fourth is the leftmost-prefix rule: status is IN the index and the
+// index cannot be entered from it.
+// The sixth filters all three columns and still reaches only two -- within
+// a range of created_at, status is no longer sorted.
+//
+// Now try it: change the INDEX order to ["user_id", "status", "created_at"]
+// and run again. The last query goes from 2 to 3, for free, because the
+// range column moved to the end.`);
+
+    createSolution("exercise-index", {
+      exercise: "Write chooseIndex(indexes, query) — decide which index Postgres can actually use, and how much of it.\n\nEach index is:\n\n  {\n    name:    'idx_tokens_user_status',\n    columns: ['user_id', 'status'],\n    partial: null | { column: 'status', value: 'active' }\n  }\n\nquery is:\n\n  {\n    filters: [{ column: 'user_id', op: 'eq', value: 7 },\n              { column: 'created_at', op: 'range' }],\n    orderBy: [{ column: 'created_at', direction: 'asc' }]\n  }\n\nReturn { name, usableColumns, avoidsSort }.\n\nThe rules — every one of them is a consequence of an index being ONE SORTED LIST, so reason from that rather than memorising them:\n\n1. LEFTMOST PREFIX. Walk the index columns from the FIRST one. A column is usable only if the query filters on it and every column before it was usable too. The first unfiltered column ends the walk. So (user_id, status) is worth nothing to a query that filters only on status — the active rows are scattered a few under every user.\n\n2. THE FIRST RANGE ENDS THE PREFIX. A range column is usable itself and nothing after it is, because within a range of that column the next one is not sorted. Equality columns first, range column last.\n\n3. ZERO USABLE COLUMNS MEANS NO INDEX. Return { name: null, usableColumns: 0, avoidsSort: false }. An index you cannot enter from the left is not a slower index, it is a sequential scan.\n\n4. A PARTIAL INDEX IS USABLE ONLY IF THE QUERY PROVES ITS PREDICATE. It contains only the rows matching its WHERE, so it may be used only when the query has an EQUALITY filter on that column with that exact value. The right column with the wrong value proves nothing. Note the predicate column does NOT have to appear in columns.\n\n5. avoidsSort: THE INDEX ALSO SUPPLIES THE ORDER BY. True when orderBy is empty. Otherwise the orderBy columns must be exactly the index columns following the leading EQUALITY-filtered ones, in that order — and all directions must be the same, because a backwards scan of one sorted list is free and a zigzag is impossible. A range before them breaks it: the rows come back grouped by the range column, not by what you asked for.\n\n6. RANKING, when more than one index is usable, in this order:\n     more usableColumns wins — filtering beats sorting, because sorting 10 rows is free and scanning 10 million is not;\n     then avoidsSort true wins;\n     then a satisfied PARTIAL index wins, being the smaller relation;\n     then FEWER total columns wins, being the cheaper index to maintain;\n     then the name, ascending, so two runs agree.\n\n7. DO NOT MUTATE indexes or query.\n\nThis models the RULE, not the planner. A real one costs plans against column statistics and will sometimes choose a sequential scan over a perfectly usable index because it expects to match half the table. What it will never do is use an index you cannot enter from the left — that part is structural, and it is the part that surprises people.",
       hints: [
-        "FOR UPDATE goes at the end of the SELECT statement.",
-        "In real code (Node.js), you'd check the SELECT result in JavaScript and decide whether to ROLLBACK or continue. In pure SQL, you can use a conditional with DO blocks, but a simple linear script showing the concept is fine.",
-        "Key indexes: tokens(user_id), tokens(code) is already UNIQUE, redemption_events(token_id), messages(token_id)."
+        "Rule 1 is a loop with a break, not a filter. The moment a column is missing you must stop, not skip to the next one.",
+        "Rule 5 needs a SECOND, shorter walk: the leading columns that are filtered by EQUALITY. That is not the same number as usableColumns, because a range column is usable and still ends the sortable part.",
+        "Do rules 1-4 to build a list of candidates, then sort that list by rule 6 and take the first. Trying to track a 'best so far' through one pass is where the tie-breaks get lost."
       ],
-      solution: `-- Indexes for Token's common queries
-CREATE INDEX idx_tokens_user_id ON tokens(user_id);
-CREATE INDEX idx_tokens_status ON tokens(status);
+      solution: `// api/src/db/chooseIndex.js
+//
+// An index is one sorted list: ordered by column 1, then by column 2 within
+// each value of column 1, and so on. Every rule below falls out of that.
+
+function chooseIndex(indexes, query) {
+  const filters = query.filters || [];
+  const orderBy = query.orderBy || [];
+
+  function filterFor(column) {
+    for (const f of filters) if (f.column === column) return f;
+    return null;
+  }
+
+  // Rule 4. We can only prove the query stays inside a partial index from an
+  // equality filter naming that column AND that value. A range over it, or
+  // the same column with a different value, proves nothing.
+  function predicateProven(index) {
+    if (!index.partial) return true;
+    const f = filterFor(index.partial.column);
+    return !!f && f.op === "eq" && f.value === index.partial.value;
+  }
+
+  // Rule 1 + 2. Walk from the left; stop at the first column with no filter,
+  // and stop AFTER the first range.
+  function usablePrefix(index) {
+    let n = 0;
+    for (const column of index.columns) {
+      const f = filterFor(column);
+      if (!f) break;
+      n++;
+      if (f.op === "range") break;
+    }
+    return n;
+  }
+
+  // Rule 5. A different, shorter walk: only the leading EQUALITY columns.
+  // Within one value of each of those the rest of the index is still in
+  // order, which is what makes the sort disappear.
+  function equalityPrefix(index) {
+    let n = 0;
+    for (const column of index.columns) {
+      const f = filterFor(column);
+      if (!f || f.op !== "eq") break;
+      n++;
+    }
+    return n;
+  }
+
+  function avoidsSort(index) {
+    if (orderBy.length === 0) return true;
+    const directions = new Set(orderBy.map(function (o) { return o.direction || "asc"; }));
+    if (directions.size > 1) return false;   // no single pass produces a zigzag
+    const start = equalityPrefix(index);
+    for (let i = 0; i < orderBy.length; i++) {
+      if (index.columns[start + i] !== orderBy[i].column) return false;
+    }
+    return true;
+  }
+
+  const candidates = [];
+  for (const index of indexes) {
+    if (!predicateProven(index)) continue;
+    const usable = usablePrefix(index);
+    if (usable === 0) continue;             // Rule 3: not a slower index, no index
+    candidates.push({
+      index: index,
+      usableColumns: usable,
+      avoidsSort: avoidsSort(index),
+      isPartial: !!index.partial,
+    });
+  }
+
+  if (candidates.length === 0) {
+    return { name: null, usableColumns: 0, avoidsSort: false };
+  }
+
+  // Rule 6, in order. Every tie-break below is doing real work -- see the
+  // wrong-cases in scripts/cases for what happens when each is dropped.
+  candidates.sort(function (a, b) {
+    if (a.usableColumns !== b.usableColumns) return b.usableColumns - a.usableColumns;
+    if (a.avoidsSort !== b.avoidsSort) return a.avoidsSort ? -1 : 1;
+    if (a.isPartial !== b.isPartial) return a.isPartial ? -1 : 1;
+    const width = a.index.columns.length - b.index.columns.length;
+    if (width !== 0) return width;
+    return a.index.name < b.index.name ? -1 : a.index.name > b.index.name ? 1 : 0;
+  });
+
+  const best = candidates[0];
+  return {
+    name: best.index.name,
+    usableColumns: best.usableColumns,
+    avoidsSort: best.avoidsSort,
+  };
+}`
+    });
+
+    createPlayground("pg-exercise-index", `// Write chooseIndex(indexes, query) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+
+function eq(column, value) { return { column: column, op: "eq", value: value }; }
+function range(column) { return { column: column, op: "range" }; }
+function asc(column) { return { column: column, direction: "asc" }; }
+function desc(column) { return { column: column, direction: "desc" }; }
+function q(filters, orderBy) { return { filters: filters, orderBy: orderBy || [] }; }
+
+// TOKENS: the four indexes a Token database plausibly grows. The NAMES are
+// load-bearing -- idx_tokens_user_created sorts BEFORE idx_tokens_user_id
+// alphabetically, which is the only reason the width tie-break is
+// observable. Do not tidy them.
+function TOKENS() {
+  return [
+    { name: "idx_tokens_status",       columns: ["status"] },
+    { name: "idx_tokens_user_created", columns: ["user_id", "created_at"] },
+    { name: "idx_tokens_user_id",      columns: ["user_id"] },
+    { name: "idx_tokens_user_status",  columns: ["user_id", "status"] },
+  ];
+}
+
+// One three-column index, for the prefix mechanics on their own.
+function ABC() {
+  return [{ name: "idx_abc", columns: ["a", "b", "c"] }];
+}
+
+// Only a composite. A query on its SECOND column has nowhere to go.
+function COMPOSITE_ONLY() {
+  return [{ name: "idx_tokens_user_status", columns: ["user_id", "status"] }];
+}
+
+// Same columns, one of them partial. These NAMES are load-bearing too:
+// idx_tokens_created sorts first alphabetically, so if the partial
+// tie-break is dropped the full index wins and the check can see it.
+function PARTIALS() {
+  return [
+    { name: "idx_tokens_created",       columns: ["user_id", "created_at"] },
+    { name: "idx_tokens_recent_active", columns: ["user_id", "created_at"],
+      partial: { column: "status", value: "active" } },
+  ];
+}
+
+try {
+  if (typeof chooseIndex !== "function") throw new Error("not written yet");
+
+  try {
+    const r = chooseIndex(COMPOSITE_ONLY(), q([eq("status", "active")]));
+    check("an index cannot be entered from its second column",
+          r.name === null && r.usableColumns === 0,
+          "got " + JSON.stringify(r) + " -- the active rows are scattered a few under every user");
+  } catch (e) { check("an index cannot be entered from its second column", false, "threw " + e.message); }
+
+  try {
+    const r = chooseIndex(TOKENS(), q([eq("user_id", 7), eq("status", "active")]));
+    check("both equality columns of a composite index are usable",
+          r.name === "idx_tokens_user_status" && r.usableColumns === 2,
+          "got " + JSON.stringify(r));
+  } catch (e) { check("both equality columns of a composite index are usable", false, "threw " + e.message); }
+
+  try {
+    const r = chooseIndex(ABC(), q([eq("a", 1), range("b"), eq("c", 3)]));
+    check("the first range ends the prefix; nothing after it counts",
+          r.usableColumns === 2,
+          "got " + r.usableColumns + " (3 = walked past the range; within a range of b, c is not sorted)");
+  } catch (e) { check("the first range ends the prefix; nothing after it counts", false, "threw " + e.message); }
+
+  try {
+    const r = chooseIndex(ABC(), q([eq("a", 1), eq("c", 3)]));
+    check("a gap ends the prefix; a later filtered column does not rejoin",
+          r.usableColumns === 1,
+          "got " + r.usableColumns + " (2 = counted filtered columns instead of walking from the left)");
+  } catch (e) { check("a gap ends the prefix; a later filtered column does not rejoin", false, "threw " + e.message); }
+
+  try {
+    const r = chooseIndex(ABC(), q([range("a")]));
+    check("a range on the FIRST column is usable, and is where it stops",
+          r.usableColumns === 1,
+          "got " + r.usableColumns);
+  } catch (e) { check("a range on the FIRST column is usable, and is where it stops", false, "threw " + e.message); }
+
+  try {
+    const r = chooseIndex(ABC(), q([eq("b", 2)]));
+    check("no usable prefix is a sequential scan, not a slow index",
+          r.name === null && r.usableColumns === 0 && r.avoidsSort === false,
+          "got " + JSON.stringify(r));
+  } catch (e) { check("no usable prefix is a sequential scan, not a slow index", false, "threw " + e.message); }
+
+  try {
+    const r = chooseIndex(TOKENS(), q([eq("holder_ip", "1.2.3.4")]));
+    check("a filter on an unindexed column finds nothing to use",
+          r.name === null,
+          "got " + JSON.stringify(r));
+  } catch (e) { check("a filter on an unindexed column finds nothing to use", false, "threw " + e.message); }
+
+  // --- Partial indexes: the predicate has to be PROVEN, not resembled ---
+  try {
+    const r = chooseIndex(PARTIALS(), q([eq("user_id", 7)], [asc("created_at")]));
+    check("a partial index is unusable when nothing proves its predicate",
+          r.name === "idx_tokens_created",
+          "got " + r.name + " -- this query would silently skip every non-active token");
+  } catch (e) { check("a partial index is unusable when nothing proves its predicate", false, "threw " + e.message); }
+
+  try {
+    const r = chooseIndex(PARTIALS(), q([eq("user_id", 7), eq("status", "active")], [asc("created_at")]));
+    check("a proven partial index beats the equivalent full one",
+          r.name === "idx_tokens_recent_active",
+          "got " + r.name + " -- same columns, fewer rows, so it wins the tie");
+  } catch (e) { check("a proven partial index beats the equivalent full one", false, "threw " + e.message); }
+
+  try {
+    const r = chooseIndex(PARTIALS(), q([eq("user_id", 7), eq("status", "paused")], [asc("created_at")]));
+    check("the right predicate column with the wrong value proves nothing",
+          r.name === "idx_tokens_created",
+          "got " + r.name + " -- an index of active rows holds no paused ones at all");
+  } catch (e) { check("the right predicate column with the wrong value proves nothing", false, "threw " + e.message); }
+
+  // --- avoidsSort ---
+  try {
+    const r = chooseIndex(TOKENS(), q([eq("user_id", 7)], [asc("created_at")]));
+    check("the sort disappears when it follows the equality columns",
+          r.name === "idx_tokens_user_created" && r.avoidsSort === true,
+          "got " + JSON.stringify(r));
+  } catch (e) { check("the sort disappears when it follows the equality columns", false, "threw " + e.message); }
+
+  try {
+    const r = chooseIndex(TOKENS(), q([range("user_id")], [asc("created_at")]));
+    check("a RANGE before the sort column brings the sort back",
+          r.avoidsSort === false,
+          "got " + JSON.stringify(r) + " -- rows arrive grouped by user_id, not by created_at");
+  } catch (e) { check("a RANGE before the sort column brings the sort back", false, "threw " + e.message); }
+
+  try {
+    const r = chooseIndex(ABC(), q([eq("a", 1)], [desc("b"), desc("c")]));
+    check("one direction throughout is free, because the scan can run backwards",
+          r.avoidsSort === true,
+          "got " + JSON.stringify(r));
+  } catch (e) { check("one direction throughout is free, because the scan can run backwards", false, "threw " + e.message); }
+
+  try {
+    const r = chooseIndex(ABC(), q([eq("a", 1)], [asc("b"), desc("c")]));
+    check("mixed directions cannot come from one pass over one sorted list",
+          r.avoidsSort === false,
+          "got " + JSON.stringify(r) + " -- forwards and backwards at the same time");
+  } catch (e) { check("mixed directions cannot come from one pass over one sorted list", false, "threw " + e.message); }
+
+  try {
+    const r = chooseIndex(ABC(), q([eq("a", 1)], [asc("c")]));
+    check("the sort columns must start where the equality columns stop",
+          r.avoidsSort === false,
+          "got " + JSON.stringify(r) + " -- c is sorted only within a value of b, and b is unconstrained");
+  } catch (e) { check("the sort columns must start where the equality columns stop", false, "threw " + e.message); }
+
+  try {
+    const r = chooseIndex(TOKENS(), q([eq("user_id", 7)]));
+    check("no ORDER BY means there is no sort to avoid",
+          r.avoidsSort === true,
+          "got " + JSON.stringify(r));
+  } catch (e) { check("no ORDER BY means there is no sort to avoid", false, "threw " + e.message); }
+
+  // --- Ranking ---
+  try {
+    // Every candidate is usable on exactly one column and none has an
+    // ORDER BY to satisfy, so only width separates them.
+    const r = chooseIndex(TOKENS(), q([eq("user_id", 7)]));
+    check("among equals the narrower index wins",
+          r.name === "idx_tokens_user_id",
+          "got " + r.name + " -- idx_tokens_user_created sorts first by NAME, which is not a reason");
+  } catch (e) { check("among equals the narrower index wins", false, "threw " + e.message); }
+
+  try {
+    // idx_tokens_user_status filters two columns and cannot help the sort;
+    // idx_tokens_user_created filters one and can. Filtering wins.
+    const r = chooseIndex(TOKENS(), q([eq("user_id", 7), eq("status", "active")], [asc("created_at")]));
+    check("filtering beats sorting: 2 usable columns outrank a free sort",
+          r.name === "idx_tokens_user_status" && r.usableColumns === 2 && r.avoidsSort === false,
+          "got " + JSON.stringify(r) + " -- sorting 10 rows is free, scanning 10 million is not");
+  } catch (e) { check("filtering beats sorting: 2 usable columns outrank a free sort", false, "threw " + e.message); }
+
+  try {
+    const input = TOKENS();
+    const before = input.map(function (i) { return i.name; }).join(",");
+    chooseIndex(input, q([eq("user_id", 7), eq("status", "active")], [asc("created_at")]));
+    check("the caller's index list is not reordered",
+          input.map(function (i) { return i.name; }).join(",") === before,
+          "was [" + before + "], now [" + input.map(function (i) { return i.name; }).join(",") + "]");
+  } catch (e) { check("the caller's index list is not reordered", false, "threw " + e.message); }
+} catch (e) {
+  console.log("Nothing to check yet -- write chooseIndex above. (" + e.message + ")");
+}`);
+
+    createExplain("explain-b1-0003", {
+      prompt: "<code>CREATE INDEX idx_tokens_user_status ON tokens(user_id, status)</code> is no help at all to <code>WHERE status = 'active'</code>, even though <code>status</code> is right there in the index. Explain why, in terms of what an index physically <em>is</em> &mdash; and then say what makes this particular failure so expensive to find."
+    });
+
+    createSolution("exercise-1", {
+      unverifiable: "the solution is a SQL transaction and CREATE INDEX statements — it needs a running Postgres",
+      exercise: "Write a complete token redemption transaction. It should: (1) BEGIN, (2) SELECT the token by code with FOR UPDATE to lock it, (3) if there is no row, or it is not active, ROLLBACK, (4) COUNT the existing redemption_events for it and ROLLBACK if max_uses IS NOT NULL and the count has already reached it -- IS NOT NULL, not > 0: NULL means unlimited and 0 is a real limit that permits nothing, (5) only now INSERT the redemption_event, (6) if that was the last permitted use, UPDATE the token to 'revoked', (7) COMMIT. Also: create the indexes Token needs for its most common queries.\n\nThe order of 4 and 5 is the exercise. Counting after the insert is a cleanup, not a limit — walk a token with max_uses = 0 through both orders and see what each one permits.",
+      hints: [
+        "FOR UPDATE goes at the end of the SELECT statement, and the lock lives until COMMIT or ROLLBACK — which is what makes the COUNT in step 4 trustworthy.",
+        "In real code (Node.js), you'd check each result in JavaScript and decide whether to ROLLBACK or continue. In pure SQL a linear script showing the concept is fine — but write the two reads in the order the decision needs them.",
+        "Key indexes: tokens(user_id, status) as one composite rather than two singles, redemption_events(token_id), messages(token_id). tokens(code) is already UNIQUE, so it is already indexed."
+      ],
+      solution: `-- Indexes for Token's common queries.
+-- One composite, not two singles: the token list screen filters by user
+-- and status together, and an index on status alone has three distinct
+-- values across the whole table, so it narrows almost nothing.
+CREATE INDEX idx_tokens_user_status ON tokens(user_id, status);
+
+-- Load-bearing rather than an optimisation: there is no use_count column,
+-- so the transaction below COUNTs these rows on every redemption.
 CREATE INDEX idx_redemptions_token_id ON redemption_events(token_id);
-CREATE INDEX idx_redemptions_redeemed_at ON redemption_events(redeemed_at);
+
+-- NOT an index on tokens(code): code TEXT NOT NULL UNIQUE already made one.
 
 -- Token redemption transaction
 BEGIN;
 
--- Step 1: Lock the token row
+-- Step 1: lock the token row. The lock is held until COMMIT or ROLLBACK,
+-- which is the only reason the COUNT below can be trusted.
 SELECT id, status, max_uses
 FROM tokens
 WHERE code = 'MERC-8GH2-KP4X'
 FOR UPDATE;
+-- (In Node.js: no row, or status !== 'active' -> ROLLBACK and refuse.)
 
--- (In Node.js: check if result.rows[0] exists and status === 'active')
--- If not active: ROLLBACK and return error to client
+-- Step 2: COUNT BEFORE INSERTING. This is the step that enforces the
+-- limit. IS NOT NULL, not > 0 -- NULL is unlimited, and 0 is a real limit
+-- that permits nothing, so 0 >= 0 must refuse the very first attempt.
+SELECT COUNT(*) AS uses
+FROM redemption_events
+WHERE token_id = (SELECT id FROM tokens WHERE code = 'MERC-8GH2-KP4X');
+-- (In Node.js: max_uses IS NOT NULL AND uses >= max_uses -> ROLLBACK.)
 
--- Step 2: Record the redemption
+-- Step 3: only now does the redemption exist.
 INSERT INTO redemption_events (token_id, holder_name, holder_ip)
 VALUES (
   (SELECT id FROM tokens WHERE code = 'MERC-8GH2-KP4X'),
@@ -229,10 +805,11 @@ VALUES (
   '103.42.55.12'
 );
 
--- Step 3: Check if max_uses is reached, auto-revoke if so.
--- IS NOT NULL, not > 0 -- NULL is unlimited, and 0 is a real limit.
+-- Step 4: if that was the last permitted use, retire the token.
+-- paused_at = NULL because a revoked token is not a paused one, and
+-- b2/0001's biconditional CHECK refuses a row claiming to be both.
 UPDATE tokens
-SET status = 'revoked', revoked_at = NOW()
+SET status = 'revoked', revoked_at = NOW(), paused_at = NULL
 WHERE code = 'MERC-8GH2-KP4X'
   AND max_uses IS NOT NULL
   AND (
@@ -247,8 +824,32 @@ COMMIT;`
     createQuiz("lesson-quiz", [
       {
         type: "predict-output",
+        code: "// A token whose owner chose 'no uses at all'.\nconst maxUses = 0;\nlet events = 0;\n\n// The order this page used to teach: write the row first, then count it\n// to decide whether to auto-revoke.\nevents += 1;                    // the redemption_events row is written\nconst revoked = maxUses !== null && events >= maxUses;\n\nconsole.log('redemptions: ' + events + ', revoked: ' + revoked);",
+        answer: "redemptions: 1, revoked: true",
+        explanation: "The transaction is perfectly atomic and every statement in it is correct. It still permitted one use of a token that permits none — and then marked the token exhausted, so the row afterwards looks exactly like a token that was used up legitimately. Counting after the insert is a cleanup, not a limit. Move the count above the insert and 0 >= 0 refuses the first attempt, which is what the column means."
+      },
+      {
+        type: "predict-output",
+        code: "// CREATE INDEX idx_tokens_user_status ON tokens(user_id, status);\nconst indexColumns = ['user_id', 'status'];\n\n// ...and a query whose only filter is  WHERE status = 'active'\nconst filtered = ['status'];\n\nlet usable = 0;\nfor (const column of indexColumns) {\n  if (!filtered.includes(column)) break;\n  usable++;\n}\nconsole.log('usable index columns: ' + usable);",
+        answer: "usable index columns: 0",
+        explanation: "status is in the index and the index is worth nothing for this query. An index is one sorted list ordered by user_id first, so the active tokens sit a few under every user, scattered its whole length — there is no contiguous run to jump to. The loop breaks before it counts anything, which is the leftmost-prefix rule in three lines. Note there is no error and no warning: the query returns the right rows, by sequential scan, for ever."
+      },
+      {
+        type: "predict-output",
+        code: "// CREATE INDEX ON tokens(user_id, created_at, status);\nconst indexColumns = ['user_id', 'created_at', 'status'];\nconst op = { user_id: 'eq', created_at: 'range', status: 'eq' };\n\nlet usable = 0;\nfor (const column of indexColumns) {\n  if (!op[column]) break;\n  usable++;\n  if (op[column] === 'range') break;\n}\nconsole.log(usable + ' of ' + indexColumns.length + ' columns usable');",
+        answer: "2 of 3 columns usable",
+        explanation: "All three columns are filtered and the third is still dead weight. Within a RANGE of created_at the status values start over for every distinct timestamp, so there is nothing sorted left to narrow. This is the rule that decides what ORDER you declare a composite index in: equality columns first, the range column last, or you pay to maintain a column the planner cannot reach."
+      },
+      {
+        type: "predict-output",
+        code: "const tokens = [{ max_uses: null }, { max_uses: 0 }, { max_uses: 5 }];\n\nconst truthy  = tokens.map(t => Boolean(t.max_uses)).join(' ');\nconst notNull = tokens.map(t => t.max_uses != null).join(' ');\n\nconsole.log('does it have a limit?');\nconsole.log('  truthiness: ' + truthy);\nconsole.log('  != null:    ' + notNull);",
+        answer: "does it have a limit?\n  truthiness: false false true\n  != null:    false true true",
+        explanation: "The middle token is the whole problem. NULL means unlimited and 0 means no uses are permitted — opposite meanings, and only one of the two is falsy, so a truthiness test calls the strictest possible token unlimited. != null catches null and undefined while leaving 0 alone, which is the entire difficulty in one operator."
+      },
+      {
+        type: "predict-output",
         question: "What happens if you INSERT a token with user_id = 999 and no user with id 999 exists?",
-        code: "INSERT INTO tokens (code, user_id, issued_to)\nVALUES ('TEST-1234', 999, 'Nobody');",
+        code: "INSERT INTO tokens (code, user_id, label)\nVALUES ('TEST-1234', 999, 'Nobody');",
         answer: "ERROR: insert or update on table \"tokens\" violates foreign key constraint",
         explanation: "The REFERENCES users(id) constraint prevents orphaned tokens. Postgres rejects the insert because user 999 doesn't exist. This is referential integrity — the database guarantees every token points to a real user."
       },
@@ -294,7 +895,7 @@ COMMIT;`
       {
         type: "predict-output",
         question: "You create a UNIQUE constraint on tokens(code). What happens when you try to insert a duplicate?",
-        code: "INSERT INTO tokens (code, user_id, issued_to) VALUES ('MERC-8GH2-KP4X', 1, 'Shop A');\nINSERT INTO tokens (code, user_id, issued_to) VALUES ('MERC-8GH2-KP4X', 2, 'Shop B');",
+        code: "INSERT INTO tokens (code, user_id, label) VALUES ('MERC-8GH2-KP4X', 1, 'Shop A');\nINSERT INTO tokens (code, user_id, label) VALUES ('MERC-8GH2-KP4X', 2, 'Shop B');",
         answer: "ERROR: duplicate key value violates unique constraint",
         explanation: "The UNIQUE constraint on code prevents two tokens from having the same code. The second INSERT fails with a constraint violation error. This is how Postgres guarantees token codes are never duplicated."
       },
@@ -319,7 +920,7 @@ COMMIT;`
       {
         type: "spot-the-bug",
         question: "What's wrong with this composite index for the Token app?",
-        code: "CREATE INDEX idx_tokens_search ON tokens(status, user_id, code, issued_to, created_at, max_uses, revoked_at);",
+        code: "CREATE INDEX idx_tokens_search ON tokens(status, user_id, code, label, created_at, max_uses, revoked_at);",
         options: [
           "Syntax error — too many columns listed",
           "Over-indexing: the index covers almost every column, making writes very slow for minimal read benefit",
@@ -416,10 +1017,10 @@ COMMIT;`
         variants: [
           "ALTER TABLE tokens ADD CONSTRAINT unique_code UNIQUE (code);",
           "ALTER TABLE tokens ADD CONSTRAINT valid_status CHECK (status IN ('active', 'paused', 'revoked'));",
-          "ALTER TABLE tokens ADD CONSTRAINT unique_user UNIQUE (user_id, issued_to) WHERE status = 'active';"
+          "ALTER TABLE tokens ADD CONSTRAINT unique_user UNIQUE (user_id, label) WHERE status = 'active';"
         ],
         correct: 2,
-        explanation: "UNIQUE constraints don't support WHERE clauses. If you want a conditional unique constraint (only enforce uniqueness among active tokens), you need a unique partial INDEX instead: CREATE UNIQUE INDEX ... ON tokens(user_id, issued_to) WHERE status = 'active'."
+        explanation: "UNIQUE constraints don't support WHERE clauses. If you want a conditional unique constraint (only enforce uniqueness among active tokens), you need a unique partial INDEX instead: CREATE UNIQUE INDEX ... ON tokens(user_id, label) WHERE status = 'active'."
       },
       {
         question: "What happens to indexes when you DELETE rows?",
@@ -435,7 +1036,7 @@ COMMIT;`
       {
         type: "spot-the-bug",
         question: "What's the problem with this transaction for creating a token?",
-        code: "BEGIN;\nINSERT INTO tokens (code, user_id, issued_to) VALUES ('NEW1-XXXX-YYYY', 1, 'Vendor');\nINSERT INTO access_rules (token_id, rule_type, payload) VALUES (???, 'time_window', '{\"start\": 9}');\nCOMMIT;",
+        code: "BEGIN;\nINSERT INTO tokens (code, user_id, label) VALUES ('NEW1-XXXX-YYYY', 1, 'Vendor');\nINSERT INTO access_rules (token_id, rule_type, payload) VALUES (???, 'time_window', '{\"start\": 9}');\nCOMMIT;",
         options: [
           "You can't INSERT into two tables in one transaction",
           "The second INSERT doesn't know the generated token_id — needs RETURNING or currval()",
@@ -455,9 +1056,9 @@ COMMIT;`
       {
         type: "fill-blank",
         question: "Create a unique composite constraint — one user can't issue two tokens to the same person:",
-        code: "ALTER TABLE tokens ADD CONSTRAINT one_token_per_recipient ___ (user_id, issued_to);",
+        code: "ALTER TABLE tokens ADD CONSTRAINT one_token_per_recipient ___ (user_id, label);",
         answer: "UNIQUE",
-        explanation: "A composite UNIQUE constraint ensures the combination of (user_id, issued_to) is unique. User 1 can issue to 'Shop A' and 'Shop B', but can't issue two separate tokens both to 'Shop A'. This prevents accidental duplicates in the Token app."
+        explanation: "A composite UNIQUE constraint ensures the combination of (user_id, label) is unique. User 1 can issue to 'Shop A' and 'Shop B', but can't issue two separate tokens both to 'Shop A'. This prevents accidental duplicates in the Token app."
       },
       {
         question: "What's the key difference between ROLLBACK and just ending a transaction with an error?",
