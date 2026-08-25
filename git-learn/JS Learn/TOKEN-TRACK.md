@@ -354,9 +354,16 @@ removed — it is in git history.
 Do not add a status column below — a fact with three homes has three chances
 to be wrong, and that is the failure the audit was written about.
 
-**As of 2026-08-17: Phases 0, 1 and 2 are done, and so are M1 and M2. Phases 3
-and 4 are not started, deliberately.** Phase 1 finished with 1.5, the Module 02
-retrofit — all 14 lessons, verified by execution.
+**As of 2026-08-25: Phases 0, 1 and 2 are done, and so are M1, M2 and M3.
+Phases 3 and 4 are not started, deliberately.** Phase 1 finished with 1.5, the
+Module 02 retrofit. **M3 closed on 2026-08-25**, when the last lesson carrying
+a whole-lesson `unverifiable` flag was retrofitted — see the M3 section below
+for what that leaves.
+
+**So Phase 3 is the only thing left**, and it is the first time since the
+pivot that the next unit of work is *new material* rather than repair.
+Everything countable is in `PROGRESS.md`; this line is the phase-level
+headline and nothing more.
 
 ## Phase 0 — Repair the map
 
@@ -555,8 +562,8 @@ Method, per lesson:
    `unverifiable`, which is the guard that keeps the count honest.
 
 **Check the neighbouring lessons while you are there.** Writing the function
-down has surfaced a defect in the lesson's own prose or snippets **fifteen
-times out of fifteen** — a rule stated on one page and broken by code on the
+down has surfaced a defect in the lesson's own prose or snippets **on every
+lesson M3 was ever run over** — a rule stated on one page and broken by code on the
 same page or the next. Those are worth more than the verification, and they are
 not incidental: reading a lesson closely enough to extract its function is the
 only process this course has that finds them.
@@ -575,11 +582,26 @@ lesson:
   `a5/0005`. **Grep the neighbour for the same noun** — `code`, `max_uses`,
   `expires_at`, `clipboard` — which is what found all of them.
 
-Roughly **10 lessons** still have an extractable function (A6, A11, B2, B3, B5,
-B7, B10 and a few singles); A3, A4, A5 and A8 are done. About **40** are
-genuinely infra-bound and should keep the whole-lesson flag. **Four are
-TypeScript** — `a2/*` and `a3/0002` — and no rewrite reaches them, because the
-runner executes JavaScript. That category needs a TS-aware runner or nothing.
+**M3 is closed, 2026-08-25.** The paragraph that used to sit here said roughly
+10 lessons still had an extractable function, about **40** were genuinely
+infra-bound and should keep the whole-lesson flag, and **four were TypeScript**
+and unreachable. All three estimates were wrong in the same direction:
+
+- **No lesson carries the whole-lesson flag.** Not forty, none. Every one of
+  the ~40 predicted to be infra-bound turned out to have a plain function in
+  it, and the running result over the whole of M3 is that **the reflex to call
+  a lesson unrunnable was wrong 22 times out of 22.**
+- **The TypeScript category was closed by a tool, not a rewrite.** The runner
+  learned TypeScript on 2026-08-23 via Node's `stripTypeScriptTypes`, so
+  `a2/*` and `a3/0002` execute like anything else. JSX still does not — that
+  limit is real and documented in `CLAUDE.md`.
+
+**What genuinely remains is small and low-risk**, and it is not the same job:
+seven lessons are verified and carry a self-check but no `--wrong` cases —
+`01/0001`–`0005`, `a11/0002` and `a8/0002`. The five Module 01 lessons predate
+the wrong-cases convention. **A self-check with no wrong-cases proves nothing
+about what it would catch**, which is the rule `CLAUDE.md` states and the
+reason these are worth doing eventually. They are maintenance, not a phase.
 
 ## Phase 4 — The operating track
 
