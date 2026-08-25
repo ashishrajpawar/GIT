@@ -159,22 +159,28 @@ import { Expo, ExpoPushMessage } from 'expo-server-sdk';
 const expo = new Expo();
 
 interface PushPayload {
+  userId: string;            // whose device this is — needed to clear it later
   pushToken: string;
   title: string;
   body: string;
   data?: Record&lt;string, unknown&gt;;
   channelId?: string;
+  // ABSOLUTE unread count, not a flag and not an increment. Omit it when
+  // you do not know; see the callout below.
   badge?: number;
   sound?: 'default' | string;
   priority?: 'default' | 'high';
+  mutableContent?: boolean;  // let the device rewrite title/body
 }
 
 export async function sendPushNotification(payload: PushPayload): Promise&lt;void&gt; {
-  const { pushToken, title, body, data, channelId, badge, sound, priority } = payload;
+  const { userId, pushToken, title, body, data, channelId, badge, sound, priority } = payload;
 
-  // Validate the token format
+  // Validate the token format. Log that it was malformed, never the value:
+  // a push token is a capability to put text on someone's lock screen, and
+  // ADR-0007's rule about codes in logs is the same rule.
   if (!Expo.isExpoPushToken(pushToken)) {
-    console.error(`Invalid push token: ${pushToken}`);
+    logger.warn({ userId, tokenSuffix: pushToken.slice(-6) }, 'malformed push token');
     return;
   }
 
@@ -184,51 +190,151 @@ export async function sendPushNotification(payload: PushPayload): Promise&lt;voi
     body,
     data: data || {},
     channelId: channelId || 'default',
-    badge: badge ?? 1,
+    // NOT `badge ?? 1`. See the badge callout below.
+    ...(badge === undefined ? {} : { badge }),
     sound: sound || 'default',
     priority: priority || 'high',
+    ...(payload.mutableContent ? { mutableContent: true } : {}),
   };
 
   try {
     const [ticket] = await expo.sendPushNotificationsAsync([message]);
+
     if (ticket.status === 'error') {
-      console.error('Push failed:', ticket.message);
-      // If the token is invalid, clear it from the database
+      // A ticket error is a REFUSAL: Expo would not accept the message.
+      logger.warn({ userId, detail: ticket.details?.error }, 'push rejected');
       if (ticket.details?.error === 'DeviceNotRegistered') {
-        await clearInvalidToken(pushToken);
+        await clearPushToken(userId);
       }
+      return;
     }
+
+    // status === 'ok' means ACCEPTED FOR DELIVERY, and nothing more.
+    // Whether it arrived is a separate question with a separate answer,
+    // which is why the id is written down rather than discarded.
+    await db.query(
+      `INSERT INTO push_receipts (ticket_id, user_id, created_at)
+       VALUES ($1, $2, NOW())`,
+      [ticket.id, userId]
+    );
   } catch (err) {
-    console.error('Expo push API error:', err);
+    logger.error({ err, userId }, 'expo push api error');
   }
 }
 
-async function clearInvalidToken(pushToken: string): Promise&lt;void&gt; {
-  await db.query(
-    'UPDATE users SET push_token = NULL WHERE push_token = $1',
-    [pushToken]
+// Runs on a schedule, at least 15 minutes behind the sends. This is where
+// DeviceNotRegistered actually turns up for a device that uninstalled.
+export async function reconcilePushReceipts(): Promise&lt;void&gt; {
+  const { rows } = await db.query(
+    `SELECT ticket_id, user_id FROM push_receipts
+      WHERE created_at &lt; NOW() - interval '15 minutes'
+      LIMIT 1000`
   );
+  if (rows.length === 0) return;
+
+  const byTicket = new Map(rows.map((r) =&gt; [r.ticket_id, r.user_id]));
+
+  for (const chunk of expo.chunkPushNotificationReceiptIds([...byTicket.keys()])) {
+    const receipts = await expo.getPushNotificationReceiptsAsync(chunk);
+
+    for (const [ticketId, receipt] of Object.entries(receipts)) {
+      if (receipt.status === 'error' &&
+          receipt.details?.error === 'DeviceNotRegistered') {
+        await clearPushToken(byTicket.get(ticketId)!);
+      }
+      await db.query('DELETE FROM push_receipts WHERE ticket_id = $1', [ticketId]);
+    }
+  }
+}
+
+// Clear by USER, not by token value: the device may already have
+// registered a new token, and matching on the old string would either
+// miss the row or wipe whatever replaced it.
+async function clearPushToken(userId: string): Promise&lt;void&gt; {
+  await db.query('UPDATE users SET push_token = NULL WHERE id = $1', [userId]);
 }</code></pre>
+
+    <p>
+      The ticket ids have to live somewhere between the send and the
+      reconciliation, so that is a table:
+    </p>
+
+    <pre><code>-- api/migrations/0012_push_receipts.sql
+CREATE TABLE push_receipts (
+  ticket_id  TEXT PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- The reconciler reads oldest-first and deletes as it goes, so this is
+-- the only index it needs.
+CREATE INDEX idx_push_receipts_created_at ON push_receipts(created_at);
+
+-- A row here is a question waiting for an answer, never a permanent
+-- record. If the reconciler is down for a day the table grows and then
+-- drains; if it is down for a month, these are stale and worth dropping
+-- rather than querying -- Expo does not keep receipts indefinitely.</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">A ticket says Expo accepted it. Only the
+      receipt says the device exists.</div>
+
+      <p>
+        This function used to check <code>ticket.details?.error</code> for
+        <code>DeviceNotRegistered</code> and stop there. That check is not
+        wrong, it is <strong>in the wrong place for the case that matters</strong>:
+        Expo cannot know the device is gone at the moment it accepts your
+        message. It finds out from Apple or Google afterwards, and it tells you
+        in a <em>receipt</em> that you have to go and fetch, using the ticket id
+        you were handed and probably threw away.
+      </p>
+      <p>
+        So the branch fires for a token that was malformed on arrival, and
+        never for the ordinary case &mdash; a user who uninstalled the app.
+        <strong>Nothing errors, every send reports success, and the dead tokens
+        accumulate for ever</strong>, each one costing an API call per
+        notification and slowly turning the push budget into a tax on people
+        who left.
+      </p>
+      <p>
+        This is a two-phase result, and it has the shape this course keeps
+        meeting: <strong>accepted, delivered, and failed are three states, and
+        a ticket only distinguishes the first from the third.</strong> The
+        middle one arrives later or not at all, which is exactly why it needs a
+        row in a table rather than a variable in a request handler.
+      </p>
+    </div>
 
     <h2>Notification Payloads for Messages vs Calls</h2>
     <pre><code>// api/src/services/pushService.ts (continued)
 
 export async function notifyNewMessage(
   recipientToken: string,
-  senderName: string,
-  preview: string,
-  conversationId: string
+  holderName: string,        // from the holder JWT — the server DOES know this
+  conversationId: string,
+  sealed: { ciphertext: string; nonce: string; keyVersion: number },
+  unreadCount: number | null
 ): Promise&lt;void&gt; {
   await sendPushNotification({
     pushToken: recipientToken,
-    title: `Message from ${senderName}`,
-    body: preview.substring(0, 100),
+    // The most this server can honestly say. It has never seen the text.
+    title: `Message from ${holderName}`,
+    body: 'Tap to read',
     data: {
       type: 'message',
       conversationId,
+      // Base64 of the same bytes the database holds. Google and Apple
+      // route them; only the device can open them.
+      ...sealed,
     },
+    // iOS: hand the payload to the Notification Service Extension, which
+    // decrypts on-device and REWRITES title and body before it is shown.
+    // Android: a data-only message plus a local notification posted from
+    // the background handler.
+    mutableContent: true,
     channelId: 'default',
     sound: 'default',
+    badge: unreadCount ?? undefined,
   });
 }
 
@@ -252,6 +358,62 @@ export async function notifyIncomingCall(
     priority: 'high',
   });
 }</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">There is no <code>preview</code>, and there
+      never can be &mdash; this function used to take one</div>
+
+      <p>
+        The old signature was
+        <code>notifyNewMessage(token, senderName, preview, conversationId)</code>
+        and it put <code>preview.substring(0, 100)</code> in the notification
+        body. <strong>Nothing on the server can fill that parameter.</strong>
+        <code>b2/0002</code>'s <code>messages</code> table stores
+        <code>ciphertext BYTEA</code> under a comment that says it plainly:
+        <em>"the server stores these bytes and holds no key for them &mdash;
+        everything ABOUT the message, its text, its type, an image's
+        dimensions, is inside here."</em>
+      </p>
+      <p>
+        So the callout below warns you not to put a token <em>code</em> in a
+        push payload, and this function put the <em>message</em> in one.
+        <strong>A leaked code is a capability, and revoking the token takes it
+        back. A leaked message body is the thing ADR-0002 exists to protect,
+        and nothing takes it back.</strong>
+      </p>
+
+      <p><strong>What this server knows, and what it does not:</strong></p>
+      <ul>
+        <li><strong>Knows:</strong> the holder's display name &mdash; they
+        typed it at redemption and it is already in the holder JWT &mdash; the
+        token's label, conversation and token ids, timestamps, and unread
+        counts.</li>
+        <li><strong>Does not know, ever:</strong> a single character of any
+        message.</li>
+      </ul>
+
+      <p>
+        That leaves two honest designs, and Token uses the second:
+        <strong>send a generic notification</strong>, or <strong>send the
+        ciphertext and let the device render it</strong> &mdash; an iOS
+        Notification Service Extension, or an Android data-only message handled
+        in the background. It is what Signal and WhatsApp do, and it is why
+        <code>mutableContent</code> is set above.
+      </p>
+      <p>
+        <strong>The fallback has to be safe on its own.</strong> An extension
+        can time out, run out of memory, or simply not exist on an older build
+        &mdash; and what the user sees then is exactly the <code>title</code>
+        and <code>body</code> the server sent. That is why those two fields say
+        <em>"Message from Ravi"</em> and <em>"Tap to read"</em> rather than
+        being left blank for the device to fill in: <strong>a notification must
+        be publishable as sent, because sometimes it is sent as written.</strong>
+      </p>
+      <p>
+        It also needs EAS Build. An extension is native code, so Expo Go cannot
+        run it &mdash; the same constraint WebRTC imposes in A7.
+      </p>
+    </div>
 
     <div class="callout danger">
       <div class="callout-title">Never put a token code in a push notification</div>
@@ -341,30 +503,82 @@ export function useBadgeReset() {
   }, []);
 }
 
-// Server increments badge when sending
-// Track unread count per user in your database
+// The badge is an ABSOLUTE number the OS displays, so the server has to
+// send the real count. There is no recipient_id on `messages` -- b2/0002
+// gives it conversation_id and sender_type, and a conversation reaches its
+// owner through the token. Unread FOR THE OWNER means messages the HOLDER
+// sent, which is what the sender_type filter is doing.
 export async function getUnreadCount(userId: string): Promise&lt;number&gt; {
   const result = await db.query(
-    'SELECT COUNT(*) FROM messages WHERE recipient_id = $1 AND read_at IS NULL',
+    `SELECT COUNT(*) AS count
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+       JOIN tokens t       ON t.id = c.token_id
+      WHERE t.user_id = $1
+        AND m.sender_type = 'holder'
+        AND m.read_at IS NULL`,
     [userId]
   );
   return parseInt(result.rows[0].count, 10);
 }</code></pre>
 
+    <div class="callout danger">
+      <div class="callout-title">Two defects met in this section, and the
+      second one was sitting four lines from its own fix</div>
+
+      <p>
+        <strong>The query read <code>messages.recipient_id</code>, which does
+        not exist.</strong> <code>b2/0002</code> gives <code>messages</code> an
+        <code>id</code>, a <code>conversation_id</code>, a
+        <code>sender_type</code>, the sealed body and three timestamps &mdash;
+        and no recipient, because a message belongs to a conversation and a
+        conversation belongs to a token. The count has to travel that path.
+        Same shape as <code>b7/0002</code> reading a <code>tokens.rules</code>
+        column <code>b2/0001</code> never creates: it type-checks, it reads
+        correctly, and it throws the first time it runs.
+      </p>
+      <p>
+        <strong>And <code>sendPushNotification</code> hardcoded
+        <code>badge: badge ?? 1</code></strong> &mdash; so the badge read "1"
+        with nine messages waiting, while the function that computes the true
+        number sat unused a few lines below. Third time in three days that a
+        lesson has held both the right and the wrong version of the same thing.
+      </p>
+      <p>
+        <strong>Omitting the badge and sending zero are different
+        instructions.</strong> Zero clears it; omitting it leaves whatever is
+        there alone. So an unknown count must be <em>left out</em>, never
+        defaulted &mdash; the same null-versus-zero distinction as
+        <code>max_uses</code>, arriving as a number the user reads off their
+        home screen.
+      </p>
+    </div>
+
     <h2>Silent Notifications for Data Sync</h2>
     <pre><code>// Silent notification — no alert, just data
 export async function sendSilentSync(
+  userId: string,
   pushToken: string,
   syncType: string
 ): Promise&lt;void&gt; {
   await sendPushNotification({
+    userId,
     pushToken,
     title: '',
     body: '',
-    data: { type: 'silent-sync', syncType },
-    // _contentAvailable triggers background fetch on iOS
-    // priority normal prevents waking the screen
+    data: {
+      type: 'silent-sync',
+      syncType,
+      // THIS is what makes it silent on iOS, and it has to be IN the
+      // payload. A comment saying it triggers background fetch does not
+      // send it.
+      _contentAvailable: true,
+    },
+    // Normal priority keeps the screen dark. High priority on a silent
+    // push is also how you get rate-limited by APNs.
     priority: 'default',
+    // No badge key at all: a sync is not an unread message, and a badge
+    // here would overwrite a count this call knows nothing about.
   });
 }
 
@@ -391,8 +605,43 @@ Notifications.setNotificationHandler({
   },
 });</code></pre>
 
+    <div class="callout warning">
+      <div class="callout-title">The comment described a field the code did not
+      send</div>
+      <p>
+        This block carried the line <em>"<code>_contentAvailable</code> triggers
+        background fetch on iOS"</em> directly above a payload that never
+        included <code>_contentAvailable</code>. Without it iOS treats the push
+        as an ordinary alert with an empty title and an empty body &mdash; so
+        instead of a silent sync the user gets a <strong>blank
+        notification</strong>, and the background handler it was written for
+        never runs.
+      </p>
+      <p>
+        Same shape as <code>b1/0003</code> creating the redundant index its own
+        next line warned against: <strong>a comment beside code is not evidence
+        about the code</strong>, and the two drift apart in whichever direction
+        nobody executes.
+      </p>
+    </div>
+
     <h2>Playground: Notification Payload Builder</h2>
     <div id="playground-1"></div>
+
+    <h2>Now build it yourself: what is this notification allowed to say?</h2>
+
+    <p>
+      A push payload leaves your trust boundary twice over &mdash; it goes
+      through Google or Apple, and it lands on a lock screen anybody standing
+      nearby can read. So the question is not what would be <em>useful</em> to
+      put in it. It is what you are in a position to put in it honestly, and
+      what survives being read by a stranger.
+    </p>
+
+    <div id="exercise-payload"></div>
+    <div id="pg-exercise-payload"></div>
+
+    <div id="explain-b8-0001"></div>
 
     <h2>Exercise: Implement Push Integration</h2>
     <div id="exercise-1"></div>
@@ -408,24 +657,40 @@ Notifications.setNotificationHandler({
     <script src="../../assets/quiz.js"></script>
     <script src="../../assets/playground.js"></script>
     <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
     <script src="../../assets/progress.js"></script>
     <script src="../../assets/copy-code.js"></script>
     <script>
-        createPlayground("playground-1", `// Build a notification payload for Token
-function buildMessagePayload(recipientToken, senderName, message, conversationId) {
-  return {
+        createPlayground("playground-1", `// Build a notification payload for Token.
+//
+// Note what buildMessagePayload does NOT take: the message. The server has
+// never seen it -- b2/0002 stores ciphertext and holds no key -- so the
+// sealed bytes go in the data payload and the DEVICE renders the text.
+function buildMessagePayload(recipientToken, holderName, sealed, conversationId, unreadCount) {
+  const payload = {
     to: recipientToken,
-    title: "Message from " + senderName,
-    body: message.substring(0, 100),
+    // What is shown if the device cannot rewrite it. It must be safe as
+    // written, because sometimes it IS what gets shown.
+    title: "Message from " + holderName,
+    body: "Tap to read",
     data: {
       type: "message",
       conversationId: conversationId,
+      ciphertext: sealed.ciphertext,
+      nonce: sealed.nonce,
+      keyVersion: sealed.keyVersion,
     },
     channelId: "default",
     sound: "default",
-    badge: 1,
+    mutableContent: true,   // iOS: let the extension decrypt and rewrite
     priority: "high",
   };
+  // Omit the badge rather than guessing. Sending 0 CLEARS it; sending 1
+  // when nine are waiting is worse than sending nothing.
+  if (unreadCount !== null && unreadCount !== undefined) {
+    payload.badge = unreadCount;
+  }
+  return payload;
 }
 
 function buildCallPayload(recipientToken, callerName, callId, tokenLabel) {
@@ -450,8 +715,10 @@ function buildCallPayload(recipientToken, callerName, callId, tokenLabel) {
 const msgPayload = buildMessagePayload(
   "ExponentPushToken[abc123]",
   "Vendor",
-  "Your order is ready for pickup at the store.",
-  "conv-456"
+  // What the server actually has: opaque bytes it cannot read.
+  { ciphertext: "k3JqXm9...", nonce: "8fA2b1...", keyVersion: 3 },
+  "conv-456",
+  9
 );
 console.log("Message payload:", JSON.stringify(msgPayload, null, 2));
 
@@ -459,11 +726,349 @@ const callPayload = buildCallPayload(
   "ExponentPushToken[abc123]",
   "Doctor Clinic",
   "call-789",
-  "MERC-8GH2-KP4X"
+  // A LABEL -- the issuer's own words. This argument was the string
+  // "MERC-8GH2-KP4X" until 2026-08-25, in the function whose comment two
+  // lines up says "never the code".
+  "clinic booking"
 );
-console.log("Call payload:", JSON.stringify(callPayload, null, 2));`);
+console.log("Call payload:", JSON.stringify(callPayload, null, 2));
+
+// And the one the whole lesson turns on: what a server that could read
+// your messages would have sent instead.
+console.log("");
+console.log("body actually sent:  " + msgPayload.body);
+console.log("badge actually sent: " + msgPayload.badge);`);
+
+        createSolution("exercise-payload", {
+            exercise: "Write buildPushPayload(event, settings) — decide what a notification is allowed to say.\n\nevent is what the server knows when something happens:\n\n  {\n    kind: 'message' | 'call' | 'token_redeemed',\n    conversationId, tokenId, callId,\n    holderName,    // they typed it at redemption; the server DOES know it\n    tokenLabel,    // the issuer's own words: 'courier', 'estate agent'\n    sealed: { ciphertext, nonce, keyVersion },   // messages only\n    unreadCount,   // number, or null meaning 'not known right now'\n    code           // present in this object, and NEVER allowed out of it\n  }\n\nsettings is { preview: 'full' | 'sender' | 'none' } — the owner's choice.\n\nReturn { title, body, data, channelId, priority, sound } plus badge and mutableContent where the rules below call for them, or null.\n\nThe rules:\n\n1. data IS AN ALLOW-LIST, BUILT KEY BY KEY. Start from an empty object and add only what the rules name. Never copy event and delete things: the field that leaks is the one somebody adds next week, and a deny-list protects only what you thought of. This is x2/0002's argument arriving as a push payload instead of a log line.\n\n2. THE CODE APPEARS NOWHERE IN THE RESULT. Not in data, not in the title, not in the body. It is in the event on purpose, so that your allow-list has something to prove itself against.\n\n3. A MESSAGE BODY IS ALWAYS 'Tap to read'. Not a preview, not a truncation, not an empty string waiting to be filled in — the server has never seen the text and cannot produce one. What you write here is what a user sees whenever the device fails to rewrite it, so it has to be publishable as sent.\n\n4. preview CONTROLS THE TITLE, AND 'full' SENDS THE SAME TITLE AS 'sender'.\n     'none'   -> 'New message'\n     'sender' -> 'Message from {holderName}'\n     'full'   -> 'Message from {holderName}', AND mutableContent: true, AND the sealed bytes in data.\n   Read that twice. A server that renders 'full' itself is a server that read the message. 'full' is a capability of the DEVICE; all the server can do is enable it.\n\n5. THE SEALED BYTES GO OUT ONLY FOR 'full'. Under 'sender' or 'none' they are withheld — so the setting is enforced by not sending the material, rather than by trusting the extension to show restraint. A privacy setting the client could ignore is not a setting.\n\n6. AN ABSENT OR EMPTY holderName FALLS BACK TO 'New message', even under 'sender' and 'full'. '' is not a name; b1/0001 has the NOT NULL version of this and a11/0003 has the render-site version. Under 'full' mutableContent still goes out — the device can put the real name in.\n\n7. A CALL IGNORES 'none' ONLY AS FAR AS THE LABEL. title is 'Incoming call'; the body is the tokenLabel under any setting, because a label is the OWNER's own words about their OWN token and telling them what they wrote is not a disclosure. Under 'sender' or 'full' the body also names the holder. channelId 'calls', priority 'high', sound 'ringtone.wav'.\n\n8. ONLY A MESSAGE CARRIES A badge, AND IT IS THE ABSOLUTE COUNT. unreadCount null means OMIT THE KEY ENTIRELY; 0 means send 0, which CLEARS the badge. Those are different instructions and only one of them is falsy — the max_uses distinction, arriving as a number on a home screen. A call is not an unread message and must never set it.\n\n9. AN UNRECOGNISED kind RETURNS null. Do not fall through to a generic notification. b7/0002 shipped exactly that defect with an unknown rule type reaching 'allowed', and the reasoning is the same: a deny-by-default product cannot have a default that says yes.\n\n10. DO NOT MUTATE event.",
+            hints: [
+              "Rule 1 is easier than it sounds and only stays easy if you never write `{ ...event }`. Build `const data = { type: event.kind }` and add to it.",
+              "Rules 4 and 5 come apart: the TITLE is the same for 'sender' and 'full', and the DATA is not. Work out the title first, then decide separately whether the sealed bytes are allowed out.",
+              "Rule 8 needs `!= null` or an explicit undefined-and-null test. `if (event.unreadCount)` drops the zero, and zero is the value that clears the badge."
+            ],
+            solution: `// api/src/services/buildPushPayload.js
+//
+// Everything this function does is decide what leaves the trust boundary.
+// The payload goes through Google or Apple and lands on a lock screen, so
+// the test for every field is: would I be content for a stranger holding
+// this phone, and a log at a company outside ADR-0002, to have it.
+
+function buildPushPayload(event, settings) {
+  const preview = (settings && settings.preview) || "none";
+
+  // '' is not a name. Trim first so a stray space does not become one.
+  const name = typeof event.holderName === "string" ? event.holderName.trim() : "";
+  const label = typeof event.tokenLabel === "string" ? event.tokenLabel.trim() : "";
+
+  // Rule 1: an allow-list starts empty. Never a copy with deletions.
+  const data = { type: event.kind };
+
+  if (event.kind === "message") {
+    // Rule 6: the name has to exist before it can be shown.
+    const named = preview !== "none" && name !== "";
+
+    const payload = {
+      title: named ? "Message from " + name : "New message",
+      // Rule 3. There is no preview and there never can be.
+      body: "Tap to read",
+      data: data,
+      channelId: "default",
+      priority: "high",
+      sound: "default",
+    };
+
+    data.conversationId = event.conversationId;
+
+    // Rules 4 and 5. 'full' is the DEVICE rendering the message; the
+    // server's whole contribution is handing over the bytes and asking
+    // for the rewrite. Withholding them under 'sender' is what makes the
+    // setting real rather than advisory.
+    if (preview === "full" && event.sealed) {
+      payload.mutableContent = true;
+      data.ciphertext = event.sealed.ciphertext;
+      data.nonce = event.sealed.nonce;
+      data.keyVersion = event.sealed.keyVersion;
+    }
+
+    // Rule 8. != null keeps 0 and drops null and undefined.
+    if (event.unreadCount != null) payload.badge = event.unreadCount;
+
+    return payload;
+  }
+
+  if (event.kind === "call") {
+    // Rule 7. The label is the owner's own words; the holder's name is
+    // somebody else's, so that one follows the setting.
+    const named = preview !== "none" && name !== "";
+    const via = label || "a token";
+
+    data.callId = event.callId;
+    data.conversationId = event.conversationId;
+
+    return {
+      title: "Incoming call",
+      body: named ? name + " is calling via " + via : "Someone is calling via " + via,
+      data: data,
+      channelId: "calls",
+      priority: "high",
+      sound: "ringtone.wav",
+      // No badge. A call is not an unread message, and setting one here
+      // would overwrite a count this event knows nothing about.
+    };
+  }
+
+  if (event.kind === "token_redeemed") {
+    data.tokenId = event.tokenId;
+    return {
+      title: "Token redeemed",
+      body: label || "One of your tokens was used",
+      data: data,
+      channelId: "default",
+      priority: "default",
+      sound: "default",
+    };
+  }
+
+  // Rule 9. An unknown event is not a generic event.
+  return null;
+}`
+        });
+
+        createPlayground("pg-exercise-payload", `// Write buildPushPayload(event, settings) here.
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+
+const CODE = "MERC-8GH2-KP4X";
+
+function messageEvent(over) {
+  return Object.assign({
+    kind: "message",
+    conversationId: "conv-456",
+    tokenId: "tok-1",
+    holderName: "Ravi",
+    tokenLabel: "clinic booking",
+    sealed: { ciphertext: "k3JqXm9", nonce: "8fA2b1", keyVersion: 3 },
+    unreadCount: 9,
+    code: CODE,
+  }, over || {});
+}
+function callEvent(over) {
+  return Object.assign({
+    kind: "call",
+    conversationId: "conv-456",
+    callId: "call-789",
+    tokenId: "tok-1",
+    holderName: "Ravi",
+    tokenLabel: "clinic booking",
+    unreadCount: 9,
+    code: CODE,
+  }, over || {});
+}
+function P(preview) { return { preview: preview }; }
+function show(r) { return JSON.stringify(r); }
+
+// Everything the payload would carry, flattened to one string. If the code
+// is anywhere in there at all, this finds it.
+function everything(r) { return JSON.stringify(r === null ? {} : r); }
+
+try {
+  if (typeof buildPushPayload !== "function") throw new Error("not written yet");
+
+  try {
+    const r = buildPushPayload(messageEvent(), P("none"));
+    check("preview 'none' does not name the sender",
+          r.title === "New message",
+          show(r.title));
+  } catch (e) { check("preview 'none' does not name the sender", false, "threw " + e.message); }
+
+  try {
+    const r = buildPushPayload(messageEvent(), P("sender"));
+    check("preview 'sender' names the sender the server does know",
+          r.title === "Message from Ravi",
+          show(r.title) + " -- holderName comes from the holder JWT, so this one is honest");
+  } catch (e) { check("preview 'sender' names the sender the server does know", false, "threw " + e.message); }
+
+  try {
+    // The surprising one, and the point of the whole exercise.
+    const full = buildPushPayload(messageEvent(), P("full"));
+    const sender = buildPushPayload(messageEvent(), P("sender"));
+    check("preview 'full' sends the SAME title as 'sender'",
+          full.title === sender.title,
+          "full=" + show(full.title) + " sender=" + show(sender.title) +
+          " -- a server that renders 'full' itself is a server that read the message");
+  } catch (e) { check("preview 'full' sends the SAME title as 'sender'", false, "threw " + e.message); }
+
+  try {
+    const r = buildPushPayload(messageEvent(), P("full"));
+    check("preview 'full' asks the DEVICE to rewrite it",
+          r.mutableContent === true,
+          show(r) + " -- without this the extension is never given the chance to run");
+  } catch (e) { check("preview 'full' asks the DEVICE to rewrite it", false, "threw " + e.message); }
+
+  try {
+    const r = buildPushPayload(messageEvent(), P("full"));
+    check("preview 'full' hands over the sealed bytes",
+          r.data.ciphertext === "k3JqXm9" && r.data.nonce === "8fA2b1" && r.data.keyVersion === 3,
+          show(r.data));
+  } catch (e) { check("preview 'full' hands over the sealed bytes", false, "threw " + e.message); }
+
+  try {
+    // Rule 5: enforced by withholding, not by asking nicely.
+    const r = buildPushPayload(messageEvent(), P("sender"));
+    check("preview 'sender' WITHHOLDS the sealed bytes",
+          !("ciphertext" in r.data) && r.mutableContent !== true,
+          show(r) + " -- a setting the device could ignore is not a setting");
+  } catch (e) { check("preview 'sender' WITHHOLDS the sealed bytes", false, "threw " + e.message); }
+
+  try {
+    const bodies = ["none", "sender", "full"].map(function (p) {
+      return buildPushPayload(messageEvent(), P(p)).body;
+    });
+    check("the body is never message content, at any setting",
+          bodies.every(function (b) { return b === "Tap to read"; }),
+          show(bodies) + " -- this is what is shown when the extension fails, so it must be safe as sent");
+  } catch (e) { check("the body is never message content, at any setting", false, "threw " + e.message); }
+
+  try {
+    const r = buildPushPayload(messageEvent({ holderName: "   " }), P("sender"));
+    check("a blank holderName falls back rather than rendering nothing",
+          r.title === "New message",
+          show(r.title) + " -- '' is not a name; 'Message from ' is worse than 'New message'");
+  } catch (e) { check("a blank holderName falls back rather than rendering nothing", false, "threw " + e.message); }
+
+  try {
+    const r = buildPushPayload(messageEvent({ holderName: "" }), P("full"));
+    check("a blank name does not cancel the device rewrite",
+          r.mutableContent === true,
+          show(r) + " -- the device can supply the name the server could not");
+  } catch (e) { check("a blank name does not cancel the device rewrite", false, "threw " + e.message); }
+
+  try {
+    const r = buildPushPayload(messageEvent(), P("full"));
+    check("the data payload is an allow-list, so 'code' is not in it",
+          !("code" in r.data),
+          show(r.data));
+  } catch (e) { check("the data payload is an allow-list, so 'code' is not in it", false, "threw " + e.message); }
+
+  try {
+    // Absence of the code field is not proof of an allow-list -- a spread
+    // with one delete passes that. Only the exact key set tells them apart.
+    const full = buildPushPayload(messageEvent(), P("full"));
+    const sender = buildPushPayload(messageEvent(), P("sender"));
+    const keys = function (r) { return Object.keys(r.data).sort().join(","); };
+    check("data holds ONLY the keys the rules name",
+          keys(sender) === "conversationId,type" &&
+          keys(full) === "ciphertext,conversationId,keyVersion,nonce,type",
+          "sender=[" + keys(sender) + "] full=[" + keys(full) +
+          "] -- a spread with deletions is a deny-list wearing a hat");
+  } catch (e) { check("data holds ONLY the keys the rules name", false, "threw " + e.message); }
+
+  try {
+    // The one that catches it wherever it was put.
+    const all = ["none", "sender", "full"].map(function (p) {
+      return everything(buildPushPayload(messageEvent(), P(p))) +
+             everything(buildPushPayload(callEvent(), P(p)));
+    }).join("");
+    check("the token code appears NOWHERE in any payload",
+          all.indexOf(CODE) === -1,
+          "found it -- data, title and body all leave the trust boundary");
+  } catch (e) { check("the token code appears NOWHERE in any payload", false, "threw " + e.message); }
+
+  try {
+    const r = buildPushPayload(messageEvent(), P("none"));
+    check("a message carries the conversation id so the tap can navigate",
+          r.data.conversationId === "conv-456",
+          show(r.data));
+  } catch (e) { check("a message carries the conversation id so the tap can navigate", false, "threw " + e.message); }
+
+  try {
+    const r = buildPushPayload(messageEvent({ unreadCount: null }), P("none"));
+    check("an unknown unread count omits the badge key entirely",
+          !("badge" in r),
+          show(r) + " -- omitting leaves the badge alone; guessing overwrites it");
+  } catch (e) { check("an unknown unread count omits the badge key entirely", false, "threw " + e.message); }
+
+  try {
+    const r = buildPushPayload(messageEvent({ unreadCount: 0 }), P("none"));
+    check("zero is sent, because zero is the instruction that CLEARS the badge",
+          r.badge === 0,
+          show(r) + " -- 0 and null are opposite instructions and only one is falsy");
+  } catch (e) { check("zero is sent, because zero is the instruction that CLEARS the badge", false, "threw " + e.message); }
+
+  try {
+    const r = buildPushPayload(messageEvent({ unreadCount: 9 }), P("none"));
+    check("the badge is the absolute count, not a flag",
+          r.badge === 9,
+          show(r.badge) + " -- 1 here means nine waiting messages read as one");
+  } catch (e) { check("the badge is the absolute count, not a flag", false, "threw " + e.message); }
+
+  try {
+    const r = buildPushPayload(callEvent(), P("sender"));
+    check("a call rings on its own channel at high priority",
+          r.channelId === "calls" && r.priority === "high" && r.sound === "ringtone.wav",
+          show(r));
+  } catch (e) { check("a call rings on its own channel at high priority", false, "threw " + e.message); }
+
+  try {
+    const r = buildPushPayload(callEvent(), P("none"));
+    check("a call under 'none' does not name the caller",
+          r.body.indexOf("Ravi") === -1 && r.body.indexOf("clinic booking") !== -1,
+          show(r.body) + " -- the label is the owner's own words; the name is somebody else's");
+  } catch (e) { check("a call under 'none' does not name the caller", false, "threw " + e.message); }
+
+  try {
+    const r = buildPushPayload(callEvent(), P("sender"));
+    check("a call under 'sender' names the caller and the token",
+          r.body.indexOf("Ravi") !== -1 && r.body.indexOf("clinic booking") !== -1,
+          show(r.body));
+  } catch (e) { check("a call under 'sender' names the caller and the token", false, "threw " + e.message); }
+
+  try {
+    // unreadCount is 9 on the call fixture ON PURPOSE, so that a builder
+    // which sets the badge unconditionally has something to get wrong.
+    const r = buildPushPayload(callEvent(), P("sender"));
+    check("a call never carries a badge",
+          !("badge" in r),
+          show(r) + " -- a call is not an unread message");
+  } catch (e) { check("a call never carries a badge", false, "threw " + e.message); }
+
+  try {
+    const r = buildPushPayload({ kind: "token_redeemed", tokenId: "tok-1",
+                                 tokenLabel: "clinic booking", code: CODE }, P("sender"));
+    check("a redemption shows the label and carries the token id",
+          r.body === "clinic booking" && r.data.tokenId === "tok-1",
+          show(r));
+  } catch (e) { check("a redemption shows the label and carries the token id", false, "threw " + e.message); }
+
+  try {
+    const r = buildPushPayload({ kind: "friend_request", code: CODE }, P("sender"));
+    check("an unrecognised kind is refused, not given a generic notification",
+          r === null,
+          show(r) + " -- b7/0002 shipped an unknown rule type falling through to 'allowed'");
+  } catch (e) { check("an unrecognised kind is refused, not given a generic notification", false, "threw " + e.message); }
+
+  try {
+    const input = messageEvent();
+    const before = JSON.stringify(input);
+    buildPushPayload(input, P("full"));
+    check("the event is not mutated",
+          JSON.stringify(input) === before,
+          "the caller still needs it -- deleting the code from the event is not redaction, it is data loss");
+  } catch (e) { check("the event is not mutated", false, "threw " + e.message); }
+} catch (e) {
+  console.log("Nothing to check yet -- write buildPushPayload above. (" + e.message + ")");
+}`);
+
+        createExplain("explain-b8-0001", {
+            prompt: "Under <code>preview: 'full'</code> this function sends exactly the same <code>title</code> and <code>body</code> as under <code>'sender'</code> &mdash; the only difference is <code>mutableContent</code> and the sealed bytes. Explain why that is the <em>only</em> design available to Token, and what the user would actually see if their phone's notification extension failed to run."
+        });
 
         createSolution("exercise-1", {
+            unverifiable: "the solution is an Expo push dispatcher and a SQL migration — it needs FCM/APNs credentials, a real device and a running Postgres",
             exercise: "Build the complete push notification integration for Token:\n\n1. Write a server-side function `dispatchNotification` that looks up the recipient's push token from the database, builds the appropriate payload (message or call), and sends it via the Expo Push API.\n2. Include error handling for invalid tokens (remove them from the database) and network failures (retry once).\n3. Write the SQL migration to add the push_token and push_platform columns to the users table.",
             hints: [
                 "Query the users table to get the push_token by user ID before sending.",
@@ -546,8 +1151,16 @@ export async function dispatchNotification(options: DispatchOptions): Promise<bo
 }
 
 async function getUnreadCount(userId: string): Promise<number> {
+  // No recipient_id on \`messages\` — b2/0002 gives it conversation_id and
+  // sender_type, and a conversation reaches its owner through the token.
   const result = await db.query(
-    'SELECT COUNT(*) FROM messages WHERE recipient_id = $1 AND read_at IS NULL',
+    \`SELECT COUNT(*) AS count
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+       JOIN tokens t       ON t.id = c.token_id
+      WHERE t.user_id = $1
+        AND m.sender_type = 'holder'
+        AND m.read_at IS NULL\`,
     [userId]
   );
   return parseInt(result.rows[0].count, 10);
@@ -719,9 +1332,9 @@ async function getUnreadCount(userId: string): Promise<number> {
             },
             {
                 type: "predict-output",
-                code: "const preview = 'Your token MERC-8GH2-KP4X has been redeemed by a new contact who wants to reach you about a business inquiry';\nconsole.log(preview.substring(0, 100).length);",
-                answer: "100",
-                explanation: "substring(0, 100) returns exactly 100 characters (or fewer if the string is shorter). Token truncates message previews to 100 characters in push notifications to keep them concise."
+                code: "// Whatever the holder typed, this is what the server has.\nconst sealed = { ciphertext: 'k3JqXm9...', nonce: '8fA2b1...', keyVersion: 3 };\n\n// So this is the body, and it does not depend on the message at all.\nconst body = 'Tap to read';\n\nconsole.log(body.length + ' characters, and none of them are the message');",
+                answer: "11 characters, and none of them are the message",
+                explanation: "This question used to truncate a preview string to 100 characters and ask for the length — and the string it truncated contained a token code, in the lesson that forbids putting one in a payload. There is no preview to truncate. b2/0002 stores ciphertext and the server holds no key, so the body is a constant: the same eleven characters whether the message is one word or a thousand. If you want the real text on the lock screen, the sealed bytes go in the data payload and an on-device notification extension rewrites the notification before it is shown."
             },
             {
                 type: "which-breaks",

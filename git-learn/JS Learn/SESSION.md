@@ -19,28 +19,114 @@ how far it got.
 > files either.** Make no claims about progress at all — not in prose, not in
 > a commit message, not as a reason for prioritising anything.
 
-**Nothing in flight.** `b9/0003`, `b1/0003` and `a9/0001` all landed
-2026-08-25. **B9, B1 and A9 are complete.**
+**Nothing in flight.** `b9/0003`, `b1/0003`, `a9/0001` and `b8/0001` all
+landed 2026-08-25. **B9, B1, A9 and B8 are complete.**
 
 **Started the `unverifiable` cluster** — the recommended body of work in
-*Next action*. A7, A10, X1, **B9**, **B1** and **A9** are finished.
-**3 to go:** B6 (2) and `b8/0001`.
+*Next action*. A7, A10, X1, **B9**, **B1**, **A9** and **B8** are finished.
+**2 to go, and they are the same cluster:** B6.
 
 **State as of 2026-08-25** — run `node scripts/audit.mjs` before trusting any
 of it:
 
 - **101 lessons.** Audit **green**, 2 warnings, six suites pass.
 - **Every lesson has been executed at least once.** The verification log has
-  no absent entries: **98 verified, 3 `unverifiable`** with a stated reason,
+  no absent entries: **99 verified, 2 `unverifiable`** with a stated reason,
   1 `nothing-to-verify`.
 - **`known-issues.json` is down to one entry** — `calls`, gated on B6.
 - `render-as-authored` is **0**, and this time it means it (see *The `variant`
   blind spot*).
 - **Complete modules:** 01, 02, A2, A3, A4, **A7**, **A9**, **A10**, B1, B2,
-  B3, B4, B7, **B9**, B10, A11, C5, X1, X2.
+  B3, B4, B7, **B8**, **B9**, B10, A11, C5, X1, X2.
 
 **Nothing is blocked.** See *Next action* for the four candidate bodies of
 work and why the `unverifiable` cluster is the recommendation.
+
+### b8/0001 — the notification carried the message, and B8 is finished (2026-08-25)
+
+M3: **`buildPushPayload`**. 23 self-checks, 15 wrong-cases, 3 correct
+alternatives. **B8 is complete.** The `unverifiable` cluster is down to **2 —
+B6, the one genuinely blocked thing left in the course.**
+
+**`notifyNewMessage` took a `preview` and put it in the notification body.
+Nothing on the server can fill that parameter.** `b2/0002`'s `messages` table
+stores `ciphertext BYTEA` under a comment that says it outright: *"the server
+stores these bytes and holds no key for them — everything ABOUT the message,
+its text, its type, an image's dimensions, is inside here."*
+
+**And the callout immediately below it warns you not to put a token code in a
+push payload.** So the page argued the smaller case at length and shipped the
+larger one silently. Worth keeping the asymmetry: **a leaked code is a
+capability and revoking the token takes it back; a leaked message body is the
+thing ADR-0002 exists to protect, and nothing takes it back.**
+
+### The rule the exercise is built on, and it is genuinely counter-intuitive
+
+`preview: 'full'` sends **exactly the same `title` and `body` as `'sender'`**.
+The only differences are `mutableContent: true` and the sealed bytes in
+`data`. **A server that renders "full" itself is a server that read the
+message** — so `full` is a capability of the *device*, and all the server can
+do is enable it.
+
+Two consequences that are easy to get backwards:
+
+- **The setting is enforced by withholding the bytes, not by asking the
+  extension to behave.** Under `'sender'` the ciphertext does not go out at
+  all. A privacy setting the client could ignore is a request.
+- **The fallback has to be publishable as sent.** An extension can time out,
+  run out of memory, or not exist on an older build, and what the user sees
+  then is literally the `title` and `body` the server wrote. One wrong-case
+  leaves the body empty *"because the extension will fill it in"* — it fails
+  on precisely the devices where it did not, which is the population nobody
+  tests on.
+
+### Four more, and one of them I introduced myself
+
+- **`getUnreadCount` queried `messages.recipient_id`**, a column `b2/0002`
+  does not create. `b7/0002`'s `tokens.rules` again. The count has to travel
+  `messages → conversations → tokens`, filtered on `sender_type = 'holder'`.
+- **`badge: badge ?? 1`** hardcoded the badge to 1 while the function that
+  computes the real number sat unused a few lines below. Fourth time this week
+  a lesson has held both the right and the wrong version of one thing.
+  **Omitting the badge and sending `0` are different instructions** — one
+  leaves it alone, the other clears it — and only one of them is falsy.
+- **`DeviceNotRegistered` arrives in the *receipt*, not the ticket.** The
+  handler checked `ticket.details`, which fires for a token malformed on
+  arrival and never for the ordinary case of someone uninstalling. Nothing
+  errors, every send reports success, and dead tokens accumulate for ever.
+  **Accepted, delivered and failed are three states and a ticket separates
+  only the first from the third**, which is why the ticket id now gets a row
+  rather than a variable.
+- **`sendSilentSync` commented that `_contentAvailable` triggers background
+  fetch and never set it.** iOS then treats it as an alert with an empty title
+  and body, so instead of a silent sync the user gets a blank notification.
+  Same shape as `b1/0003`'s `idx_tokens_code`.
+
+> **The audit caught me committing the very defect I had just fixed.** My
+> receipt reconciler queried a `push_receipts` table that nothing created —
+> `messages.recipient_id` again, one hour later, by me. It failed the build as
+> an error, which is the whole argument for keeping the audit green: a red
+> exit code that means something is the only reason that landed as a
+> two-minute fix instead of a lesson.
+
+### The allow-list check was asserting the wrong thing, and a wrong-case proved it
+
+The self-check asked whether `code` was absent from `data`. **A spread with
+one `delete` passes that** — and ships `holderName`, `tokenLabel` and the
+sealed bytes under every setting. Asserting the absence of one dangerous field
+*is* the deny-list thinking the rule exists to prevent. The check now asserts
+the **exact key set**, and the spread-then-delete case is the reason it exists.
+
+12 of 15 mistakes trip exactly one check; the three that trip more are one
+rule each, recorded in the case file.
+
+### And I walked into the backtick trap again
+
+Writing `` `code` `` as markup inside a *comment* in the playground's template
+literal, which terminates the string. `CLAUDE.md` documents it, I quoted it
+two sessions ago, and the habit that causes it — marking up an identifier in
+prose — is the correct habit everywhere else. The error named a token ninety
+lines away.
 
 ### a9/0001 — iOS can carve a hole and Android cannot, and A9 is finished (2026-08-25)
 
@@ -2467,38 +2553,33 @@ executed; the log is 84 verified, 17 `unverifiable` with a reason, 1
 What is left, in no forced order:
 
 1. **The `unverifiable` lessons — started 2026-08-23; all of A7, A10, X1,
-   B9, B1 and A9 done, 3 left.**
+   B9, B1, A9 and B8 done, 2 left — and both are B6.**
    `CLAUDE.md` warns that the reflex to reach for that flag is wrong more often
    than it is right, and this pass proved it again — nine lessons that looked
    unrunnable produced nine exercises, and `a7/0001` then produced a tenth
-   plus two real defects. Remaining: **`b8/0001`** and **B6 (2)**. Each needs the
-   same move: find the plain function, excuse the rest per-exercise, **and add
-   the `createExplain` prompt** — the 3 without one are exactly the 3 still
-   excused.
+   plus two real defects. **Remaining: B6, and it is not the same job as the
+   other twelve.**
 
-   **Next: `b8/0001-fcm-apns-expo.html`.** Its excuse is *"needs FCM/APNs
-   credentials and a real device"*, which is true of the delivery and of
-   nothing else on the page. **Deciding what a push notification is allowed to
-   SAY is the whole exercise, and it is a Token-specific one**: under ADR-0002
-   the server holds ciphertext, so it cannot put the message in the payload
-   even if it wanted to, and under ADR-0007 it must not put the code there
-   either. What is left — a title, a conversation id, a badge count — is a
-   precedence problem over notification categories plus the same
-   allow-list discipline as `x2/0002`'s `redactLogFields`. Check it against
-   `a8/0004` (what the holder JWT already carries, so the payload need not
-   repeat it) and `b10/0002`'s retention table.
+   **B6 is the one genuinely blocked cluster**, and unlike everything else in
+   this pass it is blocked for a real reason rather than an excuse:
+   `b6/0001` and `b6/0002` are the *only* two lessons whose `unverifiable`
+   reason has held up. They also gate the last `known-issues.json` entry —
+   the `calls` table, queried by two lessons and created by none — so the
+   decision B6 has to make is a **schema** decision, not a retrofit:
+   **what does a call record persist, given that the media never touches the
+   server and the signalling is relayed?**
 
-   Then **B6 (2 lessons) last** — it is the one genuinely blocked cluster and
-   also what gates the final `known-issues.json` entry, so writing it closes
-   two things at once.
+   So B6 is a *writing* job, not an M3 job, and it should be treated as one.
+   Doing it closes the cluster and the known-issues file together.
 
-   **Three for three on the prediction so far:** `b9/0003`'s retention,
-   `b1/0003`'s index selection and `a9/0001`'s claim matching were all the
-   precedence problem *Next action*
-   guessed. In all three the sharper finding was still cross-lesson rather
-   than in-lesson — the off-site prune, the count-after-insert, and a sibling
-   that documented a bug nobody had actually fixed. **Predict the exercise
-   from the topic; find the defect by reading the siblings.**
+   **Four for four on the prediction:** `b9/0003`'s retention, `b1/0003`'s
+   index selection, `a9/0001`'s claim matching and `b8/0001`'s payload
+   allow-list were all the precedence problem *Next action* guessed. And in
+   all four the sharper finding was still **cross-lesson rather than
+   in-lesson** — the off-site prune, the count-after-insert, a sibling that
+   documented a bug nobody had fixed, and a body carrying a message the server
+   cannot read. **Predict the exercise from the topic; find the defect by
+   reading the siblings.**
 
    **A fifth result to carry, new today:** `b9/0001` caught an error I had
    introduced in `x1/0003` an hour earlier, because its Dockerfile disagreed

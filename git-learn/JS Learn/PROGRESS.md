@@ -14,11 +14,11 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 101 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
 | Quiz questions (track) | 2751 |
-| Avg teaching prose per track lesson | 2201 words |
+| Avg teaching prose per track lesson | 2217 words |
 | Lessons with a playground | 101 / 101 |
 | Lessons with an exercise | 101 / 101 |
 | **Deepened** (all 3 spine sections) | 16 / 101 |
-| **Verified** (code executed) | 98 / 101 |
+| **Verified** (code executed) | 99 / 101 |
 | Ran clean but had nothing to run | 0 / 101 |
 | Errors | 0 |
 | Known and blocked | 1 |
@@ -93,7 +93,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b5-websocket-server | 3 | 1961 | 6 | 6 | 77 | 0/3 | 3/3 |
 | b6-webrtc-signalling | 2 | 2052 | 2 | 2 | 52 | 1/2 | 0/2 |
 | b7-token-engine | 3 | 3451 | 7 | 6 | 78 | 3/3 | 3/3 |
-| b8-push-notifications | 1 | 1420 | 1 | 1 | 25 | 0/1 | 0/1 |
+| b8-push-notifications | 1 | 3020 | 2 | 2 | 25 | 0/1 | 1/1 |
 | b9-docker-deployment | 3 | 3199 | 6 | 6 | 81 | 2/3 | 3/3 |
 | c5-end-to-end-encryption | 5 | 1671 | 10 | 10 | 126 | 0/5 | 5/5 |
 | x1-git-dev-environment | 3 | 1201 | 4 | 6 | 83 | 0/3 | 3/3 |
@@ -219,7 +219,7 @@ so they do not hold the audit red. They are **not** resolved.
 | b7-token-engine/0001-token-generation-redemption.html | 3766 | 12 | 3 | 2 | 25 | yes | yes |
 | b7-token-engine/0002-access-rules-engine.html | 3620 | 8 | 2 | 2 | 27 | yes | yes |
 | b7-token-engine/0003-revocation-pause.html | 2967 | 9 | 2 | 2 | 26 | yes | yes |
-| b8-push-notifications/0001-fcm-apns-expo.html | 1420 | 11 | 1 | 1 | 25 | — | n/a |
+| b8-push-notifications/0001-fcm-apns-expo.html | 3020 | 12 | 2 | 2 | 25 | — | yes |
 | b9-docker-deployment/0001-docker-fundamentals.html | 3054 | 13 | 2 | 2 | 26 | yes | yes |
 | b9-docker-deployment/0002-coolify-setup.html | 3280 | 12 | 2 | 2 | 26 | yes | yes |
 | b9-docker-deployment/0003-logs-backups-monitoring.html | 3263 | 17 | 2 | 2 | 29 | — | yes |
