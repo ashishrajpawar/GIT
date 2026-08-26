@@ -4,7 +4,7 @@
      Regenerate with: node scripts/audit.mjs
      Hand-written session state lives in SESSION.md, never here. -->
 
-Generated 2026-08-25 from the files on disk. Where any other document disagrees
+Generated 2026-08-26 from the files on disk. Where any other document disagrees
 with this one, this one is right — everything below is measured, not asserted.
 
 ## Summary

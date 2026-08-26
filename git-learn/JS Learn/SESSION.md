@@ -19,8 +19,8 @@ how far it got.
 > files either.** Make no claims about progress at all — not in prose, not in
 > a commit message, not as a reason for prioritising anything.
 
-**Nothing in flight.** `b9/0003`, `b1/0003`, `a9/0001`, `b8/0001` and
-`b6/0001` all landed 2026-08-25.
+**Nothing in flight.** Six lessons landed 2026-08-25: `b9/0003`, `b1/0003`,
+`a9/0001`, `b8/0001`, `b6/0001` and `b6/0002`.
 
 > ### `known-issues.json` is **empty**, for the first time in the project
 >
@@ -28,16 +28,24 @@ how far it got.
 > 2026-08-25. Every error the audit finds is now either fixed or absent —
 > there is nothing gated, nothing deferred, and nothing being carried.
 
-**Nothing in flight.** Six lessons landed 2026-08-25: `b9/0003`, `b1/0003`,
-`a9/0001`, `b8/0001`, `b6/0001` and `b6/0002`.
+> ### The course is published, and one page is outside the tooling
+>
+> The repo was pushed on 2026-08-25 — 214 commits — and it is public, served
+> by GitHub Pages from `main`. **Pushing publishes; there is no staging step.**
+>
+> The landing page is `git-learn/index.html`, **one directory above this
+> folder and outside everything that checks the course.** It had described the
+> pre-pivot WhatsApp clone for two months, linked to seven deleted modules,
+> and hardcoded "Complete" onto all nine cards. Rewritten; all links verified
+> 200 on the live site. See `CLAUDE.md` § *Running / viewing lessons* — the
+> point is that no check will ever catch that page, so it is a hand check
+> whenever the course's shape changes.
 
 > ### The `unverifiable` cluster is closed, and the audit reads 101/101
 >
 > Every lesson in the course now executes something and passes its own
 > self-check. There are **no `unverifiable` entries left** — the flag that
 > covered 17 lessons on 2026-08-23 covers none.
->
-> **`known-issues.json` is empty too.** Nothing is gated, deferred or carried.
 >
 > The standing warning about `--unverifiable` deleting a log entry is now
 > **moot for every lesson**: there is no excused entry left to destroy. Keep

@@ -272,6 +272,33 @@ No build step. Open any `.html` file directly in a browser.
 The quiz widget is loaded via `<script src="../../assets/quiz.js"></script>`.
 All lessons in `modules/` share `assets/styles.css` and `assets/quiz.js`.
 
+### ⚠ This course is published, and the audit cannot see the page that links to it
+
+**The repo is public and served by GitHub Pages** at
+`ashishrajpawar.github.io/GIT/`, from `main`. Pushing publishes; there is no
+staging step. The course home is
+`…/GIT/git-learn/JS%20Learn/index.html` — the space in the folder name is
+encoded and works fine.
+
+**The entry point is one directory ABOVE this one**, at
+`git-learn/index.html`, and it is outside everything that checks this course.
+`scripts/audit.mjs` walks `modules/`; `verify-lesson.mjs` takes a lesson path.
+**Neither has any reach into the parent folder**, so that page can contradict
+the course indefinitely and nothing goes red.
+
+It did, for over two months. On 2026-08-25 it still described *"9 modules ·
+Build a WhatsApp Clone from scratch"*, linked to seven modules deleted in the
+pivot, and — the part that matters — **hardcoded a 100% progress bar and the
+word "Complete" onto all nine cards.** That is the exact claim this file
+forbids anyone from making, in the one copy the public could read, surviving
+precisely because it sat one directory outside the tooling.
+
+**So: when a decision changes what the course *is*, check
+`git-learn/index.html` by hand.** It is not covered, it will not warn you, and
+being wrong there is worse than being wrong here because it is the version
+strangers see. It now links to the course index and the two tracks and asserts
+nothing about progress — keep it that way.
+
 ### Additional shared scripts (load after quiz.js)
 ```html
 <script src="../../assets/dom-sandbox.js"></script>  <!-- before playground.js -->
