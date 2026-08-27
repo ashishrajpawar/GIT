@@ -652,3 +652,138 @@ C7, C8, C6 and C9 together are the "operate Token" half: observability,
 analytics, scale, launch and support. Studied after launch, but **built into
 the product from Phase 3 onward** — instrumentation retrofitted is
 instrumentation that never happens.
+
+---
+
+# The queue
+
+Added 2026-08-27. **One ordered list of everything open, across both kinds of
+work**, because one person is doing both and they compete for the same week.
+
+**Two kinds of work, and they are not interchangeable:**
+
+- **`W` — writing.** Course lessons. Bounded by your own hours. The whole
+  backlog is Phase 3 plus a small maintenance tail.
+- **`L` — launch.** Company tasks whose detail lives in the F1 lesson task
+  boards. **Several are bounded by other people's calendars**, which is why the
+  queue is ordered by *what unblocks what*, not by importance.
+
+**No status column, deliberately** — same rule as the phase tables above. What
+is done is in `SESSION.md`; what is countable is in `PROGRESS.md`. This table
+answers *what the work is and what has to come first*, and nothing else.
+
+**"Owns the detail" is where the actual checklist lives.** This queue is one
+line per unit; the F1 lesson named in that column has the full task board, the
+worked example and the cost. Do not copy checklist items up here — that is how
+a fact gets three homes.
+
+## Wave 0 — start now, because other people's clocks are running
+
+Nothing in this wave is gated on anything in the project. Every one of them is
+gated on someone else, and the two SMS rows sit under the longest chain in the
+whole launch.
+
+| # | Unit | Owns the detail | Gate | Lead time |
+|---|---|---|---|---|
+| L1 | SMS DLT: principal entity, sender header, OTP template, delivery tested on every major operator | F1/0012 | — | **1–3 wks** |
+| L2 | Second SMS aggregator — same three registrations, **template wording identical** so failover needs no re-approval | F1/0012 | — | 1–3 wks, alongside L1 |
+| L3 | Play Console account + organisation identity verification | F1/0004 | company documents | days–2 wks |
+| L4 | Recruit 12 testers (ask 16), tester agreements signed before any build goes out | F1/0004, F1/0015 | L3 for the track; asking starts today | **3–5 wks all in** |
+| L5 | D-U-N-S number, then Apple Developer Program enrolment as an organisation | F1/0005 | company documents; D-U-N-S details must match exactly | 1–3 wks |
+| L6 | Trademark search in classes 9, 38, 42 + attorney opinion | F1/0003 | — | weeks |
+| L7 | **The RoPA** — every field, six columns, cross-checked against the real schema | F1/0001 | technical founder's time | ~1 wk of yours |
+| L8 | Brief counsel: privacy policy + terms, RoPA attached — including the holder side and **the Hindi question** | F1/0001, 0002, 0014 | L7 | **2–4 wks turnaround** |
+| L9 | One letter to the CA: GST position on subscriptions, place of supply | F1/0016 | — | free, stable answer |
+
+> **L1 → L4 is the critical path of the entire launch**, and none of it is code:
+> no DLT → no OTP → no sign-in → no closed test → no 14 continuous days → no
+> production access. **L7 is the second chain**: it is upstream of four separate
+> documents and of the deletion page Play requires.
+
+## Wave 1 — everything the RoPA unblocks
+
+| # | Unit | Owns the detail | Gate |
+|---|---|---|---|
+| L10 | Retention policy — a period **and a written justification** per data class | F1/0001 | L7 |
+| L11 | Backup locations counted; the verified-dump floor; over-retention reported, rounded up | F1/0001, 0009 | L10 |
+| L12 | Play Data Safety form, answered from the schema | F1/0004 | L7 |
+| L13 | Apple privacy labels, cross-checked line by line against L12 | F1/0005 | L7, L12 |
+| L14 | Consent notice: itemised, unbundled, versioned, withdrawal table | F1/0001 | L7 |
+| L15 | Rights procedures + export format, each tested end to end on a dummy account | F1/0001 | L10 |
+| L16 | Deletion mechanism + **the web-accessible deletion page** | F1/0004, 0001 | L10, L15 |
+| L17 | Grievance officer appointed and published — name, email, **postal address** — plus templates and the log | F1/0001, 0013 | — |
+| L18 | Vendor inventory, a DPA from each, residency per service, **error-tracker scrubbing configured** | F1/0009 | L7 |
+
+## Wave 2 — trust & safety, which is the UGC evidence both stores audit
+
+| # | Unit | Owns the detail | Gate |
+|---|---|---|---|
+| L19 | Threat catalogue, each row marked mitigated or open; the abuse signals worth watching | F1/0006 | — |
+| L20 | Report pipeline end to end — and **a test report filed and read**, not a code review | F1/0006 | — |
+| L21 | The 24-hour SLA: duty, escalation, the automatic interim suspension, and the instrumentation that keeps it honest | F1/0006, 0005 | L20 |
+| L22 | Triage decision matrix, with a worked example under every row | F1/0006 | — |
+| L23 | **What a block attaches to** — technical founder's call — then the six-step test passing, including the different-browser step | F1/0006 | technical founder |
+| L24 | Crisis protocols, helpline numbers, authority contacts, named emergency-disclosure authority | F1/0006 | — |
+| L25 | Law-enforcement protocol, the can/cannot lists, **the recovery position in writing**, the register | F1/0002 | — |
+| L26 | The UGC evidence pack for both stores: filtering answer, reporting, blocking, published contact | F1/0004, 0005 | L20, L21, L23, L28 |
+
+## Wave 3 — make it comprehensible, then list it
+
+| # | Unit | Owns the detail | Gate |
+|---|---|---|---|
+| L27 | Comprehension: three candidate first screens, the ten-second test, the empty state rewritten | F1/0007 | — |
+| L28 | Support: tooling, published contact, **holder contact path**, 20 templates, the 7 hard help articles | F1/0008 | — |
+| L29 | Positioning statement, ten strangers, the 80-character line and the paragraph | F1/0007 | L27 |
+| L30 | Store listing: title, descriptions, icon, feature graphic, **the five captioned screenshots** | F1/0004, 0005 | L29 |
+| L31 | Reviewer notes + demo account + a non-expiring demo token, both stores | F1/0004, 0005 | L16, L26 |
+| L32 | Analytics: self-hosted, event counts, the five metrics, activation = first redemption | F1/0007 | — |
+
+## Wave 4 — the gates you cannot ship without
+
+| # | Unit | Owns the detail | Gate |
+|---|---|---|---|
+| L33 | 18+ stated at signup and in terms; store ratings aligned; the underage-account policy | F1/0013 | — |
+| L34 | Dark-pattern audit of onboarding, consent, paywall, cancellation | F1/0013 | L14 |
+| L35 | Holder notice, the line above Connect, the holder contact path | F1/0014 | L8 |
+| L36 | 2FA everywhere, credential vault, bus factor documented, domain locked, SPF/DKIM/DMARC | F1/0015 | — |
+| L37 | Five defensive domains redirecting to primary; certificate-transparency monitoring; the takedown process | F1/0015 | L6 informs it |
+| L38 | `security.txt`, vulnerability disclosure policy with safe harbour, a named triager | F1/0015 | — |
+| L39 | CERT-In: the 6-hour workflow, 180-day logs, clock sync — **kept separate from the DPDP runbook** | F1/0012 | — |
+| L40 | Incident runbook, severity tiers, user notification template, **one tabletop actually run** | F1/0001 | — |
+| L41 | QA: the bug-report habit, the manual checklist, the smoke test, a real low-end phone, old browsers, accessibility, and the three guarantees re-proved | F1/0010 | — |
+| L42 | The compliance calendar and its register — owners, dates, artefacts, triggers | F1/0011 | most of the above exists |
+| L43 | Transparency report designed and the counters wired up **from launch** | F1/0006 | L20, L21 |
+
+## Wave 5 — the test, and the two decisions it settles
+
+| # | Unit | Owns the detail | Gate |
+|---|---|---|---|
+| L44 | Closed test: 12 testers, **14 continuous days**, count checked weekly | F1/0004 | L1, L3, L4, L26, L31 |
+| L45 | Decide **replacement vs supplement** and **which segment leads** — from the signals table, before production access | F1/0007 | L44 |
+| L46 | Apply for Play production access | F1/0004 | L44, L45 |
+| L47 | Apple submission | F1/0005 | L13, L26, L31 |
+
+## The writing queue, which runs in parallel
+
+| # | Unit | Owns the detail | Gate |
+|---|---|---|---|
+| W1 | **Phase 3 — the nine unwritten C-modules.** C0, C1, C2, C3, C4, C6, C7, C8, C9. C5 is the only one that exists. Written **just-in-time**, never batched | this file, § Phase 3 | the student reaching each one |
+| W2 | Maintenance: `--wrong` cases for the seven lessons that have a self-check and none — `01/0001`–`0005`, `a11/0002`, `a8/0002` | `CLAUDE.md` § practice pattern | — |
+| W3 | **Phase 4 — the operating track.** C6, C7, C8, C9 studied after launch, but instrumented into the product from Phase 3 onward | this file, § Phase 4 | W1 |
+
+> **W2 is small and worth doing between larger units.** A self-check with no
+> wrong-cases proves nothing about what it would catch — five self-checks in
+> Phase 1.5 passed a wrong answer purely by coincidence, and every one was
+> exposed by a wrong-case that should have failed and did not.
+
+## What is genuinely blocked
+
+Three things, and only three:
+
+| What | On whom | Unblocks |
+|---|---|---|
+| **L23** — what a block attaches to | the technical founder | L26, and therefore both store submissions |
+| **L45** — replacement vs supplement, and the lead segment | the closed test | store copy stops being provisional |
+| **The Hindi question** inside L8 | counsel | whether English-only launch stands |
+
+Everything else in this queue can be started today by one person.

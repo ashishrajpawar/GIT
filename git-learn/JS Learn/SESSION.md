@@ -2793,6 +2793,18 @@ storage-model note is already waiting on. Until then `0003`'s column wins.
 
 ## Next action
 
+> ### → The queue is in `TOKEN-TRACK.md` § *The queue* (2026-08-27)
+>
+> Forty-seven launch units plus three writing units, ordered by what unblocks
+> what. **Start with `L1` (SMS DLT) and `L7` (the RoPA)** — they head the two
+> chains that decide the launch date, and neither is code.
+>
+> **Everything below this box is history and is kept for its reasoning, not for
+> its instructions.** Several passages describe work that has since been
+> finished — the `unverifiable` cluster, C5, the b6/b9 lessons — and the counts
+> in them are superseded by `PROGRESS.md`. Read it for *why*, never for *what
+> next*.
+
 ### Four decisions were taken 2026-08-23 (round 2), and nothing is blocked
 
 All four came back as the recommendation. **They are recorded in `CLAUDE.md`,
@@ -4080,17 +4092,24 @@ architecture question in architecture vocabulary.**
 
 ## Blocked on
 
-**Nothing is blocked from starting.** `c5/0004` is unblocked and designed.
+**Rewritten 2026-08-27.** The previous contents were stale: they described
+`c5/0004` as undesigned and `c5/0005` as needing a decision, and both were
+written and shipped on 2026-08-22/23. C5 is complete.
 
-**One thing needs a decision before it is written, and only that one:**
-`c5/0005` was multi-device, and the student chose **one device for v1** on
-2026-08-23, so the lesson has no product left to describe. Either reframe it as
-*"why Token is single-device and what changing it would cost"*, or drop it and
-make C5 four lessons. **Do not write it as originally planned.** Everything
-else in the queue can proceed without asking.
+**Three things are blocked, and only three. Everything else can start today.**
 
-*(ADR-0008 was the last true blocker and was settled 2026-08-20. The
-relay-egress note below is the residue of it.)*
+| What | On whom | What it unblocks |
+|---|---|---|
+| **L23** — what a block attaches to, for a holder with no account | the technical founder | L26, the UGC evidence pack, and therefore **both store submissions** |
+| **L45** — replacement vs supplement, and which segment leads | the closed test (L44) | store copy stops being provisional. `F1/0007` has the signals table and the day-14 question |
+| **The Hindi question** inside L8 | counsel | whether English-only at launch stands. Ask it in the same brief as the privacy policy |
+
+None of the three blocks anything in Wave 0, which is where the work starts.
+
+*(ADR-0008 was the last true architectural blocker and was settled 2026-08-20.
+The relay-egress note below is the residue of it, and it is now also a founder
+concern — see `F1/0009`, where the same arithmetic is a line item in a budget
+rather than a capacity note.)*
 
 **One thing to carry to deployment, not to act on now:** relay egress is a
 certainty rather than a risk. ADR-0003 expressed the single-box ceiling in
@@ -4107,17 +4126,49 @@ no new decision.
 Per-item status only. The plan itself is in `TOKEN-TRACK.md`; the counts are in
 `PROGRESS.md`; why any of it went the way it did is in `HANDOFF.md`.
 
+**Updated 2026-08-27.** The queue this table reports against is
+`TOKEN-TRACK.md` § *The queue* — one ordered list covering both the writing
+work and the launch work, because one person is doing both.
+
+### Course writing
+
 | Phase | Status |
 |---|---|
 | 0 — repair the map | done |
 | 1 — unblock where the student is | **done**, all five items |
 | 1.5 — the practice pattern in Module 02 | **done** — all 14, 2026-08-17 |
 | 2 — deepen the spine | done (16 of 16 deepenable; 4 deliberately skipped as rewrites) |
-| 3 — the ten C-modules | not started, deliberately |
-| 4 — the operating track | not started, deliberately |
+| **3 — the C-modules** | **not started.** C5 is the only one written; **nine remain** — C0, C1, C2, C3, C4, C6, C7, C8, C9. `TOKEN-TRACK.md` queue item **W1** |
+| 4 — the operating track | not started, deliberately. Queue item **W3** |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
-| **M3 — the plain function in Track A/B lessons** | **done 2026-08-22** — 37 lessons. A3, A4, A5, A6, A8, B5, all of B2, B3, B7, B10 and A11, plus A7's `0005` |
+| **M3 — the plain function in Track A/B lessons** | **closed 2026-08-25.** No lesson carries a whole-lesson `unverifiable` flag; the reflex to call a lesson unrunnable was wrong 22 times out of 22 |
+| Maintenance tail | **open, small.** Seven lessons have a self-check and no `--wrong` cases: `01/0001`–`0005`, `a11/0002`, `a8/0002`. Queue item **W2** |
+| **F1 — the founder track** | **written 2026-08-26**, 16 lessons. Sixteen decisions settled 2026-08-27; three left open with gates. See *In progress* above |
+
+### Launch execution — the F1 queue
+
+**Not started.** Forty-seven units, ordered in `TOKEN-TRACK.md` § *The queue*
+by what unblocks what. Nothing has been begun.
+
+| Wave | What it is | Note |
+|---|---|---|
+| 0 — L1–L9 | Registrations, accounts, the RoPA, the counsel brief | **Every one is gated on somebody else's calendar.** Start today |
+| 1 — L10–L18 | Everything the RoPA unblocks: retention, both store forms, consent, rights, deletion page, vendors | Gated on L7 |
+| 2 — L19–L26 | Trust & safety, which *is* the UGC evidence both stores audit | L26 is the pack itself |
+| 3 — L27–L32 | Comprehension, positioning, the listings, support, analytics | L27 before L29 before L30 |
+| 4 — L33–L43 | The gates: age, dark patterns, holder notice, opsec, CERT-In, incident runbook, QA, calendar, transparency | Mostly parallel |
+| 5 — L44–L47 | The closed test, the two decisions it settles, both submissions | L44 is 14 calendar days that cannot be compressed |
+
+> **The two chains that decide the launch date, neither of them code:**
+>
+> ```
+> L1 DLT ──▶ OTP works ──▶ L44 closed test ──▶ 14 continuous days ──▶ L46 production
+> L7 RoPA ─┬▶ privacy policy   ├▶ L12 Play Data Safety   ├▶ L13 Apple labels
+>          └▶ L10 retention ──▶ L16 deletion ──▶ the web deletion page Play requires
+> ```
+>
+> **L1 and L7 are the two things to start first.** Everything else has slack.
 
 ### M3 — where it has reached
 
