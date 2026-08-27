@@ -102,7 +102,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 ## Founder track (F1) — non-technical
 
-16 lesson(s), averaging 2425 words of prose.
+16 lesson(s), averaging 2495 words of prose.
 
 > **These deliberately have no quiz, no playground and no self-check**, so they
 > are counted here rather than averaged into the table above — a quiz-less
@@ -114,7 +114,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Lesson | Prose | Pre | Explain prompt |
 |---|---|---|---|
-| 0001-dpdp-data-protection.html | 4904 | 6 | yes |
+| 0001-dpdp-data-protection.html | 5326 | 6 | yes |
 | 0002-intermediary-law.html | 2139 | 3 | yes |
 | 0003-ip-and-brand.html | 2198 | 0 | yes |
 | 0004-google-play.html | 2998 | 2 | yes |
@@ -123,12 +123,12 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | 0007-positioning-and-gtm.html | 3851 | 1 | yes |
 | 0008-support-and-help-content.html | 2684 | 3 | yes |
 | 0009-vendors-and-governance.html | 2472 | 0 | yes |
-| 0010-release-and-qa.html | 2143 | 3 | yes |
+| 0010-release-and-qa.html | 2275 | 3 | yes |
 | 0011-compliance-calendar.html | 1075 | 1 | yes |
 | 0012-registrations-statutory-reporting.html | 2127 | 2 | yes |
 | 0013-age-consumers-fair-dealing.html | 1828 | 2 | yes |
-| 0014-holder-side-legal.html | 1845 | 1 | yes |
-| 0015-opsec-and-brand-defence.html | 2008 | 5 | yes |
+| 0014-holder-side-legal.html | 2126 | 1 | yes |
+| 0015-opsec-and-brand-defence.html | 2291 | 5 | yes |
 | 0016-payments-and-tax.html | 1607 | 1 | yes |
 
 ## Integrity checks

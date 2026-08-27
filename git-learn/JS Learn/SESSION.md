@@ -69,6 +69,22 @@ landed 2026-08-25: `b9/0003`, `b1/0003`, `a9/0001`, `b8/0001`, `b6/0001` and
 > for an accountless holder is the technical founder's; `0006` specifies the
 > behaviour and the test script instead of the mechanism.
 >
+> **Two more settled the same day:** **Hindi is deferred** — English at launch,
+> and when it lands the *redemption page goes first*, because a holder never
+> chose the product and arrives in whatever language their phone is set to. And
+> **five defensive domains**, each redirecting to the primary, chosen by asking
+> whether a holder would accept it in an address bar.
+>
+> > **The Hindi one carries the most exposure in the module and has a live
+> > question attached.** Ask counsel specifically whether the DPDP consent
+> > notice needs Hindi at launch — the Act contemplates English *or* an Eighth
+> > Schedule language, and the regime turns on whether the person understood.
+> > Also: two of the four target segments skew away from English, and a holder
+> > who cannot read the redemption page closes the tab, which is invisible
+> > because it looks like a redemption that never happened. Watch holder
+> > completion rate. Keep every user-facing string in one place from the first
+> > commit — that is the only part of this that gets more expensive by waiting.
+>
 > **Two consequences worth carrying:** keeping the name removes one of the three
 > causes of the queue-management misreading, so `0007`'s first screen now has to
 > beat an actively misleading word rather than an absent one — and `0015`'s
