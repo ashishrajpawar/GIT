@@ -12,6 +12,7 @@ with this one, this one is right — everything below is measured, not asserted.
 | Metric | Value |
 |---|---|
 | Token-track lessons | 101 |
+| Founder-track lessons (F1, counted separately) | 16 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
 | Quiz questions (track) | 2751 |
 | Avg teaching prose per track lesson | 2244 words |
@@ -76,7 +77,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | 01-javascript-fundamentals | 13 | 2556 | 85 | 15 | 380 | 0/13 | 13/13 |
 | 02-react-native | 14 | 2641 | 39 | 14 | 355 | 0/14 | 14/14 |
 | a10-device-security | 2 | 2273 | 4 | 4 | 52 | 1/2 | 2/2 |
-| a11-polish-publish | 5 | 2196 | 9 | 10 | 137 | 0/5 | 5/5 |
+| a11-polish-publish | 5 | 2197 | 9 | 10 | 137 | 0/5 | 5/5 |
 | a2-typescript | 3 | 1099 | 5 | 6 | 76 | 0/3 | 3/3 |
 | a3-api-consumption | 4 | 1275 | 5 | 8 | 111 | 1/4 | 4/4 |
 | a4-auth-client | 3 | 1400 | 3 | 6 | 80 | 1/3 | 3/3 |
@@ -99,6 +100,37 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | x1-git-dev-environment | 3 | 1201 | 4 | 6 | 83 | 0/3 | 3/3 |
 | x2-debugging | 2 | 1242 | 3 | 4 | 50 | 0/2 | 2/2 |
 
+## Founder track (F1) — non-technical
+
+16 lesson(s), averaging 2175 words of prose.
+
+> **These deliberately have no quiz, no playground and no self-check**, so they
+> are counted here rather than averaged into the table above — a quiz-less
+> lesson in the Verified column would read as a regression that did not happen.
+> They are still link-checked, still parsed, still scanned for invalid token
+> codes and alphabets, and still required to be in `search-index.json`.
+> The deliverable of each is a document the founder writes; the assessment is
+> the `createExplain` prompt at the foot of the page.
+
+| Lesson | Prose | Pre | Explain prompt |
+|---|---|---|---|
+| 0001-dpdp-data-protection.html | 4203 | 6 | yes |
+| 0002-intermediary-law.html | 2139 | 3 | yes |
+| 0003-ip-and-brand.html | 1845 | 0 | yes |
+| 0004-google-play.html | 2998 | 2 | yes |
+| 0005-apple-app-store.html | 1883 | 1 | yes |
+| 0006-trust-and-safety.html | 2609 | 6 | yes |
+| 0007-positioning-and-gtm.html | 2856 | 1 | yes |
+| 0008-support-and-help-content.html | 2422 | 2 | yes |
+| 0009-vendors-and-governance.html | 2234 | 0 | yes |
+| 0010-release-and-qa.html | 2023 | 3 | yes |
+| 0011-compliance-calendar.html | 1075 | 1 | yes |
+| 0012-registrations-statutory-reporting.html | 1831 | 2 | yes |
+| 0013-age-consumers-fair-dealing.html | 1615 | 2 | yes |
+| 0014-holder-side-legal.html | 1712 | 1 | yes |
+| 0015-opsec-and-brand-defence.html | 2008 | 5 | yes |
+| 0016-payments-and-tax.html | 1340 | 1 | yes |
+
 ## Integrity checks
 
 | Check | Result |
@@ -107,7 +139,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Quiz structure valid | ok |
 | Tables queried but never created | ok |
 | Broken relative links | ok |
-| search-index.json | 102 entries, 0 dead, 0 unindexed |
+| search-index.json | 118 entries, 0 dead, 0 unindexed |
 | Example tokens valid under alphabet | 2 invalid |
 
 ## Errors
@@ -157,7 +189,7 @@ None.
 | a11-polish-publish/0002-theming-dark-mode.html | 2214 | 10 | 2 | 2 | 27 | — | yes |
 | a11-polish-publish/0003-forms-validation.html | 2104 | 10 | 2 | 2 | 28 | — | yes |
 | a11-polish-publish/0004-environment-config.html | 1467 | 13 | 1 | 2 | 25 | — | yes |
-| a11-polish-publish/0005-store-submission.html | 2693 | 11 | 2 | 2 | 29 | — | yes |
+| a11-polish-publish/0005-store-submission.html | 2696 | 11 | 2 | 2 | 29 | — | yes |
 | a2-typescript/0001-types-and-interfaces.html | 1098 | 11 | 2 | 2 | 26 | — | yes |
 | a2-typescript/0002-generics-utility-types.html | 1140 | 11 | 2 | 2 | 25 | — | yes |
 | a2-typescript/0003-typescript-react-native.html | 1060 | 9 | 1 | 2 | 25 | — | yes |

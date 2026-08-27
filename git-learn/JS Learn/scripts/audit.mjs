@@ -63,6 +63,23 @@ const rel = (p) => path.relative(ROOT, p).split(path.sep).join("/");
 /** Legacy = the 45 pre-pivot WhatsApp-era lessons in modules/03- .. 09-. */
 const isLegacy = (p) => /modules\/0[3-9]-/.test(rel(p));
 
+/* Founder track = F1, the non-technical half of shipping Token: DPDP, store
+   compliance, trust & safety, positioning, vendors, registrations, opsec.
+   It is a deliberate exception to the lesson-format invariants — no quiz, no
+   playground, no self-check — because its deliverable is a document the founder
+   writes, and there is no multiple-choice question that can check whether a
+   Record of Processing Activities matches the real schema. See CLAUDE.md.
+
+   It is counted SEPARATELY rather than excluded. Folding 16 quiz-less lessons
+   into `track` would have read as "Verified 101/117" and "Deepened 16/117" —
+   a regression that never happened, in the one file that is supposed to be
+   measured rather than asserted. Excluding it entirely would put it outside the
+   tooling, which is exactly how git-learn/index.html spent two months
+   contradicting the course. So: still link-checked, still parsed, still scanned
+   for bad token codes and alphabets, still required in the search index —
+   just not averaged in with lessons that teach code. */
+const isFounder = (p) => /modules\/f1-/.test(rel(p));
+
 const decode = (s) =>
   s
     .replace(/&lt;/g, "<")
@@ -314,6 +331,7 @@ for (const file of lessonFiles) {
     id,
     module: id.split("/")[1],
     legacy: isLegacy(file),
+    founder: isFounder(file),
     words,
     pre: (body.match(/<pre/g) || []).length,
     playgrounds: (html.match(/createPlayground\(/g) || []).length,
@@ -414,6 +432,21 @@ if (exists(indexPath)) {
 const preScan = scanPreBlocks(path.join(ROOT, "modules"));
 preScan.findings.forEach((f) =>
   err(`display block: unterminated ${f.quote} string — ${f.file}:${f.line}`));
+
+// -------------------------------------------------- founder track
+
+/* The F1 lessons are exempt from the quiz and self-check invariants, which
+   removes every automatic check the rest of the course has. One thing has to
+   replace them or the exemption becomes "this module is not checked at all":
+   each lesson must carry its createExplain prompt, because that prompt IS the
+   assessment — the deliverable is a document the founder writes, and the box is
+   where they write it. An error, not a warning: a page with the exemption and
+   without the prompt is prose nobody is asked to act on. */
+for (const l of lessons.filter((x) => x.founder)) {
+  const html = read(path.join(ROOT, l.id));
+  if (!/createExplain\(/.test(html))
+    err(`founder: ${l.id} has no createExplain prompt — the exemption from quizzes is what makes it required`);
+}
 
 // -------------------------------------------------- token alphabet
 
@@ -547,8 +580,9 @@ stale.forEach((k) =>
 
 // ---------------------------------------------------------------- report
 
-const track = lessons.filter((l) => !l.legacy);
+const track = lessons.filter((l) => !l.legacy && !l.founder);
 const legacy = lessons.filter((l) => l.legacy);
+const founder = lessons.filter((l) => l.founder);
 const totalQ = track.reduce((a, l) => a + l.questions, 0);
 const keyed = Object.values(positions).reduce((a, b) => a + b, 0);
 const avg = (xs) => (xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : 0);
@@ -576,6 +610,7 @@ with this one, this one is right — everything below is measured, not asserted.
 | Metric | Value |
 |---|---|
 | Token-track lessons | ${track.length} |
+| Founder-track lessons (F1, counted separately) | ${founder.length} |
 | Legacy lessons (pre-pivot, excluded) | ${legacy.length} |
 | Quiz questions (track) | ${totalQ} |
 | Avg teaching prose per track lesson | ${avg(track.map((l) => l.words))} words |
@@ -637,6 +672,22 @@ ${[...byModule.entries()]
   })
   .join("\n")}
 
+## Founder track (F1) — non-technical
+
+${founder.length} lesson(s), averaging ${avg(founder.map((l) => l.words))} words of prose.
+
+> **These deliberately have no quiz, no playground and no self-check**, so they
+> are counted here rather than averaged into the table above — a quiz-less
+> lesson in the Verified column would read as a regression that did not happen.
+> They are still link-checked, still parsed, still scanned for invalid token
+> codes and alphabets, and still required to be in \`search-index.json\`.
+> The deliverable of each is a document the founder writes; the assessment is
+> the \`createExplain\` prompt at the foot of the page.
+
+| Lesson | Prose | Pre | Explain prompt |
+|---|---|---|---|
+${founder.map((l) => `| ${l.id.replace("modules/f1-founder-track/", "")} | ${l.words} | ${l.pre} | ${/createExplain\(/.test(read(path.join(ROOT, l.id))) ? "yes" : "**MISSING**"} |`).join("\n")}
+
 ## Integrity checks
 
 | Check | Result |
@@ -670,6 +721,7 @@ fs.writeFileSync(path.join(ROOT, "PROGRESS.md"), md);
 
 if (!QUIET) {
   console.log(`\nToken-track lessons : ${track.length}   (legacy excluded: ${legacy.length})`);
+  console.log(`Founder track (F1)  : ${founder.length}   (no quiz by design — counted separately)`);
   console.log(`Quiz questions      : ${totalQ}`);
   console.log(`Avg prose / lesson  : ${avg(track.map((l) => l.words))} words`);
   console.log(`Deepened            : ${track.filter((l) => l.deepened).length}/${track.length}`);

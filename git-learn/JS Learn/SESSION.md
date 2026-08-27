@@ -19,8 +19,38 @@ how far it got.
 > files either.** Make no claims about progress at all — not in prose, not in
 > a commit message, not as a reason for prioritising anything.
 
-**Nothing in flight.** Six lessons landed 2026-08-25: `b9/0003`, `b1/0003`,
-`a9/0001`, `b8/0001`, `b6/0001` and `b6/0002`.
+**Nothing in flight.** The F1 founder track landed 2026-08-26 — 16 lessons plus
+a README, in one pass, on the student's instruction. Before that, six lessons
+landed 2026-08-25: `b9/0003`, `b1/0003`, `a9/0001`, `b8/0001`, `b6/0001` and
+`b6/0002`.
+
+> ### F1 — a whole module with no quizzes, and that was the instruction
+>
+> `modules/f1-founder-track/`, written from `token-nontech-taskboard.md`.
+> Sixteen lessons, one per section of the board. **No quiz, no playground, no
+> self-check** — asked for explicitly, and the reasoning is recorded in
+> `CLAUDE.md` § *The founder track* so it does not get "fixed" later.
+>
+> Three decisions taken without asking, per the standing instruction, each with
+> the cost of the option rejected:
+>
+> - **`createExplain` is mandatory and the audit errors without it.** The
+>   exemption removes every automatic check the rest of the course has, so one
+>   thing had to stay compulsory or "no quiz" becomes "not checked at all".
+> - **The audit counts F1 separately** (`isFounder`, beside `isLegacy`).
+>   *Rejected:* folding it into `track`, which printed `Verified 101/117` and
+>   `Deepened 16/117` — a regression that never happened, in the file whose
+>   whole point is being measured. *Also rejected:* excluding it like legacy,
+>   which would have put 16 published pages outside the tooling, which is
+>   exactly how `git-learn/index.html` went two months contradicting the course.
+> - **All 16 are `nothing-to-verify` in the log**, so `Verified` stays 101/101
+>   for lessons that actually contain code.
+>
+> **Flagged, not resolved:** the task board's vendor list names **LiveKit** and
+> **AWS**; `CLAUDE.md` says self-hosted coturn on a Coolify VPS and no
+> third-party comms SDK. `0009` is written against roles rather than brand
+> names so it survives either answer, and both the README and `0009` say plainly
+> that the technical founder has to settle it before any DPA is signed.
 
 > ### `known-issues.json` is **empty**, for the first time in the project
 >

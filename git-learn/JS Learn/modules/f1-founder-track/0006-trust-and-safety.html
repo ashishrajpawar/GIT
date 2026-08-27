@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>F1 — Trust &amp; Safety Operations</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Founder Track</a> &rsaquo;
+        <span>Trust &amp; Safety Operations</span>
+    </nav>
+
+    <h1>Trust &amp; Safety Operations</h1>
+    <p class="lesson-meta">F1 &mdash; Lesson 6 of 16 &nbsp;|&nbsp; this is the lesson both stores audit</p>
+
+    <div class="callout">
+        <div class="callout-title">Why this matters for Token</div>
+        <p>Two stores require four things: filtering, reporting, blocking, a published contact. This
+        lesson is where three of the four actually get built, and where the evidence for all four
+        comes from.</p>
+        <p>It is also where a specific defect gets fixed. A review of the prototype found that the
+        report button <strong>sent nothing anywhere</strong> &mdash; it showed a confirmation to the
+        person reporting and stopped. That is the worst possible failure mode: it is invisible to the
+        user, it satisfies a demo, and it means every report ever made was discarded. Assume nothing
+        about the pipeline until you have watched a test report arrive.</p>
+    </div>
+
+    <h2>1 &middot; The threat model &mdash; catalogue what is specific to Token</h2>
+    <p>Generic abuse lists are useless here, because Token&rsquo;s design removes some categories and
+    creates others. Write your own catalogue. A starting set:</p>
+
+    <table>
+        <tr><th>Abuse</th><th>How it works</th><th>Mitigated?</th></tr>
+        <tr><td><strong>Forwarded link</strong></td><td>The holder passes the redemption URL to someone else. The token was issued to one party and is now used by another</td><td>Partly. A use cap and an expiry bound it; nothing proves who is at the other end</td></tr>
+        <tr><td><strong>Second-device access</strong></td><td>The holder opens the same conversation on another device or hands the page to a colleague</td><td>Weakly. Inherent to a browser-based holder with no account</td></tr>
+        <tr><td><strong>Code enumeration</strong></td><td>An attacker guesses codes to find live tokens</td><td>Yes, if rate limiting is right &mdash; and the code space is enormous. Verify it, do not assume it</td></tr>
+        <tr><td><strong>Harassment inside a legitimate token</strong></td><td>A person the user genuinely gave a token to abuses the channel</td><td>This is the main one. Report, block, revoke</td></tr>
+        <tr><td><strong>Listing tokens as an attack surface</strong></td><td>A token published somewhere public is redeemed by strangers rather than the intended party</td><td>Partly. Use caps and rules. Also a user-education problem</td></tr>
+        <tr><td><strong>Impersonation of Token itself</strong></td><td>A cloned redemption page harvests what a holder types</td><td>Lesson <a href="./0015-opsec-and-brand-defence.html">0015</a>. This is the predictable attack on this design</td></tr>
+        <tr><td><strong>Unwanted contact by rule evasion</strong></td><td>Contacting at the edge of a rule &mdash; ten messages in ten seconds under a daily cap of ten</td><td>Open. A per-minute cooldown was considered and deferred; know that the gap exists</td></tr>
+    </table>
+
+    <p>For each row, mark <strong>mitigated in the current build</strong> or <strong>open</strong>.
+    The open ones are not failures; they are things you have decided to accept for now, and writing
+    them down is what stops them being rediscovered as surprises after launch.</p>
+
+    <h3>Signals worth monitoring</h3>
+    <p>You cannot read messages. What you can watch:</p>
+    <ul>
+        <li>Redemption attempts per IP and per code &mdash; enumeration looks like this.</li>
+        <li>Reports per token and per holder identity.</li>
+        <li>Tokens revoked within minutes of first redemption &mdash; a strong signal that something
+        went wrong immediately.</li>
+        <li>Blocks per holder across different users. A person blocked by several unrelated users is
+        the clearest abuse signal available to a system that cannot read content.</li>
+        <li>Message and call volume that jumps against a token&rsquo;s own history.</li>
+    </ul>
+
+    <h2>2 &middot; The report pipeline &mdash; &#128308; specify it end to end</h2>
+
+    <pre><code>REPORT                  the user taps Report on a message or a
+                        conversation. Available in the app AND on
+                        the redemption page -- a holder can be the
+                        one being harassed.
+
+PACKAGE                 the device assembles what the server cannot
+                        see for itself: the message text, the
+                        surrounding messages for context, and proof
+                        that the sender really sent it. The server
+                        cannot decrypt, so the reporter supplies
+                        the evidence.
+
+SERVER RECORD           one row: who reported, which conversation,
+                        which token, when, the category chosen, the
+                        free text, and the packaged evidence. This
+                        is the step the prototype was missing.
+
+TRIAGE QUEUE            it appears somewhere a human will see it,
+                        with an SLA clock started.
+
+DECISION                from the matrix in section 4.
+
+ACTION                  applied, and recorded on the report row.
+
+NOTIFY REPORTER         they are told something happened. Not the
+                        details of the other person, just that the
+                        report was read and acted on.</code></pre>
+
+    <div class="callout danger">
+        <div class="callout-title">Confirm the report captures enough to act on</div>
+        <p>Test it, do not read it. File a report from a test account and then look at what arrived.
+        Ask yourself, with only what is in front of you: <em>could I decide this?</em></p>
+        <p>Common gaps, all of which look fine in a screenshot:</p>
+        <ul>
+            <li>The reported message is included but <strong>the previous three are not</strong>, so
+            you cannot tell provocation from harassment.</li>
+            <li>The report identifies the conversation but not <strong>which party</strong> is being
+            reported.</li>
+            <li>There is no <strong>proof of authorship</strong>, so a reporter could paste anything
+            and you would have no way to tell.</li>
+            <li>The category is free text, so nothing is countable and every report reads
+            differently.</li>
+        </ul>
+        <p>The authorship proof matters more here than in an ordinary product. Because the server
+        never saw the message, your only account of it comes from someone with a motive. A signature
+        the sender produced is what turns a report from an allegation into evidence.</p>
+    </div>
+
+    <h3>Triage tooling</h3>
+    <p><strong>A shared inbox is acceptable at launch. A spreadsheet is not.</strong> The difference
+    is not sophistication, it is that an inbox has a per-item state and an audit trail &mdash; you can
+    see what is unread, what is assigned, and what was said &mdash; and a spreadsheet silently loses
+    all three the first time two people edit it.</p>
+    <p>Minimum requirements: every report gets an id, a state, an owner, and a timestamped history.
+    Reports must be searchable by holder, by token, and by reporter, because the fourth or fifth
+    report about the same person is the one that matters.</p>
+
+    <h2>3 &middot; The 24-hour SLA, in practice &#128308;</h2>
+    <p>Apple requires it, so you have already promised it. Write down what it actually means:</p>
+
+    <table>
+        <tr><th>Question</th><th>A workable answer for two founders</th></tr>
+        <tr><td>What counts as a response?</td><td>Acknowledged, assessed, and an interim protective action taken if warranted. Not a completed investigation</td></tr>
+        <tr><td>Who is on duty?</td><td>A named default and a named backup, written down, swapped explicitly</td></tr>
+        <tr><td>Weekends and holidays?</td><td>Covered. The clock does not observe them</td></tr>
+        <tr><td>What wakes someone?</td><td>A push alert on a new report, not an inbox someone means to check</td></tr>
+        <tr><td>Escalation?</td><td>No response in 4 hours &rarr; alert the backup. No response in 12 &rarr; alert both, loudly</td></tr>
+        <tr><td>Both unreachable?</td><td>An automatic interim action fires. See below</td></tr>
+    </table>
+
+    <div class="callout warning">
+        <div class="callout-title">The mechanism that keeps the promise when nobody is awake</div>
+        <p>For a two-person company, the only honest way to guarantee a 24-hour response is to make
+        part of it automatic. On a report of the most serious categories, <strong>suspend the reported
+        party&rsquo;s access to that conversation pending review</strong>, immediately, and tell the
+        reporter that this has happened.</p>
+        <p>It is reversible, it is proportionate, it is exactly the interim action a human would take
+        anyway, and it converts a staffing promise into a system property.</p>
+        <p>The cost, stated plainly so it can be reversed if it proves wrong: <strong>it is abusable.
+        A malicious reporter can silence someone for a few hours.</strong> That is a real harm and it
+        is much smaller than the alternative, which is a serious report sitting unread overnight.
+        Track how often it is used and by whom; a reporter who triggers it repeatedly against
+        different people is themselves a signal.</p>
+    </div>
+
+    <h2>4 &middot; The triage decision matrix</h2>
+    <p>Write it once so that decisions stay consistent when you are tired, and so that the second
+    founder decides the same way the first one would.</p>
+
+    <table>
+        <tr><th>What was reported</th><th>First occurrence</th><th>Repeat / severe</th></tr>
+        <tr><td>Rudeness, unwanted persistence</td><td>Warn the sender; tell the reporter they can revoke the token</td><td>Block the person for that user</td></tr>
+        <tr><td>Spam or commercial mass contact</td><td>Block the person for that user; check whether the same identity appears elsewhere</td><td>Ban the identity across the service</td></tr>
+        <tr><td>Harassment</td><td>Block the person for that user, across all their tokens</td><td>Ban; retain evidence</td></tr>
+        <tr><td>Threat of violence</td><td>Immediate suspension; crisis protocol &sect;5</td><td>Ban; consider disclosure to authorities</td></tr>
+        <tr><td>Sexual content involving a minor</td><td>Immediate suspension, preserve, escalate the same day</td><td>Ban; mandatory escalation</td></tr>
+        <tr><td>Self-harm disclosure</td><td>Not an enforcement action. Crisis protocol &sect;5</td><td>&mdash;</td></tr>
+        <tr><td>Impersonation of another person</td><td>Suspend pending verification</td><td>Ban</td></tr>
+        <tr><td>False or vexatious report</td><td>Note it on the reporter&rsquo;s record</td><td>Restrict their ability to report</td></tr>
+    </table>
+
+    <p><strong>Add a worked example under each row</strong> &mdash; a real anonymised case, or an
+    invented one before you have real ones. A matrix of category names is interpreted differently by
+    two people; a matrix with examples is not. This is the cheapest consistency mechanism you will
+    ever build.</p>
+
+    <div class="callout danger">
+        <div class="callout-title">&#128308; Blocking must target the person, not the token</div>
+        <p>This is the requirement most likely to be quietly wrong in the build, because the obvious
+        implementation is wrong in the right-looking way.</p>
+        <p>A block attached to a <em>token</em> ends when that token does. The blocked person redeems
+        a different token from the same user &mdash; or the user issues a new one to someone else and
+        the blocked person gets hold of it &mdash; and they are back. From the user&rsquo;s point of
+        view they blocked someone and the block evaporated.</p>
+        <p>A block must attach to <strong>the holder identity, across every token that user has issued
+        or will issue.</strong> Ask for it explicitly, and then prove it:</p>
+        <pre><code>TEST: a block survives the token it was made on
+
+1. User A issues token T1. Person B redeems it. They exchange
+   messages.
+2. A blocks B.
+   EXPECT: B can no longer send on T1.
+3. A issues a new token T2 and gives the code to B.
+4. B redeems T2 from the same device and browser.
+   EXPECT: refused, or connected-but-silenced by the block.
+   FAIL:   B can message A again.
+5. Repeat step 4 from a different browser with the same
+   identity signal the product uses.
+   EXPECT: same result as step 4.
+6. A unblocks B.
+   EXPECT: B can use T2. T1, being revoked or spent, stays dead.</code></pre>
+        <p>Step 5 is the one that finds the shallow implementation. Run this before every release
+        that touches blocking, and keep the result &mdash; it is part of your UGC evidence for both
+        stores.</p>
+    </div>
+
+    <h2>5 &middot; Crisis handling</h2>
+    <p>Three protocols, written in advance, each one page. You will read them exactly once, at the
+    worst possible moment, and that is when a page you wrote calmly is worth more than any amount of
+    judgement under stress.</p>
+
+    <h3>Threats of violence</h3>
+    <pre><code>1. Preserve everything. Do not delete, do not let the account
+   be deleted, until this is resolved.
+2. Suspend the threatening party's access immediately.
+3. Tell the person threatened what you have done, in plain
+   language, and that they may want to contact the police.
+4. Decide on disclosure -- see "emergency disclosure" below.
+5. Record it: what was said, what you did, when, who decided.</code></pre>
+
+    <h3>Self-harm disclosure</h3>
+    <pre><code>This is not an enforcement matter. Do not suspend anyone.
+
+1. Respond to the person, briefly and without judgement.
+2. Provide the helpline numbers -- prepared in advance, in
+   English and Hindi, for the region.
+3. Do not promise confidentiality you cannot keep, and do not
+   attempt to counsel. You are not equipped and it is not
+   the role.
+4. Record only what is necessary, and keep it tightly held.</code></pre>
+    <p>Compile the helpline numbers <em>now</em> and check them annually. Looking them up during an
+    incident is exactly the wrong time.</p>
+
+    <h3>Child safety</h3>
+    <pre><code>1. Preserve. Do not view further than needed to confirm.
+2. Suspend immediately, both directions.
+3. Escalate the SAME DAY through the reporting path you
+   identified in advance. Identify it in advance.
+4. Only the named decider handles this. It is not delegated
+   and it is not discussed in a group chat.
+5. Follow legal advice on retention -- normal deletion rules
+   may not apply.</code></pre>
+
+    <h3>Emergency disclosure</h3>
+    <p>There will be a case where someone appears to be in immediate danger and the ordinary legal
+    request process is too slow. Decide <strong>now</strong>:</p>
+    <ul>
+        <li><strong>Who can make the call.</strong> One named person, plus one named deputy. Not
+        &ldquo;the founders&rdquo;.</li>
+        <li><strong>On what threshold.</strong> A genuine belief of a risk to life, written down at
+        the time.</li>
+        <li><strong>What can be disclosed.</strong> Only what you have &mdash; which for Token is
+        metadata, not message contents. The lists in lesson
+        <a href="./0002-intermediary-law.html">0002</a> apply here too, and the limits do not relax in
+        an emergency because they are physical rather than procedural.</li>
+        <li><strong>What gets recorded.</strong> Everything, contemporaneously, including the
+        reasoning.</li>
+    </ul>
+    <p>Compile authority contact details before they are needed, and keep them somewhere reachable
+    from a phone.</p>
+
+    <h2>6 &middot; Transparency reporting &#128257;</h2>
+    <p>Design it once, publish half-yearly. It is a credibility asset for a privacy product and it
+    costs an afternoon per edition once the numbers are being counted.</p>
+
+    <pre><code>Token transparency report -- Jan to Jun 2026
+
+Reports received                              &lt;n&gt;
+  by category                                 &lt;breakdown&gt;
+Actions taken
+  warnings                                    &lt;n&gt;
+  blocks applied at a user's request          &lt;n&gt;
+  accounts banned                             &lt;n&gt;
+  interim suspensions, later reversed         &lt;n&gt;
+Median time to first response                 &lt;hours&gt;
+Reports actioned within 24 hours              &lt;percent&gt;
+
+Government and law enforcement requests       &lt;n&gt;
+  complied with, in full or part              &lt;n&gt;
+  refused or narrowed                         &lt;n&gt;
+  message contents produced                   0
+    (we hold no key and cannot produce them)
+
+Grievances received                           &lt;n&gt;
+  resolved within the statutory timeline      &lt;percent&gt;
+  appealed to the Grievance Appellate Committee  &lt;n&gt;
+
+Data deletion requests                        &lt;n&gt;
+  completed                                   &lt;n&gt;</code></pre>
+
+    <p>The zero on message contents is the most valuable line in the document, and it is only
+    publishable if it is true every time.</p>
+
+    <h2>The task board for this lesson</h2>
+    <table>
+        <tr><th>Mark</th><th>Task</th><th>Done looks like</th></tr>
+        <tr><td></td><td>Catalogue abuse specific to Token</td><td>The table in &sect;1, extended with your own rows</td></tr>
+        <tr><td></td><td>Identify which are mitigated and which are open</td><td>Every row marked, openly</td></tr>
+        <tr><td></td><td>Define the abuse signals worth monitoring</td><td>Five or six, each with somewhere they are actually visible</td></tr>
+        <tr><td>&#128308;</td><td>Specify the report flow end to end</td><td>Report &rarr; package &rarr; server record &rarr; queue &rarr; action &rarr; notify</td></tr>
+        <tr><td></td><td>Confirm the report captures enough context to act on</td><td>A test report filed and read. Not a code review</td></tr>
+        <tr><td></td><td>Select triage tooling</td><td>Shared inbox at minimum. Id, state, owner, history, searchable</td></tr>
+        <tr><td>&#128308;</td><td>Define the 24-hour SLA in practice</td><td>Duty, escalation, weekends, and the automatic interim action</td></tr>
+        <tr><td></td><td>Write the triage decision matrix</td><td>The table in &sect;4</td></tr>
+        <tr><td></td><td>Add worked examples to the matrix</td><td>At least one case per row</td></tr>
+        <tr><td>&#128308;</td><td>Verify blocking targets the person across all tokens</td><td>The test in &sect;4 passes, including step 5</td></tr>
+        <tr><td></td><td>Write a test script proving that behaviour</td><td>Written down and re-run every release</td></tr>
+        <tr><td></td><td>Protocol for threats of violence</td><td>One page, with a named decider</td></tr>
+        <tr><td></td><td>Protocol for self-harm disclosure, with resources</td><td>Helpline numbers compiled, English and Hindi</td></tr>
+        <tr><td></td><td>Protocol for child safety, with escalation paths</td><td>Escalation path identified before it is needed</td></tr>
+        <tr><td></td><td>Compile authority contact details</td><td>Reachable from a phone, checked annually</td></tr>
+        <tr><td></td><td>Define who can make an emergency disclosure decision</td><td>One name, one deputy, one threshold</td></tr>
+        <tr><td></td><td>Design the transparency report</td><td>The template in &sect;6, with the counters wired up</td></tr>
+        <tr><td>&#128257;</td><td>Publish half-yearly</td><td>On the compliance calendar</td></tr>
+        <tr><td>&#128257;</td><td>Review the threat catalogue quarterly</td><td>On the compliance calendar</td></tr>
+    </table>
+
+    <h2>What this costs you</h2>
+    <ul>
+        <li><strong>A daily duty from launch day.</strong> Triage is the one item in this module that
+        never has a quiet week once you have users.</li>
+        <li><strong>Engineering work that is invisible in a demo</strong> &mdash; the report record,
+        the evidence packaging, the person-level block. It is easy to deprioritise and it is the part
+        the stores audit.</li>
+        <li><strong>Exposure to distressing material</strong>, occasionally, with no team to share it
+        with. Take that seriously in advance, including for yourself.</li>
+        <li><strong>An automatic suspension that will sometimes be wrong.</strong> Chosen
+        deliberately over the alternative of a serious report going unread overnight. Measure it, and
+        change it if the evidence says the trade was wrong.</li>
+    </ul>
+
+    <h2>Write it down</h2>
+    <div id="explain-f1-0006"></div>
+    <script>
+        createExplain("explain-f1-0006", {
+            prompt: "A user blocks someone, then issues a brand-new token to a different person, and the blocked person gets hold of that code. Describe what must happen, and then explain why a block stored against the <em>token</em> looks correct in testing and fails here."
+        });
+    </script>
+
+    <div class="lesson-nav">
+        <a href="./0005-apple-app-store.html">&larr; Apple App Store</a>
+        <a href="./0007-positioning-and-gtm.html">Next: Positioning &amp; Go-to-Market &rarr;</a>
+    </div>
+
+    <script src="../../assets/explain.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+</body>
+</html>

@@ -267,6 +267,47 @@ unverified lessons against a student on lesson 5.
 | **C7** | Observability | 4 | Extends B9 — self-hosted error tracking, metrics, logs, alerting, runbooks |
 | **C8** | Product Analytics | 2 | After C7 — privacy-first analytics for a privacy product |
 | **C9** | Launch, Support & Operations | 5 | Replaces the A11 tail — store compliance, account deletion, i18n/a11y, support, incident response |
+| **F1** | Founder Track — Non-Technical | 16 | **WRITTEN 2026-08-26.** Phase 7 / "Ship it", but six of its items are ⏳ and start on day one. See below |
+
+### F1 — the non-technical track
+
+Written 2026-08-26 from `token-nontech-taskboard.md`, on the student's
+instruction, in one pass. It is the only module in the course with **no quizzes,
+no playgrounds and no self-checks** — the reasoning and the audit consequences
+are in `CLAUDE.md` § *The founder track*.
+
+Sixteen lessons, one per section of the task board: DPDP and the RoPA ·
+intermediary law · IP and brand · Google Play · Apple · trust & safety ·
+positioning and GTM · support · vendors and DPAs · release and QA · the
+compliance calendar · SMS DLT and CERT-In · age, consumers and dark patterns ·
+the holder-side notice · opsec and brand defence · payments and tax (parked).
+
+**Where it sits in the sequence is misleading and the README says so.** It is
+filed under Phase 7 because that is where most of it is *needed*, but the
+critical path of the whole launch runs through two of its items:
+
+```
+SMS DLT registration (1-3 weeks)
+   └─→ OTP login works
+           └─→ closed test can begin
+                   └─→ 12 testers × 14 continuous days
+                           └─→ Play production access
+
+Data inventory (RoPA)
+   ├─→ privacy policy       ├─→ Play Data Safety form
+   ├─→ Apple privacy labels └─→ retention policy → deletion → the web
+                                                   deletion page Play requires
+```
+
+Neither can be compressed by writing code faster, and both are waiting on other
+people. **Start them on day one, whatever phase the code is in.**
+
+**F1 does not overlap C9 as much as it looks.** C9 is *Launch, Support &
+Operations* on the engineering side — building account deletion, i18n, a11y,
+incident tooling. F1 is the paperwork, the registrations and the decisions that
+those features are built to satisfy. Where they touch (store compliance,
+support, incident response), F1 states the obligation and C9 builds the
+mechanism. When C9 is eventually written, cross-link rather than duplicate.
 
 ## Phase order
 
@@ -328,6 +369,8 @@ Phase 8 — Ship and operate
   C8  Product Analytics                   ← new
   A11 Polish & Publish                    ← modernised off Expo SDK 49
   C9  Launch, Support & Operations        ← new
+  F1  Founder Track (non-technical)       ← written 2026-08-26; six of its
+                                             items start on day one, not here
 ```
 
 ## Rewrites, not deepenings

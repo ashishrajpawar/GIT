@@ -230,6 +230,11 @@ modules/
   b9-docker-deployment/             ← 3 lessons
   b10-security-compliance/          ← 2 lessons
   c5-end-to-end-encryption/         ← 5 lessons; the only C-module written
+  f1-founder-track/                 ← 16 lessons, added 2026-08-26. The
+                                      NON-TECHNICAL half of shipping Token, from
+                                      `token-nontech-taskboard.md`. Deliberately
+                                      has no quiz, no playground and no
+                                      self-check — see § "The founder track"
   (03-firebase-backend/)           ← DELETED 2026-08-16. Firebase is out of
                                       scope; Track B replaces it
   (04 … 09/)                        ← DELETED 2026-08-22, 40 pre-pivot lessons.
@@ -1175,6 +1180,54 @@ takes it back; a leaked message body is what ADR-0002 exists to protect.**
 7. **Every lesson's code is committed to the Token repo**, not left standalone.
 
 8. **Load `copy-code.js`** — it auto-attaches to all `<pre>` blocks.
+
+### The founder track (F1) — the one module exempt from the invariants above
+
+Added 2026-08-26, on the student's instruction, from `token-nontech-taskboard.md`.
+Sixteen lessons covering everything required to publish and operate Token that is
+not engineering: DPDP and the data inventory, intermediary law, trademark, both
+stores, trust & safety, positioning, support, vendors, QA, the compliance
+calendar, SMS DLT and CERT-In, age and dark patterns, the holder-side notice,
+opsec, and payments.
+
+**It has no quizzes, no playgrounds and no self-checks, and that was the
+instruction.** The reasoning, so it is not "fixed" later: every other module
+teaches a behaviour a computer can check — does this code run, does this key
+match. Nothing here is like that. The deliverable of each lesson is a
+**document, a decision or a registration**, and there is no multiple-choice
+question that can tell you whether a Record of Processing Activities matches the
+real schema.
+
+**What replaces the quiz is a `createExplain` prompt, and the audit now
+*errors* if one is missing.** That is the whole bargain: the exemption removes
+every automatic check the rest of the course has, so one thing has to be
+mandatory or "no quiz" becomes "not checked at all". The prompt is the
+assessment — the deliverable is a document, and the box is where it gets
+written.
+
+**The audit counts F1 separately rather than excluding it** (`isFounder`, beside
+`isLegacy`). Two options were rejected and both are worth recording:
+
+- **Folding it into `track`** made the summary read `Verified 101/117` and
+  `Deepened 16/117` — a regression that never happened, printed in the one file
+  whose entire purpose is being measured rather than asserted.
+- **Excluding it the way legacy is excluded** would have put 16 published pages
+  outside the tooling. That is precisely how `git-learn/index.html` spent two
+  months contradicting the course. F1 is still link-checked, still parsed, still
+  scanned for invalid token codes and alphabets, and still required in
+  `search-index.json`.
+
+Its `verification-log.json` status is `nothing-to-verify` for all sixteen, which
+is the honest reading and keeps `Verified` at 101/101 for the lessons that
+actually contain code.
+
+**One contradiction is flagged rather than resolved, in the F1 README and in
+`0009`.** The task board's vendor list names **LiveKit** and **AWS**; this file's
+architecture is self-hosted coturn on a Coolify VPS with no third-party comms
+SDK. Those cannot both be true, and it changes the DPA list, the residency
+answers and the cost model. `0009` is written against **roles** ("whoever relays
+your calls") rather than brand names, so it survives either answer — but the
+decision is the technical founder's and is not made here.
 
 ### Track B (backend) lessons
 

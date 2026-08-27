@@ -3823,3 +3823,118 @@ not mine to change: the `PermissionRequest` hook ends in `exit 1`, and a
 non-zero exit there denies the request. If the intent was only to play a
 notification sound, that hook is silently refusing prompts rather than showing
 them.
+
+---
+
+### Session of 2026-08-26 — the founder track, and a module that opts out of the invariants
+
+The student handed over `token-nontech-taskboard.md` — sixteen numbered sections
+of everything required to publish and operate Token that is not engineering —
+and asked for it turned into lessons under Phase 7, with examples, **without
+quizzes**, in one pass, without stopping to ask.
+
+`modules/f1-founder-track/`: a README and sixteen lessons, one per section of
+the board. DPDP and the RoPA · intermediary law · IP and brand · Google Play ·
+Apple · trust & safety · positioning and GTM · support · vendors and DPAs ·
+release and QA · the compliance calendar · SMS DLT and CERT-In · age, consumers
+and dark patterns · the holder-side notice · opsec and brand defence · payments
+and tax (parked).
+
+#### Why "no quiz" is right here, and why it still needed a check
+
+Every other module in this course teaches something a computer can check: does
+this code run, does this key match, does this self-check pass. **Nothing in F1
+is like that.** The deliverable of each lesson is a document, a decision or a
+registration, and there is no multiple-choice question that can tell you whether
+a Record of Processing Activities matches the real schema.
+
+So the quiz was the wrong instrument, not a corner being cut. But dropping it
+removes *every* automatic check the rest of the course has, and "this module is
+exempt" is one short step from "this module is not checked at all" — which is
+the same shape as the `unverifiable` cluster, and the same shape as
+`git-learn/index.html` sitting outside the tooling for two months.
+
+**So one thing was made compulsory instead: the `createExplain` prompt, enforced
+by the audit as an error.** It is the assessment. The deliverable is a document
+and that box is where it gets written, so a page carrying the exemption and no
+prompt is prose nobody is asked to act on.
+
+#### The audit change, and the two options rejected
+
+`isFounder`, sitting beside `isLegacy`. F1 is **counted separately** rather than
+folded in or excluded, and both alternatives were tried:
+
+- **Folding it into `track`** printed `Verified 101/117` and `Deepened 16/117`.
+  Sixteen quiz-less lessons had just manufactured a regression that did not
+  happen, in `PROGRESS.md` — the one file whose entire purpose is to be measured
+  rather than asserted. *That* is the failure this project keeps having: a true
+  number in a misleading denominator.
+- **Excluding it the way legacy is excluded** would have put sixteen published
+  pages outside every check. The precedent against it was written last session:
+  the landing page one directory up spent two months describing a deleted course
+  because nothing walked that far.
+
+What F1 keeps: link checking, inline-script parsing, the `<pre>` block scan, the
+token-code and alphabet scans, and a mandatory `search-index.json` entry. What
+it does not join: prose averages, playground and exercise counts, deepening, and
+the Verified fraction. All sixteen are `nothing-to-verify` in the log, which is
+the honest reading — `verify-lesson.mjs` ran over each and found nothing to run.
+
+#### The contradiction that was flagged rather than resolved
+
+The task board's vendor list names **LiveKit** and **AWS Mumbai**. `CLAUDE.md`
+specifies self-hosted coturn on a Coolify VPS, and puts third-party
+communications SDKs explicitly out of scope. Those cannot both be true, and the
+difference is not cosmetic: a managed call service is a processor with media
+passing through it, which changes the DPA list, the residency answers, the store
+declarations and the cost model.
+
+It is an architecture decision and it is not mine. So `0009` is written against
+**roles** — "whoever relays your calls" — rather than brand names, so it stays
+correct either way, and both it and the README say plainly that the technical
+founder must settle it before a single DPA is signed.
+
+Two related things were kept honest while writing it. If the relay stays
+self-hosted it is **not a vendor**, but it is a large line item, because every
+call is relayed and each crosses the server twice — the arithmetic corrected in
+`b6/0002` last session, now carried into the founder-facing budget. And the
+holder-side lesson states that **no network address from a call may be stored**,
+because relay-only exists so neither party learns the other's, and persisting
+one defeats the policy from the far side in a table nobody thinks of as
+sensitive.
+
+#### What the material surfaced about the product
+
+Writing the compliance side out end to end put a few things in sharper relief
+than the technical lessons do:
+
+- **The critical path of the entire launch is non-technical.** SMS DLT
+  registration gates OTP login, which gates the closed test, which gates twelve
+  testers for fourteen continuous days, which gates Play production access. Not
+  one link in that chain is code.
+- **The RoPA is upstream of four deliverables** — privacy policy, Play Data
+  Safety, Apple labels, retention policy — and the retention policy is upstream
+  of the web deletion page Play requires. One table, five documents.
+- **"Token does not collect your phone number" is false and is in a compliance
+  document.** `CLAUDE.md` already had this; F1/0001 makes it the first callout,
+  because a founder writing marketing copy is exactly who is about to say it.
+- **The holder is a Data Principal with no account**, which the whole of `0014`
+  exists for: their own privacy notice, their own contact path, their own rights,
+  and a support process built for someone you cannot look up.
+- **The 24-hour report SLA is a staffing promise a two-person company cannot
+  keep by intention.** `0005` and `0006` land on the same answer — an automatic
+  interim suspension on the most serious report categories — and state its cost
+  plainly, that a malicious reporter can silence someone for a few hours. That
+  is smaller than a serious report sitting unread overnight, and it is a real
+  harm chosen on purpose rather than an oversight.
+
+#### Wiring
+
+`index.html` Phase 7 gains an F1 row and a callout saying the placement is
+misleading — six of its items are waiting on other people and start on day one.
+`a11/0005`'s nav now continues into F1 instead of dead-ending at Course Home.
+Sixteen `search-index.json` entries. `TOKEN-TRACK.md` gains an F1 row, an F1
+section with the two critical-path chains drawn out, and a note on where F1 and
+the unwritten C9 touch — F1 states the obligation, C9 builds the mechanism.
+
+Audit green, 2 warnings (both pre-existing and both known), six suites pass.
