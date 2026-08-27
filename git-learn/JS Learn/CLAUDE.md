@@ -1221,13 +1221,47 @@ Its `verification-log.json` status is `nothing-to-verify` for all sixteen, which
 is the honest reading and keeps `Verified` at 101/101 for the lessons that
 actually contain code.
 
-**One contradiction is flagged rather than resolved, in the F1 README and in
-`0009`.** The task board's vendor list names **LiveKit** and **AWS**; this file's
-architecture is self-hosted coturn on a Coolify VPS with no third-party comms
-SDK. Those cannot both be true, and it changes the DPA list, the residency
-answers and the cost model. `0009` is written against **roles** ("whoever relays
-your calls") rather than brand names, so it survives either answer — but the
-decision is the technical founder's and is not made here.
+**Sixteen decisions were put to the student on 2026-08-27 and settled.** The
+register is in the F1 README as pointers only; each decision lives in the lesson
+that owns it, with its rejected alternative and its reversal condition. Four of
+them are **product rules that constrain how other lessons must be written**, so
+they are repeated here and nowhere else:
+
+- **The relay contradiction is closed: self-hosted coturn on a Coolify VPS,
+  no media vendor.** The task board's LiveKit/AWS line is the stale document.
+  Nothing in this file changes; `0009` now states it as settled and carries the
+  two costs it buys — relay bandwidth sized on **100% of calls, doubled**, and a
+  coturn outage being a *total* call outage.
+- **Minimum age is 18. There is no under-18 flow and no verifiable-parental-
+  consent surface.** A lesson must not offer one. Note the coupling: DPDP's
+  outright ban on behavioural tracking of children is satisfied *for free* by
+  analytics being self-hosted event counts with no per-user timelines — so a
+  future growth experiment that adds behavioural tracking reopens the age
+  decision, not just the analytics one.
+- **Revoking ends contact and keeps the user's history.** The holder loses
+  access and keeps no server-side copy; the user's record of the conversation
+  survives until account deletion. Deleting a conversation separately is
+  *additive* and may be built later. Any lesson implying revoke wipes the thread
+  is wrong.
+- **A dead code says the same thing however it died.** Revoked, expired,
+  exhausted, never-existed, and *account deleted* all produce one identical
+  response on the redemption page. Account deletion telling the holder "the
+  account was closed" was considered and rejected — it discloses a fact about
+  someone exercising an erasure right, and it punches a hole in the
+  denial-oracle defence in the place least likely to be tested.
+
+**Two items were deliberately left open, with gates rather than drift**:
+*replacement versus supplement* and *which segment leads the launch* are both
+settled by the closed test — `0007` says what to measure and by when. **What a
+block attaches to for an accountless holder is the technical founder's call**;
+`0006` specifies the behaviour and the test script, not the mechanism, because
+both stores audit the behaviour and neither audits the mechanism.
+
+**And the name stays "Token"** (`0003`). That removes one of the three causes of
+the queue-management misreading from the table, so the first screen and the
+stated premise in `0007` now carry all of it, and the brand-defence work in
+`0015` becomes load-bearing rather than prudent — it is what you have instead of
+a registration.
 
 ### Track B (backend) lessons
 

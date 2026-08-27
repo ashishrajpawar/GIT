@@ -46,11 +46,36 @@ landed 2026-08-25: `b9/0003`, `b1/0003`, `a9/0001`, `b8/0001`, `b6/0001` and
 > - **All 16 are `nothing-to-verify` in the log**, so `Verified` stays 101/101
 >   for lessons that actually contain code.
 >
-> **Flagged, not resolved:** the task board's vendor list names **LiveKit** and
-> **AWS**; `CLAUDE.md` says self-hosted coturn on a Coolify VPS and no
-> third-party comms SDK. `0009` is written against roles rather than brand
-> names so it survives either answer, and both the README and `0009` say plainly
-> that the technical founder has to settle it before any DPA is signed.
+> **All sixteen open decisions were put to the student and settled, 2026-08-27.**
+> The register is in the F1 README (pointers only); each decision lives in the
+> lesson that owns it with its rejected alternative and reversal condition.
+> `CLAUDE.md` § *The founder track* carries the four that constrain how other
+> lessons must be written.
+>
+> Settled: self-hosted coturn (the LiveKit/AWS contradiction is closed —
+> the task board is the stale document) · **keep the name "Token"** · 18+ ·
+> automatic interim suspension on the gravest report categories · notice at the
+> point of action for holders · a verified-dump floor under the 7-day backup
+> promise, with breaches reported · revoke keeps the user's history · a second
+> SMS aggregator registered in advance · self-hosted event-count analytics ·
+> co-founder as consolidated grievance officer · store billing for the first
+> paid tier · account deletion tells the holder nothing · half-yearly
+> transparency report · all four use-case segments in scope.
+>
+> **Three things are open, and each has a gate rather than a shrug:**
+> *replacement versus supplement* and *which segment leads the launch* are both
+> decided by the closed test — `0007` names the signals to measure and the
+> deadline (before applying for production access). **What a block attaches to**
+> for an accountless holder is the technical founder's; `0006` specifies the
+> behaviour and the test script instead of the mechanism.
+>
+> **Two consequences worth carrying:** keeping the name removes one of the three
+> causes of the queue-management misreading, so `0007`'s first screen now has to
+> beat an actively misleading word rather than an absent one — and `0015`'s
+> clone defence is what you have *instead of* a trademark registration. And the
+> child-tracking prohibition in `0013` is satisfied by the analytics decision
+> taken for an unrelated reason, which means a future growth experiment reopens
+> the age decision, not just the analytics one.
 
 > ### `known-issues.json` is **empty**, for the first time in the project
 >

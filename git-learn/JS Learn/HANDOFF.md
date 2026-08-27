@@ -3938,3 +3938,127 @@ section with the two critical-path chains drawn out, and a note on where F1 and
 the unwritten C9 touch — F1 states the obligation, C9 builds the mechanism.
 
 Audit green, 2 warnings (both pre-existing and both known), six suites pass.
+
+---
+
+### Session of 2026-08-27 — sixteen decisions, and the two that were right to defer
+
+The student asked to be asked. Every open decision in the founder track was put
+to them with options and costs, in four batches, and all sixteen came back.
+
+The register is in the F1 README as **pointers only** — each decision lives in
+the lesson that owns it, with the rejected alternative and what would reverse
+it. Four are product rules that constrain other lessons and those are repeated
+in `CLAUDE.md` and nowhere else.
+
+#### The contradiction closed the way it should have
+
+**Self-hosted coturn on a Coolify VPS. No media vendor.** The task board's
+LiveKit/AWS line was the stale document, not `CLAUDE.md`. Writing `0009` against
+roles rather than brand names turned out to be the right call for a reason
+beyond hedging: when the answer came back, the lesson needed a decision box and
+two cost paragraphs, not a rewrite.
+
+The two costs are now stated where a founder will meet them: relay bandwidth
+sized on **100% of calls, doubled** — the `b6/0002` arithmetic, carried into a
+budget conversation — and a coturn outage being a *total* call outage rather
+than a degraded one. That second one produced a distinction worth keeping: the
+SMS aggregator gets a **redundancy** answer, because a competing supplier exists
+and registering one takes weeks you will not have in an outage; the relay gets a
+**recovery** answer only, because you run it and there is nobody to fail over
+to.
+
+#### Keeping the name moved work, it did not remove it
+
+**The name stays "Token."** That is the decision with the longest tail in this
+set, and the tail is not the trademark.
+
+Of the three independent causes of the queue-management misreading — the name,
+the first screen, the absent premise — one has now been taken off the table. So
+`0007`'s first screen has to beat an *actively misleading* word rather than an
+absent one, which is a harder job than the lesson was originally written for. It
+now says so, in a callout at the top of §1.
+
+And `0015`'s brand defence changes character. Defensive domains, certificate
+transparency monitoring and teaching users the exact genuine URL were prudent;
+without a registration behind them they are **what you have instead of one**. A
+cloned redemption page is the predictable attack on this design and the only
+thing a holder can check is the address bar.
+
+`0003` records three reversal conditions rather than treating the decision as
+final: a conflicting registered mark surfacing, a clone you cannot get taken
+down, or testers still being unable to say what the app is after two weeks. The
+third is the one the closed test can actually produce.
+
+#### The two deferrals were right, and a deferral without a gate is just drift
+
+**Replacement versus supplement** went to the closed test, and **all four
+use-case segments** were kept in scope. Both are defensible — twelve people
+using the product beat an argument — and both had the same problem: the store
+listing copy has to be written *before* the test finishes, and five screenshots
+cannot lead with four segments.
+
+So `0007` now carries what the deferral needs to survive contact:
+
+- **What to write in the meantime** — the copy that is true under either answer,
+  which is the problem statement. And what must *not* be written: anything
+  implying frequency or habit, because that is the replacement answer smuggled
+  in as a phrase and it will be quoted back.
+- **A signals table** for the fourteen days — tokens issued per tester, what
+  they issued them *for*, whether they carried on giving out their number in
+  parallel, which screen they returned to, and the unprompted language in their
+  feedback. Plus the direct day-14 question: *how many times did you give
+  someone your actual phone number?*
+- **A deadline**: decided before applying for production access. And the tiebreak
+  — if fourteen days do not separate the two, that *is* the supplement answer,
+  because a replacement would have been obvious.
+
+Same treatment for the segments: a table of what leading with each one buys and
+costs, and the observation that the twelve testers can pick frame 1 for free.
+
+#### One question I could not answer and did not pretend to
+
+**What a block attaches to** for a holder with no account went back to the
+technical founder. `0006` states the behaviour and the six-step test script —
+including the different-browser step that finds the shallow implementation — and
+explicitly not the mechanism, with the two candidate shapes and their costs.
+**Both stores audit the behaviour; neither audits the mechanism.** That is the
+sentence that makes the split legitimate rather than evasive.
+
+#### A coupling nobody asked about, found by writing the boxes
+
+**The child-tracking prohibition is satisfied by the analytics decision.** DPDP
+bans behavioural tracking of children outright; the minimum age is 18 but you
+cannot verify it and must not profile users to guess. Self-hosted event counts
+with no per-user timelines have nothing behavioural in them, so `0013`'s hardest
+technical requirement is met by a decision taken in `0007` for an entirely
+different reason.
+
+The consequence is the useful part and it is now written in both lessons: **a
+future growth experiment that adds behavioural analytics reopens the age
+decision, not just the analytics one.** That is exactly the kind of link that is
+invisible from inside either lesson — the same class as the cross-lesson
+contradictions M3 kept finding.
+
+#### And one that made the denial oracle stronger by accident
+
+Account deletion tells the holder nothing — the page dies with the same message
+a revoked, expired, exhausted or never-existed code produces. The reason given
+for the choice was disclosure: telling a holder "the account was closed" leaks a
+fact about someone who has just exercised an erasure right.
+
+But the *stronger* reason turned up while writing it down. One response for
+every dead code is what stops the page telling an enumerator which codes are
+real. A deleted account producing a **different** message would have punched a
+hole in that defence, in the branch least likely to ever be tested. Both lessons
+now say so.
+
+`0008` and `0010` were updated to match the revoke and deletion decisions — the
+help article now states what revoke does *not* do, the holder-facing article
+explains why it cannot tell them which case they are in, and the QA checklist
+gained three checks: that revoke keeps history *and* kills the holder's page,
+that post-deletion the message is identical, and that the terms line above the
+Connect button has not drifted below it or gone grey in a redesign. That last
+one is a silent downgrade to browsewrap and nothing else would catch it.
+
+Audit green, 2 pre-existing warnings, six suites pass.
