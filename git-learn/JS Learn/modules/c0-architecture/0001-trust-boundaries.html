@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>C0 — Trust Boundaries</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Architecture &amp; System Design</a> &rsaquo;
+        <span>Trust Boundaries</span>
+    </nav>
+
+    <h1>Trust Boundaries</h1>
+    <p class="lesson-meta">C0 &mdash; Lesson 1 of 2 &nbsp;|&nbsp; ~45 min</p>
+
+    <div class="callout">
+        <div class="callout-title">Why this matters for Token</div>
+        <p>Every product you have used describes itself by what it <em>does</em>. Token is easier to
+        describe by where its data is <strong>not allowed to go</strong>.</p>
+        <p>A holder must never learn a phone number. A server must never hold a key that opens a
+        message. A log must never contain a token code. A call record must never contain a network
+        address. Those are not four features. They are four <strong>lines</strong>, and the whole
+        system is the shape those lines make.</p>
+        <p>By the end of this lesson you will have written the function that enforces them &mdash;
+        and, more usefully, you will know why it has to refuse things it has never heard of.</p>
+    </div>
+
+    <h2>1 &middot; A trust boundary is a line data changes form to cross</h2>
+
+    <p>The phrase sounds abstract. It is not. A trust boundary is any point where data moves from
+    somewhere you control to somewhere you control less &mdash; and the question at every boundary
+    is the same: <strong>what form must this be in to cross?</strong></p>
+
+    <p>Token has four zones. Learn these four names; the rest of the course uses them.</p>
+
+    <pre><code>          THE USER'S DEVICE
+          plaintext messages, private keys, the token code
+          at the moment it is created
+                    |
+                    |  <-- boundary 1
+                    v
+          OUR SERVER
+          ciphertext, hashes, metadata. Runs our code on
+          hardware we rent. Can be breached, subpoenaed,
+          backed up to the wrong bucket
+                    |
+        +-----------+-----------+
+        |                       |
+        v  <-- boundary 2       v  <-- boundary 3
+   THE HOLDER              A VENDOR
+   a browser we do         SMS aggregator, push
+   not control, used       provider, error tracker.
+   by someone the user     Sees only what we send,
+   may not trust           and keeps it
+
+                    and cutting across all of them:
+
+          A LOG
+          every zone writes logs. A log is read by more
+          people, kept longer, and secured less carefully
+          than the database it describes</code></pre>
+
+    <div class="callout warning">
+        <div class="callout-title">The log is a zone, and that is the point of drawing it separately</div>
+        <p>Nobody designs a log. It accumulates. It gets shipped to a third-party error tracker that
+        attaches request bodies by default, copied into a support ticket, grepped on a laptop, and
+        retained long after the row it describes was deleted.</p>
+        <p>Treating &ldquo;the log&rdquo; as a destination with its own rules is the single highest-
+        value idea in this lesson, because <strong>the log is where sensitive data ends up without
+        anyone deciding it should.</strong> Three separate lessons in this course once taught
+        writing a token code into a log line, each of them in a lesson about something else.</p>
+    </div>
+
+    <h2>2 &middot; The same field, two answers</h2>
+
+    <p>Here is the table the exercise implements. Read the <code>phone number</code> row and the
+    <code>holder IP</code> row twice.</p>
+
+    <table>
+        <tr><th>Field</th><th>Device</th><th>Server</th><th>Vendor</th><th>Log</th><th>The user's data export</th></tr>
+        <tr><td>Message body</td><td>plain</td><td><strong>sealed</strong></td><td>refused</td><td>refused</td><td>plain (decrypted on the device)</td></tr>
+        <tr><td>Phone number</td><td>plain</td><td><strong>derived</strong> &mdash; hashed</td><td><strong>plain</strong> &mdash; the SMS provider must dial it</td><td>refused</td><td>refused</td></tr>
+        <tr><td>Token code</td><td>plain</td><td><strong>derived</strong> and <strong>sealed</strong>, never plain</td><td>refused</td><td>refused</td><td>refused</td></tr>
+        <tr><td>Holder IP</td><td>&mdash;</td><td>plain</td><td>refused</td><td>refused</td><td><strong>refused</strong> &mdash; it is not the user's data</td></tr>
+        <tr><td>ICE candidate</td><td>plain</td><td><strong>refused</strong></td><td>refused</td><td>refused</td><td>refused</td></tr>
+    </table>
+
+    <p>Three rows are worth stopping on, because each one is a decision that could plausibly have
+    gone the other way and did not.</p>
+
+    <h3>The phone number is allowed to reach a vendor and not a log</h3>
+    <p>That looks backwards the first time you see it. A vendor is a company we do not control; a log
+    is a file on our own server.</p>
+    <p>But the SMS aggregator <em>cannot deliver a one-time code without dialling the number</em>.
+    The disclosure is inherent to the purpose, it is bounded by a contract, and it is the reason
+    that vendor exists. The log has no such need. Nobody ever wrote a log line that required a phone
+    number to do its job &mdash; they wrote it because the number was in scope and printing it was
+    convenient.</p>
+    <p><strong>The rule that generalises: a boundary is crossed for a reason, or not at all.</strong>
+    &ldquo;It was available&rdquo; is not a reason.</p>
+
+    <h3>The holder's IP may reach the server and not the user's export</h3>
+    <p>The user's data export is a <em>compliance feature</em>. It exists so a person can get a copy
+    of their data. A naive export is written from the schema: find every row connected to this user
+    and serialise it.</p>
+    <p>Redemption records are connected to this user &mdash; they belong to tokens the user issued
+    &mdash; and they contain the <strong>holder's</strong> IP address, the name they typed, and their
+    browser. Exporting those hands one person another person's rough location, through a privacy
+    feature, on request.</p>
+    <p>The holder is a different person who never signed up and never agreed to be disclosed. What
+    belongs in the user's export is <em>that a redemption happened, and when</em>.</p>
+
+    <div class="callout danger">
+        <div class="callout-title">&ldquo;A row in my table&rdquo; and &ldquo;my personal data&rdquo; are different sets</div>
+        <p>This is the sentence to remember from this lesson. An export written from the schema ships
+        the difference between those two sets; an export written from the question <em>whose data is
+        this?</em> does not.</p>
+        <p>Notice that the boundary here is not a technical one. Nothing stops the code. The line
+        exists only because someone asked the question, which is exactly why it needs to be written
+        down in a function rather than remembered.</p>
+    </div>
+
+    <h3>An ICE candidate may not reach the server at all</h3>
+    <p>When two people set up a call, their devices exchange candidate network paths. <strong>An ICE
+    candidate <em>is</em> an IP address.</strong></p>
+    <p>Token relays every call through its own server precisely so that neither party learns the
+    other's address &mdash; so a delivery company cannot discover roughly where a user lives. If those
+    candidates were then written into a call record, the policy would be defeated from the far side,
+    in a table nobody thinks of as sensitive.</p>
+    <p>This is the most easily lost of the five, because storing them is <em>useful</em>. They are
+    excellent debugging material. The rule survives only if the absence of the column is treated as
+    the feature it is.</p>
+
+    <h2>3 &middot; Deny by default, and why it must be structural</h2>
+
+    <p>Here is the version of the policy function almost everyone writes first.</p>
+
+    <div id="pg-permissive"></div>
+    <script>
+        createPlayground("pg-permissive", `// The natural shape: list what is forbidden, allow the rest.
+function crossBoundaryPermissive(field, destination) {
+  if (field === "token_code" && destination === "log") return false;
+  if (field === "message_body" && destination === "vendor") return false;
+  if (field === "phone_number" && destination === "log") return false;
+  return true;   // <-- everything else is fine
+}
+
+console.log("code to a log      :", crossBoundaryPermissive("token_code", "log"));
+console.log("message to a vendor:", crossBoundaryPermissive("message_body", "vendor"));
+
+// Now a field that did not exist when this was written.
+// Someone adds recovery phrases next quarter.
+console.log("recovery phrase to a vendor:",
+  crossBoundaryPermissive("recovery_phrase", "vendor"));`);
+    </script>
+
+    <p>The last line prints <code>true</code>. Nobody decided that. The recovery phrase &mdash; the
+    twelve words that are the <em>only</em> thing standing between a stolen phone number and a
+    user's entire message history &mdash; is cleared for export to a third party, because the
+    function was written as a list of things to stop and that list is finite.</p>
+
+    <div class="callout danger">
+        <div class="callout-title">A deny-list is a promise about the past</div>
+        <p>Every rule in a deny-list was written by somebody who had already thought of the problem.
+        The set of things you have thought of does not grow when someone adds a database column.</p>
+        <p>An allow-list is the opposite: <strong>a field that nobody has classified cannot move.</strong>
+        The new column breaks the build, or fails a check, or shows up in a review &mdash; which is
+        annoying exactly once, at the moment it is cheap.</p>
+        <p>This same argument appears three more times in this course, and it is worth noticing that
+        it is always the same argument: an allow-list for what goes in a log, an allow-list for the
+        fields in a push payload, and the rule that an unknown access-rule type is <em>refused</em>
+        rather than ignored. Absence of a known-bad is never evidence of good.</p>
+    </div>
+
+    <h3>The same function, inverted</h3>
+
+    <div id="pg-denydefault"></div>
+    <script>
+        createPlayground("pg-denydefault", `const POLICY = {
+  message_body:  { device: "plain", server: "sealed" },
+  phone_number:  { device: "plain", server: "derived", vendor: "plain" },
+  token_code:    { device: "plain", server: "derived" },
+  holder_ip:     { server: "plain" },
+  ice_candidate: { device: "plain" }
+};
+
+function crossBoundary(field, destination) {
+  const rules = POLICY[field];
+  if (!rules) {
+    return { allowed: false, form: null, reason: "unclassified" };
+  }
+  const form = rules[destination];
+  if (!form) {
+    return { allowed: false, form: null, reason: "not_permitted" };
+  }
+  return { allowed: true, form: form, reason: "ok" };
+}
+
+console.log(crossBoundary("message_body", "server"));
+console.log(crossBoundary("holder_ip", "export"));
+console.log(crossBoundary("recovery_phrase", "vendor"));`);
+    </script>
+
+    <p>Three things that small change bought:</p>
+    <ul>
+        <li><strong>The unknown field is refused</strong>, and the reason says why. Someone reading
+        the log of refusals learns that a field needs classifying.</li>
+        <li><strong>The answer is not a boolean.</strong> &ldquo;May a message body reach the
+        server?&rdquo; has no yes-or-no answer &mdash; it may, <em>sealed</em>. A function returning
+        <code>true</code> has thrown away the only part that mattered.</li>
+        <li><strong>Two different refusals are distinguishable.</strong> <em>Unclassified</em> is a
+        gap in the policy; <em>not_permitted</em> is the policy working. They need different
+        responses from a human, so they need different reasons.</li>
+    </ul>
+
+    <h2>4 &middot; Try it yourself &mdash; the boundary in both directions</h2>
+
+    <p>Run this and predict each line before you do.</p>
+
+    <div id="pg-directions"></div>
+    <script>
+        createPlayground("pg-directions", `const POLICY = {
+  phone_number: { device: "plain", server: "derived", vendor: "plain" },
+  holder_ip:    { server: "plain" }
+};
+
+function crossBoundary(field, destination) {
+  const rules = POLICY[field];
+  if (!rules) return { allowed: false, form: null, reason: "unclassified" };
+  const form = rules[destination];
+  if (!form) return { allowed: false, form: null, reason: "not_permitted" };
+  return { allowed: true, form: form, reason: "ok" };
+}
+
+// The SMS provider must dial the real number.
+console.log("phone -> vendor:", crossBoundary("phone_number", "vendor").form);
+
+// A log has no such need.
+console.log("phone -> log   :", crossBoundary("phone_number", "log").reason);
+
+// The server needs to look holders up.
+console.log("holder ip -> server:", crossBoundary("holder_ip", "server").form);
+
+// The issuer's export is a different person's data.
+console.log("holder ip -> export:", crossBoundary("holder_ip", "export").reason);`);
+    </script>
+
+    <h3>One that is broken on purpose</h3>
+
+    <p>This one runs and produces a wrong answer rather than an error, which is the more dangerous
+    kind of bug. Read the output, work out which rule was lost, and fix it.</p>
+
+    <div id="pg-broken"></div>
+    <script>
+        createPlayground("pg-broken", `const POLICY = {
+  message_body: { device: "plain", server: "sealed" },
+  token_code:   { device: "plain", server: "derived" }
+};
+
+function crossBoundary(field, destination) {
+  const rules = POLICY[field];
+  if (!rules) return { allowed: false, form: null, reason: "unclassified" };
+  // BUG IS HERE. It looks harmless.
+  return { allowed: true, form: rules[destination], reason: "ok" };
+}
+
+console.log(crossBoundary("message_body", "server"));
+console.log(crossBoundary("token_code", "log"));
+
+// The second line is the whole problem. What does it say, and
+// what would a caller that only checks .allowed do with it?`);
+    </script>
+
+    <p>The caller writes <code>if (crossBoundary(f, d).allowed)</code> and proceeds. A token code
+    goes into a log line, and the <code>form</code> is <code>undefined</code>, which nothing checks.
+    <strong>The missing early return did not cause a crash; it caused a leak.</strong></p>
+
+    <h2>5 &middot; Where the boundaries came from</h2>
+
+    <p>None of the five rows in the table was invented for this lesson. Each is an architecture
+    decision with a written record in the Token repo, and lesson
+    <a href="./0002-decisions-that-survive.html">2</a> is about how those records work.</p>
+
+    <table>
+        <tr><th>Rule</th><th>Decided in</th><th>The cost it accepted</th></tr>
+        <tr><td>Messages sealed before the server</td><td>ADR-0002</td><td>No server-side search, no server-side moderation, no message recovery from a phone number alone</td></tr>
+        <tr><td>Token codes hashed and encrypted, never plain</td><td>ADR-0007</td><td>Two derived columns instead of one; lose the keys and every token ever issued is dead</td></tr>
+        <tr><td>No network addresses in call records</td><td>ADR-0008</td><td>Every call is relayed, so relay bandwidth is a real bill and a coturn outage is a total call outage</td></tr>
+        <tr><td>An identical refusal for every dead code</td><td>ADR-0010</td><td>Support cannot tell a holder which case they are in</td></tr>
+        <tr><td>Event-only analytics, no per-user timelines</td><td>ADR-0012</td><td>No funnel tooling, ever</td></tr>
+    </table>
+
+    <p>Notice that every row has a cost, and that the cost is written down next to the decision. That
+    is not humility. <strong>A decision recorded with its cost can be overturned when the evidence
+    changes; one recorded without can only be re-argued</strong> &mdash; which is why the same
+    questions come back every few months in most projects.</p>
+
+    <h2>Now build it yourself</h2>
+
+    <div id="exercise-1"></div>
+    <script>
+        createSolution("exercise-1", {
+            exercise: "Write <code>crossBoundary(field, destination)</code> &mdash; the policy function for Token's four zones. It takes a field name and a destination, and returns <code>{ allowed, form, reason }</code>.<br><br>" +
+                "<strong>The rules, in order:</strong><br>" +
+                "1. A field that is not in the policy is <strong>refused</strong>, with reason <code>unclassified</code>. This is deny-by-default and it is the whole point.<br>" +
+                "2. A field with no rule for that destination is refused, with reason <code>not_permitted</code>.<br>" +
+                "3. Otherwise it is allowed, and <code>form</code> is the form the policy names &mdash; <code>plain</code>, <code>sealed</code> or <code>derived</code>.<br>" +
+                "4. On any refusal, <code>form</code> must be <code>null</code>. Never <code>undefined</code>, never a leftover value.<br>" +
+                "5. <code>reason</code> is <code>ok</code> when allowed.<br><br>" +
+                "Use this policy exactly:<br>" +
+                "<pre><code>message_body  : device plain, server sealed, export plain\n" +
+                "phone_number  : device plain, server derived, vendor plain\n" +
+                "token_code    : device plain, server derived\n" +
+                "holder_ip     : server plain\n" +
+                "ice_candidate : device plain</code></pre>",
+            hints: [
+                "Look the field up first and return early if it is missing. An early return for the unknown case is what makes rule 1 structural rather than something you remember to check.",
+                "A destination that is absent from a field's rules gives you undefined, which is falsy. That is convenient, but be careful you are testing for it deliberately rather than by accident.",
+                "Rule 4 exists because a caller may read .form without checking .allowed. Returning null on every refusal means that caller gets an obviously empty value rather than a stale or undefined one."
+            ],
+            solution: "const POLICY = {\n" +
+                "  message_body:  { device: \"plain\", server: \"sealed\", export: \"plain\" },\n" +
+                "  phone_number:  { device: \"plain\", server: \"derived\", vendor: \"plain\" },\n" +
+                "  token_code:    { device: \"plain\", server: \"derived\" },\n" +
+                "  holder_ip:     { server: \"plain\" },\n" +
+                "  ice_candidate: { device: \"plain\" }\n" +
+                "};\n\n" +
+                "function crossBoundary(field, destination) {\n" +
+                "  const rules = POLICY[field];\n" +
+                "  if (!rules) {\n" +
+                "    return { allowed: false, form: null, reason: \"unclassified\" };\n" +
+                "  }\n" +
+                "  const form = rules[destination];\n" +
+                "  if (!form) {\n" +
+                "    return { allowed: false, form: null, reason: \"not_permitted\" };\n" +
+                "  }\n" +
+                "  return { allowed: true, form: form, reason: \"ok\" };\n" +
+                "}"
+        });
+    </script>
+
+    <div id="pg-exercise"></div>
+    <script>
+        createPlayground("pg-exercise", `// Write crossBoundary(field, destination) here.
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed || !detail ? "" : "  --  " + detail));
+}
+function show(v) { return JSON.stringify(v); }
+
+// Rule 1 gets its own try/catch, because the natural wrong answer here
+// -- POLICY[field][destination] with no guard -- THROWS on an unknown
+// field rather than returning. An uncaught throw would abort every
+// check below it, so the mistake would look like a broken verifier
+// instead of a caught error, and would trip nothing at all.
+var unknown = null;
+try {
+  unknown = crossBoundary("recovery_phrase", "vendor");
+  check("an unclassified field is REFUSED",
+    unknown.allowed === false && unknown.reason === "unclassified",
+    "got " + show(unknown));
+} catch (err) {
+  check("an unclassified field is REFUSED", false, "it threw: " + err.message);
+}
+
+try {
+  // Rule 3 -- the form is carried out, not flattened to a boolean.
+  var sealed = crossBoundary("message_body", "server");
+  check("a message body reaches the server SEALED, not plain",
+    sealed.allowed === true && sealed.form === "sealed",
+    "got " + show(sealed));
+
+  // The same field, a different form. A function that returns one form
+  // per field rather than per destination fails here and not above.
+  var onDevice = crossBoundary("message_body", "device");
+  check("the same message body is plain on the device",
+    onDevice.allowed === true && onDevice.form === "plain",
+    "got " + show(onDevice));
+
+  // Rule 2 -- classified, but not for this destination.
+  var codeToLog = crossBoundary("token_code", "log");
+  check("a token code is refused at a log, as not_permitted",
+    codeToLog.allowed === false && codeToLog.reason === "not_permitted",
+    "got " + show(codeToLog));
+
+  // The two refusals must be distinguishable. A single "denied" reason
+  // passes every check above and loses the difference between a gap in
+  // the policy and the policy working.
+  check("unclassified and not_permitted are different reasons",
+    Boolean(unknown) && unknown.reason !== codeToLog.reason,
+    "both said " + show(codeToLog.reason));
+
+  // Rule 4, on both refusal paths.
+  check("form is null on an unclassified refusal",
+    Boolean(unknown) && unknown.form === null,
+    "got " + show(unknown && unknown.form));
+  check("form is null on a not_permitted refusal",
+    codeToLog.form === null, "got " + show(codeToLog.form));
+
+  // The direction case. Same field, allowed one way and refused the
+  // other -- a function keyed only on the field cannot get both right.
+  var ipIn = crossBoundary("holder_ip", "server");
+  var ipOut = crossBoundary("holder_ip", "export");
+  check("a holder IP reaches the server",
+    ipIn.allowed === true && ipIn.form === "plain", "got " + show(ipIn));
+  check("a holder IP is REFUSED in the user's export",
+    ipOut.allowed === false, "got " + show(ipOut));
+
+  // The vendor case that looks backwards.
+  var phoneVendor = crossBoundary("phone_number", "vendor");
+  var phoneLog = crossBoundary("phone_number", "log");
+  check("a phone number may reach the SMS vendor, plain",
+    phoneVendor.allowed === true && phoneVendor.form === "plain",
+    "got " + show(phoneVendor));
+  check("the same number is refused at a log",
+    phoneLog.allowed === false, "got " + show(phoneLog));
+
+  // ICE candidates never reach the server. This is the one that is
+  // useful to store, which is why it is easy to lose.
+  var ice = crossBoundary("ice_candidate", "server");
+  check("an ICE candidate is refused at the server",
+    ice.allowed === false, "got " + show(ice));
+
+  // reason is 'ok' on success -- callers log it.
+  check("reason is 'ok' when allowed",
+    sealed.reason === "ok", "got " + show(sealed.reason));
+
+  // Nothing is allowed at a log. Counted directly, so a policy that
+  // grew a log rule by accident is caught here rather than in review.
+  var fields = ["message_body", "phone_number", "token_code",
+                "holder_ip", "ice_candidate", "recovery_phrase"];
+  var atLog = fields.filter(function (f) {
+    return crossBoundary(f, "log").allowed;
+  });
+  check("nothing at all is allowed at a log",
+    atLog.length === 0, "allowed: " + show(atLog));
+} catch (err) {
+  console.log("Self-check could not run: " + err.message);
+}`);
+    </script>
+
+    <h2>Explain it in your own words</h2>
+    <div id="explain-0001"></div>
+    <script>
+        createExplain("explain-0001", {
+            prompt: "A phone number is allowed to reach the SMS vendor &mdash; a company you do not control &mdash; and refused at a log file on your own server. Explain why that is the right way round, and what general rule about boundaries it is an instance of."
+        });
+    </script>
+
+    <div id="lesson-quiz"></div>
+    <script>
+        createQuiz("lesson-quiz", [
+            {
+                question: "What is a trust boundary?",
+                options: [
+                    "A point where data moves somewhere you control less, and must change form to cross",
+                    "A firewall rule between two servers",
+                    "The edge of the database",
+                    "A permission check on a user account"
+                ],
+                correct: 0,
+                explanation: "The useful definition is about control, not about network topology. The line between your app and your own log file is a trust boundary even though both are on hardware you rent, because a log is read by more people, kept longer and secured less carefully than the database it describes."
+            },
+            {
+                type: "predict-output",
+                question: "What does this print?",
+                code: "const POLICY = { token_code: { device: 'plain', server: 'derived' } };\nfunction cross(f, d) {\n  const r = POLICY[f];\n  if (!r) return 'unclassified';\n  return r[d] || 'not_permitted';\n}\nconsole.log(cross('token_code', 'log'));",
+                answer: "not_permitted",
+                explanation: "The field is known, so the first guard passes. The destination has no rule, so r[d] is undefined, which is falsy, so the fallback wins. Distinguishing this from 'unclassified' matters: one is the policy working, the other is a gap in it, and a human needs to respond differently."
+            },
+            {
+                type: "predict-output",
+                question: "And this one?",
+                code: "const POLICY = { token_code: { device: 'plain' } };\nfunction cross(f, d) {\n  const r = POLICY[f];\n  if (!r) return 'unclassified';\n  return r[d] || 'not_permitted';\n}\nconsole.log(cross('recovery_phrase', 'device'));",
+                answer: "unclassified",
+                explanation: "The field is not in the policy at all, so the first guard fires and the destination is never consulted. This is deny-by-default doing its job: a field nobody has classified cannot move anywhere, including to the device."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This policy function has a defect that leaks rather than crashes. Where?",
+                code: "1  function crossBoundary(field, destination) {\n2    const rules = POLICY[field];\n3    if (!rules) return { allowed: false, form: null, reason: 'unclassified' };\n4    return { allowed: true, form: rules[destination], reason: 'ok' };\n5  }",
+                bugLine: 4,
+                options: ["Line 2", "Line 3", "Line 4"],
+                correct: 2,
+                explanation: "There is no check that the destination is permitted. Every known field is allowed everywhere, with form silently undefined. A caller testing only .allowed writes a token code into a log and nothing errors. The missing early return did not cause a crash, it caused a leak."
+            },
+            {
+                question: "Why is a phone number permitted to reach the SMS aggregator but not a log file?",
+                options: [
+                    "The aggregator cannot deliver a code without dialling the number; a log has no such need",
+                    "The aggregator is contractually bound and a log is not",
+                    "Logs are less secure than a vendor's systems",
+                    "The number is encrypted in transit to the aggregator"
+                ],
+                correct: 0,
+                explanation: "A boundary is crossed for a reason or not at all. The disclosure to the aggregator is inherent to the purpose. Nobody ever wrote a log line that needed a phone number to do its job; they wrote it because the number was in scope and printing it was convenient. The contract matters too, but it is not what decides this."
+            },
+            {
+                question: "Why is the holder's IP address kept out of the issuing user's data export?",
+                options: [
+                    "It is another person's personal data, and the user's right is to their own",
+                    "IP addresses are not considered personal data",
+                    "It would make the export file too large",
+                    "It is already covered by the conversation records in the export"
+                ],
+                correct: 0,
+                explanation: "The holder is a separate person who never signed up and never agreed to be disclosed. Shipping their IP to the issuer hands one person another person's rough location, through a privacy feature, on request. The general trap: 'a row in my table' and 'my personal data' are different sets, and an export written from the schema ships the difference."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the deny-by-default guard.",
+                code: "const rules = POLICY[field];\nif (!rules) {\n  return { allowed: false, form: ___, reason: 'unclassified' };\n}",
+                answer: "null",
+                explanation: "null, explicitly, on every refusal path. A caller that reads .form without checking .allowed then gets an obviously empty value rather than undefined or a stale one. undefined would also be falsy, but it is the value you get by accident, and a value you get by accident cannot be relied on."
+            },
+            {
+                question: "What is wrong with writing the policy as a list of forbidden combinations?",
+                options: [
+                    "A field added later is permitted by default, and nobody decided that",
+                    "Deny-lists are slower to evaluate",
+                    "It cannot express the form data must take",
+                    "It requires more code than an allow-list"
+                ],
+                correct: 0,
+                explanation: "Every rule in a deny-list was written by someone who had already thought of that problem, and the set of things you have thought of does not grow when a colleague adds a database column. An allow-list makes the new field break something at the moment it is cheap to fix."
+            },
+            {
+                type: "which-breaks",
+                question: "Three ways to express the policy. Which one fails the moment a new field is added?",
+                variants: [
+                    "const FORBIDDEN = [['token_code','log'], ['phone_number','log']];\nfunction cross(f,d){ return !FORBIDDEN.some(p => p[0]===f && p[1]===d); }",
+                    "const POLICY = { token_code: { device:'plain' } };\nfunction cross(f,d){ const r = POLICY[f]; if(!r) return false; return Boolean(r[d]); }",
+                    "const POLICY = { token_code: { device:'plain' } };\nfunction cross(f,d){ return Boolean((POLICY[f] || {})[d]); }"
+                ],
+                correct: 0,
+                explanation: "The deny-list returns true for any pair it has not heard of, so a field added next quarter is cleared for every destination. The other two look the new field up and find nothing, which refuses it. Note the third is terser and behaves correctly here, though it loses the distinction between an unclassified field and a forbidden destination."
+            },
+            {
+                type: "predict-output",
+                question: "What does this print, and why is it a problem?",
+                code: "const POLICY = { message_body: { server: 'sealed' } };\nfunction cross(f, d) {\n  const r = POLICY[f] || {};\n  return { allowed: Boolean(r[d]), form: r[d] };\n}\nconsole.log(JSON.stringify(cross('message_body', 'log')));",
+                answer: "{\"allowed\":false}",
+                explanation: "form is undefined, and JSON.stringify omits undefined properties entirely — so the key disappears from the output rather than showing as null. A caller deserialising this over an API sees no form field at all, which is a third state nobody designed. Explicit null survives serialisation; undefined does not."
+            },
+            {
+                question: "Why does the function return a form rather than just true or false?",
+                options: [
+                    "Because 'may a message reach the server' has no yes-or-no answer — it may, sealed",
+                    "Because booleans cannot be logged",
+                    "Because the caller needs to know which zone it is in",
+                    "Because form is required for the audit trail"
+                ],
+                correct: 0,
+                explanation: "The interesting part of the answer is the condition attached to it. A function that flattens 'sealed' to true has discarded the only part the caller needed, and the caller will then send plaintext with a clear conscience."
+            },
+            {
+                type: "order-steps",
+                question: "Put the policy checks in the order they must run.",
+                steps: [
+                    "Look up the field in the policy",
+                    "Refuse as unclassified if the field is unknown",
+                    "Look up the destination in that field's rules",
+                    "Refuse as not_permitted if the destination has no rule",
+                    "Return allowed, with the form the policy names"
+                ],
+                correctOrder: [0, 1, 2, 3, 4],
+                explanation: "Field first, and refuse before touching the destination. Reversing the first two means reading a property of undefined, which throws — and a throw is a worse outcome than a refusal because a caller may catch it and carry on."
+            },
+            {
+                question: "Which of these is NOT one of Token's four zones?",
+                options: [
+                    "The certificate authority",
+                    "The user's device",
+                    "A vendor",
+                    "The holder's browser"
+                ],
+                correct: 0,
+                explanation: "The four are the device, the server, the holder, and vendors — with the log cutting across all of them. A certificate authority is real infrastructure but it never receives user data, which is what makes something a zone in this model."
+            },
+            {
+                question: "Why is 'the log' drawn as a zone of its own rather than as part of the server?",
+                options: [
+                    "It is read by more people, kept longer, and secured less than the data it describes",
+                    "Logs are stored on a separate machine",
+                    "Logs are not encrypted at rest",
+                    "Logs are exempt from the retention policy"
+                ],
+                correct: 0,
+                explanation: "It is also the destination nobody designs. Logs accumulate, get shipped to third-party error trackers, copied into support tickets and grepped on laptops. Treating it as a zone with rules is what stops sensitive data arriving there by nobody's decision."
+            },
+            {
+                type: "predict-output",
+                question: "What does this print?",
+                code: "const POLICY = {\n  phone_number: { server: 'derived', vendor: 'plain' }\n};\nfunction cross(f, d) {\n  const r = POLICY[f];\n  if (!r) return 'unclassified';\n  const form = r[d];\n  if (!form) return 'not_permitted';\n  return form;\n}\nconsole.log([cross('phone_number','vendor'), cross('phone_number','server'), cross('phone_number','log')].join(' | '));",
+                answer: "plain | derived | not_permitted",
+                explanation: "One field, three destinations, three different answers. This is why the function is keyed on the pair rather than on the field: a per-field answer cannot express that a number is dialled by a vendor, hashed on the server, and refused at a log."
+            },
+            {
+                question: "An ICE candidate is excellent debugging material. Why is it still refused at the server?",
+                options: [
+                    "It is an IP address, and relay-only exists so neither party learns the other's",
+                    "It changes on every call, so storing it is pointless",
+                    "It is covered by the message encryption already",
+                    "Storing it would break the WebRTC protocol"
+                ],
+                correct: 0,
+                explanation: "Relaying every call is what stops a delivery company discovering roughly where a user lives. Writing the candidates into a call record defeats that from the far side, in a table nobody thinks of as sensitive. Its usefulness for debugging is exactly why the rule is easy to lose."
+            },
+            {
+                type: "spot-the-bug",
+                question: "Which line makes an unclassified field behave as if it were classified?",
+                code: "1  function cross(field, destination) {\n2    const rules = POLICY[field] || { device: 'plain' };\n3    const form = rules[destination];\n4    if (!form) return { allowed: false, form: null, reason: 'not_permitted' };\n5    return { allowed: true, form: form, reason: 'ok' };\n6  }",
+                bugLine: 2,
+                options: ["Line 2", "Line 3", "Line 4"],
+                correct: 0,
+                explanation: "The default object silently classifies every unknown field as device-plain. A recovery phrase would be cleared for the device with no decision made, and the unclassified reason can never be produced, so the gap in the policy is invisible. A default that looks like a safe fallback is the most common way deny-by-default is lost."
+            },
+            {
+                question: "What does 'derived' mean in this policy?",
+                options: [
+                    "Computed from the value, with the original never stored — like a hash",
+                    "Encrypted with a key held on the server",
+                    "Copied from another table",
+                    "Generated at request time and discarded"
+                ],
+                correct: 0,
+                explanation: "Derived and sealed are different guarantees and the policy distinguishes them deliberately. Sealed means encrypted, and someone holds the key. Derived means the original is not there at all — a phone number stored as a hash cannot be read back into a number by anyone, including us."
+            },
+            {
+                question: "A hashed phone number is described as a lookup key rather than an anonymisation. Why?",
+                options: [
+                    "The space of Indian mobile numbers is small enough to enumerate and match exhaustively",
+                    "Hashes are reversible with the right algorithm",
+                    "The hash is stored alongside the number",
+                    "The pepper is kept in the same database"
+                ],
+                correct: 0,
+                explanation: "Ten digits with a known prefix is a small enough space that anyone with the hash function can try every number and match them all. That makes phone_hash a key you look rows up by, not a privacy measure — which is why the accurate public sentence is 'a scrambled version, used only to sign you in'."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the guard that catches a destination with no rule.",
+                code: "const form = rules[destination];\nif (!___) {\n  return { allowed: false, form: null, reason: 'not_permitted' };\n}",
+                answer: "form",
+                explanation: "Testing the looked-up value, not the destination string. Testing the destination would only tell you what was asked for, never whether the policy has an answer for it."
+            },
+            {
+                question: "Which pair of rules could NOT both be true in a coherent policy?",
+                options: [
+                    "A token code is refused at a log, and a token code is written to an error report",
+                    "A phone number reaches a vendor plain, and is refused at a log",
+                    "A message body is sealed at the server, and plain on the device",
+                    "A holder IP reaches the server, and is refused in the user's export"
+                ],
+                correct: 0,
+                explanation: "An error report is a log by another name — usually a worse one, since error trackers attach request bodies by default and are operated by a third party. The other three pairs are all real Token rules, and each looks contradictory only until you notice the destinations differ."
+            },
+            {
+                question: "Why is a wrong alphabet worse than a wrong example token code?",
+                options: [
+                    "A wrong code is one bad example; a wrong alphabet generates an unlimited supply",
+                    "Alphabets are harder to change once published",
+                    "Example codes are never copied by students",
+                    "The alphabet affects the database schema"
+                ],
+                correct: 0,
+                explanation: "Same shape as the deny-list argument. A single wrong instance is a bug you fix once; a wrong rule is a factory. This is why the course audit treats an alphabet mismatch as an error and a bad example code as a warning."
+            },
+            {
+                type: "predict-output",
+                question: "What does this count?",
+                code: "const POLICY = {\n  message_body: { device: 'plain', server: 'sealed' },\n  token_code: { device: 'plain', server: 'derived' },\n  holder_ip: { server: 'plain' }\n};\nconst atLog = Object.keys(POLICY).filter(f => POLICY[f].log);\nconsole.log(atLog.length);",
+                answer: "0",
+                explanation: "Nothing is permitted at a log, so the filter finds nothing. Counting the allowed set directly is a better check than asserting each field individually: a policy that grows a log rule by accident is caught by the count, even for a field the test author never thought to name."
+            },
+            {
+                question: "What is the argument for writing the cost of a decision down next to the decision?",
+                options: [
+                    "A decision recorded with its cost can be overturned on evidence; one without can only be re-argued",
+                    "It satisfies audit requirements",
+                    "It makes the decision harder to reverse, which is the goal",
+                    "It shortens the document"
+                ],
+                correct: 0,
+                explanation: "Without the cost, a future reader cannot tell whether the trade-off was considered and accepted or simply never noticed — so the only way to challenge it is to have the whole argument again from nothing. That is why the same questions resurface every few months in most projects."
+            },
+            {
+                question: "A colleague suggests logging the token code so support can help users who lost theirs. What is the best response?",
+                options: [
+                    "Log the token id instead — it identifies the row for anyone who can already query the database and is worthless to anyone who cannot",
+                    "Log the code but redact the middle group",
+                    "Log the code only in the staging environment",
+                    "Log a hash of the code so it can be matched later"
+                ],
+                correct: 0,
+                explanation: "That is exactly the property an identifier in a log should have. Redaction leaves a shorter capability and is usually reversible from context; staging environments get restored from production; and a hash in a log is still a lookup key against the table it came from."
+            },
+            {
+                question: "Which of these is a trust boundary that costs nothing technically and exists only because someone asked a question?",
+                options: [
+                    "Excluding a holder's IP from the issuing user's data export",
+                    "Sealing message bodies before they reach the server",
+                    "Hashing the phone number at sign-up",
+                    "Relaying every call through your own server"
+                ],
+                correct: 0,
+                explanation: "Nothing in the code stops the export from including those rows — they are connected to the user, and a serialiser walking the schema will find them. The other three are enforced by mechanism: no key, no plaintext column, no direct path. The export boundary exists only because someone asked whose data it was, which is precisely why it has to be written into a function rather than remembered."
+            },
+            {
+                type: "predict-output",
+                question: "What does this print?",
+                code: "function cross(field, destination, policy) {\n  const rules = policy[field];\n  if (!rules) return 'unclassified';\n  return rules[destination] || 'not_permitted';\n}\nconst P = { holder_ip: { server: 'plain' } };\nconsole.log(cross('holder_ip', 'server', P) + ',' + cross('holder_ip', 'export', P));",
+                answer: "plain,not_permitted",
+                explanation: "One field, opposite answers, decided entirely by the destination. A function keyed only on the field name cannot produce this, and a policy that says 'holder_ip is sensitive' or 'holder_ip is fine' is wrong in one direction either way."
+            },
+            {
+                question: "Why does this module come before the SQL module rather than after it?",
+                options: [
+                    "A schema is a set of answers to architecture questions that were never asked out loud",
+                    "SQL is harder and should come later",
+                    "The database is not part of the architecture",
+                    "Trust boundaries only apply to the client"
+                ],
+                correct: 0,
+                explanation: "Three of Token's schema decisions are inexplicable without this lesson: the code stored twice and never in the clear, message bodies as ciphertext, and a calls table with deliberately no column for a network address. Meeting those as arbitrary constraints in a schema lesson is how they get 'simplified' away later."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the check that nothing at all is permitted at a log.",
+                code: "const atLog = fields.filter(f => crossBoundary(f, 'log').___);\nif (atLog.length !== 0) throw new Error('policy leaked to a log');",
+                answer: "allowed",
+                explanation: "Counting the allowed set is stronger than asserting field by field, because it also covers fields the test author never thought to name — including ones added after the test was written."
+            }
+        ]);
+    </script>
+
+    <div class="lesson-nav">
+        <a href="./README.html">&larr; C0 &mdash; Module home</a>
+        <a href="./0002-decisions-that-survive.html">Next: Decisions That Survive &rarr;</a>
+    </div>
+
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+</body>
+</html>
