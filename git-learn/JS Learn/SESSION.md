@@ -27,9 +27,11 @@ how far it got.
 > commit message, not as a reason for prioritising anything.
 
 **W1 — C1, Testing & Quality.** Started 2026-08-28. `0001-what-a-test-is.html`
-is written; `0002`–`0005`, the README, the index row and the search-index
-entries are not. The audit is red until they land, and every error it prints
-names `c1-testing-quality`.
+is written, verified and has its `--wrong` cases; the README, the index row and
+the search entry are in. **`0002`–`0005` remain.** Each lesson lands as its own
+commit with the audit green: `0001`'s next-link is a disabled span until `0002`
+exists, and the README lists the four unwritten lessons as spans rather than
+links.
 
 Planned: `0001` what a test is · `0002` time, randomness and fakes · `0003`
 testing an HTTP handler without a network · `0004` testing against a real

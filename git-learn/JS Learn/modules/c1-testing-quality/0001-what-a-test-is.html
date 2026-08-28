@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>C1 — What a Test Is</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Testing &amp; Quality</a> &rsaquo;
+        <span>What a Test Is</span>
+    </nav>
+
+    <h1>What a Test Is</h1>
+    <p class="lesson-meta">C1 &mdash; Lesson 1 of 5 &nbsp;|&nbsp; ~45 min</p>
+
+    <div class="callout">
+        <div class="callout-title">Why this matters for Token</div>
+        <p>You have written a test in every single lesson of this course. Scroll to the bottom of
+        any exercise and you will find the line
+        <code>// --- Self-check: leave everything below this line alone ---</code> and, under it, a
+        function called <code>check</code>. That is a test suite. Nobody called it one.</p>
+        <p>This lesson is about turning that habit into the real thing, because the API you are
+        about to build has behaviour that <strong>cannot be checked by looking at it</strong>. A
+        revoked token and a token that never existed must produce byte-identical responses. A
+        redemption must be counted exactly once even when two requests arrive together. A rule
+        the engine does not recognise must be refused, not permitted. None of those are visible
+        on a screen. All of them are one assertion each.</p>
+        <p>By the end you will have written the runner that the rest of this module uses &mdash; and
+        you will know why the first thing it has to do is survive a test that explodes.</p>
+    </div>
+
+    <h2>1 &middot; You have been doing this since lesson one</h2>
+
+    <p>Here is the self-check from <a href="../01-javascript-fundamentals/0004-conditionals.html">01/0004</a>,
+    reduced to its skeleton:</p>
+
+    <pre><code>function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label);
+  if (!passed && detail) console.log("      " + detail);
+}
+
+check("a revoked token is revoked",
+      checkAccess(token({ revokedAt: "2026-08-15" })) === "revoked",
+      "got: " + checkAccess(token({ revokedAt: "2026-08-15" })));</code></pre>
+
+    <p>Three things are going on, and every test ever written does the same three:</p>
+
+    <ul>
+        <li><strong>Arrange</strong> &mdash; build the world the behaviour needs.
+        <code>token({ revokedAt: "2026-08-15" })</code>.</li>
+        <li><strong>Act</strong> &mdash; do the one thing under test. <code>checkAccess(...)</code>.</li>
+        <li><strong>Assert</strong> &mdash; state what should now be true, and fail loudly if it is
+        not. <code>=== "revoked"</code>.</li>
+    </ul>
+
+    <p>The fourth thing is the one people skip, and it is why <code>check</code> takes a third
+    argument: <strong>a failing test must say what it actually got.</strong> A test that prints
+    <code>FAIL a revoked token is revoked</code> tells you a fact you already knew from the word
+    FAIL. A test that prints <code>got: paused</code> tells you which branch ran, and usually that
+    is the whole debugging session.</p>
+
+    <div class="callout">
+        <div class="callout-title">The name is documentation, so write it as a sentence</div>
+        <p><code>"a revoked token is revoked"</code> is a claim about the system. <code>"test 3"</code>
+        and <code>"checkAccess works"</code> are not. When a suite of forty tests fails at 2am, the
+        names are the only thing you read &mdash; and a good name means you often know the cause
+        before you open the file.</p>
+    </div>
+
+    <h2>2 &middot; The real tool is already installed</h2>
+
+    <p>Node has had a test runner built in since v18. There is nothing to install, which suits this
+    project: the course has no <code>package.json</code> on purpose, and the Token API will pick up
+    dependencies only when they earn their place.</p>
+
+    <pre><code>// api/src/access.test.js
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
+import { checkAccess } from "./access.js";
+
+const token = (over) => ({
+  revokedAt: null, isPaused: false, timesUsed: 0, maxUses: 5, ...over
+});
+
+test("a fresh token is allowed", () =&gt; {
+  assert.equal(checkAccess(token()), "allowed");
+});
+
+test("revoking beats pausing", () =&gt; {
+  assert.equal(checkAccess(token({ revokedAt: "2026-08-15", isPaused: true })), "revoked");
+});</code></pre>
+
+    <p>Run it with <code>node --test</code>. You get the pass and fail counts, and for a failure,
+    the expected and actual values &mdash; the third argument of <code>check</code>, done for you.</p>
+
+    <div class="callout warning">
+        <div class="callout-title">Import <code>node:assert/strict</code>, never bare <code>node:assert</code></div>
+        <p>The default <code>assert.equal</code> compares with <code>==</code>. So this passes:</p>
+        <pre><code>assert.equal(token.timesUsed, 3);   // passes when timesUsed is the STRING "3"</code></pre>
+        <p>That is the exact bug <a href="../01-javascript-fundamentals/0002-data-types.html">01/0002</a>
+        is about, and a test written with loose equality is blind to it. Worse than blind: it is
+        <em>evidence</em> that the field is a number, filed away and trusted by the next person.</p>
+        <p><code>node:assert/strict</code> makes every comparison strict. There is no reason to use
+        anything else, and the failure mode of forgetting is a green suite over a real defect.</p>
+    </div>
+
+    <h3>Try it yourself</h3>
+    <p>Both of these &ldquo;pass&rdquo;. Only one of them should.</p>
+
+    <div id="pg-loose"></div>
+    <script>
+        createPlayground("pg-loose", `// A rough stand-in for the two assert modes.
+function looseEqual(actual, expected, label) {
+  console.log((actual == expected ? "PASS  " : "FAIL  ") + label);
+}
+function strictEqual(actual, expected, label) {
+  console.log((actual === expected ? "PASS  " : "FAIL  ") + label);
+}
+
+// This is what came back from a form field: a string.
+const timesUsed = "3";
+
+looseEqual(timesUsed, 3, "loose: timesUsed is 3");
+strictEqual(timesUsed, 3, "strict: timesUsed is 3");
+
+// And the one that catches people out in the other direction:
+looseEqual([], false, "loose: an empty array is false");
+strictEqual([], false, "strict: an empty array is false");`);
+    </script>
+
+    <h2>3 &middot; A test only tests the case someone thought of</h2>
+
+    <p>This is not a warning about laziness. It is the single most reliable way a test suite lies to
+    you, and it happened in this course, in the lesson you have already done.</p>
+
+    <p><code>checkAccess</code> has four rules in a fixed order: revoked, then paused, then the use
+    limit, then allowed. The self-check in 01/0004 tested that <strong>revoked beats paused</strong>
+    and stopped there. So this implementation passed every check:</p>
+
+    <pre><code>function checkAccess(token) {
+  if (token.revokedAt !== null)              return "revoked";
+  else if (token.timesUsed &gt;= token.maxUses) return "limit reached";   // &lt;-- swapped
+  else if (token.isPaused === true)          return "paused";          // &lt;-- swapped
+  else                                       return "allowed";
+}</code></pre>
+
+    <p>Every token with a single state comes out right. Only a token that is <strong>paused and at
+    its limit</strong> is wrong &mdash; it reports <code>"limit reached"</code>, a state the user
+    cannot clear, which hides the Resume button that would actually fix it.</p>
+
+    <div class="callout warning">
+        <div class="callout-title">Four rules in order have three adjacent pairs, and one test is not three</div>
+        <p>The suite checked one pair out of three and called it precedence. That is the general
+        shape: <strong>the author tests the case they were thinking about, and the case they were
+        not thinking about is the bug.</strong></p>
+        <p>When behaviour is &ldquo;these rules, in this order&rdquo;, the test list is not one case
+        per rule. It is one case per rule <em>plus one case per pair that can be true at once</em>,
+        and you write them by reading the order, not by imagining scenarios.</p>
+    </div>
+
+    <h3>Try it yourself</h3>
+    <p>The suite below is green and the function under it is wrong. Add the missing case.</p>
+
+    <div id="pg-precedence"></div>
+    <script>
+        createPlayground("pg-precedence", `function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label);
+  if (!passed && detail) console.log("      " + detail);
+}
+
+function token(over) {
+  return Object.assign({ revokedAt: null, isPaused: false, timesUsed: 0, maxUses: 5 }, over);
+}
+
+// The rules are: revoked, then paused, then the limit, then allowed.
+function checkAccess(t) {
+  if (t.revokedAt !== null) return "revoked";
+  if (t.timesUsed >= t.maxUses) return "limit reached";
+  if (t.isPaused) return "paused";
+  return "allowed";
+}
+
+check("a fresh token is allowed", checkAccess(token()) === "allowed");
+check("a revoked token is revoked", checkAccess(token({ revokedAt: "2026-08-15" })) === "revoked");
+check("a paused token is paused", checkAccess(token({ isPaused: true })) === "paused");
+check("a spent token has reached its limit", checkAccess(token({ timesUsed: 5 })) === "limit reached");
+check("revoked beats paused", checkAccess(token({ revokedAt: "2026-08-15", isPaused: true })) === "revoked");
+
+// Four rules in order have THREE adjacent pairs. Two of them are untested.
+// Write the check for a token that is paused AND at its limit.
+// The right answer is "paused" -- rule 2 comes before rule 3.
+`);
+    </script>
+
+    <h2>4 &middot; The trap that decides how a runner is written</h2>
+
+    <p>A test does not report a failure by returning <code>false</code>. It reports one by
+    <strong>throwing</strong> &mdash; that is what <code>assert</code> does. Which means a test
+    runner spends its whole life handling exceptions, and the naive loop has a defect that is
+    much worse than it looks:</p>
+
+    <pre><code>for (const t of tests) {
+  t.fn();                 // an assertion failure throws out of the whole loop
+  console.log("PASS " + t.name);
+}</code></pre>
+
+    <p>The second test throws. Tests three through forty never run. The output shows one pass and
+    a stack trace, and the honest reading of that output is <em>&ldquo;I know one thing passed and
+    I know nothing at all about the other thirty-nine.&rdquo;</em></p>
+
+    <div class="callout warning">
+        <div class="callout-title">This project has been caught by it three times, most recently this week</div>
+        <p>The self-checks in this course are one long <code>try</code> block. When a wrong answer
+        <em>throws</em> rather than returning the wrong value, every check below the throw is
+        skipped &mdash; so the suite reports the crash and stays silent about the eight things it
+        never got to.</p>
+        <p>It reads exactly like a broken test runner, which is why it wastes an afternoon each
+        time. <strong>A test that fails must not be able to take another test with it.</strong>
+        That single requirement is most of the design of the exercise below.</p>
+    </div>
+
+    <h3>Try it yourself</h3>
+    <p>This one is broken on purpose. Read the output before you fix it &mdash; the important part
+    is what is <em>missing</em> from it.</p>
+
+    <div id="pg-broken"></div>
+    <script>
+        createPlayground("pg-broken", `const tests = [
+  { name: "a code is 14 characters with its dashes", fn: () => {
+      if ("MERC-8GH2-KP4X".length !== 14) throw new Error("wrong length");
+  } },
+  { name: "a code has three groups of four", fn: () => {
+      // A dash lost to a typo. This one is going to throw -- watch what
+      // happens to the test below it, which is the one that matters most.
+      const code = "MERC-8GH2KP4X";
+      const groups = code.split("-");
+      if (groups.length !== 3) throw new Error("expected 3 groups, got " + groups.length);
+  } },
+  { name: "a code uses no excluded letters", fn: () => {
+      if (/[OIL01]/.test("MERC-8GH2-KP4X")) throw new Error("excluded letter");
+  } }
+];
+
+// The naive loop. One throw and the rest of the suite is never heard from.
+for (const t of tests) {
+  t.fn();
+  console.log("PASS  " + t.name);
+}
+
+// Fix it: wrap t.fn() so a throw is recorded as a failure and the loop continues.
+// Then check that the third test reports at all.`);
+    </script>
+
+    <h2>5 &middot; What a runner has to get right</h2>
+
+    <p>Four things, and only the first is obvious:</p>
+
+    <ol>
+        <li><strong>Run every test</strong>, whatever the ones before it did.</li>
+        <li><strong>Report what failed and why</strong> &mdash; name and message, not just a count.
+        A suite that prints <code>37 passed, 3 failed</code> and nothing else has told you to go
+        and find them yourself.</li>
+        <li><strong>Keep the order</strong> the tests were written in. Failures read as a story:
+        the first one is usually the cause and the rest are consequences.</li>
+        <li><strong>Survive a test that throws something that is not an <code>Error</code>.</strong>
+        <code>throw "boom"</code> is legal JavaScript, and a runner that reads <code>err.message</code>
+        without checking reports <code>undefined</code> as the reason for the failure &mdash; which
+        is worse than reporting nothing, because it looks like a bug in the runner.</li>
+    </ol>
+
+    <h2>Now build it yourself</h2>
+
+    <div id="exercise-1"></div>
+    <script>
+        createSolution("exercise-1", {
+            exercise:
+                "Write <code>runTests(tests)</code> &mdash; the runner this module uses from here on.<br><br>" +
+                "It takes an array of <code>{ name, fn }</code> and returns a summary object:<br>" +
+                "<code>{ total, passed, failed, failures }</code><br><br>" +
+                "The rules:<br>" +
+                "1. A test <strong>passes</strong> if <code>fn()</code> returns without throwing. What it returns is irrelevant &mdash; a test that returns <code>undefined</code> or <code>false</code> still passed.<br>" +
+                "2. A test <strong>fails</strong> if <code>fn()</code> throws. Record it in <code>failures</code> as <code>{ name, message }</code>.<br>" +
+                "3. <strong>Every test runs</strong>, whatever happened before it.<br>" +
+                "4. <code>failures</code> keeps the order the tests were given in.<br>" +
+                "5. If something that is not an <code>Error</code> is thrown, <code>message</code> is that value as a string &mdash; <code>throw \"boom\"</code> gives <code>\"boom\"</code>, never <code>undefined</code>.<br>" +
+                "6. An empty array returns all zeros and an empty <code>failures</code> array.",
+            hints: [
+                "Start with the answer, as in 01/0005: an object with total, passed and failed at 0 and failures as an empty array. Then walk the tests and adjust it.",
+                "Rule 3 is the whole exercise, and it is one <code>try/catch</code> INSIDE the loop. A try/catch around the loop compiles, runs, and does exactly the wrong thing &mdash; it stops at the first failure.",
+                "For rule 5: an Error has a <code>message</code> property and a string does not. <code>err instanceof Error ? err.message : String(err)</code> handles both, and <code>String(err)</code> is safe for null, numbers and objects too."
+            ],
+            solution: `function runTests(tests) {
+  const summary = { total: 0, passed: 0, failed: 0, failures: [] };
+
+  for (const t of tests) {
+    summary.total++;
+    try {
+      t.fn();
+      summary.passed++;
+    } catch (err) {
+      // Inside the loop, so one exploding test cannot silence the rest.
+      summary.failed++;
+      summary.failures.push({
+        name: t.name,
+        message: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+
+  return summary;
+}`
+        });
+    </script>
+
+    <div id="pg-exercise"></div>
+    <script>
+        createPlayground("pg-exercise", `// --- Write runTests(tests) here, then press Run ---
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label);
+  if (!passed && detail) console.log("      " + detail);
+}
+
+const ok = { name: "passes", fn: function () { return true; } };
+const quiet = { name: "returns nothing", fn: function () {} };
+const falsy = { name: "returns false", fn: function () { return false; } };
+const bad = { name: "fails", fn: function () { throw new Error("expected 3, got 5"); } };
+const rude = { name: "throws a string", fn: function () { throw "boom"; } };
+
+try {
+  const empty = runTests([]);
+  check("an empty list totals zero",
+    empty.total === 0 && empty.passed === 0 && empty.failed === 0,
+    "got: " + JSON.stringify(empty));
+  check("an empty list has an empty failures array",
+    Array.isArray(empty.failures) && empty.failures.length === 0,
+    "got: " + JSON.stringify(empty.failures) + " - it should be [], not undefined");
+
+  const good = runTests([ok, quiet]);
+  check("a test that returns without throwing passes",
+    good.passed === 2 && good.failed === 0,
+    "got: " + JSON.stringify(good));
+
+  // Passing is about not throwing. A runner written as if (t.fn()) counts
+  // this one as a failure, and every assert-style test returns undefined.
+  const f = runTests([falsy]);
+  check("a test that returns false still PASSES",
+    f.passed === 1 && f.failed === 0,
+    "got: " + JSON.stringify(f) + " - a test reports failure by throwing, not by returning");
+
+  const one = runTests([bad]);
+  check("a throwing test is counted as failed",
+    one.failed === 1 && one.passed === 0,
+    "got: " + JSON.stringify(one));
+  check("the failure carries the test name",
+    one.failures.length === 1 && one.failures[0].name === "fails",
+    "got: " + JSON.stringify(one.failures));
+  check("the failure carries the error message",
+    one.failures.length === 1 && one.failures[0].message === "expected 3, got 5",
+    "got: " + JSON.stringify(one.failures));
+
+  // The point of the whole exercise.
+  const mixed = runTests([ok, bad, quiet, bad, ok]);
+  check("every test runs, including the ones after a failure",
+    mixed.total === 5 && mixed.passed === 3 && mixed.failed === 2,
+    "got: " + JSON.stringify({ total: mixed.total, passed: mixed.passed, failed: mixed.failed }) +
+    " - if total is 2 the loop stopped at the first throw");
+
+  check("the counts add up to the total",
+    mixed.passed + mixed.failed === mixed.total,
+    "got: " + mixed.passed + " + " + mixed.failed + " which is not " + mixed.total);
+
+  const ordered = runTests([
+    { name: "first", fn: function () { throw new Error("a"); } },
+    ok,
+    { name: "second", fn: function () { throw new Error("b"); } }
+  ]);
+  check("failures keep the order the tests were given in",
+    ordered.failures.length === 2 &&
+    ordered.failures[0].name === "first" && ordered.failures[1].name === "second",
+    "got: " + JSON.stringify(ordered.failures.map(function (x) { return x.name; })));
+
+  // Wrapped on its own: a runner that reads err.message unguarded does not
+  // throw here, it reports undefined -- but a runner that calls
+  // err.message.trim() DOES throw, and would take every check below with it.
+  try {
+    const r = runTests([rude]);
+    check("a thrown string is reported as its own text",
+      r.failed === 1 && r.failures[0].message === "boom",
+      "got: " + JSON.stringify(r.failures) + " - not every throw is an Error");
+  } catch (err) {
+    check("a thrown string is reported as its own text", false,
+      "runTests itself threw: " + err.message);
+  }
+
+  const untouched = runTests([ok]);
+  check("a fresh call starts from zero",
+    untouched.total === 1 && untouched.failures.length === 0,
+    "got: " + JSON.stringify(untouched) + " - is the summary object declared outside the function?");
+} catch (err) {
+  console.log("FAIL  " + err.name + ": " + err.message);
+  console.log("      Usually this means runTests is missing or misspelt,");
+  console.log("      or it does not return the summary object.");
+}`);
+    </script>
+
+    <h2>Explain it in your own words</h2>
+    <div id="explain-0001"></div>
+    <script>
+        createExplain("explain-0001", {
+            prompt: "A colleague writes a test runner whose loop has no <code>try/catch</code>, runs it against forty tests, and reports &ldquo;one passing test, one crash&rdquo;. Explain what that output actually tells you about the other thirty-eight, and why this is a worse outcome than the suite failing loudly."
+        });
+    </script>
+
+    <div id="lesson-quiz"></div>
+    <script>
+        createQuiz("lesson-quiz", [
+            {
+                question: "What are the three parts of every test?",
+                options: [
+                    "Arrange the world, act on the thing under test, assert what should now be true",
+                    "Set up a database, call the API, print the result",
+                    "Mock the dependencies, run the function, check for errors",
+                    "Describe, expect, report"
+                ],
+                correct: 0,
+                explanation: "Arrange, act, assert. The shape is the same whether the test is a line in a browser playground or a suite running against Postgres — and naming the three parts is what stops a test that acts twice, or asserts nothing at all."
+            },
+            {
+                question: "Why does the <code>check</code> helper in this course take a third argument?",
+                options: [
+                    "So a failing test prints what it actually got, which is usually the whole debugging session",
+                    "To give each test a unique identifier",
+                    "To let the test be skipped conditionally",
+                    "To record how long the test took"
+                ],
+                correct: 0,
+                explanation: "A failure that prints only its name repeats what the word FAIL already told you. One that prints 'got: paused' tells you which branch ran. Writing the detail argument is the cheapest improvement available to any test suite."
+            },
+            {
+                type: "predict-output",
+                code: "const results = [];\nfor (const n of [1, 2, 3]) {\n  try {\n    if (n === 2) throw new Error('bad');\n    results.push('pass');\n  } catch (e) {\n    results.push('fail');\n  }\n}\nconsole.log(results.join(','));",
+                answer: "pass,fail,pass",
+                explanation: "The try/catch is inside the loop, so the throw is contained to one iteration and the third still runs. Moving those same four lines outside the loop gives ['pass'] and an exception — the same code, the opposite behaviour."
+            },
+            {
+                type: "predict-output",
+                code: "const results = [];\ntry {\n  for (const n of [1, 2, 3]) {\n    if (n === 2) throw new Error('bad');\n    results.push('pass');\n  }\n} catch (e) {\n  results.push('fail');\n}\nconsole.log(results.join(','));",
+                answer: "pass,fail",
+                explanation: "The try is outside the loop, so the throw exits the loop entirely and the third test never runs. The output has two entries for three tests, and nothing in it says the third was skipped — which is exactly why this bug survives review."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This runner reports every assert-style test as a failure. Where?",
+                code: "1  function runTests(tests) {\n2    let passed = 0, failed = 0;\n3    for (const t of tests) {\n4      if (t.fn()) passed++;\n5      else failed++;\n6    }\n7    return { passed, failed };\n8  }",
+                bugLine: 4,
+                options: ["Line 2", "Line 4", "Line 7"],
+                correct: 1,
+                explanation: "It decides pass or fail from the RETURN VALUE. A test written with assert returns undefined when it succeeds, which is falsy — so every passing test is counted as a failure, and a test that throws takes the whole loop down. A test reports failure by throwing, not by returning."
+            },
+            {
+                type: "predict-output",
+                code: "function message(err) { return err.message; }\ntry { throw 'boom'; } catch (e) { console.log(String(message(e))); }",
+                answer: "undefined",
+                explanation: "A string has no message property, so reading it gives undefined rather than an error. The failure is then reported with no reason at all, which reads like a broken runner. String(err) handles it; err instanceof Error tells the two cases apart."
+            },
+            {
+                question: "Why does this module use <code>node:test</code> rather than a testing framework?",
+                options: [
+                    "It is built into Node, so there is nothing to install and nothing to keep up to date",
+                    "It is faster than every alternative",
+                    "Frameworks cannot test HTTP handlers",
+                    "It is the only runner that supports async tests"
+                ],
+                correct: 0,
+                explanation: "Built in since Node 18. It suits a project that has deliberately avoided dependencies, and the concepts move to any other runner unchanged — the names differ, the three parts do not."
+            },
+            {
+                type: "which-breaks",
+                question: "One of these assertions passes when it should fail. Which?",
+                variants: [
+                    "assert.strictEqual(token.timesUsed, 3)   // timesUsed is the string \"3\"",
+                    "assert.equal(token.timesUsed, 3)         // loose mode, timesUsed is the string \"3\"",
+                    "assert.strictEqual(token.revokedAt, null)  // revokedAt is undefined"
+                ],
+                correct: 1,
+                explanation: "Loose equality coerces, so the string \"3\" and the number 3 compare as equal and the assertion passes over a real type bug. Importing node:assert/strict makes every comparison strict, and there is no situation in which you want the other behaviour."
+            },
+            {
+                question: "A suite tests <code>checkAccess</code> with one token in each of its four states, and all four pass. What has it NOT tested?",
+                options: [
+                    "The order of the rules, which only shows up when two states are true at once",
+                    "Whether the function returns a string",
+                    "Whether the function handles a missing token",
+                    "The performance of the function"
+                ],
+                correct: 0,
+                explanation: "Precedence is invisible until two states overlap. Four rules in order have three adjacent pairs and the suite covered none of them — which is how a real implementation with the limit ahead of the pause passed a full green run in this course."
+            },
+            {
+                question: "A token that is paused AND at its use limit reports \"limit reached\". Why is that the wrong answer rather than merely a different one?",
+                options: [
+                    "It hides the Resume button, offering the user no way to act on a state they can actually clear",
+                    "The two states are equally valid, so either string is acceptable",
+                    "It makes the badge the wrong colour",
+                    "It causes an error in the API response"
+                ],
+                correct: 0,
+                explanation: "A pause is something the user can undo; a spent limit is not. Reporting the state they cannot clear removes the control that would fix it. Precedence bugs are almost always like this — both answers are true, and only one of them is useful."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the guard that reports a non-Error throw as its own text.",
+                code: "message: err instanceof Error ? err.message : ___(err)",
+                answer: "String",
+                explanation: "String(err) is safe for strings, numbers, null, undefined and objects alike. Reading .message unguarded gives undefined, which is a failure with no stated reason — the least useful thing a runner can print."
+            },
+            {
+                type: "order-steps",
+                question: "Put the parts of a single test in the order they run.",
+                steps: [
+                    "Arrange: build the token the case needs",
+                    "Act: call checkAccess with it",
+                    "Assert: compare the result to what the rules say it must be",
+                    "Report: name the behaviour and, on failure, what came back instead"
+                ],
+                correctOrder: [0, 1, 2, 3],
+                explanation: "A test that asserts before it acts is testing the fixture. A test that acts twice — once in the assertion and once in the detail message — can report a different value from the one it checked, which is a genuine and very confusing bug."
+            },
+            {
+                question: "Why must <code>failures</code> preserve the order the tests were given in?",
+                options: [
+                    "The first failure is usually the cause and the ones after it are consequences",
+                    "Alphabetical order would be harder to generate",
+                    "The runner would be slower otherwise",
+                    "Test names must be unique and order enforces that"
+                ],
+                correct: 0,
+                explanation: "Failures read as a story. One broken fixture at the top produces nine failures below it, and the order is what tells you to fix the first and re-run rather than investigate all ten."
+            },
+            {
+                type: "predict-output",
+                code: "const summary = { passed: 0 };\nfunction run(tests) {\n  for (const t of tests) { t.fn(); summary.passed++; }\n  return summary;\n}\nrun([{ fn: () => {} }]);\nconsole.log(run([{ fn: () => {} }]).passed);",
+                answer: "2",
+                explanation: "The summary is declared outside the function, so the second call adds to the first one's answer. Calling it once looks perfect, which is why this survives — it is the same shared-state mistake as a counter declared outside a closure factory."
+            },
+            {
+                question: "What does a green test suite prove?",
+                options: [
+                    "That the cases someone thought to write behave as that person expected",
+                    "That the code has no bugs",
+                    "That the code matches its specification",
+                    "That every line of the code has been executed"
+                ],
+                correct: 0,
+                explanation: "It is a statement about the cases written, nothing more. This is not pessimism — it is what tells you where to spend effort: on the cases nobody would think of, which is what lesson 5 of this module is about."
+            },
+            {
+                type: "spot-the-bug",
+                question: "Every test in this suite passes, including against a completely empty implementation. Why?",
+                code: "1  test('checkAccess handles a revoked token', () => {\n2    const t = { revokedAt: '2026-08-15' };\n3    const result = checkAccess(t);\n4    // TODO: assert something\n5  });",
+                bugLine: 4,
+                options: ["Line 2", "Line 3", "Line 4"],
+                correct: 2,
+                explanation: "It arranges and acts and never asserts. The test passes because nothing threw, and it will keep passing forever — a test with no assertion is a test that reports on the health of the test runner."
+            },
+            {
+                question: "Which of these is the better test name?",
+                options: [
+                    "\"revoking beats pausing when both are true\"",
+                    "\"test checkAccess precedence\"",
+                    "\"checkAccess works correctly\"",
+                    "\"test case 7\""
+                ],
+                correct: 0,
+                explanation: "It states a claim about the system that can be true or false. When it fails at 2am you know what broke before opening the file — and if you cannot write a sentence like that, the test usually does not know what it is checking either."
+            },
+            {
+                type: "which-breaks",
+                question: "Which of these runner loops stops early on the first failing test?",
+                variants: [
+                    "for (const t of tests) { try { t.fn(); pass++; } catch { fail++; } }",
+                    "try { for (const t of tests) { t.fn(); pass++; } } catch { fail++; }",
+                    "tests.forEach(t => { try { t.fn(); pass++; } catch { fail++; } });"
+                ],
+                correct: 1,
+                explanation: "With the try outside the loop, the first throw exits the loop and everything after it is never attempted — reported as a single failure, which understates the damage. The other two contain the throw to one test. The difference is four characters of indentation and it is the entire behaviour."
+            },
+            {
+                type: "predict-output",
+                code: "function runTests(tests) {\n  let passed = 0;\n  for (const t of tests) { try { t.fn(); passed++; } catch (e) {} }\n  return passed;\n}\nconsole.log(runTests([{ fn: () => {} }, { fn: () => { throw new Error('x'); } }, { fn: () => {} }]));",
+                answer: "2",
+                explanation: "Two of the three pass and the failure is swallowed. Note what this runner does NOT report: which test failed, or why. A count with no failure list makes you go and find them yourself, which is the job you were trying to automate."
+            },
+            {
+                question: "Why is a test that reports its failure by returning <code>false</code> a bad fit for <code>assert</code>?",
+                options: [
+                    "assert reports failure by throwing, and a successful assertion returns undefined",
+                    "assert cannot be used inside a function",
+                    "Returning false is slower",
+                    "assert only works with async tests"
+                ],
+                correct: 0,
+                explanation: "A test body full of assertions returns undefined when everything passes. A runner that treats the return value as the verdict marks every one of those as a failure — and the fix is to decide on throw versus no-throw instead."
+            },
+            {
+                question: "What is the honest one-line summary of what a test suite buys you?",
+                options: [
+                    "The freedom to change code without re-checking by hand what you already checked once",
+                    "Proof that the code is correct",
+                    "Fewer bugs in the first version",
+                    "A way to satisfy a code review requirement"
+                ],
+                correct: 0,
+                explanation: "The value shows up on the second change, not the first. Writing the test costs more than the manual check it replaces; it pays for itself the fourth time you alter that function and want to know in one second whether anything moved."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the line that makes one exploding test unable to silence the rest.",
+                code: "for (const t of tests) {\n  ___ {\n    t.fn();\n    summary.passed++;\n  } catch (err) {\n    summary.failed++;\n  }\n}",
+                answer: "try",
+                explanation: "Inside the loop, not around it. This is the whole design requirement of the exercise: a failing test must not be able to take another test with it."
+            },
+            {
+                question: "A suite prints \"37 passed, 3 failed\" and nothing else. What is missing?",
+                options: [
+                    "Which three failed and what each one got, without which you must go and find them",
+                    "The total, which cannot be derived",
+                    "The time each test took",
+                    "Nothing — counts are what a summary is for"
+                ],
+                correct: 0,
+                explanation: "A count tells you a suite is red. Names and messages tell you where to look. The runner in this lesson returns a failures array for exactly this reason, and it is the thing people leave out when writing one from scratch."
+            },
+            {
+                type: "predict-output",
+                code: "const t = { revokedAt: null, isPaused: true, timesUsed: 5, maxUses: 5 };\nfunction checkAccess(x) {\n  if (x.revokedAt !== null) return 'revoked';\n  if (x.timesUsed >= x.maxUses) return 'limit reached';\n  if (x.isPaused) return 'paused';\n  return 'allowed';\n}\nconsole.log(checkAccess(t));",
+                answer: "limit reached",
+                explanation: "The rules are correct individually and in the wrong order. The specified answer is 'paused', because pausing is rule 2 and the limit is rule 3. This exact function passed a full green suite in this course, because no test gave it a token in two states at once."
+            },
+            {
+                question: "You are testing a function whose behaviour is \"these four rules, in this order\". How many cases does the precedence itself need?",
+                options: [
+                    "One for each pair of rules that can be true at the same time",
+                    "One, showing the first rule wins",
+                    "Four, one per rule",
+                    "None — testing each rule separately covers it"
+                ],
+                correct: 0,
+                explanation: "Order is invisible until two rules apply at once, so the cases come from the pairs, not the rules. You find them by reading the order and asking which combinations are reachable — not by imagining user scenarios, which is how the unreachable ones get written and the reachable ones get missed."
+            },
+            {
+                question: "Why does this lesson say you have already been writing tests?",
+                options: [
+                    "The self-check under every exercise arranges, acts, asserts and reports what it got",
+                    "Because the quizzes are a form of test",
+                    "Because the browser validates the code as you type",
+                    "Because the audit script checks every lesson"
+                ],
+                correct: 0,
+                explanation: "It is the same three parts with a different name, and recognising that is most of the learning curve. What the real runner adds is discovery, reporting and exit codes — not a new idea about what a test is."
+            }
+        ]);
+    </script>
+
+    <div class="lesson-nav">
+        <a href="./README.html">&larr; C1 &mdash; Testing &amp; Quality</a>
+        <span class="disabled">Next: Time, Randomness and Fakes &rarr;</span>
+    </div>
+
+</body>
+</html>

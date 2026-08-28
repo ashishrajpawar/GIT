@@ -11,16 +11,16 @@ with this one, this one is right — everything below is measured, not asserted.
 
 | Metric | Value |
 |---|---|
-| Token-track lessons | 103 |
+| Token-track lessons | 104 |
 | Founder-track lessons (F1, counted separately) | 16 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
-| Quiz questions (track) | 2808 |
-| Avg teaching prose per track lesson | 2229 words |
-| Lessons with a playground | 103 / 103 |
-| Lessons with an exercise | 103 / 103 |
-| **Deepened** (all 3 spine sections) | 16 / 103 |
-| **Verified** (code executed) | 103 / 103 |
-| Ran clean but had nothing to run | 0 / 103 |
+| Quiz questions (track) | 2834 |
+| Avg teaching prose per track lesson | 2220 words |
+| Lessons with a playground | 104 / 104 |
+| Lessons with an exercise | 104 / 104 |
+| **Deepened** (all 3 spine sections) | 16 / 104 |
+| **Verified** (code executed) | 104 / 104 |
+| Ran clean but had nothing to run | 0 / 104 |
 | Errors | 0 |
 | Known and blocked | 0 |
 | Warnings | 2 |
@@ -30,12 +30,12 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 ## Answer-position distribution — **authored order, not what the student sees**
 
-1514 keyed questions (multiple-choice, spot-the-bug, which-breaks).
+1531 keyed questions (multiple-choice, spot-the-bug, which-breaks).
 
 > **This clustering is expected and already handled. Do not "fix" it again.**
 > `quiz.js` shuffles options at render time (`optionDisplayOrder`), so the
 > displayed distribution is roughly even — measured at 26.9 / 28.5 / 26.9 / 17.6
-> across all 1514 questions, versus the authored figures below. Index 3 sits
+> across all 1531 questions, versus the authored figures below. Index 3 sits
 > lower only because many questions have three options.
 >
 > The numbers here read `correct` straight from the lesson data, which is
@@ -54,21 +54,21 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Position | Count | Share |
 |---|---|---|
-| index 0 | 184 | 12.2% |
-| index 1 | 949 | 62.7% |
-| index 2 | 347 | 22.9% |
+| index 0 | 197 | 12.9% |
+| index 1 | 952 | 62.2% |
+| index 2 | 348 | 22.7% |
 | index 3 | 34 | 2.2% |
 
 ## Question types
 
 | Type | Count |
 |---|---|
-| multiple-choice | 849 |
-| predict-output | 546 |
-| fill-blank | 467 |
-| spot-the-bug | 380 |
-| which-breaks | 285 |
-| order-steps | 281 |
+| multiple-choice | 862 |
+| predict-output | 552 |
+| fill-blank | 469 |
+| spot-the-bug | 382 |
+| which-breaks | 287 |
+| order-steps | 282 |
 
 ## Modules
 
@@ -97,6 +97,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b8-push-notifications | 1 | 3020 | 2 | 2 | 25 | 0/1 | 1/1 |
 | b9-docker-deployment | 3 | 3199 | 6 | 6 | 81 | 2/3 | 3/3 |
 | c0-architecture | 2 | 1477 | 10 | 2 | 57 | 0/2 | 2/2 |
+| c1-testing-quality | 1 | 1371 | 4 | 1 | 26 | 0/1 | 1/1 |
 | c5-end-to-end-encryption | 5 | 1671 | 10 | 10 | 126 | 0/5 | 5/5 |
 | x1-git-dev-environment | 3 | 1202 | 4 | 6 | 83 | 0/3 | 3/3 |
 | x2-debugging | 2 | 1242 | 3 | 4 | 50 | 0/2 | 2/2 |
@@ -140,7 +141,8 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Quiz structure valid | ok |
 | Tables queried but never created | ok |
 | Broken relative links | ok |
-| search-index.json | 120 entries, 0 dead, 0 unindexed |
+| Widgets defined before they are called | ok |
+| search-index.json | 121 entries, 0 dead, 0 unindexed |
 | Example tokens valid under alphabet | 2 invalid |
 
 ## Errors
@@ -250,6 +252,7 @@ None.
 | b9-docker-deployment/0003-logs-backups-monitoring.html | 3263 | 17 | 2 | 2 | 29 | — | yes |
 | c0-architecture/0001-trust-boundaries.html | 1572 | 1 | 5 | 1 | 29 | — | yes |
 | c0-architecture/0002-decisions-that-survive.html | 1381 | 2 | 5 | 1 | 28 | — | yes |
+| c1-testing-quality/0001-what-a-test-is.html | 1371 | 5 | 4 | 1 | 26 | — | yes |
 | c5-end-to-end-encryption/0001-keys-on-the-device.html | 1371 | 5 | 2 | 2 | 26 | — | yes |
 | c5-end-to-end-encryption/0002-publishing-fetching-keys.html | 1782 | 3 | 2 | 2 | 25 | — | yes |
 | c5-end-to-end-encryption/0003-verification-safety-numbers.html | 1462 | 4 | 2 | 2 | 25 | — | yes |
