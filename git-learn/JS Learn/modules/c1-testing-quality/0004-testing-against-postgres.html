@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>C1 — Testing Against Real Postgres</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Testing &amp; Quality</a> &rsaquo;
+        <span>Testing Against Real Postgres</span>
+    </nav>
+
+    <h1>Testing Against Real Postgres</h1>
+    <p class="lesson-meta">C1 &mdash; Lesson 4 of 5 &nbsp;|&nbsp; ~50 min</p>
+
+    <div class="callout">
+        <div class="callout-title">Why this matters for Token</div>
+        <p>The last lesson handed the database to the handler as <code>findByCode</code>, and
+        everything got easy. That was honest as far as it went, and it moved the problem rather than
+        solving it: <strong>something still has to run the query, and the query is where a whole
+        class of Token's bugs actually live.</strong></p>
+        <p>Here is one that was in this course for months. The rules query has to be a
+        <code>LEFT JOIN</code>, and <code>enabled</code> has to sit in the join condition rather than
+        the <code>WHERE</code>. Both look like style. Both are load-bearing, and getting either wrong
+        means <strong>a token with no rules &mdash; the most permissive kind &mdash; is reported as
+        not existing at all</strong>, because the engine recognises &ldquo;no such token&rdquo; by
+        getting no rows.</p>
+        <p>No mock catches that. A mock returns whatever you told it to return, and what you told it
+        was your belief about the query &mdash; which is the thing that was wrong.</p>
+    </div>
+
+    <h2>1 &middot; The query is the part that is hard to get right</h2>
+
+    <p>The rules lookup, written the way it must be written:</p>
+
+    <pre><code>SELECT t.id, t.status, t.expires_at, t.max_uses,
+       r.id AS rule_id, r.rule_type, r.payload
+  FROM tokens t
+  LEFT JOIN access_rules r
+    ON r.token_id = t.id
+   AND r.enabled                 -- in the JOIN, not the WHERE
+ WHERE t.code_hash = $1;</code></pre>
+
+    <p>Two decisions, both invisible:</p>
+
+    <ul>
+        <li><strong><code>LEFT JOIN</code> rather than <code>JOIN</code>.</strong> An inner join
+        returns <em>no rows</em> for a token that has no rules. A left join returns one row with the
+        rule columns null.</li>
+        <li><strong><code>AND r.enabled</code> in the join condition.</strong> Moved into the
+        <code>WHERE</code>, it filters out the null row that the left join just produced &mdash;
+        doing exactly what the inner join did, for a token whose only rule is switched off.</li>
+    </ul>
+
+    <p>And the reason both matter is one line in the engine:</p>
+
+    <pre><code>if (rows.length === 0) return { allowed: false, reason: "no_such_token" };</code></pre>
+
+    <div class="callout warning">
+        <div class="callout-title">Deny-by-default makes both failures silent and total</div>
+        <p>A token with no restrictions at all is the most useful token in the product, and either
+        mistake turns it into one that does not exist. There is no error, no log, no exception
+        &mdash; the holder is told the code is invalid, and the user, looking at their own screen,
+        sees a healthy active token.</p>
+        <p>This is the general shape of a database bug: <strong>it is not a crash, it is a wrong
+        answer that the rest of the system faithfully acts upon.</strong> Which is why the query
+        needs a test, and the test needs a database.</p>
+    </div>
+
+    <h3>Try it yourself</h3>
+    <p>What the two joins hand back, for a token with no rules.</p>
+
+    <div id="pg-join-shape"></div>
+    <script>
+        createPlayground("pg-join-shape", `// Standing in for the database: one token, and its rules.
+const tokens = [{ id: "t1", status: "active", expires_at: null, max_uses: null }];
+const rules = [
+  { id: "r1", token_id: "t1", rule_type: "time_window", enabled: false }
+];
+
+function innerJoin() {
+  const out = [];
+  for (const t of tokens)
+    for (const r of rules)
+      if (r.token_id === t.id) out.push({ token: t.id, rule_id: r.id, enabled: r.enabled });
+  return out;
+}
+
+function leftJoin() {
+  const out = [];
+  for (const t of tokens) {
+    const matches = rules.filter((r) => r.token_id === t.id && r.enabled);
+    if (matches.length === 0) out.push({ token: t.id, rule_id: null, enabled: null });
+    else for (const r of matches) out.push({ token: t.id, rule_id: r.id, enabled: r.enabled });
+  }
+  return out;
+}
+
+// The engine's rule: no rows means no such token.
+const found = (rows) => rows.length > 0;
+
+console.log("inner join rows:", JSON.stringify(innerJoin()));
+console.log("  ...and WHERE enabled filters that to:", JSON.stringify(innerJoin().filter((r) => r.enabled)));
+console.log("  token found?", found(innerJoin().filter((r) => r.enabled)));
+console.log("left join rows:", JSON.stringify(leftJoin()));
+console.log("  token found?", found(leftJoin()));`);
+    </script>
+
+    <h2>2 &middot; Isolation: one transaction per test, rolled back</h2>
+
+    <p>Two tests sharing a database interfere, and the symptom is the worst one in testing:
+    <strong>tests that pass alone and fail together</strong>, or the reverse, depending on order.</p>
+
+    <p>The cheapest fix that actually works:</p>
+
+    <pre><code>import { test, before, beforeEach, afterEach } from "node:test";
+
+let client;
+
+before(async () =&gt; {
+  client = await pool.connect();
+  await migrate(client);          // once, for the whole run
+});
+
+beforeEach(async () =&gt; { await client.query("BEGIN"); });
+afterEach(async () =&gt;  { await client.query("ROLLBACK"); });
+
+test("a token with no rules is found", async () =&gt; {
+  await client.query("INSERT INTO tokens ...");
+  const rows = await findByCodeHash(client, "abc");
+  assert.equal(rows.length, 1);
+});</code></pre>
+
+    <p>Every test starts from the same database and leaves no trace. Nothing is deleted, because
+    nothing was ever committed &mdash; a rollback is faster than a <code>TRUNCATE</code> and cannot
+    forget a table someone added last week.</p>
+
+    <div class="callout">
+        <div class="callout-title">What this costs, stated plainly</div>
+        <p><strong>The test must use that client.</strong> Anything reaching for a connection of its
+        own is outside the transaction: it cannot see the rows the test inserted, and whatever it
+        writes survives the rollback. So the connection has to be a parameter, exactly like the
+        clock and the byte source in lesson 2 &mdash; same technique, third time.</p>
+        <p><strong>Real concurrency cannot be tested this way.</strong> Two simultaneous redemptions
+        of a one-use token is a question about two transactions, and it needs two connections. That
+        is a different and slower kind of test, and it is worth writing for exactly the few places
+        where <code>FOR UPDATE</code> is doing the work.</p>
+    </div>
+
+    <h2>3 &middot; Fixtures that lie</h2>
+
+    <p>Every self-check in this course has a helper like this:</p>
+
+    <pre><code>const DEFAULTS = { status: "active", expiresAt: null, maxUses: null, rules: [] };
+function makeToken(over) {
+  return Object.assign({}, DEFAULTS, over);
+}</code></pre>
+
+    <p>It is nearly right, and the flaw is one level down. <code>Object.assign</code> copies the
+    top level, so every token built without an explicit <code>rules</code> gets <strong>the same
+    array</strong>. One test pushes a rule onto its token, and the token in the next test has it
+    too.</p>
+
+    <h3>Try it yourself</h3>
+
+    <div id="pg-fixture-trap"></div>
+    <script>
+        createPlayground("pg-fixture-trap", `const DEFAULTS = { status: "active", expiresAt: null, maxUses: null, rules: [] };
+
+function shallow(over) { return Object.assign({}, DEFAULTS, over); }
+function deep(over) {
+  return Object.assign({}, DEFAULTS, { rules: DEFAULTS.rules.slice() }, over);
+}
+
+const a = shallow({});
+const b = shallow({});
+a.rules.push({ type: "time_window" });
+console.log("shallow: b has", b.rules.length, "rules, and nobody gave it any");
+console.log("  same array?", a.rules === b.rules);
+
+const c = deep({});
+const d = deep({});
+c.rules.push({ type: "time_window" });
+console.log("deep:    d has", d.rules.length, "rules");
+
+// The tell: the bug appears only when tests run in a particular order,
+// which is why it survives being 'reproduced' one test at a time.`);
+    </script>
+
+    <h2>4 &middot; The pure half, and it is the half that was wrong</h2>
+
+    <p>A query is two things joined together: fetching rows, which needs a database, and
+    <strong>turning rows into an object</strong>, which does not. The second half is where the
+    <code>LEFT JOIN</code> decision is finally interpreted &mdash; and it is a plain function.</p>
+
+    <pre><code>// A token with two rules comes back as two rows:
+{ token_id: "t1", status: "active", rule_id: "r1", rule_type: "time_window",    payload: {...} }
+{ token_id: "t1", status: "active", rule_id: "r2", rule_type: "contact_limit",  payload: {...} }
+
+// A token with NO rules comes back as one row, with the rule columns null:
+{ token_id: "t1", status: "active", rule_id: null, rule_type: null, payload: null }
+
+// A code nobody has ever issued comes back as nothing at all:
+// (no rows)</code></pre>
+
+    <p>Three shapes, three different answers, and only two of them are &ldquo;found&rdquo;.</p>
+
+    <h3>Try it yourself &mdash; broken on purpose</h3>
+
+    <div id="pg-broken"></div>
+    <script>
+        createPlayground("pg-broken", `function rowsToToken(rows) {
+  // Reads the first row to get the token's own columns.
+  const first = rows[0];
+  return {
+    id: first.token_id,
+    status: first.status,
+    rules: rows.filter((r) => r.rule_id !== null)
+  };
+}
+
+const withRules = [
+  { token_id: "t1", status: "active", rule_id: "r1", rule_type: "time_window" }
+];
+console.log(JSON.stringify(rowsToToken(withRules)));
+
+// A code nobody ever issued. This is the ordinary case, not the rare one.
+console.log(JSON.stringify(rowsToToken([])));
+
+// Fix it. The answer for "no rows" is not an empty token -- it is that
+// there is no token, and the caller has to be able to tell.`);
+    </script>
+
+    <h2>Now build it yourself</h2>
+
+    <div id="exercise-suite"></div>
+    <script>
+        createSolution("exercise-suite", {
+            unverifiable: "the suite connects to a running Postgres with the migrations applied, which this browser sandbox has no way to provide",
+            exercise:
+                "Write the test file for the rules query: <code>api/src/tokens.test.js</code>.<br><br>" +
+                "It must run the migrations once, wrap every test in a transaction that is rolled back afterwards, and pass the transaction's client into the function under test. Cover the three shapes: a token with two rules, a token with none, and a code that was never issued.<br><br>" +
+                "The case that matters most is the middle one &mdash; it is the case an inner join gets wrong, and it is the case nobody writes, because a token with no rules does not feel like a case.",
+            hints: [
+                "node:test gives you before, beforeEach and afterEach. Connect and migrate in before; BEGIN in beforeEach; ROLLBACK in afterEach. Nothing needs cleaning up because nothing is ever committed.",
+                "The function under test has to take the client as an argument. If it reaches for the pool itself it gets a different connection, which cannot see the rows your test inserted inside its transaction — the test then fails in a way that looks like the query is broken.",
+                "Assert on the SHAPE the query returns, not just on a count. The whole bug is that a token with no rules comes back as one row with null rule columns rather than as zero rows, so the assertion has to be that there is exactly one row and its rule_id is null."
+            ],
+            solution: `import { test, before, beforeEach, afterEach } from "node:test";
+import assert from "node:assert/strict";
+import pg from "pg";
+
+import { migrate } from "./migrate.js";
+import { findTokenRowsByHash } from "./tokens.js";
+
+const pool = new pg.Pool({ connectionString: process.env.TEST_DATABASE_URL });
+let client;
+
+before(async () => {
+  client = await pool.connect();
+  await migrate(client);
+});
+
+after(async () => {
+  client.release();
+  await pool.end();
+});
+
+// Every test runs inside a transaction that is thrown away, so the
+// database each one starts from is identical and no test can see
+// another's rows.
+beforeEach(async () => { await client.query("BEGIN"); });
+afterEach(async () => { await client.query("ROLLBACK"); });
+
+async function insertToken(over = {}) {
+  const row = { code_hash: "hash-1", status: "active", expires_at: null, max_uses: null, ...over };
+  const res = await client.query(
+    "INSERT INTO tokens (code_hash, status, expires_at, max_uses) VALUES ($1,$2,$3,$4) RETURNING id",
+    [row.code_hash, row.status, row.expires_at, row.max_uses]
+  );
+  return res.rows[0].id;
+}
+
+async function insertRule(tokenId, over = {}) {
+  const rule = { rule_type: "time_window", payload: {}, enabled: true, ...over };
+  await client.query(
+    "INSERT INTO access_rules (token_id, rule_type, payload, enabled) VALUES ($1,$2,$3,$4)",
+    [tokenId, rule.rule_type, rule.payload, rule.enabled]
+  );
+}
+
+test("a token with two rules comes back as two rows", async () => {
+  const id = await insertToken();
+  await insertRule(id, { rule_type: "time_window" });
+  await insertRule(id, { rule_type: "contact_limit" });
+
+  const rows = await findTokenRowsByHash(client, "hash-1");
+
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows.map((r) => r.rule_type).sort(), ["contact_limit", "time_window"]);
+});
+
+// The case an inner join gets wrong, and the one nobody writes.
+test("a token with NO rules is still found, as one row with null rule columns", async () => {
+  await insertToken();
+
+  const rows = await findTokenRowsByHash(client, "hash-1");
+
+  assert.equal(rows.length, 1, "an inner join returns 0 here and the engine reads that as no such token");
+  assert.equal(rows[0].rule_id, null);
+});
+
+// The same failure, reached the other way: enabled in the WHERE clause
+// filters away the null row the LEFT JOIN produced.
+test("a token whose only rule is disabled is still found", async () => {
+  const id = await insertToken();
+  await insertRule(id, { enabled: false });
+
+  const rows = await findTokenRowsByHash(client, "hash-1");
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].rule_id, null);
+});
+
+test("a code that was never issued comes back as no rows at all", async () => {
+  const rows = await findTokenRowsByHash(client, "hash-nobody-issued");
+  assert.equal(rows.length, 0);
+});
+
+test("one test cannot see another test's rows", async () => {
+  const rows = await findTokenRowsByHash(client, "hash-1");
+  assert.equal(rows.length, 0, "a previous test inserted hash-1 and its transaction was rolled back");
+});`
+        });
+    </script>
+
+    <div id="exercise-rows"></div>
+    <script>
+        createSolution("exercise-rows", {
+            exercise:
+                "Write <code>rowsToToken(rows)</code> &mdash; the half of the query that needs no database.<br><br>" +
+                "Each row has <code>token_id</code>, <code>status</code>, <code>expires_at</code>, <code>max_uses</code>, and the rule columns <code>rule_id</code>, <code>rule_type</code>, <code>payload</code>. The token's own columns repeat on every row.<br><br>" +
+                "1. <strong>No rows means no token.</strong> Return <code>null</code>. This is how the caller tells &ldquo;never issued&rdquo; from &ldquo;issued and unrestricted&rdquo;, and getting it wrong makes those two the same thing.<br>" +
+                "2. Otherwise return <code>{ id, status, expiresAt, maxUses, rules }</code>, taking the token's columns from the first row.<br>" +
+                "3. <code>rules</code> holds one entry per row with a non-null <code>rule_id</code>, as <code>{ id, type, payload }</code>, in row order. A single row with <code>rule_id: null</code> is a token with <strong>no</strong> rules, not a token with one null rule.<br>" +
+                "4. Carry rules of <strong>every</strong> type through, including a <code>rule_type</code> you do not recognise. Refusing an unknown rule is the engine's job and it cannot refuse what it cannot see.<br>" +
+                "5. Do not modify <code>rows</code>.",
+            hints: [
+                "Rule 1 is the first line and it is an early return, not a special case at the end. Everything below it may then assume rows[0] exists — which is the same shape as the null guard in lesson 2.",
+                "Rules 2 and 3 read from different places: the token's fields come from rows[0] because they repeat, and the rules come from all the rows. Watch the null conventions — max_uses of 0 and expires_at of null must survive, so copy the values across rather than defaulting them with || .",
+                "Rule 4 is a warning about a helpful line you might otherwise write: filtering rules down to the three types you know about makes an unrecognised rule invisible, and an invisible rule is one the engine silently permits."
+            ],
+            solution: `function rowsToToken(rows) {
+  // No rows is not an empty token. It is no token, and the caller has to
+  // be able to tell the difference -- deny-by-default depends on it.
+  if (rows.length === 0) return null;
+
+  const first = rows[0];
+
+  return {
+    id: first.token_id,
+    status: first.status,
+    // Copied straight across: max_uses 0 is a real limit and expires_at
+    // null means never, so neither may be defaulted away.
+    expiresAt: first.expires_at,
+    maxUses: first.max_uses,
+    // A LEFT JOIN gives one row with null rule columns when there are no
+    // rules. That row is the token, not a rule.
+    rules: rows
+      .filter((row) => row.rule_id !== null)
+      .map((row) => ({ id: row.rule_id, type: row.rule_type, payload: row.payload }))
+  };
+}`
+        });
+    </script>
+
+    <div id="pg-exercise-rows"></div>
+    <script>
+        createPlayground("pg-exercise-rows", `// --- Write rowsToToken(rows) here, then press Run ---
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label);
+  if (!passed && detail) console.log("      " + detail);
+}
+
+function row(over) {
+  return Object.assign({
+    token_id: "t1", status: "active", expires_at: null, max_uses: null,
+    rule_id: null, rule_type: null, payload: null
+  }, over);
+}
+
+try {
+  // Rule 1, and the reason the whole lesson exists.
+  check("no rows means no token",
+    rowsToToken([]) === null,
+    "got: " + JSON.stringify(rowsToToken([])) +
+    " - an empty token here makes 'never issued' and 'unrestricted' the same thing");
+
+  // Rule 3: one row with null rule columns is a token with no rules.
+  const bare = rowsToToken([row({})]);
+  check("a token with no rules is still a token",
+    bare !== null && bare.id === "t1",
+    "got: " + JSON.stringify(bare));
+  check("...and its rules are an empty array",
+    Array.isArray(bare.rules) && bare.rules.length === 0,
+    "got: " + JSON.stringify(bare.rules) +
+    " - the null row is the token, not a rule");
+
+  const two = rowsToToken([
+    row({ rule_id: "r1", rule_type: "time_window", payload: { days: [1, 2] } }),
+    row({ rule_id: "r2", rule_type: "contact_limit", payload: { max_messages_per_day: 5 } })
+  ]);
+  check("two rule rows become two rules",
+    two.rules.length === 2, "got: " + JSON.stringify(two.rules));
+  check("rules keep their row order",
+    two.rules[0].id === "r1" && two.rules[1].id === "r2",
+    "got: " + two.rules.map(function (r) { return r.id; }).join(","));
+  check("a rule carries id, type and payload",
+    two.rules[0].type === "time_window" &&
+    JSON.stringify(two.rules[0].payload) === JSON.stringify({ days: [1, 2] }),
+    "got: " + JSON.stringify(two.rules[0]));
+  check("the token's own columns come from the rows",
+    two.id === "t1" && two.status === "active",
+    "got: " + JSON.stringify({ id: two.id, status: two.status }));
+
+  // Rule 4. Filtering to the types you know about hides a rule the engine
+  // must refuse, and a rule it cannot see is one it silently permits.
+  const odd = rowsToToken([row({ rule_id: "r9", rule_type: "cooldown", payload: {} })]);
+  check("an unrecognised rule type is carried through, not dropped",
+    odd.rules.length === 1 && odd.rules[0].type === "cooldown",
+    "got: " + JSON.stringify(odd.rules) +
+    " - refusing an unknown rule is the engine's job, and it cannot refuse what it cannot see");
+
+  // The two null conventions, again.
+  const zero = rowsToToken([row({ max_uses: 0 })]);
+  check("max_uses of 0 survives as 0, not as null",
+    zero.maxUses === 0,
+    "got: " + JSON.stringify(zero.maxUses) + " - 0 is falsy and means no uses at all");
+
+  const never = rowsToToken([row({ expires_at: null })]);
+  check("expires_at of null survives as null",
+    never.expiresAt === null,
+    "got: " + JSON.stringify(never.expiresAt));
+
+  const dated = rowsToToken([row({ expires_at: "2027-01-01T00:00:00Z", max_uses: 3 })]);
+  check("a real expiry and limit are carried across",
+    dated.expiresAt === "2027-01-01T00:00:00Z" && dated.maxUses === 3,
+    "got: " + JSON.stringify({ expiresAt: dated.expiresAt, maxUses: dated.maxUses }));
+
+  // Rule 5. Snapshot BEFORE the first call, or an earlier mutation has
+  // already happened and comparing afterwards proves nothing.
+  const input = [row({ rule_id: "r1", rule_type: "time_window", payload: {} }), row({})];
+  const before = JSON.stringify(input);
+  rowsToToken(input);
+  check("the input rows are not modified",
+    JSON.stringify(input) === before,
+    "rows changed to: " + JSON.stringify(input));
+
+  // Mixed: a token whose rules arrive alongside nothing unusual.
+  const mixed = rowsToToken([
+    row({ rule_id: "r1", rule_type: "channel_restrict", payload: { allow_text: true } }),
+    row({ rule_id: "r2", rule_type: "time_window", payload: {} }),
+    row({ rule_id: "r3", rule_type: "contact_limit", payload: {} })
+  ]);
+  check("three rules, three entries, none invented",
+    mixed.rules.length === 3 &&
+    mixed.rules.every(function (r) { return r.id !== null && r.type !== null; }),
+    "got: " + JSON.stringify(mixed.rules));
+} catch (err) {
+  console.log("FAIL  " + err.name + ": " + err.message);
+  console.log("      Usually this means rowsToToken is missing or misspelt,");
+  console.log("      or it read rows[0] before checking that there is one.");
+}`);
+    </script>
+
+    <h2>Explain it in your own words</h2>
+    <div id="explain-0004"></div>
+    <script>
+        createExplain("explain-0004", {
+            prompt: "A colleague replaces the database in the rules test with a mock that returns two rule rows, and the test passes. Explain what that test now proves, what it cannot prove, and why the <code>LEFT JOIN</code> bug in particular is invisible to it."
+        });
+    </script>
+
+    <div id="lesson-quiz"></div>
+    <script>
+        createQuiz("lesson-quiz", [
+            {
+                question: "Why does mocking the database fail to catch the rules-join bug?",
+                options: [
+                    "A mock returns your belief about what the query does, which is the thing that is wrong",
+                    "Mocks cannot represent null columns",
+                    "Mocks are too slow to run the query",
+                    "The bug is in the connection pool rather than the query"
+                ],
+                correct: 0,
+                explanation: "You write the mock from your mental model. If the model were right the query would be too. That is the general limit of mocking anything you are also the author of."
+            },
+            {
+                question: "What does an inner join return for a token that has no rules?",
+                options: [
+                    "No rows at all",
+                    "One row with the rule columns null",
+                    "One row per rule that could have existed",
+                    "An error"
+                ],
+                correct: 0,
+                explanation: "An inner join emits a row only where both sides match, and there is nothing on the rules side. The left join is what produces the single row with null rule columns — the row that says 'this token exists and has nothing attached'."
+            },
+            {
+                question: "Why does <code>enabled</code> belong in the join condition rather than the WHERE clause?",
+                options: [
+                    "In the WHERE it removes the null row the left join produced, undoing the left join",
+                    "It is faster in the join condition",
+                    "The WHERE clause cannot reference joined tables",
+                    "It makes the query easier to read"
+                ],
+                correct: 0,
+                explanation: "The left join produces a row with null rule columns; a WHERE on r.enabled evaluates null as not-true and drops it. Two different-looking mistakes, one identical outcome: a token that exists is reported as not existing."
+            },
+            {
+                question: "What happens in Token when the rules query returns no rows for a token that exists?",
+                options: [
+                    "The engine reads it as no such token and denies the holder, with no error anywhere",
+                    "The engine throws and the request 500s",
+                    "The token is treated as unrestricted and allowed",
+                    "The query is retried without the join"
+                ],
+                correct: 0,
+                explanation: "rows.length === 0 is how 'not found' is recognised. Deny-by-default then does its job perfectly on a wrong input: the holder sees an invalid code and the user sees a healthy token, and nothing is logged because nothing went wrong."
+            },
+            {
+                type: "predict-output",
+                code: "const rows = [];\nfunction rowsToToken(rows) { return { id: rows[0].token_id }; }\ntry { rowsToToken(rows); } catch (e) { console.log(e.constructor.name); }",
+                answer: "TypeError",
+                explanation: "Reading a property of undefined. This is the friendly version of the bug — it crashes. The dangerous version returns an empty token, which the caller then treats as a real one."
+            },
+            {
+                question: "Why run every test inside a transaction that is rolled back?",
+                options: [
+                    "Every test starts from an identical database and leaves no trace, without deleting anything",
+                    "It makes the queries faster",
+                    "Postgres requires a transaction for reads",
+                    "It prevents deadlocks between tests"
+                ],
+                correct: 0,
+                explanation: "A rollback is cheaper than a TRUNCATE and cannot forget a table someone added last week. It also fails safe: if a test crashes mid-way, nothing it wrote was ever committed."
+            },
+            {
+                question: "What must the function under test accept for the transaction pattern to work?",
+                options: [
+                    "The transaction's client, as a parameter",
+                    "The name of the current test",
+                    "A flag telling it that it is running in a test",
+                    "A separate read-only pool"
+                ],
+                correct: 0,
+                explanation: "A function that reaches for the pool itself gets a different connection, outside the transaction — it cannot see the test's rows and its own writes survive the rollback. Same technique as passing the clock and the byte source, met a third time."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This fixture helper makes tests fail depending on the order they run in. Where?",
+                code: "1  const DEFAULTS = { status: 'active', rules: [] };\n2  function makeToken(over) {\n3    return Object.assign({}, DEFAULTS, over);\n4  }",
+                bugLine: 3,
+                options: ["Line 1", "Line 3", "Line 4"],
+                correct: 1,
+                explanation: "Object.assign copies the top level only, so every token built without an explicit rules array shares the one on DEFAULTS. A push in one test is visible in the next — and reproducing it one test at a time makes it disappear."
+            },
+            {
+                type: "predict-output",
+                code: "const D = { rules: [] };\nconst a = Object.assign({}, D);\nconst b = Object.assign({}, D);\na.rules.push('x');\nconsole.log(b.rules.length, a.rules === b.rules);",
+                answer: "1 true",
+                explanation: "Two 'separate' fixtures holding one array. The count on b is the surprise; the identity check is the explanation. A slice() or a fresh literal per call fixes it."
+            },
+            {
+                question: "Which case does a test suite for this query almost always miss?",
+                options: [
+                    "The token that has no rules at all",
+                    "The token with two rules",
+                    "The code that was never issued",
+                    "The token that is revoked"
+                ],
+                correct: 0,
+                explanation: "It does not feel like a case — nothing is set up, so there seems to be nothing to test. It is the exact case both join mistakes get wrong, and it is the most permissive and most common kind of token in the product."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the first line of rowsToToken.",
+                code: "if (rows.length === 0) return ___;",
+                answer: "null",
+                explanation: "Returning null is what lets the caller tell 'never issued' from 'issued and unrestricted'. An empty object collapses those two into one, and the collapse is silent."
+            },
+            {
+                question: "A single row arrives with <code>rule_id: null</code>. What does it mean?",
+                options: [
+                    "The token exists and has no enabled rules",
+                    "The token has one rule whose id is missing",
+                    "The query failed",
+                    "The token does not exist"
+                ],
+                correct: 0,
+                explanation: "It is the left join's way of saying 'here is the left side, nothing matched on the right'. Turning it into a rule with a null type gives the engine a rule it cannot evaluate, which is the next bug along."
+            },
+            {
+                question: "Why must <code>rowsToToken</code> carry through a rule type it does not recognise?",
+                options: [
+                    "Refusing an unknown rule is the engine's job, and it cannot refuse what it never sees",
+                    "Unknown rule types are always safe to apply",
+                    "The database guarantees only known types exist",
+                    "It keeps the function shorter"
+                ],
+                correct: 0,
+                explanation: "Filtering to the types you know about is the helpful line that turns an unenforceable restriction into no restriction at all. Token's engine had exactly this defect once, with an unknown type falling through to allowed."
+            },
+            {
+                type: "which-breaks",
+                question: "Which of these loses a max_uses of 0?",
+                variants: [
+                    "maxUses: first.max_uses",
+                    "maxUses: first.max_uses || null",
+                    "maxUses: first.max_uses === undefined ? null : first.max_uses"
+                ],
+                correct: 1,
+                explanation: "0 is falsy, so || replaces it with null — and null means unlimited. A token issued to permit no uses becomes one that permits any number, which is the most damaging direction this particular mistake can go."
+            },
+            {
+                question: "Why does the self-check snapshot the input rows BEFORE calling the function?",
+                options: [
+                    "Taken afterwards, a mutation has already happened and the comparison proves nothing",
+                    "It makes the test faster",
+                    "JSON.stringify cannot be called twice on the same object",
+                    "The rows are frozen after the first call"
+                ],
+                correct: 0,
+                explanation: "The snapshot has to be of the original state. Comparing two post-call snapshots compares a mutated object with itself, which passes for every implementation including the ones that scribble all over their input."
+            },
+            {
+                type: "order-steps",
+                question: "Put the lifecycle of one database test in order.",
+                steps: [
+                    "Connect and run the migrations, once for the whole file",
+                    "BEGIN, before each test",
+                    "Insert the rows this test needs and run the query",
+                    "ROLLBACK, after each test"
+                ],
+                correctOrder: [0, 1, 2, 3],
+                explanation: "Migrations belong outside the transaction and outside the per-test cycle — running them per test is slow and, if they are wrapped in the rollback, pointless."
+            },
+            {
+                question: "What kind of test can the transaction-per-test pattern NOT do?",
+                options: [
+                    "Anything about two transactions at once, like two simultaneous redemptions of a one-use token",
+                    "Anything involving joins",
+                    "Anything that inserts rows",
+                    "Anything using parameterised queries"
+                ],
+                correct: 0,
+                explanation: "Concurrency is a question about two connections, and this pattern has one on purpose. It is worth writing the slower two-connection test for the few places FOR UPDATE is carrying the weight — the redemption count is one."
+            },
+            {
+                type: "predict-output",
+                code: "const rows = [\n  { rule_id: 'r1', rule_type: 'time_window' },\n  { rule_id: null, rule_type: null }\n];\nconsole.log(rows.filter(r => r.rule_id !== null).length);",
+                answer: "1",
+                explanation: "The null row is filtered out. Note the filter is on rule_id rather than on rule_type — either works here, and rule_id is the column the join is actually keyed on, so it stays right if a rule type is ever allowed to be null."
+            },
+            {
+                question: "Splitting the query into 'fetch rows' and 'turn rows into an object' buys what, exactly?",
+                options: [
+                    "The interpretation of the join becomes a plain function that needs no database to test",
+                    "The query runs faster",
+                    "The database can be swapped for another engine",
+                    "It removes the need for a database test"
+                ],
+                correct: 0,
+                explanation: "It does not remove the need for the database test — the join itself still has to be checked against a real Postgres. What it buys is that the half where the three row-shapes are interpreted can be tested exhaustively and instantly."
+            },
+            {
+                question: "Where does the token's own <code>status</code> come from when there are three rule rows?",
+                options: [
+                    "The first row — the token's columns repeat identically on every row",
+                    "The last row, which is the most recent",
+                    "It must be merged across the rows",
+                    "A separate query"
+                ],
+                correct: 0,
+                explanation: "A join repeats the left side once per match. Any row would do; taking the first is the convention, and it is the reason the empty-rows guard has to come before anything reads rows[0]."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This turns a token with no rules into a token with one broken rule. Where?",
+                code: "1  return {\n2    id: first.token_id,\n3    rules: rows.map((r) => ({ id: r.rule_id, type: r.rule_type }))\n4  };",
+                bugLine: 3,
+                options: ["Line 2", "Line 3", "Line 4"],
+                correct: 1,
+                explanation: "map over every row, including the null one from the left join, so the token comes back with a rule whose type is null. The engine then has a rule it cannot evaluate — and what it does with that is the difference between refusing and permitting."
+            },
+            {
+                question: "The suite exercise in this lesson is marked as not runnable here. Why is that acceptable?",
+                options: [
+                    "It genuinely needs a Postgres, and the plain function beside it is fully tested instead",
+                    "Database code cannot be tested at all",
+                    "The suite is illustrative and does not need to work",
+                    "It will be replaced by mocks later"
+                ],
+                correct: 0,
+                explanation: "The rule in this course is that at least one exercise must actually execute. Excusing the part that needs a database while testing the part that does not is the pattern — and the reflex to call a whole lesson unrunnable has been wrong far more often than it has been right."
+            },
+            {
+                question: "What is the honest cost of testing against a real database?",
+                options: [
+                    "The tests are slower and need a database available to run at all",
+                    "They cannot be run in CI",
+                    "They cannot test failure cases",
+                    "They require production data"
+                ],
+                correct: 0,
+                explanation: "Milliseconds instead of microseconds, and a service to start. That is the whole bill, and it buys the only tests that can see what the query actually does — which is where a specific and silent family of bugs lives."
+            },
+            {
+                type: "predict-output",
+                code: "const first = { max_uses: 0, expires_at: null };\nconsole.log(first.max_uses || null, first.max_uses ?? null);",
+                answer: "null 0",
+                explanation: "|| replaces every falsy value; ?? replaces only null and undefined. For a column where 0 and null mean opposite things, that difference is the whole correctness of the field."
+            },
+            {
+                question: "Two tests pass alone and fail when run together. What is the most likely cause?",
+                options: [
+                    "Shared state — a fixture object or database rows surviving from one test into the next",
+                    "A race condition in the database driver",
+                    "Insufficient timeouts",
+                    "The test runner executing them in parallel"
+                ],
+                correct: 0,
+                explanation: "Order-dependent failure is the signature of shared state. The two usual sources are a fixture default whose nested value is shared, and rows that were committed rather than rolled back — this lesson has one of each."
+            },
+            {
+                question: "What is the single most valuable test in this lesson's suite?",
+                options: [
+                    "That a token with no rules comes back as one row rather than none",
+                    "That a token with two rules comes back as two rows",
+                    "That a never-issued code comes back as no rows",
+                    "That the migrations run"
+                ],
+                correct: 0,
+                explanation: "It is the assertion both join mistakes fail and the one nobody writes unprompted. The other cases are true of the wrong query as well, which is what makes them comfortable to write and much less useful."
+            }
+        ]);
+    </script>
+
+    <div class="lesson-nav">
+        <a href="./0003-testing-http-handlers.html">&larr; Testing an HTTP Handler</a>
+        <span class="disabled">Next: What to Test &rarr;</span>
+    </div>
+
+</body>
+</html>
