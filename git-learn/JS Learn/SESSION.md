@@ -40,6 +40,8 @@ this section records is only what a script cannot compute:
   none.
 - **`known-issues.json` is empty.** Nothing gated, deferred or carried.
 - **Every module that exists is complete**, including the two written this week.
+- **Every self-check in the course now has `--wrong` cases.** W2 closed
+  2026-08-28. Nothing is left in the maintenance tail.
 
 ### What landed 2026-08-26 → 28
 
@@ -93,9 +95,9 @@ fill the angle brackets and send. The folder README has the send order.
 
 **Writing side — `W1` continues, one module at a time.** C0 landed; **eight
 C-modules remain**: C1, C2, C3, C4, C6, C7, C8, C9. Written just-in-time, never
-batched. `W2` is a small maintenance tail worth doing between larger units:
-`--wrong` cases for the seven lessons that have a self-check and none —
-`01/0001`–`0005`, `a11/0002`, `a8/0002`.
+batched. **C1 — Testing & Quality is the next one**, per the module table in
+`TOKEN-TRACK.md`. `W2` is closed and there is no maintenance tail left to slot
+between units.
 
 ---
 
@@ -137,7 +139,7 @@ Per-item status only. The plan is in `TOKEN-TRACK.md`; the counts are in
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
 | M3 — the plain function in Track A/B lessons | **closed 2026-08-25.** No lesson carries a whole-lesson `unverifiable` flag. The reflex to call a lesson unrunnable was wrong 22 times out of 22 |
-| Maintenance tail | **open, small.** Seven lessons have a self-check and no `--wrong` cases. Queue item **W2** |
+| Maintenance tail | **closed 2026-08-28.** The queue said seven lessons; the real number was **five** — `a11/0002` and `a8/0002` had cases already and the note was never trimmed. Every self-check in the course now has wrong-cases, and the fifth one found a real hole: `01/0004` passed a `checkAccess` with the use-limit ahead of the pause |
 | **F1 — the founder track** | **written 2026-08-26**, 16 lessons. 18 decisions settled 2026-08-27; three left open with gates |
 
 ### Launch execution — the F1 queue

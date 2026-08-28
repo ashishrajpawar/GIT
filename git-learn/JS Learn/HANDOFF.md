@@ -4221,3 +4221,75 @@ Audit green and six suites pass; the counts are in `PROGRESS.md`, which this
 file does not restate. Course repo pushed; **the token repo has no remote and
 never has**, which is now stated in `CLAUDE.md` and `SESSION.md` rather than
 being a surprise.
+
+---
+
+### Session of 2026-08-28 — the maintenance tail, and the check that could not see the second half of its own rule
+
+**W2 is closed.** Every self-check in the course now has `--wrong` cases:
+`01/0001`–`0005` were written today, and the tail is empty.
+
+#### The list was wrong, and the way it was wrong is the point
+
+The queue said seven lessons. The real number was **five**. `a11/0002` and
+`a8/0002` had had cases for days; nobody trimmed the note, so the backlog
+described work that was finished — the same failure mode as *"Modules 1 and 2
+complete"*, one size smaller, in the file that says what to do next.
+
+It took one script to find out: walk `modules/` for a page containing
+`Self-check`, look for `scripts/cases/<lesson>.mjs`, print the difference. That
+is thirty seconds against a note that had been wrong for days, and it is the
+general lesson this project keeps relearning — **a hand-maintained list of what
+is left is a claim, and a claim is checkable.**
+
+#### `01/0004` was passing a wrong answer, and had been since it was written
+
+`checkAccess` has four rules in a fixed order. The self-check tested the
+precedence pair *revoked beats paused* and stopped there — so this
+implementation passed all six checks:
+
+```js
+if (token.revokedAt !== null)            return "revoked";
+else if (token.timesUsed >= token.maxUses) return "limit reached";
+else if (token.isPaused === true)          return "paused";
+else                                       return "allowed";
+```
+
+Every single-state token comes out right. Only a token that is **paused *and*
+at its limit** is wrong, and it reports "limit reached" — a state the user
+cannot clear — hiding the Resume button that would actually fix it. That is the
+`a5/0003` badge-precedence bug, met for the first time in lesson four of the
+course, and the exercise's own text says *"the order matters"* while checking
+one third of the order.
+
+A seventh check was added: **paused BEATS the limit when both are true.** The
+wrong-case then trips it, as it should.
+
+Five self-checks in Phase 1.5 passed a wrong answer by coincidence and this is
+another, so the pattern holds exactly: **the check tests the case its author was
+thinking about, and the case they were not thinking about is the bug.** A
+precedence rule with four positions has three adjacent pairs, and testing one of
+them is not testing precedence.
+
+#### What the new cases deliberately do not do
+
+Two blind spots are documented in the case files rather than closed:
+
+- `01/0001` cannot see `const timesUsed = 3` written directly — the exercise
+  asks for a variable that *starts* at 0 and *changes*, which is a history, and
+  only the end state reaches the check.
+- `01/0002` cannot see `tags: ["delivery", "orders", "urgent"]` written in one
+  go instead of pushed, or `summary` built with `+` instead of a template
+  literal.
+
+Both could be "fixed" by scanning the student's source for the characters
+`let`, `.push(` or a backtick. That is testing resemblance, which is the thing
+these files exist to prevent, and it would fail a student whose code is right.
+**Left uncovered on purpose, and written down so the next person does not
+mistake the gap for an oversight.** The `const`/`let` check in `0001` is the
+counter-example worth keeping in view: it earns its place precisely because it
+tests behaviour — it attempts the reassignment and sees whether the language
+refuses.
+
+Thirty-five mistakes and twenty alternatives across the five lessons. Audit
+green, six suites pass, all 103 lessons still verified.

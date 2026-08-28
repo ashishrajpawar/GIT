@@ -768,13 +768,14 @@ whole launch.
 | # | Unit | Owns the detail | Gate |
 |---|---|---|---|
 | W1 | **Phase 3 — the C-modules. C0 landed 2026-08-27**; C5 already existed. **Eight remain**: C1, C2, C3, C4, C6, C7, C8, C9. Written **just-in-time**, one module then stop — never batched | this file, § Phase 3 | the student reaching each one |
-| W2 | Maintenance: `--wrong` cases for the seven lessons that have a self-check and none — `01/0001`–`0005`, `a11/0002`, `a8/0002` | `CLAUDE.md` § practice pattern | — |
 | W3 | **Phase 4 — the operating track.** C6, C7, C8, C9 studied after launch, but instrumented into the product from Phase 3 onward | this file, § Phase 4 | W1 |
 
-> **W2 is small and worth doing between larger units.** A self-check with no
-> wrong-cases proves nothing about what it would catch — five self-checks in
-> Phase 1.5 passed a wrong answer purely by coincidence, and every one was
-> exposed by a wrong-case that should have failed and did not.
+> **W2 was the maintenance tail — `--wrong` cases for every self-check that had
+> none — and it is closed.** It is off this list because the list is what is
+> open; `SESSION.md` records that it landed. The rule it enforced is permanent
+> and lives in `CLAUDE.md` § practice pattern: **a self-check with no
+> wrong-cases proves nothing about what it would catch.** Any new lesson with a
+> self-check arrives with its cases, rather than joining a tail.
 
 ## What is genuinely blocked
 
