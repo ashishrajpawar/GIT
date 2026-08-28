@@ -26,6 +26,12 @@ the rule exists.
 > They cover the original audit, the quiz-key repairs, the seven pivot
 > decisions and the start of Phase 0. Split out to keep this file readable;
 > nothing was discarded.
+>
+> **`SESSION.md`'s accumulated log is in
+> `docs/archive/session-log-2026-08-17-to-25.md`**, split out 2026-08-28. It is
+> the per-lesson defect narrative from the M3 and B-track work — what each
+> lesson shipped that was wrong and how it was found. Kept for the method,
+> which generalises; the instances are all closed.
 
 ---
 
@@ -4062,3 +4068,156 @@ Connect button has not drifted below it or gone grey in a redesign. That last
 one is a silent downgrade to browsewrap and nothing else would catch it.
 
 Audit green, 2 pre-existing warnings, six suites pass.
+
+---
+
+### Session of 2026-08-27/28 — Phase 3 starts, and the decisions get their arguments back
+
+The student asked whether to start Phase 3. The useful part of answering was
+noticing that **the premise was wrong**: Phase 3 and the launch queue do not
+compete. Wave 0 is almost entirely *their* work — registering with DLT,
+creating store accounts, briefing counsel, asking sixteen people to test — a
+day or two of their time and then weeks of other people's calendars. Phase 3 is
+my hours and blocks nothing external. The two run in parallel, by different
+people, so the only real question was what I did first.
+
+#### The launch documents came first, because they are the only work that starts someone else's clock
+
+`token/docs/launch/` — four drafts, reordered ahead of everything else on the
+grounds that the ADRs cannot be sent to anybody and these can.
+
+`counsel-brief.md` puts the seven questions in priority order, and the Hindi one
+is first because it is the one most likely to change the launch plan. It also
+asks counsel to review the *"we cannot produce message contents"* one-pager
+**before** it is needed, rather than improvising it in front of an officer.
+
+`ropa.md` is pre-filled from the schema as this course documents it, with every
+row marked `CONFIRM` against the real migration files, and it carries the
+backup-location checklist — because the seven-day promise is a claim about every
+copy, and the commands that make off-site copies never delete at the far end.
+
+`tester-pack.md` includes the two-party trick, which is the part that would
+otherwise sink the closed test: a tester alone has nobody to redeem their token,
+so twelve people conclude the app does nothing. Its debrief questions include
+the two that settle replacement-versus-supplement, since collecting them costs
+nothing extra.
+
+`dlt-registration.md` recommends `TOKNAP` as the sender header so the OTP and
+the redemption domain carry the same string — a free reinforcement of the
+"verify the link by its domain" advice in F1/0015 — and specifies **identical
+template wording** for the standby provider so failover needs no fresh approval.
+
+#### ADR-0009 to 0015 — seven conclusions that had lost their arguments
+
+Writing the founder track produced eighteen decisions, and seven of them were
+*product* facts rather than course facts. Their reasoning existed only inside
+lesson HTML, which is a conclusion sitting somewhere the product does not read.
+
+Two are worth restating because the recorded reason is not the obvious one.
+
+**ADR-0009, revocation keeps the user's history.** The deciding argument is not
+about retention, it is about *when revocation happens*. The most common reason
+to revoke in anger is harassment — and that is the worst possible moment to
+destroy the user's own record on their behalf, irreversibly. Delete-on-revoke
+performs a privacy gesture by shredding the evidence of the thing the user is
+upset about. It also foreclosed the third option; B leaves a separate "delete
+conversation" verb available, purely additive.
+
+**ADR-0010, one response for every dead code.** The disclosure argument — that
+telling a holder "the account was closed" leaks a fact about someone exercising
+an erasure right — is true and is the weaker one. The stronger argument only
+appeared while writing it down: **a deleted account returning a different
+message would have holed the enumeration defence in the branch least likely ever
+to be tested.** Nobody writes a test that deletes an account and then checks the
+wording a stranger sees on an unrelated page. The four ordinary cases would have
+stayed uniform for years while the fifth quietly leaked.
+
+ADR-0012 pairs the 18+ minimum with event-only analytics in one record, because
+each holds the other up: the ban on tracking children is discharged not by
+knowing who they are — we must not profile to guess — but by there being nothing
+behavioural in the system at all. **A future growth experiment adding per-user
+timelines reopens the age decision, not just the analytics one.** That sentence
+is the reason the two share a file.
+
+#### C0 — the first new course material since the pivot
+
+Two lessons, and the choice of C0 needed no guess about where the student is:
+it is first in the Phase 3 sequence, and it is the only one of the nine with a
+repo to be written *against* — eight ADRs, `ARCHITECTURE.md`, and the Module 01
+capstone. That is what "just-in-time, never batched" is supposed to mean.
+
+`0001` is trust boundaries, and the idea that earns its place is drawing **the
+log as a zone of its own.** Nobody designs a log; it accumulates, gets shipped
+to an error tracker that attaches request bodies by default, and is grepped on
+laptops long after the row it describes was deleted. Three lessons in this
+course once taught writing a token code into a log line, each in a lesson about
+something else.
+
+The exercise, `crossBoundary(field, destination)`, is worth executing rather
+than reading for three reasons: the answer is not a boolean (a message body may
+reach the server, *sealed* — flattening that discards the only part the caller
+needed); the same field has opposite answers by destination (a holder IP reaches
+the server and is refused in the issuer's export, because "a row in my table"
+and "my personal data" are different sets); and the two refusals must stay
+distinguishable, because *unclassified* is a gap in the policy and
+*not_permitted* is the policy working.
+
+`0002` opens on a real failure from this project: a rule agreed in a chat
+message, a lesson five months later that reasonably contradicted it, and a
+capacity plan built on the contradiction. **The June author did nothing wrong.**
+Given the argument, nobody writes that lesson; given the conclusion alone,
+writing it is the sensible thing to do. That gap is what an ADR fills, and it is
+a better motivation than any amount of process advocacy.
+
+#### Four defects the wrong-cases caught, one of them conceptual and mine
+
+- **I inverted the direction of supersession.** An alternative derived "in
+  force" from the set of `supersededBy` *values* — but those are the records
+  that **replaced** something, not the ones replaced, so it returned the oldest
+  record in the chain. The same inversion had already reached a quiz question
+  and a which-breaks variant. All three corrected, and the inversion is recorded
+  in the cases file because it is easy to make.
+- **A self-check that passed a mutating answer.** The "input is not mutated"
+  check snapshotted the array *after* an earlier call had already sorted it in
+  place, so sorting again changed nothing.
+- **`alternatives` must be an object map**, name → source. An array of
+  `{ label, impl }` stringifies to `[object Object]` and every alternative fails
+  with a SyntaxError that reads as a broken verifier.
+- **A throwing mistake tripped nothing**, because it aborted the whole
+  self-check — the third time this project has hit that trap, and `CLAUDE.md`
+  already warned about it. Both C0 lessons now wrap the vulnerable check alone.
+
+Also: `check-pre-blocks` flagged a *narrative* block of mine, because it
+contains the word `let` and therefore scans as JavaScript, and a quotation
+wrapped across a line after a colon is exactly the damage signature. **The
+prose was reworded rather than the check weakened.** And one explanation said
+"the second one", which pins a question against shuffling; `render-as-authored`
+is back to 0.
+
+#### The landing page had the same bug again, one size smaller
+
+Checked by hand before pushing, per the standing rule. The hero read **"9
+Modules"** against 26 module folders — a literal sitting between two stats that
+are computed live from the GitHub API, in the one file no check reaches.
+
+Not corrected to 26. **Made computed**, so it cannot drift again: it counts
+directories through the same API the other sections use, runs independently so a
+rate limit on one section does not blank the other, and leaves an em dash on
+failure. An em dash is honest; a stale number is not.
+
+#### And `SESSION.md` was 4,486 lines
+
+Its *In progress* and *Next action* sections held 4,080 lines of session log
+between them. The cost was not untidiness — its *Blocked on* section spent three
+days describing `c5/0004` as undesigned after `c5/0004` had shipped, because
+nobody scrolled far enough to notice.
+
+The narrative moved to `docs/archive/session-log-2026-08-17-to-25.md`, all 213
+sections of it, and `SESSION.md` is now 208 lines answering the three questions
+it exists for. `CLAUDE.md` gained the rule: **if it cannot answer "what is next"
+on one screen, trim it.**
+
+Audit green and six suites pass; the counts are in `PROGRESS.md`, which this
+file does not restate. Course repo pushed; **the token repo has no remote and
+never has**, which is now stated in `CLAUDE.md` and `SESSION.md` rather than
+being a surprise.

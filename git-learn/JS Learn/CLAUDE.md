@@ -35,7 +35,8 @@ node scripts/test-explain.mjs           node scripts/test-strip-types.mjs
 |---|---|---|
 | `PROGRESS.md` | Anything a script can compute — counts, coverage, verification state | **Generated only.** Never hand-edit |
 | `scripts/known-issues.json` | Real errors that are known, gated and deliberately not blocking the audit | Hand, one entry per problem |
-| `SESSION.md` | In progress / Next action / Blocked, **and per-item phase status** | Hand, before each unit of work |
+| `SESSION.md` | In progress / Next action / Blocked, **and per-item phase status**. Kept **short** — see the note below | Hand, before each unit of work |
+| `docs/archive/` | Closed session logs, split out of `SESSION.md` and `HANDOFF.md` once they stop being current | Hand, when a file gets too long to read |
 | `CLAUDE.md` (this file) | Architecture invariants, conventions, product rules | Hand |
 | `HANDOFF.md` | Narrative — why decisions were made, what failed, session log | Hand, appended each session |
 | `ARCHITECTURE.md` + `docs/adr/` | Technical design and the decisions behind it | Hand |
@@ -46,6 +47,19 @@ node scripts/test-explain.mjs           node scripts/test-strip-types.mjs
 countable thing is in `PROGRESS.md`. Three files, three different questions —
 and deliberately no status column in the phase tables, because a fact with
 three homes has three chances to be wrong.
+
+**What is *next* is one ordered list: `TOKEN-TRACK.md` § "The queue".** Both
+kinds of work in it — `L` units are launch tasks whose detail lives in the F1
+lesson task boards, `W` units are course writing. One person does both and they
+compete for the same week, so they are ordered together, by what unblocks what.
+
+> **`SESSION.md` must stay short, and this is a rule rather than a preference.**
+> It grew to 4,486 lines by 2026-08-28 because every session appended its
+> narrative to *In progress*. The cost was not untidiness: its *Blocked on*
+> section spent three days describing a lesson as undesigned after that lesson
+> had shipped, because nobody scrolled far enough to notice. **Narrative belongs
+> in `HANDOFF.md`; once `HANDOFF.md` is unwieldy, both go to `docs/archive/`.**
+> If `SESSION.md` cannot answer "what is next" on one screen, trim it.
 
 **A green audit is the point.** It used to exit `FAIL` on the same three orphan
 tables every single run, which trains everyone to ignore the exit code — and
@@ -178,8 +192,14 @@ claimable only by the content it guards.**
 ### Token repo layout (one git repo, four folders)
 
 **It is a separate git repo, beside this one, at `GIT/token/`** — not inside
-`git-learn/`. Its own commits, its own history. `ARCHITECTURE.md` and the ADRs
-live there.
+`git-learn/`. Its own commits, its own history. `ARCHITECTURE.md`, the ADRs and
+the launch documents live there.
+
+> **⚠ It has no remote and has never been pushed.** Everything in it —
+> fifteen ADRs, `ARCHITECTURE.md`, `docs/launch/`, the Module 01 capstone —
+> exists on one machine. The course repo is public and backed up by being
+> pushed; this one is not backed up at all. Do not assume a `git push` in
+> `token/` will work, and do not report work there as "pushed".
 
 ```
 token/
@@ -229,7 +249,12 @@ modules/
   b8-push-notifications/            ← 1 lesson
   b9-docker-deployment/             ← 3 lessons
   b10-security-compliance/          ← 2 lessons
-  c5-end-to-end-encryption/         ← 5 lessons; the only C-module written
+  c0-architecture/                  ← 2 lessons, added 2026-08-27. Trust
+                                      boundaries, and how a decision survives.
+                                      Sits before B1: a schema is a set of
+                                      answers to architecture questions nobody
+                                      asked out loud
+  c5-end-to-end-encryption/         ← 5 lessons
   f1-founder-track/                 ← 16 lessons, added 2026-08-26. The
                                       NON-TECHNICAL half of shipping Token, from
                                       `token-nontech-taskboard.md`. Deliberately
@@ -247,8 +272,9 @@ modules/
 **The counts above are a map, not a status.** What is verified, what carries
 practice, and how many questions exist are all in `PROGRESS.md`, which is
 generated — this list exists so you can find a module, not so you can report
-on one. **The C-modules other than C5 do not exist yet**; `TOKEN-TRACK.md` has
-the plan for them.
+on one. **Of the C-modules only C0 and C5 exist**; the other eight — C1, C2,
+C3, C4, C6, C7, C8, C9 — are planned in `TOKEN-TRACK.md` and written
+just-in-time, **one module then stop.**
 
 ```
 assets/
