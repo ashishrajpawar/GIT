@@ -280,8 +280,15 @@ function validateQuestion(q, file, i) {
    MUST stay in step with it: this decides what the audit REPORTS, that one
    decides what the student SEES. They disagreed about the word `variant`
    until 2026-08-23, and the count read 0 while 61 questions were broken. */
+/* Must stay identical to explanationNamesAPosition in assets/quiz.js — this
+   number is a report on what that function will do at render time, and two
+   copies that disagree make the report wrong in whichever direction they
+   differ. The uppercase [A-D] is deliberate: with /i over the whole pattern it
+   also matched a lower-case "a", so "the most confident wrong answer a CI
+   system can give" counted as naming option A and pinned a question that
+   should shuffle. See test-quiz-shuffle.mjs for cases in both directions. */
 const namesAPosition = (text) =>
-  /\b(?:option|answer|choice|variant)\s+[A-D]\b/i.test(text) ||
+  /\b(?:[Oo]ption|[Aa]nswer|[Cc]hoice|[Vv]ariant)\s+[A-D]\b/.test(text) ||
   /\bthe\s+(?:first|second|third|fourth|last)\s+(?:option|answer|choice|variant|one)\b/i.test(text);
 
 const fixedOrder = { total: 0, positions: {} };

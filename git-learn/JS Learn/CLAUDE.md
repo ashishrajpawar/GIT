@@ -1168,6 +1168,18 @@ takes it back; a leaked message body is what ADR-0002 exists to protect.**
      `test-quiz-shuffle.mjs` tells them apart — which is why widening the
      regex came with cases in both directions, the phrasings it must catch and
      the ordinary prose it must not.
+
+     **And it was too wide in one place, fixed 2026-08-28.** `[A-D]` under a
+     `/i` flag also matches a lower-case `a` — English's indefinite article —
+     so *"the most confident wrong answer a CI system can give"* was read as
+     naming option A and the question was **pinned**. A false positive here is
+     not noise: it silently restores the second-option edge on a question that
+     should shuffle. The letter must now be a capital, which is how anyone
+     naming an option writes it, and four prose phrasings joined the suite.
+     **The detector lives in two files and they must stay identical** —
+     `assets/quiz.js` decides, `scripts/audit.mjs` reports on that decision,
+     and copies that disagree make the report wrong in whichever direction
+     they differ.
    - Options whose meaning depends on position ("All of the above", "Both…")
      are pinned last. And per the note above, `quiz.js` shuffling is exactly why
      "Both A and B" is broken wherever it sits.

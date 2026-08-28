@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>C2 — Continuous Integration</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">CI/CD &amp; Release Engineering</a> &rsaquo;
+        <span>Continuous Integration</span>
+    </nav>
+
+    <h1>Continuous Integration</h1>
+    <p class="lesson-meta">C2 &mdash; Lesson 1 of 4 &nbsp;|&nbsp; ~45 min</p>
+
+    <div class="callout">
+        <div class="callout-title">Why this matters for Token</div>
+        <p>You now have tests. This module is about the machine that runs them when you forget to
+        &mdash; and about the failure mode that machine has, which is not the one people expect.</p>
+        <p>The expected failure is a pipeline that goes red and blocks you. <strong>The real one is
+        a pipeline that is <em>always</em> red, or always green, and therefore says nothing.</strong>
+        This course has a first-hand example: its own audit exited <code>FAIL</code> on the same
+        three problems every single run for weeks. Everyone learned to read the output and ignore
+        the exit code &mdash; and then a new error landed in a build nobody was reading, and two
+        checks were lost that way.</p>
+        <p>A check that is ignored is worse than no check, because it occupies the space where a
+        working one would go.</p>
+    </div>
+
+    <h2>1 &middot; Three words: the same checks, on every push, in a clean place</h2>
+
+    <p>Continuous integration is not complicated, and each of those three words is doing work.</p>
+
+    <ul>
+        <li><strong>The same checks.</strong> If CI runs different commands from the ones you run
+        locally, it is testing a different thing, and the two will disagree at the worst moment.
+        Put the commands in one place &mdash; a script both of you call &mdash; so they cannot
+        drift.</li>
+        <li><strong>On every push.</strong> Not nightly, not before release. The value of the signal
+        collapses with distance from the change that caused it: an hour later you remember what you
+        did; three days later you are reading your own diff like a stranger.</li>
+        <li><strong>In a clean place.</strong> Your machine has installed packages, environment
+        variables you set in March, and a database with your test data in it. A fresh container has
+        none of that, which is the entire point &mdash; it is what turns &ldquo;works on my
+        machine&rdquo; from an argument into a build log.</li>
+    </ul>
+
+    <p>For Token, the checks are the ones you already have:</p>
+
+    <pre><code># .github/workflows/ci.yml
+name: CI
+on: [push, pull_request]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: postgres }
+        options: &gt;-
+          --health-cmd pg_isready --health-interval 10s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm ci
+      - run: npm run check          # the SAME script you run locally
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres</code></pre>
+
+    <p>And <code>npm run check</code> is one line that does everything, so there is exactly one
+    answer to &ldquo;what does CI run?&rdquo;</p>
+
+    <h2>2 &middot; The exit code is the whole interface</h2>
+
+    <p>Every CI system on earth reduces your build to one number. <strong>Zero means success.
+    Anything else means failure.</strong> That is the complete contract, and almost every
+    &ldquo;why is my build green?&rdquo; mystery is a place where the number got lost.</p>
+
+    <pre><code>node --test ; node scripts/audit.mjs        # ; runs both, and reports only the LAST
+node --test &amp;&amp; node scripts/audit.mjs      # &amp;&amp; stops at the first failure
+node --test | tee test.log                 # exit code is tee's, which always succeeds</code></pre>
+
+    <div class="callout warning">
+        <div class="callout-title">The classic: a script that ends by printing something</div>
+        <p>A build script whose last line is <code>echo "done"</code> exits 0 whatever happened
+        above it, because <code>echo</code> succeeded. The output is full of failures and the build
+        is green.</p>
+        <p>The same trap wears several costumes: a pipe (the exit code belongs to the last command
+        in it), a loop that runs a command per package and never checks the result, and a
+        <code>try/catch</code> in a Node script that logs the error and lets the process end
+        normally. In all four the work failed, was reported as failing, and exited 0.</p>
+    </div>
+
+    <h3>Try it yourself</h3>
+
+    <div id="pg-exitcode"></div>
+    <script>
+        createPlayground("pg-exitcode", `// A tiny stand-in for a shell: each command returns an exit code.
+const commands = {
+  test: () => 1,          // the tests fail
+  audit: () => 0,
+  echo: () => 0
+};
+
+function runSemicolons(names) {
+  let last = 0;
+  for (const n of names) last = commands[n]();
+  return last;               // only the last one is reported
+}
+
+function runAndAnd(names) {
+  for (const n of names) {
+    const code = commands[n]();
+    if (code !== 0) return code;   // stop at the first failure
+  }
+  return 0;
+}
+
+console.log("test ; audit ; echo   ->", runSemicolons(["test", "audit", "echo"]));
+console.log("test && audit && echo ->", runAndAnd(["test", "audit", "echo"]));
+console.log("");
+console.log("Same commands, same failures. One build is green.");`);
+    </script>
+
+    <h2>3 &middot; A build that is always red is not a check</h2>
+
+    <p>This is the part people get wrong, and it is a human problem wearing a technical costume.</p>
+
+    <p>A pipeline that fails for a reason everybody has agreed to live with trains everybody to
+    ignore the result. After a fortnight, &ldquo;the build is red&rdquo; carries no information, and
+    the next <em>real</em> failure arrives in a message nobody opens. The check has not been
+    weakened &mdash; it has been switched off, by people, without anyone deciding to.</p>
+
+    <p>The fix is not to delete the check or lower it to a warning. It is to <strong>acknowledge the
+    known problem explicitly</strong>, with two things attached:</p>
+
+    <ul>
+        <li><strong>A why</strong> &mdash; what this is, and why it cannot be fixed now.</li>
+        <li><strong>A gate</strong> &mdash; the condition under which it must be fixed. &ldquo;When
+        B2 lands&rdquo;, not &ldquo;later&rdquo;.</li>
+    </ul>
+
+    <p>Acknowledged problems still print, under their own heading, so they stay visible. They just
+    stop holding the build red.</p>
+
+    <div class="callout warning">
+        <div class="callout-title">The half of this that people leave out</div>
+        <p>An acknowledgement list needs to be kept honest <strong>from both ends</strong>:</p>
+        <ul>
+            <li>An error that is <em>not</em> acknowledged fails the build. Obviously.</li>
+            <li>An acknowledgement that no longer matches any real error <strong>also</strong> fails
+            the build, as stale.</li>
+        </ul>
+        <p>Without the second rule the file becomes where problems go to be forgotten: someone fixes
+        the bug, the entry stays, and it silently covers the next thing that produces a similar
+        error. <strong>An entry is not a fix</strong>, and the list has to be able to tell you when
+        it has stopped describing reality.</p>
+    </div>
+
+    <h3>Try it yourself</h3>
+    <p>Four builds. Watch what happens to the new error in the third one.</p>
+
+    <div id="pg-alwaysred"></div>
+    <script>
+        createPlayground("pg-alwaysred", `const KNOWN = ["orphan table: calls", "orphan table: sessions", "orphan table: devices"];
+
+function build(errors, acknowledge) {
+  const live = acknowledge ? errors.filter((e) => KNOWN.indexOf(e) === -1) : errors;
+  return { red: live.length > 0, shown: live };
+}
+
+const day1 = ["orphan table: calls", "orphan table: sessions", "orphan table: devices"];
+const day2 = day1;
+const day3 = day1.concat(["fill-blank answer does not match the blank"]);
+
+console.log("WITHOUT acknowledgement:");
+[day1, day2, day3].forEach((e, i) => {
+  const r = build(e, false);
+  console.log("  day " + (i + 1) + ": red=" + r.red + "  errors=" + r.shown.length);
+});
+console.log("  ...day 3 looks exactly like day 1 and day 2. Nobody opens it.");
+
+console.log("");
+console.log("WITH acknowledgement:");
+[day1, day2, day3].forEach((e, i) => {
+  const r = build(e, true);
+  console.log("  day " + (i + 1) + ": red=" + r.red + "  " + JSON.stringify(r.shown));
+});`);
+    </script>
+
+    <h2>4 &middot; Required and advisory are different things</h2>
+
+    <p>Not every step should stop a release. A formatter complaining about a blank line and a test
+    proving the redemption endpoint leaks are not the same event, and treating them the same
+    produces one of two bad outcomes: people start ignoring failures, or people start deleting
+    checks.</p>
+
+    <p>So each step is either <strong>required</strong> (its failure fails the build) or
+    <strong>advisory</strong> (its failure is reported and the build continues). The distinction has
+    to be written down per step rather than decided in the moment.</p>
+
+    <div class="callout warning">
+        <div class="callout-title">A step that did not run is not a step that passed</div>
+        <p>This is the one that catches people. A required step can be <em>skipped</em> &mdash; a
+        dependency failed, a path filter did not match, a runner died &mdash; and the natural way to
+        write the check treats a missing result as a fine one:</p>
+        <pre><code>if (step.exitCode) failed.push(step.name);   // null is falsy. It "passed".</code></pre>
+        <p>Same shape as <code>if (token.maxUses)</code>, and the same reason: absent and zero are
+        different, and only one of them is falsy. <strong>Deny by default applies to your build too
+        &mdash; a check whose result you do not have is a check that did not pass.</strong></p>
+        <p>The extreme case is a pipeline where <em>nothing</em> ran, because a path filter was too
+        clever. Every step green, zero steps executed, and a green tick on a change nobody
+        verified.</p>
+    </div>
+
+    <h3>Try it yourself &mdash; broken on purpose</h3>
+    <p>Read the error. Then notice which case it happens on.</p>
+
+    <div id="pg-broken"></div>
+    <script>
+        createPlayground("pg-broken", `function report(steps) {
+  const failing = steps.filter((s) => s.exitCode !== 0);
+  console.log(failing.length + " step(s) failed");
+  console.log("first failure: " + failing[0].name);
+  return failing.length === 0;
+}
+
+console.log(report([
+  { name: "test", exitCode: 1 },
+  { name: "audit", exitCode: 0 }
+]));
+
+// And now the case that is supposed to be the good news:
+console.log(report([
+  { name: "test", exitCode: 0 },
+  { name: "audit", exitCode: 0 }
+]));
+
+// Fix it. The lesson is not the null check -- it is that the SUCCESS path
+// is a case, and it was the one nobody tried.`);
+    </script>
+
+    <h2>Now build it yourself</h2>
+
+    <div id="exercise-1"></div>
+    <script>
+        createSolution("exercise-1", {
+            exercise:
+                "Write <code>pipelineOutcome(steps)</code> &mdash; the function that turns a list of step results into the single verdict CI reports.<br><br>" +
+                "Each step is <code>{ name, exitCode, required }</code>. <code>exitCode</code> is a number, or <code>null</code> meaning <strong>the step never ran</strong>.<br><br>" +
+                "Return <code>{ ok, failures, warnings }</code>:<br><br>" +
+                "1. A step <strong>succeeded</strong> only if its <code>exitCode</code> is exactly <code>0</code>. Any other number is a failure, and <code>null</code> is <strong>not</strong> a success &mdash; a step whose result you do not have did not pass.<br>" +
+                "2. A <strong>required</strong> step that did not succeed goes into <code>failures</code>, by name.<br>" +
+                "3. An <strong>advisory</strong> step (<code>required: false</code>) that did not succeed goes into <code>warnings</code>, by name. It never fails the build.<br>" +
+                "4. Both lists keep the order the steps were given in, and every failing step is listed &mdash; not just the first.<br>" +
+                "5. <code>ok</code> is true when <code>failures</code> is empty.<br>" +
+                "6. <strong>A pipeline with no steps is not a pass.</strong> Return <code>ok: false</code> with <code>failures: [\"no steps ran\"]</code>. A green tick on a build that executed nothing is the most confident wrong answer a CI system can give.<br>" +
+                "7. Do not modify <code>steps</code>.",
+            hints: [
+                "Rule 6 first, as an early return, before anything walks the list. It is the same shape as the empty-rows guard in C1/0004 — the empty case is a different answer, not a smaller version of the same one.",
+                "Rule 1 is the whole exercise in one comparison. Write <code>step.exitCode === 0</code> and nothing else: <code>if (step.exitCode)</code> reads a skipped step as a pass, and <code>step.exitCode !== 1</code> reads an out-of-memory kill (137) as a pass.",
+                "Rules 2 and 3 are the same test with two destinations, so decide 'did it succeed' once and then choose which array to push the name onto. Rule 5 is then one line at the end — and note it stays true for rule 6, because that case puts something in failures rather than special-casing ok."
+            ],
+            solution: `function pipelineOutcome(steps) {
+  // A build that ran nothing has proved nothing. This is a different
+  // answer, not a smaller version of the ordinary one.
+  if (steps.length === 0) {
+    return { ok: false, failures: ["no steps ran"], warnings: [] };
+  }
+
+  const failures = [];
+  const warnings = [];
+
+  for (const step of steps) {
+    // Exactly 0. Not truthy, not "!== 1": null means the step never ran,
+    // and 137 means the runner killed it for using too much memory.
+    const succeeded = step.exitCode === 0;
+    if (succeeded) continue;
+
+    if (step.required) failures.push(step.name);
+    else warnings.push(step.name);
+  }
+
+  return { ok: failures.length === 0, failures: failures, warnings: warnings };
+}`
+        });
+    </script>
+
+    <div id="pg-exercise"></div>
+    <script>
+        createPlayground("pg-exercise", `// --- Write pipelineOutcome(steps) here, then press Run ---
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label);
+  if (!passed && detail) console.log("      " + detail);
+}
+
+function step(over) {
+  return Object.assign({ name: "s", exitCode: 0, required: true }, over);
+}
+function names(list) { return JSON.stringify(list); }
+
+try {
+  // Rule 6, and the most confident wrong answer a CI system can give.
+  const empty = pipelineOutcome([]);
+  check("an empty pipeline is not a pass",
+    empty.ok === false, "got: " + JSON.stringify(empty) +
+    " - a green tick on a build that executed nothing");
+  check("...and it says why",
+    names(empty.failures) === names(["no steps ran"]),
+    "got failures: " + names(empty.failures));
+
+  const green = pipelineOutcome([
+    step({ name: "test" }), step({ name: "audit" }), step({ name: "lint", required: false })
+  ]);
+  check("every step at exit 0 is ok",
+    green.ok === true, "got: " + JSON.stringify(green));
+  check("...with nothing in either list",
+    green.failures.length === 0 && green.warnings.length === 0,
+    "got: " + JSON.stringify({ f: green.failures, w: green.warnings }));
+
+  const oneBad = pipelineOutcome([
+    step({ name: "test", exitCode: 1 }), step({ name: "audit" })
+  ]);
+  check("a required step with a non-zero exit fails the build",
+    oneBad.ok === false && names(oneBad.failures) === names(["test"]),
+    "got: " + JSON.stringify(oneBad));
+
+  // Rule 1, the part that catches people.
+  const skipped = pipelineOutcome([
+    step({ name: "test" }), step({ name: "audit", exitCode: null })
+  ]);
+  check("a required step that never ran fails the build",
+    skipped.ok === false && names(skipped.failures) === names(["audit"]),
+    "got: " + JSON.stringify(skipped) +
+    " - null is falsy, and a result you do not have is not a pass");
+
+  // Not every failure is exit code 1. 137 is the runner killing it.
+  const killed = pipelineOutcome([step({ name: "test", exitCode: 137 })]);
+  check("an out-of-memory kill is a failure like any other",
+    killed.ok === false && names(killed.failures) === names(["test"]),
+    "got: " + JSON.stringify(killed) + " - the contract is 'exactly 0', not 'not 1'");
+
+  // Rule 3: advisory steps never fail the build, and are never silent.
+  const advisory = pipelineOutcome([
+    step({ name: "test" }), step({ name: "format", exitCode: 1, required: false })
+  ]);
+  check("an advisory failure does not fail the build",
+    advisory.ok === true, "got: " + JSON.stringify(advisory));
+  check("...but it is still reported",
+    names(advisory.warnings) === names(["format"]),
+    "got warnings: " + names(advisory.warnings));
+
+  const advisorySkipped = pipelineOutcome([
+    step({ name: "test" }), step({ name: "format", exitCode: null, required: false })
+  ]);
+  check("an advisory step that never ran is a warning, not a pass",
+    names(advisorySkipped.warnings) === names(["format"]),
+    "got warnings: " + names(advisorySkipped.warnings));
+
+  const passingAdvisory = pipelineOutcome([step({ name: "format", exitCode: 0, required: false })]);
+  check("an advisory step that succeeded warns about nothing",
+    passingAdvisory.warnings.length === 0 && passingAdvisory.ok === true,
+    "got: " + JSON.stringify(passingAdvisory));
+
+  // Rule 4: all of them, in order.
+  const several = pipelineOutcome([
+    step({ name: "test", exitCode: 1 }),
+    step({ name: "audit" }),
+    step({ name: "types", exitCode: 2 }),
+    step({ name: "format", exitCode: 1, required: false }),
+    step({ name: "docs", exitCode: null, required: false })
+  ]);
+  check("every failing required step is listed, in order",
+    names(several.failures) === names(["test", "types"]),
+    "got: " + names(several.failures) + " - not just the first one");
+  check("every failing advisory step is listed, in order",
+    names(several.warnings) === names(["format", "docs"]),
+    "got: " + names(several.warnings));
+
+  // Rule 5, as an invariant rather than an example.
+  const cases = [empty, green, oneBad, skipped, killed, advisory, several];
+  const broken = cases.filter(function (r) { return r.ok !== (r.failures.length === 0); });
+  check("ok always agrees with the failures list",
+    broken.length === 0,
+    "disagreed in " + broken.length + " case(s): " + JSON.stringify(broken));
+
+  // Rule 7. Snapshot before the first call, not after.
+  const input = [step({ name: "test", exitCode: 1 }), step({ name: "audit" })];
+  const before = JSON.stringify(input);
+  pipelineOutcome(input);
+  check("the input steps are not modified",
+    JSON.stringify(input) === before, "steps changed to: " + JSON.stringify(input));
+} catch (err) {
+  console.log("FAIL  " + err.name + ": " + err.message);
+  console.log("      Usually this means pipelineOutcome is missing or misspelt,");
+  console.log("      or it does not return the result object.");
+}`);
+    </script>
+
+    <h2>Explain it in your own words</h2>
+    <div id="explain-0001"></div>
+    <script>
+        createExplain("explain-0001", {
+            prompt: "A team's build has been red for three weeks for a reason everyone has agreed to live with. Explain what has actually been lost &mdash; and why deleting the failing check and acknowledging it with a gate are <strong>not</strong> the same decision, even though both turn the build green."
+        });
+    </script>
+
+    <div id="lesson-quiz"></div>
+    <script>
+        createQuiz("lesson-quiz", [
+            {
+                question: "What are the three properties that make continuous integration useful?",
+                options: [
+                    "The same checks as you run locally, on every push, in a clean environment",
+                    "Fast builds, parallel jobs, and caching",
+                    "Automatic deployment, rollback, and monitoring",
+                    "Branch protection, code review, and merge queues"
+                ],
+                correct: 0,
+                explanation: "Each word carries weight. Different commands test a different thing; a delayed signal arrives after you have forgotten the change; and a clean environment is what turns 'works on my machine' from an argument into a build log."
+            },
+            {
+                question: "Why should CI call the same script you run locally rather than listing the commands in the workflow file?",
+                options: [
+                    "Two lists of commands drift apart, and they disagree at the worst possible moment",
+                    "Workflow files have a length limit",
+                    "Scripts run faster than workflow steps",
+                    "It is required by GitHub Actions"
+                ],
+                correct: 0,
+                explanation: "One place, one answer to 'what does CI run?'. When the lists differ, the usual discovery is a check that has not run for a month — nobody removed it, it just never got copied into the other list."
+            },
+            {
+                type: "predict-output",
+                code: "function shell(cmds) { let last = 0; for (const c of cmds) last = c(); return last; }\nconst fail = () => 1, ok = () => 0;\nconsole.log(shell([fail, ok]));",
+                answer: "0",
+                explanation: "Semicolon chaining reports only the last command. The failing command ran first, its output is right there in the log, and the build is green — which is the single most common way an exit code goes missing."
+            },
+            {
+                question: "A build script's last line is <code>echo \"done\"</code>. What is the effect?",
+                options: [
+                    "The script exits 0 whatever failed above it, because echo succeeded",
+                    "Nothing — echo does not affect the exit code",
+                    "The build fails, because echo writes to stdout",
+                    "The exit code becomes the number of characters printed"
+                ],
+                correct: 0,
+                explanation: "A script's exit code is its last command's. The same trap wears other costumes: a pipe into tee, a loop that never checks results, and a try/catch that logs the error and lets the process end normally."
+            },
+            {
+                type: "which-breaks",
+                question: "Which of these loses the exit code of the tests?",
+                variants: [
+                    "node --test && node scripts/audit.mjs",
+                    "node --test | tee test.log",
+                    "set -e; node --test; node scripts/audit.mjs"
+                ],
+                correct: 1,
+                explanation: "In a pipeline the exit code belongs to the last command, and tee essentially always succeeds. It is a nastier version of the semicolon problem because the intent — keep a copy of the log — is entirely reasonable."
+            },
+            {
+                question: "What is wrong with a build that has been red for three weeks for an agreed reason?",
+                options: [
+                    "It has stopped carrying information, so the next real failure arrives unread",
+                    "It slows down the pipeline",
+                    "It uses CI minutes unnecessarily",
+                    "Nothing, as long as everyone knows why"
+                ],
+                correct: 0,
+                explanation: "The check has been switched off by people rather than by a config change, which is why nobody notices it happening. This course lost two checks exactly that way — a new error landed among three old ones and looked identical from outside."
+            },
+            {
+                question: "An acknowledged, non-blocking problem should carry which two things?",
+                options: [
+                    "Why it cannot be fixed now, and the condition under which it must be",
+                    "A severity score and an owner",
+                    "A ticket number and a due date",
+                    "A suppression pattern and an expiry timestamp"
+                ],
+                correct: 0,
+                explanation: "The why is what stops it being reargued; the gate is what stops it being permanent. 'When B2 lands' is a gate. 'Later' is not, and an entry with 'later' in it is a deletion with extra steps."
+            },
+            {
+                question: "Why must an acknowledgement that matches no current error ALSO fail the build?",
+                options: [
+                    "Otherwise the list becomes where problems go to be forgotten, silently covering the next similar error",
+                    "To keep the file small",
+                    "Because stale entries slow the check down",
+                    "So that the count of known issues is accurate for reporting"
+                ],
+                correct: 0,
+                explanation: "Kept honest from one end only, the file grows suppressions for bugs that were fixed years ago — and each one is a pattern that will quietly swallow the next error resembling it. An entry is not a fix, and the list must be able to say when it has stopped describing reality."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This treats a skipped step as a passing one. Where?",
+                code: "1  for (const step of steps) {\n2    if (step.exitCode) failed.push(step.name);\n3  }\n4  return { ok: failed.length === 0 };",
+                bugLine: 2,
+                options: ["Line 2", "Line 4", "Both"],
+                correct: 0,
+                explanation: "null is falsy, so a step that never ran is counted as a success — and so is exit code 0, correctly, which is what makes the line look right. Same shape as if (token.maxUses): absent and zero are different, and only one of them is falsy."
+            },
+            {
+                type: "predict-output",
+                code: "const steps = [{ exitCode: 0 }, { exitCode: null }, { exitCode: 137 }];\nconsole.log(steps.filter(s => s.exitCode).length, steps.filter(s => s.exitCode !== 0).length);",
+                answer: "1 2",
+                explanation: "Truthiness sees one failure and misses the skipped step entirely. The explicit comparison sees both. The contract is 'succeeded means exactly 0', and any looser test lets something through."
+            },
+            {
+                question: "Why is <code>step.exitCode !== 1</code> the wrong success test?",
+                options: [
+                    "Exit codes other than 1 are failures too — 137 is the runner killing the process",
+                    "It fails to handle exit code 0",
+                    "It is slower than a strict comparison",
+                    "It cannot be used with null"
+                ],
+                correct: 0,
+                explanation: "Programs exit with all sorts of codes: 2 for usage errors, 137 for an out-of-memory kill, 143 for a termination signal. Success is one value and everything else is failure, which is why the contract is stated that way round."
+            },
+            {
+                question: "A pipeline runs zero steps because a path filter did not match. What should it report?",
+                options: [
+                    "A failure — a build that executed nothing has verified nothing",
+                    "Success, since no check failed",
+                    "Skipped, which is neither",
+                    "A warning, because the filter may be intentional"
+                ],
+                correct: 0,
+                explanation: "A green tick on a build that ran nothing is the most confident wrong answer a CI system can give, and it looks exactly like a fast, healthy build. Deny by default applies to your pipeline for the same reason it applies to token redemption."
+            },
+            {
+                question: "What distinguishes a required step from an advisory one?",
+                options: [
+                    "Whether its failure should stop a release, decided per step and written down",
+                    "Whether it runs before or after the tests",
+                    "How long it takes",
+                    "Whether it can be run locally"
+                ],
+                correct: 0,
+                explanation: "A formatter complaining about a blank line and a test proving the redemption endpoint leaks are not the same event. Treating them identically produces either ignored failures or deleted checks, and both are worse than the distinction."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the success test.",
+                code: "const succeeded = step.exitCode ___ 0;",
+                answer: "===",
+                explanation: "Exactly zero. Truthiness lets a skipped step through as a pass, and any 'not this specific failure' test lets the other failure codes through."
+            },
+            {
+                question: "Why does an advisory failure still need to be reported?",
+                options: [
+                    "A check nobody sees the output of is a check that is not running",
+                    "So the build time can be measured",
+                    "To satisfy the workflow schema",
+                    "Because advisory steps become required later"
+                ],
+                correct: 0,
+                explanation: "Advisory means it does not block, not that it is invisible. Silently swallowing advisory results is how a formatter goes unrun for six months while its step keeps appearing green in the list."
+            },
+            {
+                type: "order-steps",
+                question: "Put the CI job's steps in the order they must run.",
+                steps: [
+                    "Check out the repository",
+                    "Install the exact dependency versions from the lockfile",
+                    "Run the one script that runs every check",
+                    "Report a single exit code"
+                ],
+                correctOrder: [0, 1, 2, 3],
+                explanation: "The lockfile install is the step people replace with a plain install, and it is what makes the run reproducible — the same commit producing the same dependency tree today and in eight months."
+            },
+            {
+                type: "predict-output",
+                code: "const failing = [{ name: 'a' }].filter(s => false);\ntry { console.log(failing[0].name); } catch (e) { console.log(e.constructor.name); }",
+                answer: "TypeError",
+                explanation: "A reporter that assumes there is a failure crashes on the success path. The success path is a case, and it is the one nobody tries because it is the outcome you were hoping for."
+            },
+            {
+                question: "Why does the empty-pipeline rule put something into <code>failures</code> rather than just setting <code>ok</code> to false?",
+                options: [
+                    "It keeps ok and the failures list in agreement, so callers can rely on either",
+                    "The failures array cannot be empty",
+                    "It makes the JSON smaller",
+                    "CI systems require a named failure"
+                ],
+                correct: 0,
+                explanation: "A result where ok is false while failures is empty is a shape every caller has to remember a special case for. Making the invariant true everywhere is cheaper than documenting the exception — and the self-check asserts the invariant rather than the examples."
+            },
+            {
+                question: "What is the argument for running CI on every push rather than nightly?",
+                options: [
+                    "The value of the signal collapses with distance from the change that caused it",
+                    "Nightly builds cost more",
+                    "Overnight runners are slower",
+                    "Nightly runs cannot access secrets"
+                ],
+                correct: 0,
+                explanation: "An hour later you remember what you did; three days later you are reading your own diff like a stranger, and a batch of thirty commits means bisecting to find which one broke it."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This reports only one failing step. Where?",
+                code: "1  for (const step of steps) {\n2    if (step.exitCode !== 0 && step.required) {\n3      return { ok: false, failures: [step.name] };\n4    }\n5  }",
+                bugLine: 3,
+                options: ["Line 2", "Line 3", "Line 5"],
+                correct: 1,
+                explanation: "It returns at the earliest failure, so a later one stays invisible until that is fixed — three rounds of push, wait, fix for three independent problems. CI steps run independently, so unlike a property test there is no reason to stop early."
+            },
+            {
+                question: "A fresh CI container has no environment variables you set months ago. Why is that a feature?",
+                options: [
+                    "It is what turns \"works on my machine\" from an argument into a build log",
+                    "It reduces the container size",
+                    "It prevents secrets leaking",
+                    "It makes the build faster"
+                ],
+                correct: 0,
+                explanation: "The clean environment is the point rather than an inconvenience. It surfaces the undeclared dependency — a global package, a variable, a file in your home directory — that a new colleague would otherwise discover on their first day."
+            },
+            {
+                question: "Which of these is the honest reason to make the build's verdict a single value?",
+                options: [
+                    "Anything more nuanced gets interpreted differently by different people, and stops blocking anything",
+                    "CI systems cannot represent more than two states",
+                    "It makes the notification email shorter",
+                    "Multiple states would slow the pipeline"
+                ],
+                correct: 0,
+                explanation: "The moment a build can be 'mostly fine' someone will merge on it, and the threshold moves a little each time. One bit, plus a visible list of acknowledged problems with gates, keeps the decision in one place."
+            },
+            {
+                type: "predict-output",
+                code: "const r = { ok: false, failures: [] };\nconsole.log(r.ok === (r.failures.length === 0));",
+                answer: "false",
+                explanation: "The invariant is broken: not ok, and nothing in the failures list. A caller checking failures.length treats this as a pass — which is why the empty-pipeline case names its failure instead of leaving the list empty."
+            },
+            {
+                question: "You add a check to CI that fails on an existing, known problem. What is the right move?",
+                options: [
+                    "Acknowledge the known instance with a why and a gate, so new instances still fail",
+                    "Lower the check to a warning until the backlog is cleared",
+                    "Leave the build red until someone fixes it",
+                    "Remove the check and add it back after the fix"
+                ],
+                correct: 0,
+                explanation: "The other three all end with the check not working: a warning is ignored, a permanently red build is ignored, and a removed check is never added back. Acknowledging the specific instance keeps the check live for everything else."
+            },
+            {
+                question: "What does \"the exit code is the whole interface\" mean in practice?",
+                options: [
+                    "Nothing you print changes the verdict — only the number the process exits with",
+                    "You should not print anything from a build script",
+                    "Exit codes must be documented for each step",
+                    "The build should exit as early as possible"
+                ],
+                correct: 0,
+                explanation: "A build can print a hundred lines of failure and be green, and it can print nothing and be red. Every mystery in this area is a place where the number got lost between the command that failed and the process that exited."
+            },
+            {
+                question: "What is the single-sentence summary of this lesson?",
+                options: [
+                    "A check that is ignored is worse than no check, because it occupies the space where a working one would go",
+                    "Every project should have continuous integration",
+                    "Builds should be fast",
+                    "Automation prevents human error"
+                ],
+                correct: 0,
+                explanation: "Everything here follows from it: the same commands so it stays trustworthy, one exit code so the verdict cannot be reinterpreted, acknowledged problems so a real failure stands out, and the required-versus-advisory line so nobody learns to scroll past red."
+            }
+        ]);
+    </script>
+
+    <div class="lesson-nav">
+        <a href="./README.html">&larr; C2 &mdash; CI/CD &amp; Release Engineering</a>
+        <span class="disabled">Next: Secrets and Environments &rarr;</span>
+    </div>
+
+</body>
+</html>

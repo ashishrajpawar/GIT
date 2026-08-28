@@ -26,9 +26,12 @@ how far it got.
 > files either.** Make no claims about it at all — not in prose, not in a
 > commit message, not as a reason for prioritising anything.
 
-**Nothing in flight.** C1 is complete — five lessons, written 2026-08-28, all
-verified with `--wrong` cases. **One module then stop**, per the just-in-time
-rule, so the next C-module is not started.
+**W1 — C2, CI/CD & Release Engineering.** Started 2026-08-28 on the student's
+say-so, immediately after C1. `0001-continuous-integration.html` is written,
+verified and has its `--wrong` cases; the README, index row and search entry are
+in. **`0002`–`0004` remain**: secrets and environments, migrations you can
+deploy, releasing to two stores. Each lands as its own green commit — `0001`'s
+next-link is a disabled span until `0002` exists.
 
 Planned: `0001` what a test is · `0002` time, randomness and fakes · `0003`
 testing an HTTP handler without a network · `0004` testing against a real

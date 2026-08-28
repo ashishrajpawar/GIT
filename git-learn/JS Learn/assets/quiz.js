@@ -439,8 +439,16 @@
      the three words that WERE caught. A blind spot in a check that reports
      zero is indistinguishable from a clean course; that is what
      test-quiz-shuffle.mjs exists to tell apart. */
+  /* The letter must be UPPERCASE, and the noun is matched case-insensitively
+     by spelling both cases out rather than with the /i flag. With /i on the
+     whole pattern, [A-D] also matches a lower-case "a" — which is English's
+     indefinite article, so "the most confident wrong answer a CI system can
+     give" was read as naming option A. That silently pins a question against
+     shuffling, which is the harm this detector exists to prevent, applied to
+     an innocent question. Option letters are written in capitals wherever
+     they are meant; "answer a", "choice a", "variant a" are prose. */
   function explanationNamesAPosition(text) {
-    return /\b(?:option|answer|choice|variant)\s+[A-D]\b/i.test(text) ||
+    return /\b(?:[Oo]ption|[Aa]nswer|[Cc]hoice|[Vv]ariant)\s+[A-D]\b/.test(text) ||
            /\bthe\s+(?:first|second|third|fourth|last)\s+(?:option|answer|choice|variant|one)\b/i.test(text);
   }
 

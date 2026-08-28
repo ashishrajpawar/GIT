@@ -148,6 +148,16 @@ for (const explanation of [
   "A variant of this bug appears in b3/0004",
   "Each option is a different way of spelling the same thing",
   "The answer depends on which timezone the device reports",
+  /* The indefinite article, found 2026-08-28 in c2/0001. With /i over the
+     whole pattern, [A-D] matches a lower-case "a" — so any explanation
+     containing "answer a", "choice a" or "option a" as ordinary English was
+     read as naming a letter, and the question was pinned. These four are the
+     phrasings that actually occur; the letter is now required to be a
+     capital, which is how anyone naming an option writes it. */
+  "A green tick is the most confident wrong answer a CI system can give",
+  "It is the choice a caller makes, not one the library makes for them",
+  "There is no option a beginner would reach for here",
+  "Each variant a student writes should behave identically",
 ]) {
   let everMoved = false;
   for (let i = 0; i < 200; i++) {
