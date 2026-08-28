@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>C1 — Testing an HTTP Handler</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Testing &amp; Quality</a> &rsaquo;
+        <span>Testing an HTTP Handler</span>
+    </nav>
+
+    <h1>Testing an HTTP Handler</h1>
+    <p class="lesson-meta">C1 &mdash; Lesson 3 of 5 &nbsp;|&nbsp; ~50 min</p>
+
+    <div class="callout">
+        <div class="callout-title">Why this matters for Token</div>
+        <p><code>POST /api/redeem</code> is the endpoint a stranger reaches. It takes a code and
+        answers one of two things: here is your conversation, or no.</p>
+        <p>The interesting requirement is not that it works. It is that <strong>the &ldquo;no&rdquo;
+        must be the same &ldquo;no&rdquo; every time</strong>. A revoked token, an expired one, one
+        that has been used up, one that never existed, and one whose owner has deleted their account
+        must all produce a byte-identical response. Any difference at all turns the endpoint into a
+        machine that answers questions nobody should be able to ask: <em>does this code exist? did
+        someone close their account?</em></p>
+        <p>You cannot see that requirement on a screen and you cannot check it by hand, because it
+        is a statement about five responses being the same. It is four lines of test &mdash; and the
+        only reason it is four lines is that the handler is a function you can call.</p>
+    </div>
+
+    <h2>1 &middot; A handler is a function; the server is wiring</h2>
+
+    <p>The version that needs a server to test looks like this:</p>
+
+    <pre><code>app.post("/api/redeem", async (req, res) =&gt; {
+  const token = await db.query("SELECT * FROM tokens WHERE code_hash = $1", [hash(req.body.code)]);
+  if (!token) return res.status(404).json({ error: "invalid_or_expired" });
+  const conversation = await db.query("INSERT INTO conversations ...");
+  logger.info("redeemed", { tokenId: token.id });
+  res.json({ conversationId: conversation.id });
+});</code></pre>
+
+    <p>To test it you need a running Postgres, a port, an HTTP client, and a logger you can read
+    back. Most people write two of those and give up, which is how an endpoint ends up with no tests
+    at all.</p>
+
+    <p>The same logic, separated from its wiring:</p>
+
+    <pre><code>// The decision — a plain function. Everything it needs, it is given.
+export function handleRedeem(req, deps) { /* returns { status, body } */ }
+
+// The wiring — written once, and boring on purpose.
+app.post("/api/redeem", async (req, res) =&gt; {
+  const result = await handleRedeem(req, { findByCode, createConversation, now: new Date(), log });
+  res.status(result.status).json(result.body);
+});</code></pre>
+
+    <div class="callout">
+        <div class="callout-title">What you gain, stated honestly</div>
+        <p>You are <strong>not</strong> testing that Express parsed the JSON body, that the route
+        path is right, or that the status code reached the socket. Those are real things and they
+        can break. What you get instead is every <em>decision</em> the endpoint makes, callable in a
+        microsecond, including the six cases that are tedious to arrange over HTTP and the one
+        &mdash; identical denials &mdash; that is nearly impossible to check any other way.</p>
+        <p>The wiring is then three lines that are the same on every route, and a single test that
+        the server starts and answers one request covers all of it.</p>
+    </div>
+
+    <h3>Try it yourself</h3>
+    <p>No server, no port, no client. A request is an object.</p>
+
+    <div id="pg-handler-shape"></div>
+    <script>
+        createPlayground("pg-handler-shape", `function handlePing(req, deps) {
+  if (!req.body || typeof req.body.name !== "string") {
+    return { status: 400, body: { error: "name_required" } };
+  }
+  deps.log("ping", { requestId: req.requestId });
+  return { status: 200, body: { greeting: "hello " + req.body.name } };
+}
+
+const lines = [];
+const log = (event, fields) => lines.push({ event, fields });
+
+console.log(handlePing({ body: { name: "Sara" }, requestId: "r1" }, { log }));
+console.log(handlePing({ body: {}, requestId: "r2" }, { log }));
+console.log("logged:", JSON.stringify(lines));
+
+// Note what the second call did NOT do: it never reached the log.`);
+    </script>
+
+    <h2>2 &middot; The denial oracle, and what makes a difference safe</h2>
+
+    <p>Here are five responses a reasonable developer writes, each of them helpful:</p>
+
+    <pre><code>{ status: 404, body: { error: "no_such_code" } }         // never existed
+{ status: 410, body: { error: "revoked" } }              // revoked
+{ status: 410, body: { error: "expired" } }              // expired
+{ status: 429, body: { error: "use_limit_reached" } }    // exhausted
+{ status: 404, body: { error: "account_closed" } }       // owner deleted</code></pre>
+
+    <p>Together they are a search engine for other people's business. Feed it codes and it tells you
+    which ones are real. Feed it one code repeatedly and it tells you when the owner revoked it,
+    when their token expired, and &mdash; the worst of the five &mdash; that somebody exercised
+    their right to erasure.</p>
+
+    <p>The rule is one response:</p>
+
+    <pre><code>{ status: 404, body: { error: "invalid_or_expired" } }   // all five, always</code></pre>
+
+    <div class="callout warning">
+        <div class="callout-title">Not every difference leaks &mdash; and knowing which is the actual skill</div>
+        <p>Refusing a <strong>malformed</strong> code with a different answer is fine, and this
+        lesson does exactly that. <code>HELLO</code> is not a token code: it is the wrong length and
+        uses letters the alphabet excludes. The client can work that out without asking, so telling
+        it nothing it could not already compute reveals nothing.</p>
+        <p>The test is not &ldquo;are these responses different&rdquo;. It is <strong>&ldquo;could
+        the caller have worked this out without asking us?&rdquo;</strong> Shape: yes. Existence:
+        no. Getting this backwards in the cautious direction has its own cost &mdash; an API that
+        answers everything with <code>400</code> is one nobody can debug.</p>
+    </div>
+
+    <h3>Try it yourself</h3>
+    <p>The oracle, made concrete. Count how many distinct answers come back.</p>
+
+    <div id="pg-oracle"></div>
+    <script>
+        createPlayground("pg-oracle", `// A handler that is helpful, in the way that leaks.
+function chatty(token) {
+  if (!token) return { status: 404, body: { error: "no_such_code" } };
+  if (token.status === "revoked") return { status: 410, body: { error: "revoked" } };
+  if (token.ownerDeleted) return { status: 404, body: { error: "account_closed" } };
+  return { status: 200, body: { ok: true } };
+}
+
+function quiet(token) {
+  if (!token || token.status === "revoked" || token.ownerDeleted) {
+    return { status: 404, body: { error: "invalid_or_expired" } };
+  }
+  return { status: 200, body: { ok: true } };
+}
+
+const dead = [
+  null,
+  { status: "revoked" },
+  { status: "active", ownerDeleted: true }
+];
+
+function distinct(handler) {
+  const seen = {};
+  for (const t of dead) seen[JSON.stringify(handler(t))] = true;
+  return Object.keys(seen);
+}
+
+console.log("chatty gives", distinct(chatty).length, "different answers:");
+distinct(chatty).forEach((a) => console.log("   " + a));
+console.log("quiet gives", distinct(quiet).length + ":");
+distinct(quiet).forEach((a) => console.log("   " + a));`);
+    </script>
+
+    <h2>3 &middot; What the log must not contain</h2>
+
+    <p>The code moved into the request body precisely so it would stay out of the URL, the proxy's
+    access log, browser history and <code>Referer</code>. Writing it into your own application log
+    on the way past undoes all of that in one line.</p>
+
+    <p>So: <strong>log the token's <code>id</code>.</strong> It identifies the row for anyone who can
+    already query the database and is worth nothing to anyone who cannot, which is the property an
+    identifier in a log should have.</p>
+
+    <div class="callout warning">
+        <div class="callout-title">The dangerous log line is the one with nothing to put in it</div>
+        <p>At <em>&ldquo;redemption denied&rdquo;</em> there is often no token &mdash; that is what
+        being denied means. There is no id, and the pull towards writing <em>something</em>
+        identifying is exactly how the code ends up in the log. <code>requestId</code> is enough: it
+        ties the line to the rest of the request without saying anything about the token.</p>
+        <p>There is a second reason the denial log must carry nothing about the token, and it is the
+        same one as the response: <strong>a log that says <code>tokenId</code> on some denials and
+        not on others is the denial oracle again</strong>, written down for whoever reads the logs
+        later. The five cases have to be indistinguishable in both places.</p>
+    </div>
+
+    <h3>Try it yourself &mdash; broken on purpose</h3>
+    <p>Read the error. Then notice that the line which crashes is the line trying to be helpful.</p>
+
+    <div id="pg-broken"></div>
+    <script>
+        createPlayground("pg-broken", `function handleRedeem(req, deps) {
+  const token = deps.findByCode(req.body.code);
+
+  if (!token || token.status === "revoked") {
+    // Trying to make the denial useful to whoever reads the log.
+    deps.log("redeem_denied", { requestId: req.requestId, tokenId: token.id });
+    return { status: 404, body: { error: "invalid_or_expired" } };
+  }
+
+  return { status: 200, body: { conversationId: "c1" } };
+}
+
+const deps = {
+  findByCode: (code) => (code === "MERC-8GH2-KP4X" ? { id: "t1", status: "revoked" } : null),
+  log: (event, fields) => console.log("LOG", event, JSON.stringify(fields))
+};
+
+console.log(handleRedeem({ body: { code: "MERC-8GH2-KP4X" }, requestId: "r1" }, deps));
+console.log(handleRedeem({ body: { code: "2345-6789-ABCD" }, requestId: "r2" }, deps));
+
+// Fix it. Note that the fix is not a null check -- it is deciding that a
+// denial log says nothing about the token, even when there is one to say.`);
+    </script>
+
+    <h2>Now build it yourself</h2>
+
+    <div id="exercise-1"></div>
+    <script>
+        createSolution("exercise-1", {
+            exercise:
+                "Write <code>handleRedeem(req, deps)</code>, returning <code>{ status, body }</code>. It never touches a database, a clock or a logger of its own &mdash; all three arrive in <code>deps</code>.<br><br>" +
+                "<code>req</code> is <code>{ body: { code }, requestId }</code>.<br>" +
+                "<code>deps</code> is <code>{ findByCode, createConversation, now, log }</code>.<br><br>" +
+                "<strong>1. Shape first.</strong> If <code>code</code> is missing, not a string, or not of the form <code>XXXX-XXXX-XXXX</code> using only <code>23456789ABCDEFGHJKMNPQRSTUVWXYZ</code>, return <code>400</code> with <code>{ error: \"malformed_code\" }</code> and <strong>do not look anything up</strong>.<br><br>" +
+                "<strong>2. Normalise, then look up.</strong> Trim it and upper-case it before calling <code>findByCode(code)</code>, so <code>merc-8gh2-kp4x</code> works. <code>findByCode</code> returns a token or <code>null</code>.<br><br>" +
+                "<strong>3. One denial.</strong> Return exactly <code>{ status: 404, body: { error: \"invalid_or_expired\" } }</code> when the token is missing, or <code>status</code> is <code>\"revoked\"</code>, or <code>ownerDeleted</code> is true, or <code>expiresAt</code> is non-null and has been reached, or <code>useCount</code> has reached a non-null <code>maxUses</code>. The same object every time.<br><br>" +
+                "<strong>4. Otherwise redeem.</strong> <code>createConversation(token.id)</code> gives you an id; return <code>200</code> with <code>{ conversationId }</code>.<br><br>" +
+                "<strong>5. Log carefully.</strong> On success, <code>log(\"redeem_ok\", { requestId, tokenId })</code>. On any denial, <code>log(\"redeem_denied\", { requestId })</code> &mdash; and nothing else, whether or not a token was found. The code never appears in a log field.",
+            hints: [
+                "Do the shape check with one regular expression against the whole string, and remember it runs on the NORMALISED value or a lower-case code is rejected as malformed before it ever gets a chance. Normalise first, validate the normalised string, then look up.",
+                "Build the denial once — <code>const denied = { status: 404, body: { error: \"invalid_or_expired\" } };</code> — and return it from every branch. Five copies of the same literal is five chances for one of them to drift, and the whole requirement is that they cannot.",
+                "For rule 3, remember the two null conventions: <code>expiresAt === null</code> means never expires and <code>maxUses === null</code> means unlimited, so both need a null test BEFORE the comparison. <code>maxUses: 0</code> is a real limit that permits nothing, and it is falsy — which is why the test is <code>maxUses !== null</code> and not <code>if (maxUses)</code>."
+            ],
+            solution: `const ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+const CODE_SHAPE = new RegExp("^[" + ALPHABET + "]{4}-[" + ALPHABET + "]{4}-[" + ALPHABET + "]{4}$");
+
+function handleRedeem(req, deps) {
+  // One object, returned from every denial branch. Five copies of a
+  // literal would be five chances for one of them to drift apart.
+  const denied = { status: 404, body: { error: "invalid_or_expired" } };
+
+  const raw = req.body && req.body.code;
+  if (typeof raw !== "string") {
+    return { status: 400, body: { error: "malformed_code" } };
+  }
+
+  const code = raw.trim().toUpperCase();
+  if (!CODE_SHAPE.test(code)) {
+    // Shape is something the caller could have checked itself, so saying
+    // so reveals nothing. No lookup happens.
+    return { status: 400, body: { error: "malformed_code" } };
+  }
+
+  const token = deps.findByCode(code);
+
+  const dead =
+    !token ||
+    token.status === "revoked" ||
+    token.ownerDeleted === true ||
+    (token.expiresAt !== null && new Date(token.expiresAt) <= deps.now) ||
+    (token.maxUses !== null && token.useCount >= token.maxUses);
+
+  if (dead) {
+    // requestId only. A tokenId here on some denials and not others is
+    // the same oracle, written into the log instead of the response.
+    deps.log("redeem_denied", { requestId: req.requestId });
+    return denied;
+  }
+
+  const conversationId = deps.createConversation(token.id);
+  deps.log("redeem_ok", { requestId: req.requestId, tokenId: token.id });
+  return { status: 200, body: { conversationId: conversationId } };
+}`
+        });
+    </script>
+
+    <div id="pg-exercise"></div>
+    <script>
+        createPlayground("pg-exercise", `// --- Write handleRedeem(req, deps) here, then press Run ---
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label);
+  if (!passed && detail) console.log("      " + detail);
+}
+
+const NOW = new Date("2026-08-28T00:00:00Z");
+const LIVE = "MERC-8GH2-KP4X";
+
+function token(over) {
+  return Object.assign({
+    id: "t1", status: "active", ownerDeleted: false,
+    expiresAt: null, maxUses: null, useCount: 0
+  }, over);
+}
+
+// A fresh set of dependencies per call, so nothing leaks between cases.
+function harness(row) {
+  const calls = { lookups: [], conversations: [], logs: [] };
+  const deps = {
+    now: NOW,
+    findByCode: function (code) { calls.lookups.push(code); return row; },
+    createConversation: function (id) { calls.conversations.push(id); return "c-" + id; },
+    log: function (event, fields) { calls.logs.push({ event: event, fields: fields }); }
+  };
+  return { deps: deps, calls: calls };
+}
+
+function run(code, row, requestId) {
+  const h = harness(row);
+  const res = handleRedeem({ body: { code: code }, requestId: requestId || "r1" }, h.deps);
+  return { res: res, calls: h.calls };
+}
+
+try {
+  // --- the happy path ---
+  const ok = run(LIVE, token({}));
+  check("a live token redeems with 200",
+    ok.res.status === 200, "got: " + JSON.stringify(ok.res));
+  check("the response carries the new conversation id",
+    ok.res.body.conversationId === "c-t1",
+    "got: " + JSON.stringify(ok.res.body));
+  check("a conversation is created exactly once",
+    ok.calls.conversations.length === 1,
+    "created " + ok.calls.conversations.length + " times");
+
+  // --- shape ---
+  const short = run("HELLO", token({}));
+  check("a malformed code is refused with 400",
+    short.res.status === 400 && short.res.body.error === "malformed_code",
+    "got: " + JSON.stringify(short.res));
+  check("a malformed code is never looked up",
+    short.calls.lookups.length === 0,
+    "looked up: " + JSON.stringify(short.calls.lookups) +
+    " - the shape is decidable without asking the database");
+
+  const excluded = run("MERC-8GH2-KPLX", token({}));   // audit-allow-token-here: being impossible is the point
+  check("a code containing an excluded letter is malformed",
+    excluded.res.status === 400,
+    "got: " + JSON.stringify(excluded.res) + " - L is not in the alphabet");
+
+  const missing = handleRedeem({ body: {}, requestId: "r0" }, harness(null).deps);
+  check("a missing code is malformed rather than a crash",
+    missing.status === 400, "got: " + JSON.stringify(missing));
+
+  // --- normalisation ---
+  const lower = run("  merc-8gh2-kp4x  ", token({}));
+  check("a lower-case code with spaces still redeems",
+    lower.res.status === 200, "got: " + JSON.stringify(lower.res));
+  check("the lookup receives the normalised code",
+    lower.calls.lookups[0] === LIVE,
+    "looked up: " + JSON.stringify(lower.calls.lookups[0]));
+
+  // --- the five denials, which must be one denial ---
+  const deaths = {
+    "never existed": run(LIVE, null),
+    "revoked": run(LIVE, token({ status: "revoked" })),
+    "owner deleted": run(LIVE, token({ ownerDeleted: true })),
+    "expired": run(LIVE, token({ expiresAt: "2026-01-01T00:00:00Z" })),
+    "exhausted": run(LIVE, token({ maxUses: 3, useCount: 3 }))
+  };
+
+  for (const name of Object.keys(deaths)) {
+    check("a token that " + name + " is refused",
+      deaths[name].res.status === 404,
+      "got: " + JSON.stringify(deaths[name].res));
+  }
+
+  const answers = {};
+  for (const name of Object.keys(deaths)) {
+    answers[JSON.stringify(deaths[name].res)] = true;
+  }
+  check("all five denials are byte-identical",
+    Object.keys(answers).length === 1,
+    Object.keys(answers).length + " different answers: " + Object.keys(answers).join("  ||  "));
+
+  check("a denied redemption creates no conversation",
+    Object.keys(deaths).every(function (n) { return deaths[n].calls.conversations.length === 0; }),
+    "one of the denials created a conversation anyway");
+
+  // --- the two null conventions ---
+  const unlimited = run(LIVE, token({ maxUses: null, useCount: 99 }));
+  check("maxUses null means unlimited, whatever the use count",
+    unlimited.res.status === 200, "got: " + JSON.stringify(unlimited.res));
+
+  const zero = run(LIVE, token({ maxUses: 0, useCount: 0 }));
+  check("maxUses 0 permits nothing, even though 0 is falsy",
+    zero.res.status === 404,
+    "got: " + JSON.stringify(zero.res) + " - if (maxUses) is the wrong test");
+
+  const never = run(LIVE, token({ expiresAt: null }));
+  check("expiresAt null means never expires",
+    never.res.status === 200,
+    "got: " + JSON.stringify(never.res) + " - new Date(null) is 1970");
+
+  const future = run(LIVE, token({ expiresAt: "2027-01-01T00:00:00Z" }));
+  check("an expiry in the future does not deny",
+    future.res.status === 200, "got: " + JSON.stringify(future.res));
+
+  // --- the log ---
+  const okLogs = ok.calls.logs;
+  check("a success is logged once, with the token id",
+    okLogs.length === 1 && okLogs[0].fields.tokenId === "t1" &&
+    okLogs[0].fields.requestId === "r1",
+    "got: " + JSON.stringify(okLogs));
+
+  const revokedLogs = deaths.revoked.calls.logs;
+  const strangerLogs = deaths["never existed"].calls.logs;
+  check("a denial is logged with the requestId",
+    revokedLogs.length === 1 && revokedLogs[0].fields.requestId === "r1",
+    "got: " + JSON.stringify(revokedLogs));
+
+  check("a denial log says nothing about the token, even when there is one",
+    JSON.stringify(revokedLogs[0].fields) === JSON.stringify(strangerLogs[0].fields),
+    "found token: " + JSON.stringify(revokedLogs[0].fields) +
+    "  vs  no token: " + JSON.stringify(strangerLogs[0].fields) +
+    " - the difference is the oracle again, in the log");
+
+  // Nothing anywhere may carry the code itself.
+  const everything = [ok, lower, deaths.revoked, deaths["never existed"], short];
+  const leaked = everything.filter(function (r) {
+    return JSON.stringify(r.calls.logs).indexOf("MERC") !== -1;
+  });
+  check("no log line anywhere contains the token code",
+    leaked.length === 0,
+    "the code reached a log field - it was moved into the body to keep it out of logs");
+} catch (err) {
+  console.log("FAIL  " + err.name + ": " + err.message);
+  console.log("      Usually this means handleRedeem is missing or misspelt,");
+  console.log("      or a branch read a property of a token that is null.");
+}`);
+    </script>
+
+    <h2>The wiring, for completeness</h2>
+
+    <p>This part is not tested by the suite above, and is written once:</p>
+
+    <pre><code>import express from "express";
+import { handleRedeem } from "./redeem.js";
+
+const app = express();
+app.use(express.json());
+
+app.post("/api/redeem", async (req, res) =&gt; {
+  const result = await handleRedeem(req, {
+    findByCode: (code) =&gt; tokens.findByCode(code),
+    createConversation: (tokenId) =&gt; conversations.create(tokenId),
+    now: new Date(),
+    log: logger.info.bind(logger)
+  });
+  res.status(result.status).json(result.body);
+});
+
+// Note the route: the code is in the BODY, never in the path. A path
+// reaches the proxy access log, browser history and Referer, which is
+// exactly what hashing the code in the database was for.
+app.listen(3000);</code></pre>
+
+    <h2>Explain it in your own words</h2>
+    <div id="explain-0003"></div>
+    <script>
+        createExplain("explain-0003", {
+            prompt: "This handler answers a <strong>malformed</strong> code differently from an <strong>unknown</strong> one, and that is deliberate rather than an oversight. Explain the test that tells those two apart &mdash; what question do you ask about a difference to decide whether it leaks?"
+        });
+    </script>
+
+    <div id="lesson-quiz"></div>
+    <script>
+        createQuiz("lesson-quiz", [
+            {
+                question: "What does separating the handler from the route give you?",
+                options: [
+                    "Every decision the endpoint makes becomes an ordinary function call, with no server, port or database",
+                    "Faster HTTP responses in production",
+                    "Automatic validation of the request body",
+                    "The ability to change web frameworks without changing tests"
+                ],
+                correct: 0,
+                explanation: "Framework independence is a real side effect but a weak reason. The reason worth the change is that the six awkward cases — and the one about five responses being identical — stop needing a running system to arrange."
+            },
+            {
+                question: "What does this approach explicitly NOT test?",
+                options: [
+                    "That the route path is right, the body was parsed, and the status reached the socket",
+                    "The order in which the denial branches are checked",
+                    "Whether a conversation is created on success",
+                    "Whether the log contains the token code"
+                ],
+                correct: 0,
+                explanation: "The wiring is untested by these tests and it can genuinely break. It is three identical lines on every route, so one test that the server starts and answers a single request covers all of it — which is a much better deal than testing every route through HTTP."
+            },
+            {
+                question: "Why must a revoked token and a code that never existed produce identical responses?",
+                options: [
+                    "Any difference answers the question \"is this code real?\" for someone guessing codes",
+                    "Because the HTTP specification requires a single status per endpoint",
+                    "To keep the response payload small",
+                    "Because the client cannot parse two different error shapes"
+                ],
+                correct: 0,
+                explanation: "The endpoint is reachable by anyone. Distinct answers turn it into a search engine over other people's tokens, and the revoked-versus-never-existed difference also reveals that a specific code was real at some point."
+            },
+            {
+                question: "Which of the five denial cases is the most damaging to distinguish?",
+                options: [
+                    "The owner having deleted their account",
+                    "The token having expired",
+                    "The token having been used up",
+                    "The code never having existed"
+                ],
+                correct: 0,
+                explanation: "It discloses a fact about someone exercising an erasure right, to a stranger, on request. It also punches a hole in the denial defence in the place least likely to be tested, because account deletion is rare and the code path is written months after the others."
+            },
+            {
+                question: "Why is refusing a malformed code with a different answer acceptable?",
+                options: [
+                    "The caller could have determined the shape without asking, so the answer reveals nothing new",
+                    "Malformed codes are rare enough not to matter",
+                    "A 400 response is not logged by proxies",
+                    "The shape check happens before authentication"
+                ],
+                correct: 0,
+                explanation: "The question to ask about any difference is whether the caller could have worked it out themselves. Length and alphabet: yes, trivially. Existence: no. That is the whole test, and it is why an API that answers everything identically is over-corrected rather than safe."
+            },
+            {
+                type: "predict-output",
+                code: "const denied = { status: 404, body: { error: 'invalid_or_expired' } };\nconst a = JSON.stringify(denied);\nconst b = JSON.stringify({ status: 404, body: { error: 'invalid_or_expired' } });\nconsole.log(a === b);",
+                answer: "true",
+                explanation: "Serialising is how a test asserts two responses are the same rather than merely similar. Comparing the objects with === would be false, because they are different objects — a trap worth meeting before you write the assertion."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This denial branch leaks. Where?",
+                code: "1  if (!token) {\n2    deps.log('redeem_denied', { requestId: req.requestId });\n3    return denied;\n4  }\n5  if (token.status === 'revoked') {\n6    deps.log('redeem_denied', { requestId: req.requestId, tokenId: token.id });\n7    return denied;\n8  }",
+                bugLine: 6,
+                options: ["Line 2", "Line 6", "Line 7"],
+                correct: 1,
+                explanation: "The responses are identical and the LOGS are not. A tokenId on some denials and not others is the same oracle written down for whoever reads the logs — and logs are read by more people, kept longer and secured less carefully than the database."
+            },
+            {
+                type: "which-breaks",
+                question: "One of these use-limit checks lets an exhausted token through. Which?",
+                variants: [
+                    "if (token.maxUses !== null && token.useCount >= token.maxUses) return denied;",
+                    "if (token.maxUses && token.useCount >= token.maxUses) return denied;",
+                    "if (token.maxUses != null && token.useCount >= token.maxUses) return denied;"
+                ],
+                correct: 1,
+                explanation: "Testing maxUses for truthiness treats 0 as absent, so a token issued to permit no uses at all permits unlimited ones. null means unlimited and 0 means none — opposite meanings, and only one of them is falsy."
+            },
+            {
+                type: "predict-output",
+                code: "const token = { maxUses: 0, useCount: 0 };\nconsole.log(Boolean(token.maxUses), token.maxUses !== null);",
+                answer: "false true",
+                explanation: "The falsy check and the null check disagree exactly where it matters. Every place in Token that reads maxUses or expiresAt has to test against null explicitly, and this is the reason."
+            },
+            {
+                question: "Why does the handler take <code>now</code> in <code>deps</code> rather than calling <code>new Date()</code>?",
+                options: [
+                    "So the expiry branch can be tested at any moment, past or future, as an ordinary call",
+                    "Because new Date() is slow inside a request",
+                    "Because Express provides the time already",
+                    "To keep the function synchronous"
+                ],
+                correct: 0,
+                explanation: "It is the same argument as the previous lesson. It also has a second benefit here: every branch of one request sees the same instant, so a request cannot be un-expired between two lines of the same handler."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the guard that stops a never-expiring token being read as expired.",
+                code: "(token.expiresAt !== ___ && new Date(token.expiresAt) <= deps.now)",
+                answer: "null",
+                explanation: "null means never expires, and new Date(null) is 1970 — so without this the check reports every unlimited token as long expired. Same guard, same reason, as in the previous lesson."
+            },
+            {
+                question: "Why does the malformed-code branch avoid calling <code>findByCode</code>?",
+                options: [
+                    "There is nothing to look up, and a lookup would put an attacker-controlled string on a database path",
+                    "It would be slower",
+                    "findByCode throws on invalid input",
+                    "The lookup would create a conversation"
+                ],
+                correct: 0,
+                explanation: "Validating shape before the lookup keeps arbitrary input off the query path and makes the assertion possible: the test checks that no lookup happened at all, which is the difference between rejecting and merely not finding."
+            },
+            {
+                type: "order-steps",
+                question: "Put the handler's steps in the order they must happen.",
+                steps: [
+                    "Read the code from the body",
+                    "Normalise it — trim and upper-case",
+                    "Check the shape against the alphabet",
+                    "Look it up, and decide live or dead"
+                ],
+                correctOrder: [0, 1, 2, 3],
+                explanation: "Normalising before validating is what makes a lower-case code work. Validating the raw string first rejects merc-8gh2-kp4x as malformed, which is a bug the user experiences as the product not working."
+            },
+            {
+                question: "What is the argument for building the denial as one object and returning it from every branch?",
+                options: [
+                    "Five copies of a literal are five chances for one to drift, and not drifting is the entire requirement",
+                    "It uses less memory",
+                    "It makes the function shorter",
+                    "Returning the same object reference is required by Express"
+                ],
+                correct: 0,
+                explanation: "The requirement is that the responses cannot differ. Writing them once means a future edit changes all five together — you have made the property structural instead of relying on everyone remembering it."
+            },
+            {
+                question: "The token code was moved out of the URL path and into the request body. What does that buy, and what does it demand?",
+                options: [
+                    "It keeps the code out of proxy logs, history and Referer — and demands it stays out of your own logs too",
+                    "It makes the request faster and demands a Content-Type header",
+                    "It allows longer codes and demands validation",
+                    "It hides the code from the client and demands HTTPS"
+                ],
+                correct: 0,
+                explanation: "The move solves everything upstream of your process and nothing inside it. A log line written by your own handler puts the code somewhere read by more people and kept longer than the database, which is where it was never allowed to be."
+            },
+            {
+                type: "predict-output",
+                code: "function handle(req) {\n  const raw = req.body && req.body.code;\n  if (typeof raw !== 'string') return 400;\n  return 200;\n}\nconsole.log(handle({ body: {} }), handle({}), handle({ body: { code: 42 } }));",
+                answer: "400 400 400",
+                explanation: "All three malformed inputs are refused without crashing. The && guard handles a missing body, and the typeof check handles both a missing code and a code that is not a string — a JSON body can contain a number and a handler that assumes otherwise crashes on .trim()."
+            },
+            {
+                question: "A test asserts the five denials are identical by putting each response into an object keyed by its JSON. What is it checking?",
+                options: [
+                    "That exactly one distinct answer exists across all five",
+                    "That each response is valid JSON",
+                    "That the responses are in the right order",
+                    "That no response is undefined"
+                ],
+                correct: 0,
+                explanation: "Keys deduplicate, so the count of keys is the count of distinct answers. It is a small trick and the reason it is worth knowing is that the assertion reads as the requirement: one answer, whatever happened."
+            },
+            {
+                question: "Why does the self-check build fresh dependencies for every call?",
+                options: [
+                    "So one case cannot see another's logs and lookups, which would make failures depend on test order",
+                    "Because the dependencies are expensive to create",
+                    "To test that the handler is stateless",
+                    "Because Express requires a new request object each time"
+                ],
+                correct: 0,
+                explanation: "Shared recording fixtures are the classic source of tests that pass alone and fail together, or vice versa. It is the same shared-state bug as a summary object declared outside its function, moved up one level."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This handler creates a conversation for a token that should be refused. Where?",
+                code: "1  const token = deps.findByCode(code);\n2  const conversationId = deps.createConversation(token.id);\n3  if (!token || token.status === 'revoked') return denied;\n4  return { status: 200, body: { conversationId } };",
+                bugLine: 2,
+                options: ["Line 1", "Line 2", "Line 3"],
+                correct: 1,
+                explanation: "The side effect happens before the decision, so a revoked token gets a conversation row that is then thrown away — and a null token crashes on .id first. Deciding before acting is why the self-check asserts that no conversation was created on any denial."
+            },
+            {
+                question: "What is a <code>requestId</code> for in a denial log?",
+                options: [
+                    "It ties the line to the rest of that request without saying anything about the token",
+                    "It identifies the user who made the request",
+                    "It is required by the logging library",
+                    "It replaces the token id for debugging purposes"
+                ],
+                correct: 0,
+                explanation: "It is worth exactly as much as the other lines from the same request and nothing on its own, which is the property you want. It also gives the line something to say, which matters — the pull to write something identifying is what puts a code there."
+            },
+            {
+                type: "predict-output",
+                code: "const seen = {};\n[{a:1},{a:1},{a:2}].forEach(o => { seen[JSON.stringify(o)] = true; });\nconsole.log(Object.keys(seen).length);",
+                answer: "2",
+                explanation: "Two distinct shapes among three objects. Applied to five denial responses, a result of 1 is the requirement met and anything else names how many different answers an attacker can distinguish."
+            },
+            {
+                question: "Which statement about the wiring layer is accurate?",
+                options: [
+                    "It is three near-identical lines per route, so one smoke test covers what it can get wrong",
+                    "It should be tested exhaustively because it handles the network",
+                    "It cannot be tested at all",
+                    "It contains most of the endpoint's risk"
+                ],
+                correct: 0,
+                explanation: "Once the decision is elsewhere, the wiring is a shape you can read at a glance and a single test that the server starts and answers proves it is connected. Effort spent there past that point is effort not spent on the five denials."
+            },
+            {
+                question: "The handler upper-cases the code before validating. What breaks if it validates first?",
+                options: [
+                    "A user typing their code in lower case is told it is malformed",
+                    "The database lookup fails",
+                    "The alphabet check becomes case-sensitive in the wrong direction",
+                    "Nothing — the order is a matter of taste"
+                ],
+                correct: 0,
+                explanation: "Codes get read off cards and typed from photographs, so lower case is normal input rather than an error. Validating before normalising rejects it — a bug users experience as the product simply not working, with an error message that blames them."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the assertion that all five denials are the same.",
+                code: "const answers = {};\nfor (const r of responses) answers[JSON.___(r)] = true;\n// then: Object.keys(answers).length === 1",
+                answer: "stringify",
+                explanation: "Serialise, then deduplicate with object keys. The assertion ends up reading almost exactly like the requirement it enforces, which is the sign of a test worth keeping."
+            },
+            {
+                question: "What is the honest summary of why this handler is easy to test?",
+                options: [
+                    "It makes decisions and is given everything it needs, so a test can supply anything and see everything",
+                    "It is short",
+                    "It avoids async code",
+                    "It uses no external libraries"
+                ],
+                correct: 0,
+                explanation: "Every input is a parameter and every effect goes through a dependency, so there is nothing the test cannot arrange and nothing it cannot observe. Length is a consequence of that, not the cause."
+            },
+            {
+                question: "A colleague suggests returning 410 Gone for revoked tokens because it is more correct HTTP. What is the reply?",
+                options: [
+                    "It is more correct and it is a disclosure, so the endpoint gives up the distinction on purpose",
+                    "410 is not a valid status code for this case",
+                    "Clients cannot handle 410",
+                    "It would be fine as long as the body stays the same"
+                ],
+                correct: 0,
+                explanation: "The colleague is right about HTTP semantics and that is not the deciding argument. The status is part of the response an attacker sees, so a truthful 410 tells them the code was real — and a matching body does not help, because the status alone separates the cases."
+            }
+        ]);
+    </script>
+
+    <div class="lesson-nav">
+        <a href="./0002-time-randomness-and-fakes.html">&larr; Time, Randomness and Fakes</a>
+        <span class="disabled">Next: Testing Against Real Postgres &rarr;</span>
+    </div>
+
+</body>
+</html>

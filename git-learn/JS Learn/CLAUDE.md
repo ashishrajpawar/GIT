@@ -183,8 +183,11 @@ opt-outable.
 
 **One line, not one file: `audit-allow-token-here`.** A file that must keep
 being scanned, but has a single legitimate reason to name a bad code, marks that
-*line* instead. This file is the only user: the paragraph above names
-`MERC-8GH2-LP4X` while explaining why it was wrong, and the check was warning <!-- audit-allow-token-here: same historical value as above -->
+*line* instead. There are two users. `c1/0003` is the straightforward one — its
+self-check feeds a code containing `L` to prove the handler rejects it as
+malformed, on one line, in a lesson otherwise full of valid codes; a whole-file
+opt-out would stop checking those. This file is the other: the paragraph above
+names `MERC-8GH2-LP4X` while explaining why it was wrong, and the check was warning <!-- audit-allow-token-here: same historical value as above -->
 about the documentation of the bug it exists to prevent. A whole-file opt-out
 here would be actively dangerous — `CLAUDE.md` carries the canonical code a
 lesson copies, which is how the original spread to 36 files. **A marker must be
