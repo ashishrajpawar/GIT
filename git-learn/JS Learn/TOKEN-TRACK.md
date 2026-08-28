@@ -767,7 +767,7 @@ whole launch.
 
 | # | Unit | Owns the detail | Gate |
 |---|---|---|---|
-| W1 | **Phase 3 — the nine unwritten C-modules.** C0, C1, C2, C3, C4, C6, C7, C8, C9. C5 is the only one that exists. Written **just-in-time**, never batched | this file, § Phase 3 | the student reaching each one |
+| W1 | **Phase 3 — the C-modules. C0 landed 2026-08-27**; C5 already existed. **Eight remain**: C1, C2, C3, C4, C6, C7, C8, C9. Written **just-in-time**, one module then stop — never batched | this file, § Phase 3 | the student reaching each one |
 | W2 | Maintenance: `--wrong` cases for the seven lessons that have a self-check and none — `01/0001`–`0005`, `a11/0002`, `a8/0002` | `CLAUDE.md` § practice pattern | — |
 | W3 | **Phase 4 — the operating track.** C6, C7, C8, C9 studied after launch, but instrumented into the product from Phase 3 onward | this file, § Phase 4 | W1 |
 

@@ -4,23 +4,23 @@
      Regenerate with: node scripts/audit.mjs
      Hand-written session state lives in SESSION.md, never here. -->
 
-Generated 2026-08-27 from the files on disk. Where any other document disagrees
+Generated 2026-08-28 from the files on disk. Where any other document disagrees
 with this one, this one is right — everything below is measured, not asserted.
 
 ## Summary
 
 | Metric | Value |
 |---|---|
-| Token-track lessons | 101 |
+| Token-track lessons | 103 |
 | Founder-track lessons (F1, counted separately) | 16 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
-| Quiz questions (track) | 2751 |
-| Avg teaching prose per track lesson | 2244 words |
-| Lessons with a playground | 101 / 101 |
-| Lessons with an exercise | 101 / 101 |
-| **Deepened** (all 3 spine sections) | 16 / 101 |
-| **Verified** (code executed) | 101 / 101 |
-| Ran clean but had nothing to run | 0 / 101 |
+| Quiz questions (track) | 2808 |
+| Avg teaching prose per track lesson | 2229 words |
+| Lessons with a playground | 103 / 103 |
+| Lessons with an exercise | 103 / 103 |
+| **Deepened** (all 3 spine sections) | 16 / 103 |
+| **Verified** (code executed) | 103 / 103 |
+| Ran clean but had nothing to run | 0 / 103 |
 | Errors | 0 |
 | Known and blocked | 0 |
 | Warnings | 2 |
@@ -30,12 +30,12 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 ## Answer-position distribution — **authored order, not what the student sees**
 
-1476 keyed questions (multiple-choice, spot-the-bug, which-breaks).
+1514 keyed questions (multiple-choice, spot-the-bug, which-breaks).
 
 > **This clustering is expected and already handled. Do not "fix" it again.**
 > `quiz.js` shuffles options at render time (`optionDisplayOrder`), so the
 > displayed distribution is roughly even — measured at 26.9 / 28.5 / 26.9 / 17.6
-> across all 1476 questions, versus the authored figures below. Index 3 sits
+> across all 1514 questions, versus the authored figures below. Index 3 sits
 > lower only because many questions have three options.
 >
 > The numbers here read `correct` straight from the lesson data, which is
@@ -54,21 +54,21 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Position | Count | Share |
 |---|---|---|
-| index 0 | 149 | 10.1% |
-| index 1 | 947 | 64.2% |
-| index 2 | 346 | 23.4% |
-| index 3 | 34 | 2.3% |
+| index 0 | 184 | 12.2% |
+| index 1 | 949 | 62.7% |
+| index 2 | 347 | 22.9% |
+| index 3 | 34 | 2.2% |
 
 ## Question types
 
 | Type | Count |
 |---|---|
-| multiple-choice | 817 |
-| predict-output | 535 |
-| fill-blank | 461 |
-| spot-the-bug | 376 |
-| which-breaks | 283 |
-| order-steps | 279 |
+| multiple-choice | 849 |
+| predict-output | 546 |
+| fill-blank | 467 |
+| spot-the-bug | 380 |
+| which-breaks | 285 |
+| order-steps | 281 |
 
 ## Modules
 
@@ -96,8 +96,9 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | b7-token-engine | 3 | 3478 | 7 | 6 | 78 | 3/3 | 3/3 |
 | b8-push-notifications | 1 | 3020 | 2 | 2 | 25 | 0/1 | 1/1 |
 | b9-docker-deployment | 3 | 3199 | 6 | 6 | 81 | 2/3 | 3/3 |
+| c0-architecture | 2 | 1477 | 10 | 2 | 57 | 0/2 | 2/2 |
 | c5-end-to-end-encryption | 5 | 1671 | 10 | 10 | 126 | 0/5 | 5/5 |
-| x1-git-dev-environment | 3 | 1201 | 4 | 6 | 83 | 0/3 | 3/3 |
+| x1-git-dev-environment | 3 | 1202 | 4 | 6 | 83 | 0/3 | 3/3 |
 | x2-debugging | 2 | 1242 | 3 | 4 | 50 | 0/2 | 2/2 |
 
 ## Founder track (F1) — non-technical
@@ -139,7 +140,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Quiz structure valid | ok |
 | Tables queried but never created | ok |
 | Broken relative links | ok |
-| search-index.json | 118 entries, 0 dead, 0 unindexed |
+| search-index.json | 120 entries, 0 dead, 0 unindexed |
 | Example tokens valid under alphabet | 2 invalid |
 
 ## Errors
@@ -247,6 +248,8 @@ None.
 | b9-docker-deployment/0001-docker-fundamentals.html | 3054 | 13 | 2 | 2 | 26 | yes | yes |
 | b9-docker-deployment/0002-coolify-setup.html | 3280 | 12 | 2 | 2 | 26 | yes | yes |
 | b9-docker-deployment/0003-logs-backups-monitoring.html | 3263 | 17 | 2 | 2 | 29 | — | yes |
+| c0-architecture/0001-trust-boundaries.html | 1572 | 1 | 5 | 1 | 29 | — | yes |
+| c0-architecture/0002-decisions-that-survive.html | 1381 | 2 | 5 | 1 | 28 | — | yes |
 | c5-end-to-end-encryption/0001-keys-on-the-device.html | 1371 | 5 | 2 | 2 | 26 | — | yes |
 | c5-end-to-end-encryption/0002-publishing-fetching-keys.html | 1782 | 3 | 2 | 2 | 25 | — | yes |
 | c5-end-to-end-encryption/0003-verification-safety-numbers.html | 1462 | 4 | 2 | 2 | 25 | — | yes |
@@ -254,6 +257,6 @@ None.
 | c5-end-to-end-encryption/0005-single-device.html | 1386 | 2 | 2 | 2 | 25 | — | yes |
 | x1-git-dev-environment/0001-git-fundamentals.html | 1254 | 10 | 2 | 2 | 29 | — | yes |
 | x1-git-dev-environment/0002-github-workflow.html | 1170 | 9 | 1 | 2 | 27 | — | yes |
-| x1-git-dev-environment/0003-dev-environment.html | 1178 | 16 | 1 | 2 | 27 | — | yes |
+| x1-git-dev-environment/0003-dev-environment.html | 1181 | 16 | 1 | 2 | 27 | — | yes |
 | x2-debugging/0001-react-native-debugging.html | 1188 | 11 | 2 | 2 | 25 | — | yes |
 | x2-debugging/0002-nodejs-debugging.html | 1295 | 8 | 1 | 2 | 25 | — | yes |

@@ -4138,7 +4138,7 @@ work and the launch work, because one person is doing both.
 | 1 — unblock where the student is | **done**, all five items |
 | 1.5 — the practice pattern in Module 02 | **done** — all 14, 2026-08-17 |
 | 2 — deepen the spine | done (16 of 16 deepenable; 4 deliberately skipped as rewrites) |
-| **3 — the C-modules** | **not started.** C5 is the only one written; **nine remain** — C0, C1, C2, C3, C4, C6, C7, C8, C9. `TOKEN-TRACK.md` queue item **W1** |
+| **3 — the C-modules** | **started 2026-08-27. C0 is written** (2 lessons, verified). C5 was already written; **eight remain** — C1, C2, C3, C4, C6, C7, C8, C9. One module at a time, so the next one waits. `TOKEN-TRACK.md` queue item **W1** |
 | 4 — the operating track | not started, deliberately. Queue item **W3** |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
