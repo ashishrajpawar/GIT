@@ -26,7 +26,14 @@ how far it got.
 > files either.** Make no claims about it at all — not in prose, not in a
 > commit message, not as a reason for prioritising anything.
 
-**Nothing in flight.**
+**W1 — C1, Testing & Quality.** Started 2026-08-28. `0001-what-a-test-is.html`
+is written; `0002`–`0005`, the README, the index row and the search-index
+entries are not. The audit is red until they land, and every error it prints
+names `c1-testing-quality`.
+
+Planned: `0001` what a test is · `0002` time, randomness and fakes · `0003`
+testing an HTTP handler without a network · `0004` testing against a real
+Postgres · `0005` what to test, and the coverage number that lies.
 
 ### State as of 2026-08-28
 
@@ -42,6 +49,10 @@ this section records is only what a script cannot compute:
 - **Every module that exists is complete**, including the two written this week.
 - **Every self-check in the course now has `--wrong` cases.** W2 closed
   2026-08-28. Nothing is left in the maintenance tail.
+- **26 lessons had a widget that never rendered**, fixed 2026-08-28 — including
+  all 16 F1 lessons, whose `createExplain` prompt is the module's only
+  assessment. `scripts/check-load-order.mjs` now errors in the audit. The
+  lesson template puts the asset scripts in `<head>`; see `CLAUDE.md`.
 
 ### What landed 2026-08-26 → 28
 

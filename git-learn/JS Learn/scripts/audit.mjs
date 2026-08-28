@@ -25,6 +25,7 @@ import path from "node:path";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 import { scanPreBlocks } from "./check-pre-blocks.mjs";
+import { scanLoadOrderIn } from "./check-load-order.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = new Set(process.argv.slice(2));
@@ -433,6 +434,27 @@ const preScan = scanPreBlocks(path.join(ROOT, "modules"));
 preScan.findings.forEach((f) =>
   err(`display block: unterminated ${f.quote} string — ${f.file}:${f.line}`));
 
+/* Same family, one layer earlier: a widget that never renders at all.
+
+   Scripts run in document order, so an inline createPlayground() above the
+   <script src> that defines it throws a ReferenceError and the widget is
+   silently absent. Nothing here could see that — verify-lesson.mjs parses the
+   configs out of the HTML with its own reader and runs them in node:vm, so it
+   never experiences load order, and this audit read a `createExplain(` call as
+   proof the F1 prompt was present.
+
+   Found 2026-08-28: 26 files, including all 16 F1 lessons, whose explain prompt
+   is the module's ONLY assessment. Every one was marked `verified`.
+
+   An error, not a warning: there is nothing to weigh up, and the failure is
+   invisible from every direction except opening the page. See
+   scripts/test-load-order.mjs. */
+const loadScan = scanLoadOrderIn(path.join(ROOT, "modules"));
+loadScan.findings.forEach((f) =>
+  err(f.kind === "missing"
+    ? `widget: ${f.file}:${f.line} calls ${f.fn}() and never loads assets/${f.src}`
+    : `widget: ${f.file}:${f.line} calls ${f.fn}() before assets/${f.src} loads (line ${f.tagLine})`));
+
 // -------------------------------------------------- founder track
 
 /* The F1 lessons are exempt from the quiz and self-check invariants, which
@@ -696,6 +718,7 @@ ${founder.map((l) => `| ${l.id.replace("modules/f1-founder-track/", "")} | ${l.w
 | Quiz structure valid | ${errors.some((e) => /\bq\d+:/.test(e)) ? "FAIL" : "ok"} |
 | Tables queried but never created | ${orphanTables.length === 0 ? "ok" : orphanTables.map(([t]) => t).join(", ")} |
 | Broken relative links | ${brokenLinks === 0 ? "ok" : brokenLinks} |
+| Widgets defined before they are called | ${loadScan.findings.length === 0 ? "ok" : loadScan.findings.length + " that never render"} |
 | search-index.json | ${indexStatus} |
 | Example tokens valid under alphabet | ${badTokens.size === 0 ? "ok" : badTokens.size + " invalid"} |
 

@@ -4293,3 +4293,70 @@ refuses.
 
 Thirty-five mistakes and twenty alternatives across the five lessons. Audit
 green, six suites pass, all 103 lessons still verified.
+
+---
+
+### Session of 2026-08-28 (continued) — 26 lessons whose widgets never rendered, found by copying the newest module
+
+C1 began by copying the structure of C0, the most recently written and most
+carefully reviewed module in the course. C0 loads every asset script at the very
+end of `<body>`, below every inline call that uses it.
+
+**That does not work.** Classic scripts run in document order. An inline
+`createPlayground(...)` above the `<script src>` that defines it throws a
+`ReferenceError`, and one throw ends that inline block — so the widget is
+silently absent and the student gets an empty `<div>`.
+
+A scan found **26 files**, in three distinct shapes:
+
+| Shape | Files | What the student loses |
+|---|---|---|
+| Every asset loaded after every call | both C0 lessons | every playground, exercise, explain prompt and quiz on the page |
+| `createExplain` above `explain.js` | **all 16 F1 lessons** | the founder track's *only* assessment |
+| `playground.js` never on the page at all | b2/0001–0003, b3/0002–0004 | every playground in the SQL schema and HTTP server lessons |
+| `explain.js` never on the page at all | x2/0001 | the explain prompt |
+
+**Every one of them was marked `verified`.**
+
+#### Why nothing caught it, which is the part worth keeping
+
+`verify-lesson.mjs` does not load the page. It reads the playground and solution
+*configs* out of the HTML with a parser of its own and runs them in `node:vm`.
+That is what makes it fast and hermetic, and it means **document order is not
+something it can experience.** The code was fine. The code never ran.
+
+`audit.mjs` was worse in an instructive way: the F1 exemption is guarded by a
+rule that each founder lesson must carry a `createExplain` prompt, *because that
+prompt is the whole assessment*. The audit checked for the call in the source
+and found it on all sixteen pages. **The check and the defect were reading the
+same line and disagreeing** — one about the text, the other about what happens
+when a browser executes it.
+
+This is the same family as `check-pre-blocks.mjs`, one layer earlier: a `<pre>`
+block that does not parse is code the student copies and cannot run; a widget
+that never renders is code the student never sees. Both are invisible to a tool
+that reads the page instead of loading it.
+
+#### The fix, and the rule that replaces the old one
+
+`CLAUDE.md`'s template said **"at end of body"**, which is where the whole thing
+came from. It now shows the assets in `<head>`, and the rule is stated as
+**"defined before it is called"** rather than as a position — that is what the
+browser actually requires, and it is mechanical enough to check.
+
+Head placement is safe for all of them: `progress.js` and `copy-code.js` both
+guard on `document.readyState`, and every other asset only defines functions.
+The rejected alternative was to keep end-of-body and move the inline calls down
+below it; the cost is a much larger diff that separates every widget from the
+content it belongs to, and a rule that is invisible while you are adding a
+section in the middle of a lesson.
+
+`scripts/check-load-order.mjs` reports two findings — `late` and `missing` — and
+runs inside `audit.mjs` as an **error**. `scripts/test-load-order.mjs` is the
+15-assertion suite that keeps it honest, and it asserts in both directions:
+the three real failure shapes are caught, and a widget merely *named* in prose
+is not. One assertion is about the check's own foundations rather than its
+output — **every asset tag in the course must be a plain classic script**,
+because `defer`, `async` and `type="module"` all move execution and would make
+document order the wrong thing to read. None are used today; if that changes,
+the suite fails and whoever changed it has to teach the check first.

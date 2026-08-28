@@ -20,13 +20,14 @@ Five steps, in order:
 
 **The audit should say `OK`.** It has since 2026-08-18, which is the first time
 in the project's history — so a red audit now means something rather than being
-the background state. If you touch `assets/` or `scripts/`, run the six suites
+the background state. If you touch `assets/` or `scripts/`, run the seven suites
 too; together they take a few seconds:
 
 ```bash
 node scripts/test-quiz-shuffle.mjs      node scripts/test-dom-sandbox.mjs
 node scripts/test-check-pre-blocks.mjs  node scripts/test-playground-dom.mjs
 node scripts/test-explain.mjs           node scripts/test-strip-types.mjs
+node scripts/test-load-order.mjs
 ```
 
 ### Document precedence — one fact, one home
@@ -1300,16 +1301,39 @@ Same structure as Track A except point 4 becomes:
 ### Lesson page template (scripts to load)
 
 ```html
-<link rel="stylesheet" href="../../assets/styles.css" />
-<!-- at end of body -->
-<script src="../../assets/quiz.js"></script>
-<script src="../../assets/dom-sandbox.js"></script>  <!-- if lesson touches the DOM -->
-<script src="../../assets/playground.js"></script>   <!-- if lesson has playgrounds -->
-<script src="../../assets/solution.js"></script>     <!-- if lesson has exercises -->
-<script src="../../assets/explain.js"></script>      <!-- every lesson: the explain prompt -->
-<script src="../../assets/progress.js"></script>
-<script src="../../assets/copy-code.js"></script>
+<head>
+  <link rel="stylesheet" href="../../assets/styles.css" />
+  <script src="../../assets/quiz.js"></script>
+  <script src="../../assets/dom-sandbox.js"></script>  <!-- if lesson touches the DOM -->
+  <script src="../../assets/playground.js"></script>   <!-- if lesson has playgrounds -->
+  <script src="../../assets/solution.js"></script>     <!-- if lesson has exercises -->
+  <script src="../../assets/explain.js"></script>      <!-- every lesson: the explain prompt -->
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/copy-code.js"></script>
+</head>
 ```
+
+> **⚠ This block used to say "at end of body", and 26 lessons rendered nothing
+> because of it.** Scripts run in document order, so an inline
+> `createPlayground(...)` sitting *above* the `<script src>` that defines it
+> throws a `ReferenceError` — and one throw ends that inline block, so the
+> widget is silently absent. **All 16 F1 lessons called `createExplain` before
+> `explain.js` loaded**, which means the founder track's only assessment did not
+> exist on the page; both C0 lessons lost every widget they had; six B2/B3
+> lessons called `createPlayground` with `playground.js` not on the page at all.
+> Every one was marked `verified`.
+>
+> **Nothing in this project could see it.** `verify-lesson.mjs` reads the widget
+> configs straight out of the HTML with its own parser and runs them in
+> `node:vm`, so it never experiences load order; `audit.mjs` counted a
+> `createExplain(` call as proof the prompt was present. The check and the
+> defect were reading the same line and disagreeing.
+>
+> **The rule is "defined before it is called", not a fixed position** —
+> `progress.js` and `copy-code.js` both guard on `readyState`, so the head is
+> safe, and every other asset only defines functions. `scripts/check-load-order.mjs`
+> enforces it and `audit.mjs` **errors**. Head placement is what the template
+> now shows because it cannot be got wrong by adding content.
 
 ### The practice pattern (established 2026-08-15, lessons 01/0001-0004)
 
@@ -1404,7 +1428,16 @@ node scripts/check-pre-blocks.mjs                    # whole course
 node scripts/check-pre-blocks.mjs modules/02-react-native
 node scripts/test-check-pre-blocks.mjs               # 14 assertions — see below
 node scripts/test-quiz-shuffle.mjs                   # the option shuffle still shuffles
+node scripts/check-load-order.mjs                    # every widget defined before it is called
+node scripts/test-load-order.mjs                     # 15 assertions, both directions
 ```
+
+**`check-load-order.mjs` is the same family, one layer earlier: a `<pre>` block
+that does not parse versus a widget that never renders at all.** Both are
+invisible to `verify-lesson.mjs` for the same reason — it reads the page with
+its own parser instead of loading it, so neither the student's copy-paste nor
+the browser's execution order is anything it experiences. Also in `audit.mjs`
+as an error.
 
 It reports exactly one thing: a `'` or `"` string left open at end of line
 inside a **JavaScript** block, where the quote sits in a code position. That
