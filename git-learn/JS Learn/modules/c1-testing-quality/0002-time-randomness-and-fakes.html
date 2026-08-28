@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>C1 — Time, Randomness and Fakes</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Testing &amp; Quality</a> &rsaquo;
+        <span>Time, Randomness and Fakes</span>
+    </nav>
+
+    <h1>Time, Randomness and Fakes</h1>
+    <p class="lesson-meta">C1 &mdash; Lesson 2 of 5 &nbsp;|&nbsp; ~50 min</p>
+
+    <div class="callout">
+        <div class="callout-title">Why this matters for Token</div>
+        <p>Three things in Token cannot be tested by calling the function and looking at what comes
+        back, because the answer depends on something the test does not own:</p>
+        <ul>
+            <li><strong>The clock.</strong> Whether a token has expired depends on what time it is.
+            A test written today passes today.</li>
+            <li><strong>Randomness.</strong> A token code is twelve random characters. You cannot
+            assert what <code>generate()</code> returns, because that is the point of it.</li>
+            <li><strong>The network.</strong> The OTP goes through an SMS aggregator. A test suite
+            that sends real messages costs money and needs a phone.</li>
+        </ul>
+        <p><strong>All three have the same fix, and it is not a mocking library.</strong> It is that
+        the function stops reaching out for the thing and is handed it instead. That change turns a
+        function you cannot test into a function you cannot get wrong quietly &mdash; and, as a side
+        effect, it is how you prove that the token generator does not have the modulo bias this
+        course keeps warning about.</p>
+    </div>
+
+    <h2>1 &middot; The clock: <code>Date.now()</code> is an input pretending to be a fact</h2>
+
+    <p>Here is the natural way to write it, and it is untestable:</p>
+
+    <pre><code>function isExpired(token) {
+  if (token.expiresAt === null) return false;
+  return new Date(token.expiresAt) &lt;= new Date();   // &lt;-- reaches out for the clock
+}</code></pre>
+
+    <p>To test the expired case you need a token whose <code>expiresAt</code> is in the past, which
+    is fine. To test the <em>not</em> expired case you need one in the future &mdash; so you write
+    <code>"2030-01-01"</code>, and your test suite acquires an expiry date of its own. It will start
+    failing, for real, on a Tuesday in 2030, and whoever is on call will spend an hour on it.</p>
+
+    <p>The fix is one parameter:</p>
+
+    <pre><code>function isExpired(token, now) {
+  if (token.expiresAt === null) return false;
+  return new Date(token.expiresAt) &lt;= now;
+}</code></pre>
+
+    <p>The caller passes <code>new Date()</code>. The test passes whatever moment it wants to talk
+    about. Nothing is mocked, nothing is patched, and the function got shorter.</p>
+
+    <div class="callout warning">
+        <div class="callout-title">Token's actual trap: <code>new Date(null)</code> is 1 January 1970</div>
+        <p>In Token, <code>expires_at</code> being <code>null</code> means <strong>never
+        expires</strong>. And <code>new Date(null)</code> is not an error and is not
+        <code>Invalid Date</code> &mdash; it is the epoch, which is before every date you will ever
+        compare it to.</p>
+        <p>So an <code>isExpired</code> without the null guard reports that a token which never
+        expires <strong>expired 56 years ago</strong>. Deny-by-default means the holder is refused,
+        the user sees a live token, and the two of them argue about it.</p>
+        <p>This is why the guard comes <em>before</em> the parse, and it is the same rule as
+        <code>max_uses</code>: <code>null</code> means unlimited, <code>0</code> means no uses at
+        all, and only one of the two is falsy.</p>
+    </div>
+
+    <h3>Try it yourself</h3>
+    <p>The first line of output is the whole reason the guard exists.</p>
+
+    <div id="pg-clock-trap"></div>
+    <script>
+        createPlayground("pg-clock-trap", `console.log("new Date(null) is:", new Date(null).toISOString());
+console.log("new Date(undefined) is:", String(new Date(undefined)));
+
+const now = new Date("2026-08-28T00:00:00Z");
+
+// No guard. A token that never expires:
+const forever = { expiresAt: null };
+console.log("without a guard:", new Date(forever.expiresAt) <= now);
+
+// With the guard, before the parse:
+function isExpired(token, when) {
+  if (token.expiresAt === null) return false;
+  return new Date(token.expiresAt) <= when;
+}
+console.log("with a guard:   ", isExpired(forever, now));`);
+    </script>
+
+    <h3>Try it yourself &mdash; this one is broken on purpose</h3>
+    <p>Read the error before you fix it. Then ask why the null case reached a line that assumed a
+    date at all.</p>
+
+    <div id="pg-broken"></div>
+    <script>
+        createPlayground("pg-broken", `function isExpired(token, now) {
+  const expiry = token.expiresAt === null ? null : new Date(token.expiresAt);
+  // The guard was written, and then the next line ignored it.
+  return expiry.getTime() <= now.getTime();
+}
+
+const now = new Date("2026-08-28T00:00:00Z");
+
+console.log(isExpired({ expiresAt: "2026-01-01T00:00:00Z" }, now));  // true, fine
+console.log(isExpired({ expiresAt: null }, now));                    // and then this
+
+// Fix it so a null expiry returns false without ever touching a Date.`);
+    </script>
+
+    <h2>2 &middot; Randomness: own the source and it stops being random</h2>
+
+    <p>Token codes are twelve characters from a 31-character alphabet:</p>
+
+    <pre><code>23456789ABCDEFGHJKMNPQRSTUVWXYZ    // 31 characters
+// 36 alphanumerics minus the five that look like each other: 0 O 1 I L</code></pre>
+
+    <p>You cannot assert what a generator returns. You <em>can</em> assert everything else about it,
+    the moment the randomness arrives as a parameter instead of being fetched:</p>
+
+    <pre><code>function makeCodeGenerator(nextByte) {
+  // nextByte() returns 0-255. In production it comes from crypto.
+  // In a test it comes from a list you wrote.
+}</code></pre>
+
+    <p>Now a test can say <em>&ldquo;given these exact bytes, the code must be exactly this&rdquo;</em>,
+    which is not a statement about randomness at all. It is a statement about the mapping &mdash;
+    and the mapping is where the bugs are.</p>
+
+    <div class="callout warning">
+        <div class="callout-title">The bug that hides in <code>%</code>, and why it is not paranoia</div>
+        <p>The obvious mapping is <code>ALPHABET[byte % 31]</code>. It is biased, and the arithmetic
+        is small enough to do by hand: <strong>256 &divide; 31 is 8 remainder 8.</strong></p>
+        <p>Bytes 0&ndash;247 cover the alphabet exactly eight times each. The eight left over
+        &mdash; 248 to 255 &mdash; wrap round and land on the first eight characters again. So
+        <code>2</code> through <code>9</code> come up <strong>nine</strong> times in 256 and the
+        other twenty-three come up eight. Every digit is 12.5% more likely than every letter.</p>
+        <p>Nobody sees this. Every code looks fine, the format is right, no test fails. It is
+        visible only as a statistical property of many codes &mdash; which is exactly the kind of
+        thing a test can check <em>once the byte source is yours</em>, and cannot check at all while
+        it is real randomness.</p>
+        <p>The fix is <strong>rejection sampling</strong>: throw away any byte of 248 or more and
+        draw again. You discard 3% of your bytes and the remaining ones are uniform.</p>
+    </div>
+
+    <h3>Try it yourself</h3>
+    <p>Count them. The first eight characters of the alphabet are the ones to look at.</p>
+
+    <div id="pg-bias"></div>
+    <script>
+        createPlayground("pg-bias", `const ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+console.log("alphabet length:", ALPHABET.length);
+console.log("256 / 31 =", Math.floor(256 / 31), "remainder", 256 % 31);
+
+function tally(accept) {
+  const counts = {};
+  for (let byte = 0; byte < 256; byte++) {
+    if (!accept(byte)) continue;
+    const ch = ALPHABET[byte % 31];
+    counts[ch] = (counts[ch] || 0) + 1;
+  }
+  return counts;
+}
+
+const biased = tally(() => true);
+console.log("with every byte used:");
+console.log("  '2' appears", biased["2"], "times");
+console.log("  'Z' appears", biased["Z"], "times");
+
+const fair = tally((byte) => byte < 248);
+console.log("rejecting 248 and above:");
+console.log("  '2' appears", fair["2"], "times");
+console.log("  'Z' appears", fair["Z"], "times");
+
+// How many of the 256 byte values survive?
+let kept = 0;
+for (let b = 0; b < 256; b++) if (b < 248) kept++;
+console.log("bytes kept:", kept, "of 256  (31 x 8)");`);
+    </script>
+
+    <h2>3 &middot; The network: a fake records what you sent</h2>
+
+    <p>The third uncontrollable thing is the SMS aggregator, and it differs from the other two in an
+    important way: <strong>you usually care more about what was sent than about what came back.</strong></p>
+
+    <p>Token's OTP is subject to two rules from earlier in the course, and both are assertions about
+    the outgoing call rather than about the response:</p>
+
+    <ul>
+        <li>The response to &ldquo;send me a code&rdquo; must be <strong>identical</strong> whether
+        or not the number is registered. Otherwise the endpoint is a list of who has an account,
+        across a phone-number space small enough to enumerate completely.</li>
+        <li>A message body never carries anything but the six digits. No token code, no name.</li>
+    </ul>
+
+    <p>A fake &mdash; a stand-in that remembers how it was called &mdash; makes both of those a
+    one-line test.</p>
+
+    <h3>Try it yourself</h3>
+
+    <div id="pg-spy"></div>
+    <script>
+        createPlayground("pg-spy", `// A fake SMS sender: same shape as the real one, and it keeps a log.
+function makeFakeSms() {
+  const sent = [];
+  return {
+    send: function (to, body) { sent.push({ to: to, body: body }); return { ok: true }; },
+    sent: sent
+  };
+}
+
+function requestOtp(phone, deps) {
+  const known = deps.lookup(phone);
+  if (known) deps.sms.send(phone, "Your Token code is 418293");
+  // Same answer either way. The caller cannot tell the two cases apart.
+  return { status: 200, body: { message: "If that number has an account, a code is on its way." } };
+}
+
+const sms = makeFakeSms();
+const lookup = (phone) => phone === "+919000000001";
+
+const registered = requestOtp("+919000000001", { sms: sms, lookup: lookup });
+const stranger = requestOtp("+919000000002", { sms: sms, lookup: lookup });
+
+console.log("responses identical:", JSON.stringify(registered) === JSON.stringify(stranger));
+console.log("messages actually sent:", sms.sent.length);
+console.log("body:", sms.sent[0].body);
+console.log("body carries only digits:", /^[^0-9]*[0-9]{6}$/.test(sms.sent[0].body));`);
+    </script>
+
+    <div class="callout">
+        <div class="callout-title">Fake, not mock &mdash; and why this course does not reach for a library</div>
+        <p>A <strong>fake</strong> is a real object with a simpler implementation: an in-memory SMS
+        sender, a byte source reading from a list, a <code>now</code> you passed in. A
+        <strong>mock</strong> is usually a library reaching into the module system to replace
+        something a function is going to fetch.</p>
+        <p>The difference that matters here: a fake is only possible if the function <em>accepts</em>
+        its dependency, so reaching for fakes pushes the design towards handing things in. Mocking
+        libraries exist precisely so you do not have to make that change &mdash; which means they
+        let a function keep reaching out for the clock, the database and the network, and that
+        function stays hard to reason about long after its tests are green.</p>
+    </div>
+
+    <h2>Now build it yourself</h2>
+
+    <p>Two exercises. The first is four lines and one of them is a guard; the second is the code
+    generator the whole product depends on.</p>
+
+    <div id="exercise-clock"></div>
+    <script>
+        createSolution("exercise-clock", {
+            exercise:
+                "Write <code>isExpired(token, now)</code>.<br><br>" +
+                "<code>token.expiresAt</code> is either an ISO date string or <code>null</code>. <code>now</code> is a <code>Date</code>. Return a <strong>boolean</strong>.<br><br>" +
+                "1. <code>expiresAt === null</code> means the token never expires &mdash; return <code>false</code>, and do it <strong>before</strong> anything tries to parse a date.<br>" +
+                "2. Otherwise it is expired when the expiry moment has arrived or passed. A token expiring at 10:00 is not usable at 10:00.<br>" +
+                "3. Never read the real clock. The only present moment this function knows about is the one it was given.",
+            hints: [
+                "Rule 1 is a plain early return. The reason it has to come first is <code>new Date(null)</code>, which is not an error and not Invalid Date — it is 1 January 1970, which is earlier than every date you will compare it against.",
+                "Rule 2 is \"reached or passed\", so the comparison is <code>&lt;=</code> and not <code>&lt;</code> — the same distinction as <code>timesUsed &gt;= maxUses</code> in 01/0004.",
+                "Compare two Dates, not a string and a Date. <code>new Date(token.expiresAt) &lt;= now</code> compares two moments; leaving the string unparsed compares text against a date and gives an answer that is sometimes right, which is worse than always wrong."
+            ],
+            solution: `function isExpired(token, now) {
+  // Before the parse, not after: new Date(null) is the epoch, so a token
+  // that never expires would read as expired 56 years ago.
+  if (token.expiresAt === null) return false;
+
+  return new Date(token.expiresAt) <= now;
+}`
+        });
+    </script>
+
+    <div id="pg-exercise-clock"></div>
+    <script>
+        createPlayground("pg-exercise-clock", `// --- Write isExpired(token, now) here, then press Run ---
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label);
+  if (!passed && detail) console.log("      " + detail);
+}
+
+const JUNE = new Date("2026-06-01T00:00:00Z");
+
+try {
+  check("a token with no expiry is not expired",
+    isExpired({ expiresAt: null }, JUNE) === false,
+    "got: " + isExpired({ expiresAt: null }, JUNE) +
+    " - new Date(null) is 1970, so this must be answered before any parsing");
+
+  check("an expiry in the past is expired",
+    isExpired({ expiresAt: "2026-01-01T00:00:00Z" }, JUNE) === true,
+    "got: " + isExpired({ expiresAt: "2026-01-01T00:00:00Z" }, JUNE));
+
+  check("an expiry in the future is not expired",
+    isExpired({ expiresAt: "2027-01-01T00:00:00Z" }, JUNE) === false,
+    "got: " + isExpired({ expiresAt: "2027-01-01T00:00:00Z" }, JUNE));
+
+  check("the exact moment of expiry counts as expired",
+    isExpired({ expiresAt: "2026-06-01T00:00:00Z" }, JUNE) === true,
+    "got: " + isExpired({ expiresAt: "2026-06-01T00:00:00Z" }, JUNE) +
+    " - reached or passed, so <= and not <");
+
+  check("one second before expiry is not expired",
+    isExpired({ expiresAt: "2026-06-01T00:00:01Z" }, JUNE) === false,
+    "got: " + isExpired({ expiresAt: "2026-06-01T00:00:01Z" }, JUNE));
+
+  // The clock is a parameter, checked from both sides. An implementation
+  // that reads the real clock gets exactly one of these two right, and
+  // which one depends on what year you run it in.
+  check("a far-future clock sees a 2027 expiry as expired",
+    isExpired({ expiresAt: "2027-01-01T00:00:00Z" }, new Date("2031-01-01T00:00:00Z")) === true,
+    "got: " + isExpired({ expiresAt: "2027-01-01T00:00:00Z" }, new Date("2031-01-01T00:00:00Z")) +
+    " - is the function reading the real clock instead of now?");
+
+  check("a past clock sees a 2020 expiry as not yet expired",
+    isExpired({ expiresAt: "2020-01-01T00:00:00Z" }, new Date("2019-01-01T00:00:00Z")) === false,
+    "got: " + isExpired({ expiresAt: "2020-01-01T00:00:00Z" }, new Date("2019-01-01T00:00:00Z")) +
+    " - same question from the other side");
+
+  check("the answer is a boolean, not a string",
+    typeof isExpired({ expiresAt: null }, JUNE) === "boolean",
+    "got a " + typeof isExpired({ expiresAt: null }, JUNE));
+} catch (err) {
+  console.log("FAIL  " + err.name + ": " + err.message);
+  console.log("      Usually this means isExpired is missing or misspelt,");
+  console.log("      or a null expiry reached a line that assumed a date.");
+}`);
+    </script>
+
+    <div id="exercise-gen"></div>
+    <script>
+        createSolution("exercise-gen", {
+            exercise:
+                "Write <code>makeCodeGenerator(nextByte)</code>. It returns a function <code>generate()</code> that produces one token code.<br><br>" +
+                "<code>nextByte()</code> returns an integer from 0 to 255. It is the only source of randomness you may use.<br><br>" +
+                "1. The alphabet is <code>23456789ABCDEFGHJKMNPQRSTUVWXYZ</code> &mdash; 31 characters, with <code>0 O 1 I L</code> excluded because they look like each other.<br>" +
+                "2. A code is <strong>12 characters in three groups of four</strong>, joined with dashes: <code>2345-6789-ABCD</code>. Fourteen characters in total.<br>" +
+                "3. <strong>Reject any byte of 248 or more and draw again.</strong> 256 &divide; 31 is 8 remainder 8, so without this the first eight characters are 12.5% more likely than the rest.<br>" +
+                "4. Never call <code>Math.random</code> or anything else. Every character comes from <code>nextByte()</code>.",
+            hints: [
+                "Build the twelve characters first and add the dashes at the end. <code>code.slice(0, 4) + \"-\" + code.slice(4, 8) + \"-\" + code.slice(8)</code> is easier to get right than tracking positions while you go.",
+                "Rule 3 is a loop, not an if — a rejected byte can be followed by another rejected byte. A <code>while</code> that keeps drawing until the byte is under 248 is the whole of it.",
+                "248 is 31 x 8, which is why it is the threshold: the bytes 0 to 247 cover the alphabet exactly eight times each with nothing left over. Reject <em>at</em> 248, not above it — byte 248 maps back to index 0 and is the first biased value."
+            ],
+            solution: `const ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+
+function makeCodeGenerator(nextByte) {
+  // 31 x 8 = 248. Bytes 0-247 cover the alphabet evenly; 248-255 would
+  // land back on the first eight characters and skew every code.
+  const LIMIT = 248;
+
+  function nextChar() {
+    let byte = nextByte();
+    while (byte >= LIMIT) byte = nextByte();   // a loop: rejects can repeat
+    return ALPHABET[byte % ALPHABET.length];
+  }
+
+  return function generate() {
+    let chars = "";
+    for (let i = 0; i < 12; i++) chars += nextChar();
+    return chars.slice(0, 4) + "-" + chars.slice(4, 8) + "-" + chars.slice(8);
+  };
+}`
+        });
+    </script>
+
+    <div id="pg-exercise-gen"></div>
+    <script>
+        createPlayground("pg-exercise-gen", `// --- Write makeCodeGenerator(nextByte) here, then press Run ---
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label);
+  if (!passed && detail) console.log("      " + detail);
+}
+
+const LETTERS = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+
+// A byte source reading from a list, then repeating the last value.
+function fromList(list) {
+  let i = 0;
+  return function () { return i < list.length ? list[i++] : list[list.length - 1]; };
+}
+function counting(start) {
+  let n = start;
+  return function () { const v = n % 256; n++; return v; };
+}
+
+try {
+  const gen = makeCodeGenerator(counting(0));
+  check("makeCodeGenerator returns a function",
+    typeof gen === "function", "got a " + typeof gen);
+
+  const code = gen();
+  check("a code is 14 characters with its two dashes",
+    typeof code === "string" && code.length === 14,
+    "got: " + code + " (" + (code && code.length) + " characters)");
+
+  check("the dashes are in the right places",
+    code[4] === "-" && code[9] === "-",
+    "got: " + code + " - three groups of four");
+
+  check("every character is in the 31-letter alphabet",
+    code.split("-").join("").split("").every(function (c) { return LETTERS.indexOf(c) !== -1; }),
+    "got: " + code + " - 0, O, 1, I and L are excluded on purpose");
+
+  // Bytes 0..11 map to the first twelve letters of the alphabet.
+  check("the bytes decide the code, exactly",
+    makeCodeGenerator(counting(0))() === "2345-6789-ABCD",
+    "got: " + makeCodeGenerator(counting(0))() +
+    " - expected 2345-6789-ABCD from bytes 0,1,2,...");
+
+  // Every one of 248..255 must be thrown away, so the code is built from
+  // the 0,1,2,... that follow and is identical to the line above.
+  check("bytes 248 to 255 are all rejected",
+    makeCodeGenerator(counting(248))() === "2345-6789-ABCD",
+    "got: " + makeCodeGenerator(counting(248))() +
+    " - 248 is the threshold: reject AT it, not above it");
+
+  // 247 is the last good byte. 247 % 31 is 30, the last letter.
+  check("byte 247 is still accepted, and maps to Z",
+    makeCodeGenerator(fromList([247, 0]))()[0] === "Z",
+    "got first character: " + makeCodeGenerator(fromList([247, 0]))()[0]);
+
+  // The distribution, asserted exactly rather than statistically. One pass
+  // through 0..255 yields 248 accepted bytes; 62 codes need 744 characters,
+  // which is exactly three passes. So every letter must appear 24 times.
+  const fair = makeCodeGenerator(counting(0));
+  const counts = {};
+  for (let i = 0; i < 62; i++) {
+    const c = fair().split("-").join("");
+    for (const ch of c) counts[ch] = (counts[ch] || 0) + 1;
+  }
+  const uneven = LETTERS.split("").filter(function (c) { return counts[c] !== 24; });
+  check("every letter comes up equally often over 62 codes",
+    uneven.length === 0,
+    "these did not appear 24 times: " +
+    uneven.map(function (c) { return c + "=" + (counts[c] || 0); }).join(" ") +
+    " - byte % 31 without rejection favours 2 to 9");
+
+  // Two generators must not share a position in one byte stream.
+  const a = makeCodeGenerator(counting(0));
+  const b = makeCodeGenerator(counting(0));
+  check("two generators are independent",
+    a() === b(),
+    "got: " + a() + " and " + b() + " - each takes its own byte source");
+} catch (err) {
+  console.log("FAIL  " + err.name + ": " + err.message);
+  console.log("      Usually this means makeCodeGenerator is missing or misspelt,");
+  console.log("      or it returns a code rather than a function that makes one.");
+}`);
+    </script>
+
+    <h2>Explain it in your own words</h2>
+    <div id="explain-0002"></div>
+    <script>
+        createExplain("explain-0002", {
+            prompt: "A colleague says the modulo bias does not matter because <code>2</code> coming up 12.5% more often than <code>Z</code> is invisible and nobody could exploit it. Set aside whether they are right about the security &mdash; explain why the test for it was <strong>impossible to write</strong> before the byte source became a parameter, and what that says about which bugs a design choice can hide."
+        });
+    </script>
+
+    <div id="lesson-quiz"></div>
+    <script>
+        createQuiz("lesson-quiz", [
+            {
+                question: "What is wrong with <code>isExpired(token)</code> reading <code>new Date()</code> itself?",
+                options: [
+                    "The answer depends on something the test does not own, so the not-expired case needs a date that will eventually arrive",
+                    "It is slower than passing the date in",
+                    "Date objects cannot be compared",
+                    "It will throw in a test environment"
+                ],
+                correct: 0,
+                explanation: "The test has to invent a future date to represent 'not yet'. That date is a deadline: the suite starts failing for real when it passes, usually years later and always at an inconvenient moment."
+            },
+            {
+                type: "predict-output",
+                code: "console.log(new Date(null).toISOString());",
+                answer: "1970-01-01T00:00:00.000Z",
+                explanation: "null coerces to 0, and 0 milliseconds after the epoch is 1 January 1970. It is not an error and not Invalid Date, which is exactly why it survives — every comparison against it succeeds and gives the wrong answer."
+            },
+            {
+                type: "predict-output",
+                code: "const token = { expiresAt: null };\nconst now = new Date('2026-08-28T00:00:00Z');\nconsole.log(new Date(token.expiresAt) <= now);",
+                answer: "true",
+                explanation: "A token that never expires reports as expired, because 1970 is before 2026. In Token this denies a holder who has a live token, and the user looking at their own screen sees nothing wrong."
+            },
+            {
+                question: "In Token, <code>expires_at</code> is <code>null</code>. What does that mean?",
+                options: [
+                    "The token never expires",
+                    "The token has already expired",
+                    "The expiry is unknown and must be looked up",
+                    "The token expires at the epoch"
+                ],
+                correct: 0,
+                explanation: "null means never — the same convention as max_uses, where null is unlimited and 0 permits no uses at all. Both are cases where a falsy value and a missing value mean opposite things, so the check must be for null specifically."
+            },
+            {
+                type: "spot-the-bug",
+                question: "The guard is written and the function still crashes on a null expiry. Where?",
+                code: "1  function isExpired(token, now) {\n2    const expiry = token.expiresAt === null ? null : new Date(token.expiresAt);\n3    return expiry.getTime() <= now.getTime();\n4  }",
+                bugLine: 3,
+                options: ["Line 2", "Line 3", "Both lines are fine"],
+                correct: 1,
+                explanation: "Line 2 correctly produces null, and line 3 then calls a method on it. The guard computed a value instead of leaving the function — an early return is what makes the rest of the body able to assume a date exists."
+            },
+            {
+                type: "predict-output",
+                question: "The expiry was never parsed. What does this print?",
+                code: "const token = { expiresAt: '2020-01-01T00:00:00Z' };\nconst now = new Date('2026-08-28T00:00:00Z');\nconsole.log(token.expiresAt <= now);",
+                answer: "false",
+                explanation: "A relational operator asks both sides for a number. The Date becomes its timestamp; the string becomes NaN, and every comparison against NaN is false. So a token that died in 2020 reports as live — and the future case answers correctly by accident, which is how this survives a suite that only tests the happy direction."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the comparison so the exact moment of expiry counts as expired.",
+                code: "return new Date(token.expiresAt) ___ now;",
+                answer: "<=",
+                explanation: "Reached or passed, so <= rather than <. Same distinction as timesUsed >= maxUses: a token expiring at 10:00 has no life left at 10:00."
+            },
+            {
+                question: "How many characters are in Token's code alphabet, and why that number?",
+                options: [
+                    "31 — the 36 alphanumerics minus 0, O, 1, I and L, which are read wrongly when spoken or written",
+                    "36 — every letter and digit",
+                    "32 — a power of two, so bytes map evenly",
+                    "26 — letters only, because digits are ambiguous"
+                ],
+                correct: 0,
+                explanation: "Five characters are removed because a code gets read aloud, written on a card and typed from a photograph. The cost is that 31 is prime and awkward: it divides into 256 unevenly, which is the whole modulo-bias problem."
+            },
+            {
+                type: "predict-output",
+                code: "console.log(Math.floor(256 / 31), 256 % 31);",
+                answer: "8 8",
+                explanation: "Eight complete passes over the alphabet and eight bytes left over. Those eight are what wrap round onto the first eight characters and make them more likely — the arithmetic of the bias in one line."
+            },
+            {
+                type: "predict-output",
+                code: "const A = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';\nlet counts = {};\nfor (let b = 0; b < 256; b++) { const c = A[b % 31]; counts[c] = (counts[c] || 0) + 1; }\nconsole.log(counts['2'], counts['Z']);",
+                answer: "9 8",
+                explanation: "Nine versus eight, which is the 12.5% skew. Every code built this way looks perfectly normal — the defect exists only across many codes, which is why it needs a test that owns the byte source."
+            },
+            {
+                question: "Why is 248 the rejection threshold rather than 250 or 255?",
+                options: [
+                    "It is 31 x 8, so the bytes below it cover the alphabet exactly eight times with nothing left over",
+                    "It is the largest byte value that fits in seven bits",
+                    "It leaves a safety margin at the top of the range",
+                    "It is the smallest number that makes the loop terminate"
+                ],
+                correct: 0,
+                explanation: "The threshold must be a multiple of the alphabet length, and 248 is the largest one that fits in a byte. Choosing anything else either keeps some bias or throws away more bytes than necessary."
+            },
+            {
+                type: "which-breaks",
+                question: "Which of these rejection guards still leaves the code biased?",
+                variants: [
+                    "while (byte >= 248) byte = nextByte();",
+                    "while (byte > 248) byte = nextByte();",
+                    "while (byte >= 31 * 8) byte = nextByte();"
+                ],
+                correct: 1,
+                explanation: "Rejecting only above 248 lets 248 itself through, and 248 % 31 is 0 — so the first character of the alphabet keeps its extra weight. One character of skew instead of eight, which is smaller and just as invisible. The other two guards are the same number written two ways."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This rejection is written as a condition rather than a loop. What can go wrong?",
+                code: "1  let byte = nextByte();\n2  if (byte >= 248) byte = nextByte();\n3  return ALPHABET[byte % 31];",
+                bugLine: 2,
+                options: ["Line 1", "Line 2", "Line 3"],
+                correct: 1,
+                explanation: "A rejected byte can be followed by another rejected byte. The second draw is used unconditionally, so roughly one attempt in a thousand still lands on a biased value. Rare enough to survive every test that is not exhaustive, which is why the fixture in this lesson feeds 248 through 255 in a row."
+            },
+            {
+                question: "What does making the byte source a parameter let you test that you could not test before?",
+                options: [
+                    "That the mapping from bytes to characters is even, asserted exactly rather than statistically",
+                    "That the codes are unpredictable",
+                    "That the generator is fast enough",
+                    "That crypto is available in the runtime"
+                ],
+                correct: 0,
+                explanation: "With real randomness you can only sample and hope; with a byte source you wrote, 62 codes drawn from three passes of 0-255 must contain every letter exactly 24 times. The property was always there — what changed is that it became observable."
+            },
+            {
+                type: "predict-output",
+                code: "function fromList(list) { let i = 0; return () => list[i++]; }\nconst next = fromList([5, 9, 200]);\nconsole.log(next(), next(), next());",
+                answer: "5 9 200",
+                explanation: "A byte source is just a function returning the next value from a list you control. That is the entire technique — there is no library, and the production version differs only in where the numbers come from."
+            },
+            {
+                question: "Why does this lesson prefer a fake over a mocking library?",
+                options: [
+                    "A fake only works if the function accepts its dependency, so using fakes pushes the design towards handing things in",
+                    "Mocking libraries are slower",
+                    "Fakes catch more bugs by definition",
+                    "Mocking libraries cannot fake the network"
+                ],
+                correct: 0,
+                explanation: "Mocking libraries exist so you do not have to change the function. That is convenient and it is the cost: the function goes on reaching out for the clock, the database and the network, and stays hard to reason about even though its tests pass."
+            },
+            {
+                question: "A fake SMS sender records every message. Which Token rule does that let you assert?",
+                options: [
+                    "That the message body carries only the six digits and nothing identifying",
+                    "That the aggregator is reachable",
+                    "That the message arrives within five seconds",
+                    "That the phone number is formatted correctly by the carrier"
+                ],
+                correct: 0,
+                explanation: "The interesting assertions are about what left the building, not about what came back. A fake turns 'we should never put a code in an SMS' from a review comment into a test that fails when someone does."
+            },
+            {
+                question: "Why must the OTP endpoint answer identically for a registered and an unregistered number?",
+                options: [
+                    "Different answers turn it into a list of who has an account, over a space small enough to enumerate",
+                    "Because the SMS aggregator requires it",
+                    "To keep the response smaller",
+                    "Because the client cannot parse two different shapes"
+                ],
+                correct: 0,
+                explanation: "A ten-digit Indian mobile has a known prefix and a small enough space to walk completely. 'We sent a code' versus 'no such account' answers a question nobody should be able to ask, and it is the same denial-oracle rule that governs token redemption."
+            },
+            {
+                type: "order-steps",
+                question: "Put the steps of generating one character in order.",
+                steps: [
+                    "Draw a byte from the source",
+                    "While the byte is 248 or more, draw another",
+                    "Take the byte modulo 31",
+                    "Look that index up in the alphabet"
+                ],
+                correctOrder: [0, 1, 2, 3],
+                explanation: "The rejection has to happen before the modulo, which is the only ordering that matters here — taking the remainder first destroys the information about which bytes were biased."
+            },
+            {
+                type: "predict-output",
+                code: "const A = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';\nconsole.log(A[247 % 31]);",
+                answer: "Z",
+                explanation: "247 is the last acceptable byte and it maps to index 30, the last character. Useful as a boundary fixture: a generator that rejects one value too many turns Z into something that never appears."
+            },
+            {
+                question: "A test suite asserts that <code>generate()</code> returns a 14-character string with dashes in the right places, and that every character is in the alphabet. What can still be badly wrong?",
+                options: [
+                    "The distribution — a biased generator passes every one of those checks",
+                    "The length, which those checks do not cover",
+                    "The dash positions, which are not asserted",
+                    "Nothing; those checks are complete"
+                ],
+                correct: 0,
+                explanation: "Shape checks pass for any mapping at all, including one that only ever emits the digit 2. Every property that is true of a single code says nothing about the property that only exists across many of them."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the threshold, written so the reason is visible.",
+                code: "const LIMIT = ALPHABET.length * ___;   // 248, the largest multiple of 31 under 256",
+                answer: "8",
+                explanation: "Writing it as 31 x 8 rather than the literal 248 keeps the reasoning attached to the number. When someone eventually asks why 248, the code answers instead of the git history."
+            },
+            {
+                question: "Which of these is the strongest argument for passing <code>now</code> into a function rather than reading the clock inside it?",
+                options: [
+                    "Every case, including ones that cannot happen yet or happened years ago, becomes an ordinary function call",
+                    "It runs faster",
+                    "It avoids a dependency on the Date object",
+                    "It makes the function shorter"
+                ],
+                correct: 0,
+                explanation: "Testing a leap second, a daylight-saving boundary or a token that expired in 2019 stops being a scheduling problem and becomes an argument. The function does get shorter too, which is a hint rather than the reason."
+            },
+            {
+                type: "predict-output",
+                code: "function isExpired(t, now) {\n  if (t.expiresAt === null) return false;\n  return new Date(t.expiresAt) <= now;\n}\nconsole.log(isExpired({ expiresAt: '2026-06-01T00:00:00Z' }, new Date('2026-06-01T00:00:00Z')));",
+                answer: "true",
+                explanation: "The moment of expiry is the moment it is dead. Written with < instead of <=, this returns false and the token is usable for one final instant — a boundary nobody notices until a use limit and an expiry disagree about the same second."
+            },
+            {
+                question: "What does \"fake\" mean in this lesson?",
+                options: [
+                    "A real working implementation that is simpler — an in-memory sender, a byte source reading a list",
+                    "An object whose methods do nothing",
+                    "A library-generated stand-in that records calls",
+                    "A copy of the production code with the network calls removed"
+                ],
+                correct: 0,
+                explanation: "It works; it is just simple enough to live in a test. The in-memory SMS sender genuinely sends, to an array — which is what makes assertions about what was sent possible at all."
+            },
+            {
+                type: "which-breaks",
+                question: "Which of these makes the token generator untestable again?",
+                variants: [
+                    "function makeCodeGenerator(nextByte) { /* uses nextByte() */ }",
+                    "function makeCodeGenerator() { /* uses crypto.randomBytes internally */ }",
+                    "function makeCodeGenerator(deps) { /* uses deps.nextByte() */ }"
+                ],
+                correct: 1,
+                explanation: "Fetching the randomness inside leaves nothing for a test to control, so the only assertions left are about shape — and shape is exactly what a biased generator satisfies. Whether the dependency arrives as a bare function or inside an object makes no difference."
+            },
+            {
+                question: "What is the general lesson behind both the clock and the byte source?",
+                options: [
+                    "A function that fetches what it needs can only be tested in the world it fetches from",
+                    "Global state is always wrong",
+                    "Pure functions are faster than impure ones",
+                    "Randomness should be avoided in application code"
+                ],
+                correct: 0,
+                explanation: "Reaching out for the clock ties the test to today; reaching out for randomness ties it to luck; reaching out for the network ties it to a phone. Handing the thing in is one change that answers all three, and the design it produces is easier to read for reasons that have nothing to do with testing."
+            }
+        ]);
+    </script>
+
+    <div class="lesson-nav">
+        <a href="./0001-what-a-test-is.html">&larr; What a Test Is</a>
+        <span class="disabled">Next: Testing an HTTP Handler &rarr;</span>
+    </div>
+
+</body>
+</html>
