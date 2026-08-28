@@ -26,12 +26,9 @@ how far it got.
 > files either.** Make no claims about it at all — not in prose, not in a
 > commit message, not as a reason for prioritising anything.
 
-**W1 — C1, Testing & Quality.** Started 2026-08-28. `0001-what-a-test-is.html`
-is written, verified and has its `--wrong` cases; the README, the index row and
-the search entry are in. **`0002`–`0005` remain.** Each lesson lands as its own
-commit with the audit green: `0001`'s next-link is a disabled span until `0002`
-exists, and the README lists the four unwritten lessons as spans rather than
-links.
+**Nothing in flight.** C1 is complete — five lessons, written 2026-08-28, all
+verified with `--wrong` cases. **One module then stop**, per the just-in-time
+rule, so the next C-module is not started.
 
 Planned: `0001` what a test is · `0002` time, randomness and fakes · `0003`
 testing an HTTP handler without a network · `0004` testing against a real
@@ -106,11 +103,12 @@ L7 RoPA ─┬▶ privacy policy   ├▶ L12 Play Data Safety   ├▶ L13 Appl
 Drafts for four of Wave 0 are written and waiting in `token/docs/launch/` —
 fill the angle brackets and send. The folder README has the send order.
 
-**Writing side — `W1` continues, one module at a time.** C0 landed; **eight
-C-modules remain**: C1, C2, C3, C4, C6, C7, C8, C9. Written just-in-time, never
-batched. **C1 — Testing & Quality is the next one**, per the module table in
-`TOKEN-TRACK.md`. `W2` is closed and there is no maintenance tail left to slot
-between units.
+**Writing side — `W1` continues, one module at a time.** C0 and C1 have landed;
+**seven C-modules remain**: C2, C3, C4, C6, C7, C8, C9. Written just-in-time,
+never batched. **C2 — CI/CD & Release Engineering is the next one**, and it sits
+after C1 for a reason worth keeping: there is nothing to automate until tests
+exist. `W2` is closed and there is no maintenance tail left to slot between
+units.
 
 ---
 
@@ -147,7 +145,7 @@ Per-item status only. The plan is in `TOKEN-TRACK.md`; the counts are in
 | 1 — unblock where the student is | **done**, all five items |
 | 1.5 — the practice pattern in Module 02 | **done** — all 14, 2026-08-17 |
 | 2 — deepen the spine | done (16 of 16 deepenable; 4 skipped as rewrites) |
-| **3 — the C-modules** | **started 2026-08-27. C0 is written** (2 lessons, verified). C5 already existed; **eight remain** — C1, C2, C3, C4, C6, C7, C8, C9. Queue item **W1** |
+| **3 — the C-modules** | **C0 written 2026-08-27, C1 written 2026-08-28** (2 and 5 lessons, all verified). C5 already existed; **seven remain** — C2, C3, C4, C6, C7, C8, C9. Queue item **W1** |
 | 4 — the operating track | not started, deliberately. Queue item **W3** |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |

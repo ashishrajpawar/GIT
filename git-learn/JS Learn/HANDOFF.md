@@ -4360,3 +4360,71 @@ output — **every asset tag in the course must be a plain classic script**,
 because `defer`, `async` and `type="module"` all move execution and would make
 document order the wrong thing to read. None are used today; if that changes,
 the suite fails and whoever changed it has to teach the check first.
+
+---
+
+### Session of 2026-08-28 (continued) — C1 written, and the module argues with itself on purpose
+
+Five lessons, all verified, all with `--wrong` cases. Phase 3's second module;
+**one module then stop**, so C2 is not begun.
+
+#### What the module is actually about
+
+The obvious version of a testing module is a tour of a framework. This one is
+built round two arguments instead, and every lesson is an instance of one of
+them.
+
+**One: stop fetching the thing, accept it instead.** The clock (`0002`), the
+byte source (`0002`), the database connection (`0004`) and the logger (`0003`)
+all arrive as parameters. The reward is the same every time — a test can supply
+anything and observe everything — and the design that results is easier to read
+for reasons that have nothing to do with testing.
+
+**Two: a failure must not be able to take anything else with it.** A test that
+throws must not silence the suite (`0001`); a property that throws must not end
+the run (`0005`). Both are one `try/catch` in the right place, and **both were
+bugs in this project before they were lessons in it** — the self-check trap in
+`CLAUDE.md` is the same defect.
+
+#### Three things the module can prove that prose cannot
+
+- **`0002`: the modulo bias, asserted exactly rather than statistically.** One
+  pass through bytes 0–255 yields 248 accepted values; 62 codes need 744
+  characters, which is exactly three passes — so every letter must appear
+  exactly 24 times. `byte % 31` without rejection fails it. That assertion is
+  **impossible to write** while the randomness is fetched internally, which is
+  the cleanest illustration of argument one in the whole course.
+- **`0003`: the denial oracle as four lines of test.** Serialise the five
+  failure responses, count distinct answers, expect one. The lesson then draws
+  the line the other way, because "make everything identical" is the wrong
+  lesson: a malformed code *is* answered differently, and the test for whether a
+  difference leaks is whether the caller could have worked it out without
+  asking.
+- **`0004`: why a mock cannot see the `LEFT JOIN` bug.** A mock returns your
+  belief about the query, and the belief is the thing that was wrong.
+
+#### The coverage argument, with this week's own bug as the evidence
+
+`0005` opens on `checkAccess` with the limit and the pause swapped, four tests
+one per state, **100% line coverage and a wrong answer**. The bug needs a token
+that is paused *and* at its limit, and no line is unvisited when that case is
+missing — because the case is not a line, it is a path.
+
+That is the same defect found in `01/0004` earlier today, which makes it a real
+example rather than a constructed one. The lesson's conclusion is the part worth
+keeping: **when you find a bug, add the sentence it violated, not the example.**
+The example stops that bug returning; the sentence — *"when two states are true
+at once, the earlier rule wins"* — is a question you can ask of every other
+function in the product.
+
+#### Two housekeeping notes
+
+- `c1/0003` is the **second user of `audit-allow-token-here`**. Its fixture
+  `MERC-8GH2-KPLX` is invalid on purpose, on one line, in a lesson otherwise
+  full of valid codes — exactly the case the per-line marker exists for.
+  `CLAUDE.md` said this file was the only user; corrected.
+- **`render-as-authored` went to 1 and is back to 0.** Two explanations named an
+  option by position, and only one of them meant to — the other said "the second
+  call adds to the first one's answer", about calls rather than options, and the
+  detector cannot tell. Both reworded. This is the watch item `SESSION.md`
+  records after any batch of new questions, and it fired exactly as intended.

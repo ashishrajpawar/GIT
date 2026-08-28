@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>C1 — What to Test</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Testing &amp; Quality</a> &rsaquo;
+        <span>What to Test</span>
+    </nav>
+
+    <h1>What to Test</h1>
+    <p class="lesson-meta">C1 &mdash; Lesson 5 of 5 &nbsp;|&nbsp; ~50 min</p>
+
+    <div class="callout">
+        <div class="callout-title">Why this matters for Token</div>
+        <p>Four lessons have been about <em>how</em>. This one is about the question that decides
+        whether any of it was worth doing: <strong>which sentences are worth writing down?</strong></p>
+        <p>The usual answer is a number. Line coverage is easy to measure, hard to argue with, and
+        it is measuring the wrong thing &mdash; it counts lines your tests <em>executed</em>, and
+        says nothing about what they <em>checked</em>. This course has a worked example of the gap,
+        found this week, in a lesson four steps from the beginning.</p>
+        <p>What replaces the number is a short list of properties that keep going wrong in this
+        specific product, and one technique for checking a property against many inputs instead of
+        one.</p>
+    </div>
+
+    <h2>1 &middot; The number that lies</h2>
+
+    <p>Here is <code>checkAccess</code> again, with the use limit and the pause the wrong way round:</p>
+
+    <pre><code>function checkAccess(token) {
+  if (token.revokedAt !== null)              return "revoked";
+  if (token.timesUsed &gt;= token.maxUses)      return "limit reached";
+  if (token.isPaused === true)               return "paused";
+  return "allowed";
+}</code></pre>
+
+    <p>Now four tests, one per state: a fresh token, a revoked one, a paused one, a spent one. All
+    four pass. <strong>Every line of the function has been executed. Coverage is 100%. The function
+    is wrong.</strong></p>
+
+    <p>The bug needs a token that is <em>paused and at its limit</em>, and no line of the function
+    is unvisited when that case is missing &mdash; because the case is not a line. It is a
+    <em>path</em>: the combination of one branch being false while another is true.</p>
+
+    <div class="callout warning">
+        <div class="callout-title">What coverage is actually good for, which is not nothing</div>
+        <p>It answers one question well: <strong>is there code here that no test touches at all?</strong>
+        A file at 12% is telling you something true and worth acting on.</p>
+        <p>It is useless as a target. The moment a number is a goal, the cheapest way to raise it is
+        to execute more lines without asserting anything &mdash; and a test with no assertion runs
+        every line it visits. A suite can be driven to 100% by a person who never once thought
+        about whether the code is right.</p>
+        <p><strong>Read it as a floor, never as a score.</strong> Low coverage is evidence. High
+        coverage is not.</p>
+    </div>
+
+    <h3>Try it yourself</h3>
+    <p>The tally is real: every line runs, and the suite is green over a wrong answer.</p>
+
+    <div id="pg-coverage"></div>
+    <script>
+        createPlayground("pg-coverage", `const linesRun = {};
+function line(n) { linesRun[n] = (linesRun[n] || 0) + 1; }
+
+// The rules are: revoked, then paused, then the limit, then allowed.
+// This has the last two swapped.
+function checkAccess(t) {
+  line(1); if (t.revokedAt !== null) { line(2); return "revoked"; }
+  line(3); if (t.timesUsed >= t.maxUses) { line(4); return "limit reached"; }
+  line(5); if (t.isPaused) { line(6); return "paused"; }
+  line(7); return "allowed";
+}
+
+const token = (over) => Object.assign(
+  { revokedAt: null, isPaused: false, timesUsed: 0, maxUses: 5 }, over);
+
+const suite = [
+  ["fresh",   token({}),                         "allowed"],
+  ["revoked", token({ revokedAt: "2026-08-15" }), "revoked"],
+  ["paused",  token({ isPaused: true }),          "paused"],
+  ["spent",   token({ timesUsed: 5 }),            "limit reached"]
+];
+
+let passed = 0;
+for (const [name, t, expected] of suite) {
+  const got = checkAccess(t);
+  if (got === expected) passed++;
+  else console.log("FAIL " + name + ": expected " + expected + ", got " + got);
+}
+
+console.log(passed + " of " + suite.length + " tests pass");
+console.log("lines executed: " + Object.keys(linesRun).length + " of 7");
+
+// The case nobody wrote:
+console.log("paused AND at the limit ->", checkAccess(token({ isPaused: true, timesUsed: 5 })));
+console.log("...the rules say it should be 'paused'");`);
+    </script>
+
+    <h2>2 &middot; What is worth testing: properties, not examples</h2>
+
+    <p>An example says <em>this input gives that output</em>. A <strong>property</strong> says
+    something that must be true of <em>every</em> input, and it is usually one sentence. Six of them
+    have caused real defects in this course, and they generalise past it:</p>
+
+    <table>
+        <thead>
+            <tr><th>Property</th><th>In Token</th><th>What went wrong</th></tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><strong>Precedence</strong> &mdash; when several rules apply, one wins, in a
+                fixed order</td>
+                <td>revoked &rarr; expired &rarr; exhausted &rarr; paused</td>
+                <td>Four tests, one per state, and the order untested. Found this week</td>
+            </tr>
+            <tr>
+                <td><strong>Exactly once</strong> &mdash; an effect happens one time, however many
+                requests arrive</td>
+                <td>a redemption counts against <code>max_uses</code> once</td>
+                <td>Needs two connections and <code>FOR UPDATE</code>; a single-threaded test cannot
+                see it</td>
+            </tr>
+            <tr>
+                <td><strong>Deny by default</strong> &mdash; input nobody planned for is refused,
+                not permitted</td>
+                <td>an unrecognised <code>rule_type</code></td>
+                <td>Fell through to <code>allowed</code>. A rule the engine cannot evaluate was a
+                rule it ignored</td>
+            </tr>
+            <tr>
+                <td><strong>Null is not zero</strong> &mdash; absent and empty are different
+                answers</td>
+                <td><code>max_uses</code>: null unlimited, 0 none</td>
+                <td><code>if (token.maxUses)</code> made a token that permits nothing permit
+                everything</td>
+            </tr>
+            <tr>
+                <td><strong>Indistinguishability</strong> &mdash; several causes produce one
+                identical answer</td>
+                <td>the five ways a redemption fails</td>
+                <td>Only visible across the set; each response alone looks correct</td>
+            </tr>
+            <tr>
+                <td><strong>Conservation</strong> &mdash; the parts add up to the whole</td>
+                <td><code>active + revoked + paused === total</code></td>
+                <td>A token counted in two states, hidden by another being uncounted</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="callout">
+        <div class="callout-title">How to find them without a table</div>
+        <p>Two questions do most of the work.</p>
+        <p><strong>&ldquo;What must be true no matter what?&rdquo;</strong> The answers are
+        properties. They are usually already written down somewhere in prose &mdash; in an ADR, in a
+        code comment, in a sentence someone said in review &mdash; and turning that sentence into an
+        assertion is most of the job.</p>
+        <p><strong>&ldquo;Which of these can be true at the same time?&rdquo;</strong> Every pair
+        that can co-occur is a test, and it is the pairs rather than the states that catch
+        precedence bugs. Four states in a fixed order have three adjacent pairs; a suite with one
+        test per state has covered none of them.</p>
+    </div>
+
+    <h2>3 &middot; Checking a property against many inputs</h2>
+
+    <p>Once you have a property, testing it against one example is a waste of a good sentence. The
+    technique is to generate many inputs and check the property against each &mdash; and, when one
+    fails, to report <strong>the input</strong>, because that is the entire value of the exercise.</p>
+
+    <pre><code>const result = forAll(everyTokenState, (t) =&gt; ONE_OF.includes(checkAccess(t)), 100);
+// { ok: false, checked: 7, counterExample: { isPaused: true, timesUsed: 5, ... } }</code></pre>
+
+    <p>The generator is a function of an index, so the run is <strong>deterministic</strong> &mdash;
+    the same idea as the byte source in lesson 2, for the same reason. A property test that finds a
+    counter-example only sometimes is a rumour rather than a bug report.</p>
+
+    <h3>Try it yourself</h3>
+    <p>Sixteen combinations, checked against the sentence the rules actually say.</p>
+
+    <div id="pg-invariant"></div>
+    <script>
+        createPlayground("pg-invariant", `// The rules, in order: revoked, paused, limit, allowed.
+function checkAccess(t) {
+  if (t.revokedAt !== null) return "revoked";
+  if (t.timesUsed >= t.maxUses) return "limit reached";   // <-- swapped with the next
+  if (t.isPaused) return "paused";
+  return "allowed";
+}
+
+// What the rules say the answer must be.
+function expected(t) {
+  if (t.revokedAt !== null) return "revoked";
+  if (t.isPaused) return "paused";
+  if (t.timesUsed >= t.maxUses) return "limit reached";
+  return "allowed";
+}
+
+// Every combination of the three flags, as a function of an index.
+function everyState(i) {
+  return {
+    revokedAt: (i & 1) ? "2026-08-15" : null,
+    isPaused: Boolean(i & 2),
+    timesUsed: (i & 4) ? 5 : 0,
+    maxUses: 5
+  };
+}
+
+for (let i = 0; i < 8; i++) {
+  const t = everyState(i);
+  const got = checkAccess(t);
+  const want = expected(t);
+  if (got !== want) {
+    console.log("counter-example at index " + i + ":");
+    console.log("  " + JSON.stringify(t));
+    console.log("  got " + got + ", the rules say " + want);
+    break;
+  }
+}
+console.log("done");`);
+    </script>
+
+    <h3>Try it yourself &mdash; broken on purpose</h3>
+    <p>A property that throws on one input, and a runner with no opinion about it.</p>
+
+    <div id="pg-broken"></div>
+    <script>
+        createPlayground("pg-broken", `function forAll(generate, property, n) {
+  for (let i = 0; i < n; i++) {
+    if (!property(generate(i))) return { ok: false, counterExample: generate(i) };
+  }
+  return { ok: true };
+}
+
+// Index 3 produces a token with no rules array at all -- the kind of input
+// a generator finds and a hand-written example never does.
+const generate = (i) => (i === 3 ? { id: "t" + i } : { id: "t" + i, rules: [] });
+const property = (t) => t.rules.length >= 0;
+
+console.log(forAll(generate, property, 10));
+
+// Fix it so a property that THROWS is a counter-example rather than a crash.
+// Lesson 1 made the same argument about a test runner, for the same reason:
+// the interesting input is exactly the one that breaks the harness.`);
+    </script>
+
+    <h2>Now build it yourself</h2>
+
+    <div id="exercise-1"></div>
+    <script>
+        createSolution("exercise-1", {
+            exercise:
+                "Write <code>forAll(generate, property, n)</code> &mdash; the last thing this module builds.<br><br>" +
+                "<code>generate(i)</code> returns the input for index <code>i</code>. <code>property(value)</code> returns something truthy when the property holds; it may also <strong>throw</strong>.<br><br>" +
+                "Return <code>{ ok, checked, counterExample, message }</code>:<br><br>" +
+                "1. Check indices <code>0</code> to <code>n - 1</code>, in order.<br>" +
+                "2. <strong>Stop at the first failure.</strong> Everything after it is noise, and the first one is nearly always the smallest.<br>" +
+                "3. On failure: <code>ok</code> is <code>false</code>, <code>counterExample</code> is the value that failed, and <code>checked</code> is how many inputs were tried <em>including</em> that one.<br>" +
+                "4. A property that <strong>throws</strong> is a failure, not a crash. <code>message</code> is the error's message; for a property that merely returned something falsy, <code>message</code> is <code>\"returned false\"</code>.<br>" +
+                "5. If every input holds: <code>{ ok: true, checked: n, counterExample: null, message: null }</code>.<br>" +
+                "6. <code>generate</code> is called <strong>once per index</strong> &mdash; never twice for the same one.",
+            hints: [
+                "Rule 6 is the one that bites. Calling generate(i) a second time to report the counter-example works for a pure generator and quietly reports the wrong value for one that is not — build the value once, into a variable, and use that variable for both the check and the report.",
+                "Rule 4 is the try/catch from lesson 1, moved one level: the throw has to be caught around the property call so it becomes a result rather than ending the loop. Use <code>err instanceof Error ? err.message : String(err)</code>, for the same reason as before.",
+                "Rule 2 is a return from inside the loop. A run that collects every failure and returns them all sounds more useful and is not — after the first counter-example the later ones are usually the same bug reported nine more times."
+            ],
+            solution: `function forAll(generate, property, n) {
+  for (let i = 0; i < n; i++) {
+    // Built once. Calling generate(i) again to report the value is right
+    // for a pure generator and silently wrong for any other kind.
+    const value = generate(i);
+
+    let held = false;
+    let message = null;
+    try {
+      held = Boolean(property(value));
+      if (!held) message = "returned false";
+    } catch (err) {
+      // A property that throws is a counter-example, not a crash: the
+      // input that breaks the harness is usually the interesting one.
+      held = false;
+      message = err instanceof Error ? err.message : String(err);
+    }
+
+    if (!held) {
+      return { ok: false, checked: i + 1, counterExample: value, message: message };
+    }
+  }
+
+  return { ok: true, checked: n, counterExample: null, message: null };
+}`
+        });
+    </script>
+
+    <div id="pg-exercise"></div>
+    <script>
+        createPlayground("pg-exercise", `// --- Write forAll(generate, property, n) here, then press Run ---
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label);
+  if (!passed && detail) console.log("      " + detail);
+}
+
+// A generator that records which indices it was asked for, so the check
+// can tell "called once per index" from "called twice for the reported one".
+function recording() {
+  const asked = [];
+  const gen = function (i) { asked.push(i); return { i: i, tag: "v" + i }; };
+  gen.asked = asked;
+  return gen;
+}
+
+try {
+  const always = forAll(recording(), function () { return true; }, 5);
+  check("a property that always holds is ok",
+    always.ok === true, "got: " + JSON.stringify(always));
+  check("...and checked counts every input",
+    always.checked === 5, "got checked: " + always.checked);
+  check("...with no counter-example and no message",
+    always.counterExample === null && always.message === null,
+    "got: " + JSON.stringify({ c: always.counterExample, m: always.message }));
+
+  const none = forAll(recording(), function () { return true; }, 0);
+  check("n of 0 holds vacuously",
+    none.ok === true && none.checked === 0, "got: " + JSON.stringify(none));
+
+  // Fails at index 3, so four inputs were tried.
+  const fails = forAll(recording(), function (v) { return v.i !== 3; }, 10);
+  check("a failing property is not ok",
+    fails.ok === false, "got: " + JSON.stringify(fails));
+  check("the counter-example is the value that failed",
+    fails.counterExample && fails.counterExample.tag === "v3",
+    "got: " + JSON.stringify(fails.counterExample));
+  check("checked counts the failing input too",
+    fails.checked === 4,
+    "got checked: " + fails.checked + " - indices 0,1,2,3 were tried");
+
+  // Rule 2, from the other side: the run stops rather than finishing.
+  const g = recording();
+  forAll(g, function (v) { return v.i !== 3; }, 100);
+  check("the run stops at the first failure",
+    g.asked.length === 4,
+    "generate was called " + g.asked.length + " times - it should stop at index 3");
+
+  // Rule 6. A generator called twice for the same index is right only for
+  // a pure one, and reports a stale value for anything else.
+  check("generate is called once per index",
+    JSON.stringify(g.asked) === JSON.stringify([0, 1, 2, 3]),
+    "asked for: " + JSON.stringify(g.asked));
+
+  // The FIRST counter-example, not the last.
+  const many = forAll(recording(), function (v) { return v.i < 2; }, 10);
+  check("the first failing input is the one reported",
+    many.counterExample.tag === "v2",
+    "got: " + JSON.stringify(many.counterExample) + " - later failures are usually the same bug");
+
+  check("a falsy return is reported as such",
+    many.message === "returned false",
+    "got message: " + JSON.stringify(many.message));
+
+  // Rule 4, wrapped on its own: a forAll with no try/catch throws here and
+  // would take every check below it with it.
+  try {
+    const threw = forAll(recording(), function (v) {
+      if (v.i === 2) throw new Error("no rules array");
+      return true;
+    }, 10);
+    check("a property that throws is a counter-example, not a crash",
+      threw.ok === false && threw.counterExample.tag === "v2",
+      "got: " + JSON.stringify(threw));
+    check("...and the error message is carried",
+      threw.message === "no rules array",
+      "got message: " + JSON.stringify(threw.message));
+  } catch (err) {
+    check("a property that throws is a counter-example, not a crash", false,
+      "forAll itself threw: " + err.message);
+    check("...and the error message is carried", false, "not reached");
+  }
+
+  // Not every throw is an Error, as in lesson 1.
+  try {
+    const rude = forAll(recording(), function (v) {
+      if (v.i === 1) throw "boom";
+      return true;
+    }, 10);
+    check("a thrown string is reported as its own text",
+      rude.message === "boom",
+      "got message: " + JSON.stringify(rude.message));
+  } catch (err) {
+    check("a thrown string is reported as its own text", false,
+      "forAll itself threw: " + err.message);
+  }
+
+  // A truthy non-boolean holds. Properties get written as .length checks
+  // and .indexOf() results, and a strict === true would reject them.
+  const truthy = forAll(recording(), function (v) { return v.tag.length; }, 5);
+  check("any truthy value counts as holding",
+    truthy.ok === true, "got: " + JSON.stringify(truthy));
+
+  // And a real one: precedence over every combination of three flags.
+  const ORDER = ["revoked", "paused", "limit reached", "allowed"];
+  function state(i) {
+    return {
+      revokedAt: (i & 1) ? "2026-08-15" : null,
+      isPaused: Boolean(i & 2),
+      timesUsed: (i & 4) ? 5 : 0,
+      maxUses: 5
+    };
+  }
+  function rulesSay(t) {
+    if (t.revokedAt !== null) return "revoked";
+    if (t.isPaused) return "paused";
+    if (t.timesUsed >= t.maxUses) return "limit reached";
+    return "allowed";
+  }
+  function swapped(t) {
+    if (t.revokedAt !== null) return "revoked";
+    if (t.timesUsed >= t.maxUses) return "limit reached";
+    if (t.isPaused) return "paused";
+    return "allowed";
+  }
+
+  const good = forAll(state, function (t) { return rulesSay(t) === rulesSay(t); }, 8);
+  check("a correct implementation survives all eight combinations",
+    good.ok === true, "got: " + JSON.stringify(good));
+
+  const bad = forAll(state, function (t) { return swapped(t) === rulesSay(t); }, 8);
+  check("the precedence bug is found, with the token that exposes it",
+    bad.ok === false && bad.counterExample.isPaused === true &&
+    bad.counterExample.timesUsed === 5,
+    "got: " + JSON.stringify(bad.counterExample) +
+    " - it must be paused AND at the limit");
+} catch (err) {
+  console.log("FAIL  " + err.name + ": " + err.message);
+  console.log("      Usually this means forAll is missing or misspelt,");
+  console.log("      or it does not return the result object.");
+}`);
+    </script>
+
+    <h2>4 &middot; What this does not do</h2>
+
+    <p>Real property-testing libraries do one more thing, and it is worth knowing the name because
+    you will want it eventually. <strong>Shrinking</strong>: having found a failing input, they
+    repeatedly simplify it and re-check, so a counter-example that arrives as a 400-character object
+    is reported as the three fields that actually matter.</p>
+
+    <p>That is genuinely useful and it is not the part that finds bugs. The part that finds bugs is
+    writing down a sentence that must always be true and then not trusting it &mdash; which is forty
+    lines and no dependency.</p>
+
+    <div class="callout warning">
+        <div class="callout-title">The honest limit of this whole module</div>
+        <p>Every technique here tests what someone thought to write down. Lesson 1 said a green
+        suite proves only that the cases someone imagined behave as that person expected, and
+        nothing in the four lessons since has changed it &mdash; property tests widen the set of
+        inputs, not the set of ideas.</p>
+        <p>What actually moves the line is the habit underneath: <strong>when you find a bug, ask
+        what sentence it violated</strong>, and add that sentence rather than that example. The
+        precedence bug in <code>01/0004</code> produced one new assertion. The sentence it violated
+        &mdash; <em>&ldquo;when two states are true at once, the earlier rule wins&rdquo;</em>
+        &mdash; is worth more, because it is a question you can now ask of every other function in
+        the product.</p>
+    </div>
+
+    <h2>Explain it in your own words</h2>
+    <div id="explain-0005"></div>
+    <script>
+        createExplain("explain-0005", {
+            prompt: "A suite reports 100% line coverage of <code>checkAccess</code> and the function returns the wrong answer for a token that is paused and at its use limit. Explain how both of those can be true at once &mdash; and what that says about what a coverage number is measuring."
+        });
+    </script>
+
+    <div id="lesson-quiz"></div>
+    <script>
+        createQuiz("lesson-quiz", [
+            {
+                question: "What does line coverage measure?",
+                options: [
+                    "Which lines a test executed, not what it checked",
+                    "How many behaviours are tested",
+                    "The proportion of requirements with a test",
+                    "How likely the code is to be correct"
+                ],
+                correct: 0,
+                explanation: "Execution, not verification. A test with no assertions at all raises coverage exactly as much as a careful one, which is the whole problem with using it as a score."
+            },
+            {
+                question: "How can a function be at 100% line coverage and still be wrong?",
+                options: [
+                    "The bug lives in a combination of branches, and no line is unvisited when that combination is missing",
+                    "The coverage tool miscounts generated code",
+                    "Some lines are executed but not compiled",
+                    "It cannot — 100% coverage means every behaviour is tested"
+                ],
+                correct: 0,
+                explanation: "Four tests, one per state, execute every line of a four-rule function. The precedence bug needs two states true at once, which is a path rather than a line, so the number never notices its absence."
+            },
+            {
+                question: "What IS line coverage good for?",
+                options: [
+                    "Finding code no test touches at all",
+                    "Deciding when a feature is finished",
+                    "Comparing the quality of two codebases",
+                    "Proving that critical paths are correct"
+                ],
+                correct: 0,
+                explanation: "A file at 12% is telling you something true. Read as a floor it is evidence; read as a target it is a number anyone can raise by executing more lines without asserting anything."
+            },
+            {
+                question: "What is the difference between an example and a property?",
+                options: [
+                    "An example says this input gives that output; a property says something true of every input",
+                    "A property is written in a different framework",
+                    "An example runs faster",
+                    "A property is a comment rather than a test"
+                ],
+                correct: 0,
+                explanation: "Properties are usually already written down in prose somewhere — an ADR, a comment, a sentence from review. Turning that sentence into an assertion is most of the work of finding what to test."
+            },
+            {
+                question: "Four rules apply in a fixed order. How many precedence cases are there?",
+                options: [
+                    "One for each pair of rules that can be true at the same time",
+                    "Four, one per rule",
+                    "One, showing the first rule wins",
+                    "Sixteen, for every combination of true and false"
+                ],
+                correct: 0,
+                explanation: "Order only becomes visible when two rules apply at once, so the cases come from the reachable pairs. Reading them off the order is reliable; imagining user scenarios produces the unreachable ones and misses the reachable."
+            },
+            {
+                type: "predict-output",
+                code: "function forAll(gen, prop, n) {\n  for (let i = 0; i < n; i++) if (!prop(gen(i))) return i;\n  return -1;\n}\nconsole.log(forAll(i => i, x => x < 3, 10));",
+                answer: "3",
+                explanation: "It stops at the first failing index rather than running all ten. Stopping is deliberate: after the first counter-example the later ones are usually the same bug, reported again."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This forAll reports the wrong counter-example for some generators. Where?",
+                code: "1  for (let i = 0; i < n; i++) {\n2    if (!property(generate(i))) {\n3      return { ok: false, counterExample: generate(i) };\n4    }\n5  }",
+                bugLine: 2,
+                options: ["Line 2", "Line 3", "Both lines together"],
+                correct: 2,
+                explanation: "generate(i) is called twice for the same index — once to test and once to report. For a pure generator the two agree; for one that reads a byte source or a counter they do not, and the reported value is not the value that failed. Build it once into a variable."
+            },
+            {
+                question: "Why must a property that throws be treated as a counter-example rather than a crash?",
+                options: [
+                    "The input that breaks the harness is usually the interesting one, and a crash reports nothing about it",
+                    "Throwing is always a bug in the property",
+                    "The test runner requires it",
+                    "It keeps the loop shorter"
+                ],
+                correct: 0,
+                explanation: "A generated input with a missing field makes the property throw, and that is exactly the case worth knowing about. It is the same argument lesson 1 made for a test runner, one level up."
+            },
+            {
+                question: "Why is the generator a function of an index rather than a source of randomness?",
+                options: [
+                    "The run is deterministic, so a counter-example is reproducible rather than a rumour",
+                    "Indices are faster to compute",
+                    "Random numbers are not available in tests",
+                    "It guarantees every input is unique"
+                ],
+                correct: 0,
+                explanation: "A failure you cannot reproduce is a report nobody can act on, and a suite that fails one run in ten teaches everyone to re-run it. Same reason the byte source in lesson 2 is a parameter."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the line that makes any truthy result count as holding.",
+                code: "held = ___(property(value));",
+                answer: "Boolean",
+                explanation: "Properties get written as .length checks or indexOf results, and a strict === true would reject those as failures. Coercing once, at the boundary, is friendlier than demanding a literal boolean from every property."
+            },
+            {
+                question: "Which Token property is invisible to any single-threaded test?",
+                options: [
+                    "That a redemption is counted exactly once when two requests arrive together",
+                    "That an unknown rule type is refused",
+                    "That null max_uses means unlimited",
+                    "That the five denials are identical"
+                ],
+                correct: 0,
+                explanation: "Exactly-once is a claim about two transactions, so it needs two connections and the FOR UPDATE that serialises them. The other three are decidable by one process calling one function."
+            },
+            {
+                question: "\"An unrecognised rule type is refused, not ignored.\" Which property is that?",
+                options: [
+                    "Deny by default",
+                    "Conservation",
+                    "Indistinguishability",
+                    "Exactly once"
+                ],
+                correct: 0,
+                explanation: "Input nobody planned for must be refused. Token's engine once let an unknown rule type fall through to allowed — a restriction the database accepted and the engine silently did not apply."
+            },
+            {
+                type: "predict-output",
+                code: "const states = [];\nfor (let i = 0; i < 8; i++) states.push([Boolean(i & 1), Boolean(i & 2), Boolean(i & 4)]);\nconsole.log(states.filter(s => s[1] && s[2]).length);",
+                answer: "2",
+                explanation: "Bit patterns are a compact way to enumerate every combination of a few flags. Two of the eight have both the second and third set — the combinations a per-state suite never constructs."
+            },
+            {
+                question: "What does \"conservation\" mean as a testable property?",
+                options: [
+                    "The parts add up to the whole — every item counted in exactly one bucket",
+                    "State is never mutated",
+                    "Resources are released after use",
+                    "The database stays consistent across restarts"
+                ],
+                correct: 0,
+                explanation: "active + revoked + paused === total catches a token counted twice, which is otherwise hidden by another being uncounted. Checking each count on its own passes for both bugs at the same time."
+            },
+            {
+                question: "Why does <code>forAll</code> stop at the first failure instead of collecting them all?",
+                options: [
+                    "The later failures are usually the same bug again, and the first is nearly always the smallest",
+                    "Continuing would be too slow",
+                    "The result object can only hold one counter-example",
+                    "Later inputs are less likely to be valid"
+                ],
+                correct: 0,
+                explanation: "Ninety-seven counter-examples for one broken branch is a wall of output that hides how many distinct problems there are. Stopping is what makes the result readable, and re-running after a fix is cheap."
+            },
+            {
+                question: "What is shrinking, in a property-testing library?",
+                options: [
+                    "Simplifying a failing input repeatedly to find the smallest one that still fails",
+                    "Reducing the number of inputs to speed the suite up",
+                    "Compressing the counter-example for storage",
+                    "Removing redundant tests automatically"
+                ],
+                correct: 0,
+                explanation: "It turns a 400-character counter-example into the three fields that matter. Genuinely useful, and not the part that finds bugs — the finding comes from writing the sentence down and then not trusting it."
+            },
+            {
+                type: "which-breaks",
+                question: "Which of these coverage situations is actually evidence of something?",
+                variants: [
+                    "A module at 12% coverage",
+                    "A module at 100% coverage",
+                    "A module at 85% coverage"
+                ],
+                correct: 0,
+                explanation: "The low number is the one that tells you something true: there is code here nobody has exercised at all. The high numbers are compatible with a suite full of tests that assert nothing, so they are not evidence either way."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This test raises coverage and proves nothing. Where?",
+                code: "1  test('checkAccess handles every state', () => {\n2    checkAccess(token({}));\n3    checkAccess(token({ revokedAt: '2026-08-15' }));\n4    checkAccess(token({ isPaused: true }));\n5  });",
+                bugLine: 5,
+                options: ["Line 2", "Line 3", "Line 5 — the test ends with no assertion"],
+                correct: 2,
+                explanation: "Three calls, every branch executed, nothing checked. It passes as long as nothing throws and will keep passing through any rewrite — and it moves the coverage number exactly as much as a test that checks the answers."
+            },
+            {
+                question: "You fix a bug. What does this lesson say to add?",
+                options: [
+                    "The sentence the bug violated, which you can then ask of every other function",
+                    "A test for that exact input",
+                    "A comment explaining the fix",
+                    "An entry in the changelog"
+                ],
+                correct: 0,
+                explanation: "The example stops that bug coming back. The sentence — 'when two states are true at once, the earlier rule wins' — is a question you can now ask everywhere else, which is where the rest of the same bug is."
+            },
+            {
+                type: "order-steps",
+                question: "Put the steps of turning a bug into a property in order.",
+                steps: [
+                    "Find the input that produces the wrong answer",
+                    "Write the sentence it violated, without mentioning that input",
+                    "Assert the sentence over every input a generator can produce",
+                    "Ask the same question of the neighbouring functions"
+                ],
+                correctOrder: [0, 1, 2, 3],
+                explanation: "The second step is the one that gets skipped, and it is where the value is. Stopping at step one gives you a regression test; going on to step four is how one bug report fixes three bugs."
+            },
+            {
+                type: "predict-output",
+                code: "function forAll(gen, prop, n) {\n  for (let i = 0; i < n; i++) {\n    const v = gen(i);\n    let held;\n    try { held = Boolean(prop(v)); } catch { held = false; }\n    if (!held) return { checked: i + 1 };\n  }\n  return { checked: n };\n}\nconsole.log(forAll(i => i, x => { if (x === 2) throw new Error('x'); return true; }, 10).checked);",
+                answer: "3",
+                explanation: "Indices 0, 1 and 2 were tried, and the third threw. checked counting the failing input is what makes the number the answer to 'how far did it get' rather than 'how many passed'."
+            },
+            {
+                question: "A property test fails once in ten runs. What is the first thing to fix?",
+                options: [
+                    "The non-determinism, because a report nobody can reproduce is a report nobody acts on",
+                    "The property, which is clearly too strict",
+                    "The number of inputs, which is too high",
+                    "Nothing — intermittent failures are normal for property tests"
+                ],
+                correct: 0,
+                explanation: "An intermittent failure trains the team to re-run the suite, which is the single most expensive habit a test suite can teach. Make the generator a function of the index and the failure either always happens or never does."
+            },
+            {
+                question: "Which sentence is a property rather than an example?",
+                options: [
+                    "\"Whatever the token's state, checkAccess returns one of exactly four strings\"",
+                    "\"A revoked token returns 'revoked'\"",
+                    "\"checkAccess({ isPaused: true }) is 'paused'\"",
+                    "\"The function handles all four states\""
+                ],
+                correct: 0,
+                explanation: "It quantifies over every input and can be checked against thousands. \"The function handles all four states\" sounds like a property and asserts nothing checkable — 'handles' is not a claim a test can evaluate."
+            },
+            {
+                question: "What does this module claim a green suite proves?",
+                options: [
+                    "That the cases someone thought to write behave as that person expected",
+                    "That the code matches its specification",
+                    "That the code is free of defects in the tested paths",
+                    "That the code will not regress"
+                ],
+                correct: 0,
+                explanation: "Stated in lesson 1 and unchanged by the four lessons since. Property tests widen the set of inputs, not the set of ideas — which is why the habit of asking 'what sentence did this bug violate' matters more than any technique here."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the return for a run where every input held.",
+                code: "return { ok: true, checked: ___, counterExample: null, message: null };",
+                answer: "n",
+                explanation: "Every index was tried, so checked is n. Returning the loop variable instead is off by one — it holds n after the loop only if you read it outside its own scope, which in a let-scoped for loop you cannot."
+            },
+            {
+                question: "What is the strongest reason to prefer properties over more examples?",
+                options: [
+                    "A property covers inputs nobody thought to write down, including the combinations",
+                    "Properties run faster",
+                    "Properties need fewer lines of code",
+                    "Properties replace the need for examples"
+                ],
+                correct: 0,
+                explanation: "They do not replace examples — a named example of a real scenario documents intent in a way a property cannot. What they add is the combinations, which is precisely the region where a per-state suite is blind."
+            }
+        ]);
+    </script>
+
+    <div class="lesson-nav">
+        <a href="./0004-testing-against-postgres.html">&larr; Testing Against Real Postgres</a>
+        <span class="disabled">Next module: C2 &mdash; CI/CD &amp; Release Engineering &rarr;</span>
+    </div>
+
+</body>
+</html>

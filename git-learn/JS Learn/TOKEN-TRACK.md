@@ -259,7 +259,7 @@ unverified lessons against a student on lesson 5.
 |----|--------|---------|----------|
 | **C0** | Architecture & System Design | 2 | Before B1 — the whole-system view, trust boundaries, ADRs, where the seams go |
 | **C5** | End-to-End Encryption | 5 | **COMPLETE, 2026-08-22/23.** Written after B4 — the plan said before B2, and the dependency was met anyway because `b2/0002` did the E2EE schema rewrite up front, so the prerequisite was satisfied by *anticipation* rather than by ordering. `0005` was planned as multi-device and became *why Token is one phone, and what a second would cost* when the student chose one device for v1; it also resolved the `participants` orphan, by deletion |
-| **C1** | Testing & Quality | 5 | After B3 — test the API as it is built, not at the end |
+| **C1** | Testing & Quality | 5 | **WRITTEN 2026-08-28.** After B3 — test the API as it is built, not at the end. The exercises are a test runner, an injected clock and byte source, the redemption handler as a plain function, the pure half of a `LEFT JOIN`, and a property checker |
 | **C2** | CI/CD & Release Engineering | 4 | After C1 — nothing to automate until tests exist |
 | **C3** | Trust, Safety & Abuse | 3 | After A5 — redesigned around client-side report packaging (ADR-0006), since E2EE removes server-side moderation |
 | **C6** | Scale & Performance | 5 | **Alongside B-track**, not after B9 — you cannot defer what you are building for |
@@ -767,7 +767,7 @@ whole launch.
 
 | # | Unit | Owns the detail | Gate |
 |---|---|---|---|
-| W1 | **Phase 3 — the C-modules. C0 landed 2026-08-27**; C5 already existed. **Eight remain**: C1, C2, C3, C4, C6, C7, C8, C9. Written **just-in-time**, one module then stop — never batched | this file, § Phase 3 | the student reaching each one |
+| W1 | **Phase 3 — the C-modules. C0 landed 2026-08-27, C1 on 2026-08-28**; C5 already existed. **Seven remain**: C2, C3, C4, C6, C7, C8, C9. Written **just-in-time**, one module then stop — never batched | this file, § Phase 3 | the student reaching each one |
 | W3 | **Phase 4 — the operating track.** C6, C7, C8, C9 studied after launch, but instrumented into the product from Phase 3 onward | this file, § Phase 4 | W1 |
 
 > **W2 was the maintenance tail — `--wrong` cases for every self-check that had
