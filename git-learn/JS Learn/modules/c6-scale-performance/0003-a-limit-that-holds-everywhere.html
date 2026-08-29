@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>C6 — A Limit That Holds on One Node Is Not a Limit</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Scale &amp; Performance</a> &rsaquo;
+        <span>A Limit That Holds on One Node Is Not a Limit</span>
+    </nav>
+
+    <h1>A Limit That Holds on One Node Is Not a Limit</h1>
+    <p class="lesson-meta">C6 &mdash; Lesson 3 of 5 &nbsp;|&nbsp; ~55 min</p>
+
+    <div class="callout">
+        <div class="callout-title">Why this matters for Token</div>
+        <p>Three things in Token are protected by a rate limit and by nothing else, and they fail in
+        three different currencies.</p>
+        <ul>
+            <li><strong>The OTP endpoint costs money.</strong> Every request is an SMS through an
+            aggregator, billed. An unlimited one is somebody else spending your balance.</li>
+            <li><strong>The redemption endpoint is guessable.</strong> 31<sup>12</sup> is far too
+            large to exhaust, but a limit is what makes that arithmetic the relevant arithmetic
+            rather than a comfort.</li>
+            <li><strong>The message send path is C3's <code>contact_limit</code></strong> &mdash; a
+            product rule the user chose, not an infrastructure concern, and one whose enforcement is
+            the same machinery.</li>
+        </ul>
+    </div>
+
+    <h2>1 &middot; The limit that multiplies by the replica count</h2>
+
+    <p>The previous lesson's registry lived in one process's heap. So does this:</p>
+
+    <pre><code>const hits = new Map();   // key -&gt; timestamps
+
+function allow(key, limit, windowMs) {
+  const now = Date.now();
+  const recent = (hits.get(key) || []).filter(t =&gt; t &gt; now - windowMs);
+  if (recent.length &gt;= limit) return false;
+  recent.push(now);
+  hits.set(key, recent);
+  return true;
+}</code></pre>
+
+    <p>With one replica this is a correct limiter. With three, each process enforces the limit
+    against its own third of the traffic:</p>
+
+    <div id="pg-replicas"></div>
+    <script>
+        createPlayground("pg-replicas", `const limit = 5;          // OTPs per number per hour
+const replicas = 3;
+
+console.log("what the policy says :", limit);
+console.log("what is enforced     :", limit * replicas);
+console.log("");
+console.log("And the attacker does not need to know any of this. A round-robin");
+console.log("load balancer spreads their requests across the replicas for them.");
+console.log("");
+console.log("cost of the gap, at Rs 0.15 per SMS, per number, per hour:",
+            "Rs " + ((limit * replicas - limit) * 0.15).toFixed(2));`);
+    </script>
+
+    <p>Notice that nothing had to go wrong for this to happen. Nobody misconfigured anything, no
+    request failed, and the limiter did its job perfectly on every node. <strong>The defect is that
+    "its job" was defined over the wrong population.</strong></p>
+
+    <p>Which is why ADR-0003 lists rate limiting as one of the three reasons Redis is required rather
+    than optional, alongside socket fan-out and presence. All three are the same fact in different
+    clothes: <em>a number that has to be true of the system cannot live in one process.</em></p>
+
+    <h2>2 &middot; The fixed window lets through double</h2>
+
+    <p>Now move the counter into Redis, and use the obvious primitive &mdash; a key per window:</p>
+
+    <pre><code>const bucketKey = `otp:${phoneHash}:${Math.floor(now / 60000)}`;
+const count = await redis.incr(bucketKey);
+await redis.expire(bucketKey, 60);
+return count &lt;= limit;</code></pre>
+
+    <p>This is genuinely shared, genuinely cheap, and permits twice the limit:</p>
+
+    <div id="pg-fixed"></div>
+    <script>
+        createPlayground("pg-fixed", `const limit = 10;
+const windowMs = 60000;
+
+// Ten requests in the last second of one window...
+const first = [];
+for (let i = 0; i < limit; i++) first.push(59500 + i);
+
+// ...and ten more in the first second of the next.
+const second = [];
+for (let i = 0; i < limit; i++) second.push(60100 + i);
+
+function windowOf(t) { return Math.floor(t / windowMs); }
+
+console.log("window of the first batch :", windowOf(first[0]));
+console.log("window of the second batch:", windowOf(second[0]));
+console.log("both batches allowed      :", first.length + second.length);
+console.log("elapsed between the first and last:", second[second.length - 1] - first[0], "ms");
+console.log("");
+console.log("A limit of", limit, "per minute permitted", first.length + second.length, "in under a second.");`);
+    </script>
+
+    <p>The window boundary is a fixed instant that the counter resets on, and the counter has no
+    memory of what happened just before it. <strong>Every fixed-window limiter permits up to twice
+    its stated limit across a boundary</strong>, and there is no configuration that fixes it &mdash;
+    it is what the design is.</p>
+
+    <p>Sometimes that is acceptable and you write it down. For an SMS bill it is a doubling of the
+    worst case, and for the redemption endpoint it doubles an attacker's rate at the one moment they
+    can predict, since window boundaries are just clock time.</p>
+
+    <h2>3 &middot; The sliding window, and what it costs</h2>
+
+    <p>Keep the timestamps instead of a count. Then "the last minute" means the last minute from
+    <em>now</em>, and there is no boundary to sit on.</p>
+
+    <div id="pg-sliding"></div>
+    <script>
+        createPlayground("pg-sliding", `const windowMs = 60000;
+const limit = 10;
+
+function countInWindow(hits, now) {
+  return hits.filter(t => t > now - windowMs).length;
+}
+
+const hits = [];
+for (let i = 0; i < limit; i++) hits.push(59500 + i);   // the same first batch
+
+console.log("at t=60100, how many of those are still in the last minute?",
+            countInWindow(hits, 60100));
+console.log("so the eleventh request is:",
+            countInWindow(hits, 60100) >= limit ? "denied" : "allowed");
+console.log("");
+console.log("and once the oldest falls out, one slot returns:");
+console.log("at t=119600 the count is", countInWindow(hits, 119600));`);
+    </script>
+
+    <p>The cost is honest and worth stating: you now store one timestamp per request instead of one
+    integer per window. For a limit of ten that is nothing. For a limit of ten thousand it is a
+    different decision, and this is where a token bucket &mdash; a count plus a refill rate &mdash;
+    starts to look better.</p>
+
+    <h2>4 &middot; The comparison is <code>&gt;</code>, not <code>&gt;=</code></h2>
+
+    <p>A hit sitting <em>exactly</em> on the window edge is out, not in. This is the half-open
+    window, and the course has already made the argument once, in <code>c3/0002</code>: with
+    <code>&gt;=</code> a hit at precisely <code>now - windowMs</code> stays in the window forever if
+    the clock happens to land there, and more usefully, one convention consistently applied is worth
+    more than an argument about which edge is fairer.</p>
+
+    <div id="pg-edge"></div>
+    <script>
+        createPlayground("pg-edge", `const now = 1000000;
+const windowMs = 60000;
+const edge = now - windowMs;   // exactly one minute ago
+
+console.log("t > now - windowMs  :", edge > now - windowMs);
+console.log("t >= now - windowMs :", edge >= now - windowMs);
+console.log("");
+console.log("One of those counts a request made exactly a minute ago against you.");`);
+    </script>
+
+    <h2>5 &middot; The clock that runs fast</h2>
+
+    <p>Replicas do not share a clock. NTP keeps them close, but a timestamp written by one node and
+    read by another can be slightly in the future.</p>
+
+    <p><code>c3/0002</code> met the same anomaly and made the opposite decision &mdash; future events
+    were counted as <code>ignored</code> and used for nothing. That is not an inconsistency, and the
+    reason is worth having exactly:</p>
+
+    <blockquote>
+        <p>There, a future timestamp was <strong>evidence</strong> about a sender, and evidence you
+        cannot trust should not count towards flagging somebody.</p>
+        <p>Here, a hit is a <strong>charge already made</strong> &mdash; an SMS that has been sent, a
+        redemption already attempted. Discarding it does not withhold a judgement, it refunds a
+        request.</p>
+    </blockquote>
+
+    <p><strong>The same anomaly gets the opposite treatment because the direction of the harm is
+    opposite.</strong> Dropping evidence is cautious; dropping a charge grants access. When you meet
+    a rule that seems to contradict one from another lesson, that is the question to ask: which way
+    does the error let somebody through?</p>
+
+    <h2>6 &middot; Unlimited and none are different, and only one of them is falsy</h2>
+
+    <p>Token has met this before, and <code>CLAUDE.md</code> keeps it near the top for a reason:
+    <code>max_uses</code> of <code>null</code> is unlimited, <code>0</code> permits nothing.</p>
+
+    <p>Rate policies have the same shape &mdash; an uncapped internal endpoint, and an endpoint
+    switched off during an incident &mdash; and the same trap:</p>
+
+    <div id="pg-nullzero"></div>
+    <script>
+        createPlayground("pg-nullzero", `const policies = [
+  { name: "health check", limit: null },   // uncapped on purpose
+  { name: "otp",          limit: 5 },
+  { name: "signup",       limit: 0 }       // switched off during an incident
+];
+
+for (const p of policies) {
+  const wrong = p.limit ? "enforce " + p.limit : "no limit";
+  const right = p.limit == null ? "no limit"
+              : p.limit === 0   ? "allow nothing"
+              : "enforce " + p.limit;
+  console.log(p.name.padEnd(14), "|  if (p.limit): " + wrong.padEnd(11), "|  correct: " + right);
+}`);
+    </script>
+
+    <p>The truthiness test gets one of the three wrong, and it is the one that matters: an endpoint
+    deliberately closed is thrown wide open, during an incident, which is when somebody turned it
+    off.</p>
+
+    <h2>7 &middot; When the shared counter is not there</h2>
+
+    <p>Redis is a network service and will occasionally be unreachable. Three answers exist and two
+    of them are wrong:</p>
+
+    <table>
+        <thead><tr><th>Answer</th><th>What actually happens</th></tr></thead>
+        <tbody>
+        <tr><td><strong>Fail open</strong> &mdash; allow the request</td><td>Every limit in the
+        product is off simultaneously, at the moment infrastructure is already unhappy. The SMS bill
+        is unbounded during the exact window nobody is watching a dashboard.</td></tr>
+        <tr><td><strong>Fall back to a local counter</strong></td><td>Worse than either. It returns a
+        plausible number, so nothing anywhere reports a problem &mdash; and it is the per-node
+        limiter from section 1, which is the bug this whole lesson exists to remove.</td></tr>
+        <tr><td><strong>Fail closed</strong> &mdash; refuse, with a short retry</td><td>A Redis blip
+        becomes a user-visible failure. That is a real cost and it is the one to accept.</td></tr>
+        </tbody>
+    </table>
+
+    <div class="callout warning">
+        <div class="callout-title">The decision, with the cost stated</div>
+        <p><strong>Fail closed.</strong> When the shared store cannot be reached, the limiter refuses
+        and asks the client to retry shortly.</p>
+        <p><em>The cost:</em> a Redis outage becomes a login outage rather than a degraded one.
+        ADR-0003 already accepts that &mdash; Redis is <em>required</em>, so an unreachable Redis is
+        an outage whether or not the limiter pretends otherwise. Pretending changes which failure you
+        get, not whether you have one.</p>
+        <p><em>Why the local fallback is the worst option</em>, and this is the README's warning about
+        this whole module: <strong>it still returns a number.</strong> A refusal is visible. A wrong
+        answer that looks right is not.</p>
+    </div>
+
+    <h2>8 &middot; What a rate limit is not</h2>
+
+    <p>C3's <code>contact_limit</code> caps messages per day. <code>CLAUDE.md</code> records the gap
+    it leaves, in the note explaining why <code>cooldown</code> was dropped for v1:</p>
+
+    <div id="pg-cooldown"></div>
+    <script>
+        createPlayground("pg-cooldown", `const cap = 10;                  // messages per day
+const arrivals = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];   // seconds after redemption
+
+console.log("messages sent :", arrivals.length);
+console.log("daily cap     :", cap);
+console.log("over the cap  :", arrivals.length > cap);
+console.log("elapsed       :", arrivals[arrivals.length - 1] - arrivals[0], "seconds");
+console.log("");
+console.log("Entirely within the rule, and the experience it was written to prevent.");`);
+    </script>
+
+    <p>A limit constrains a <em>total over a period</em>. It says nothing about distribution, and the
+    thing a user actually objects to is usually the distribution. Adding <code>cooldown</code> later
+    is one value in a <code>CHECK</code> list &mdash; which is the concrete payoff of rules being rows
+    rather than a JSONB blob &mdash; but until then the gap is real and should not be described as
+    covered.</p>
+
+    <h2>9 &middot; Broken on purpose</h2>
+
+    <p>Run it. The error is the lesson: it is what "the shared store was unreachable" looks like when
+    nobody decided what should happen.</p>
+
+    <div id="pg-broken"></div>
+    <script>
+        createPlayground("pg-broken", `function readBucket(key) {
+  // Redis is down; the client resolves to null rather than throwing.
+  return null;
+}
+
+function allow(key, now, limit, windowMs) {
+  const bucket = readBucket(key);
+  const recent = bucket.hits.filter(t => t > now - windowMs);
+  return recent.length < limit;
+}
+
+console.log(allow("otp:abc", 1000000, 5, 60000));`);
+    </script>
+
+    <p>It crashes, which by accident fails closed &mdash; the request errors and no SMS is sent. That
+    is the right outcome reached the wrong way: a 500 with a stack trace instead of a retry hint, an
+    entry in the error tracker for something that is not a bug, and behaviour nobody chose and nobody
+    can find in the code.</p>
+
+    <h2>10 &middot; Now build it yourself</h2>
+
+    <div id="exercise-1"></div>
+    <script>
+        createSolution("exercise-1", {
+            exercise: "Write <code>checkLimit(bucket, now, policy)</code> &mdash; one decision, for one key, at one instant. It is pure: it reads a bucket and returns what should be stored back, rather than writing anything.<br><br><code>bucket</code> is <code>{ hits: [timestampsMs] }</code>, or <code>null</code> when the shared store could not be reached. <code>now</code> is a millisecond timestamp. <code>policy</code> is <code>{ limit, windowMs, unavailableRetryMs }</code>.<br><br>Return <code>{ allowed, remaining, retryAfterMs, reason, keep }</code>.<br><br>The rules, the first four in this precedence:<br>1. <code>bucket</code> is <code>null</code> or <code>undefined</code> &mdash; the store was unreachable. Refuse: <code>allowed</code> false, <code>remaining</code> 0, <code>retryAfterMs</code> is <code>policy.unavailableRetryMs</code>, reason <code>\"store_unavailable\"</code>, <code>keep</code> empty. Never count locally instead.<br>2. <code>policy.limit</code> is exactly <code>0</code> &mdash; nothing is permitted. Reason <code>\"no_quota\"</code>, and <code>retryAfterMs</code> is <code>null</code>, because there is no later time at which this succeeds.<br>3. <code>policy.limit</code> is <code>null</code> or <code>undefined</code> &mdash; uncapped. Allowed, <code>remaining</code> <code>null</code>, <code>retryAfterMs</code> 0, and the hit is still recorded.<br>4. Otherwise: <code>keep</code> is every hit strictly newer than <code>now - windowMs</code>, in the order given. If that count is below the limit the request is allowed and <code>now</code> is appended to <code>keep</code>; otherwise it is denied and <code>keep</code> is left as the pruned list.<br><br>And:<br>5. A hit later than <code>now</code> is kept and counted. A fast clock on another node must not hand out free requests.<br>6. <code>remaining</code> is the limit minus the length of <code>keep</code>, never below zero.<br>7. When denied, <code>retryAfterMs</code> is when the oldest kept hit leaves the window: <code>oldest + windowMs - now</code>. When allowed, it is <code>0</code>.<br>8. Do not modify <code>bucket</code> or its array.",
+            hints: [
+                "Write the three refusals and the uncapped case as four early returns before you write any arithmetic. Each one returns a complete result, so none of the later code has to remember which of them might have applied.",
+                "retryAfterMs has three kinds of value and they mean different things: 0 is go now, a positive number is wait this long, and null is there is no such time. Decide what each branch returns before you write the loop.",
+                "Prune with filter, which gives you a new array, and then append to that copy rather than to bucket.hits. The order of keep is the order the hits arrived in, so nothing needs sorting — but the oldest is not necessarily the first element once a future timestamp is in there."
+            ],
+            solution: `function checkLimit(bucket, now, policy) {
+  // Rule 1. Fail closed. A local count here would be the per-node limiter
+  // this whole lesson exists to remove, and it would look like it worked.
+  if (bucket === null || bucket === undefined) {
+    return {
+      allowed: false,
+      remaining: 0,
+      retryAfterMs: policy.unavailableRetryMs,
+      reason: "store_unavailable",
+      keep: []
+    };
+  }
+
+  // Rules 2 and 3. Zero and null are opposite instructions and only one of
+  // them is falsy, which is why neither is tested with if (policy.limit).
+  if (policy.limit === 0) {
+    return { allowed: false, remaining: 0, retryAfterMs: null, reason: "no_quota", keep: [] };
+  }
+
+  const cutoff = now - policy.windowMs;
+  const kept = bucket.hits.filter(at => at > cutoff);
+
+  if (policy.limit === null || policy.limit === undefined) {
+    return {
+      allowed: true,
+      remaining: null,
+      retryAfterMs: 0,
+      reason: "ok",
+      // Still recorded: lowering the limit later must take effect at once,
+      // not after a free window has gone by.
+      keep: kept.concat([now])
+    };
+  }
+
+  if (kept.length < policy.limit) {
+    const keep = kept.concat([now]);
+    return {
+      allowed: true,
+      remaining: Math.max(0, policy.limit - keep.length),
+      retryAfterMs: 0,
+      reason: "ok",
+      keep: keep
+    };
+  }
+
+  // Denied. The oldest kept hit is the one whose departure frees a slot, and
+  // it is found with Math.min rather than kept[0] because a clock-skewed
+  // future timestamp can arrive out of order.
+  const oldest = Math.min.apply(null, kept);
+  return {
+    allowed: false,
+    remaining: 0,
+    retryAfterMs: oldest + policy.windowMs - now,
+    reason: "over_limit",
+    keep: kept
+  };
+}`
+        });
+    </script>
+
+    <div id="pg-exercise"></div>
+    <script>
+        createPlayground("pg-exercise", `// Write checkLimit(bucket, now, policy) here.
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed ? "" : "  -> " + detail));
+}
+
+const NOW = 1000000;
+const POLICY = { limit: 5, windowMs: 60000, unavailableRetryMs: 2000 };
+
+// 940000 sits exactly on the edge and must be excluded; 930000 is well outside.
+// The in-window hits are deliberately not evenly spaced, so an answer that
+// picks the wrong one as oldest gives a different retryAfterMs.
+function bucket(hits) { return { hits: hits.slice() }; }
+function threeInWindow() { return bucket([930000, 940000, 950000, 970000, 995000]); }
+
+try {
+  if (typeof checkLimit !== "function") throw new Error("checkLimit is not defined yet");
+
+  try {
+    const r = checkLimit(threeInWindow(), NOW, POLICY);
+    check("hits outside the window are pruned and the edge one is excluded",
+      JSON.stringify(r.keep) === JSON.stringify([950000, 970000, 995000, NOW]),
+      "keep " + JSON.stringify(r.keep));
+  } catch (e) { check("hits outside the window are pruned and the edge one is excluded", false, e.message); }
+
+  try {
+    const r = checkLimit(threeInWindow(), NOW, POLICY);
+    check("remaining counts the request being allowed right now",
+      r.allowed === true && r.remaining === 1 && r.retryAfterMs === 0 && r.reason === "ok",
+      "allowed " + r.allowed + " remaining " + r.remaining + " retryAfterMs " + r.retryAfterMs);
+  } catch (e) { check("remaining counts the request being allowed right now", false, e.message); }
+
+  try {
+    const full = bucket([950000, 960000, 970000, 980000, 990000]);
+    const r = checkLimit(full, NOW, POLICY);
+    check("the request that would be one over is denied, and the oldest hit sets the retry",
+      r.allowed === false && r.reason === "over_limit" && r.remaining === 0
+        && r.retryAfterMs === 10000,
+      "allowed " + r.allowed + " retryAfterMs " + r.retryAfterMs);
+  } catch (e) { check("the request that would be one over is denied, and the oldest hit sets the retry", false, e.message); }
+
+  try {
+    const four = bucket([950000, 960000, 970000, 980000]);
+    const r = checkLimit(four, NOW, POLICY);
+    check("the fifth request against a limit of five is allowed, not the fourth",
+      r.allowed === true && r.remaining === 0,
+      "allowed " + r.allowed + " remaining " + r.remaining);
+  } catch (e) { check("the fifth request against a limit of five is allowed, not the fourth", false, e.message); }
+
+  try {
+    const skewed = bucket([950000, 960000, 970000, 980000, NOW + 5000]);
+    const r = checkLimit(skewed, NOW, POLICY);
+    check("a timestamp from a node with a fast clock still counts against the limit",
+      r.allowed === false && r.reason === "over_limit",
+      "allowed " + r.allowed + " reason " + r.reason);
+  } catch (e) { check("a timestamp from a node with a fast clock still counts against the limit", false, e.message); }
+
+  try {
+    const skewed = bucket([NOW + 5000, 950000, 960000, 970000, 980000]);
+    const r = checkLimit(skewed, NOW, POLICY);
+    check("the retry is set by the oldest kept hit, not by whichever arrived first",
+      r.retryAfterMs === 10000,
+      "retryAfterMs " + r.retryAfterMs);
+  } catch (e) { check("the retry is set by the oldest kept hit, not by whichever arrived first", false, e.message); }
+
+  try {
+    const r = checkLimit(null, NOW, POLICY);
+    check("an unreachable store refuses rather than counting locally",
+      r.allowed === false && r.reason === "store_unavailable"
+        && r.retryAfterMs === 2000 && r.keep.length === 0,
+      "reason " + r.reason + " retryAfterMs " + r.retryAfterMs);
+  } catch (e) { check("an unreachable store refuses rather than counting locally", false, e.message); }
+
+  try {
+    const r = checkLimit(threeInWindow(), NOW, { limit: 0, windowMs: 60000, unavailableRetryMs: 2000 });
+    check("a limit of zero permits nothing and has no retry time at all",
+      r.allowed === false && r.reason === "no_quota" && r.retryAfterMs === null,
+      "allowed " + r.allowed + " reason " + r.reason + " retryAfterMs " + r.retryAfterMs);
+  } catch (e) { check("a limit of zero permits nothing and has no retry time at all", false, e.message); }
+
+  try {
+    const r = checkLimit(threeInWindow(), NOW, { limit: null, windowMs: 60000, unavailableRetryMs: 2000 });
+    check("a limit of null is uncapped, reports no remaining figure, and still records the hit",
+      r.allowed === true && r.remaining === null && r.keep.length === 4,
+      "allowed " + r.allowed + " remaining " + r.remaining + " keep " + JSON.stringify(r.keep));
+  } catch (e) { check("a limit of null is uncapped, reports no remaining figure, and still records the hit", false, e.message); }
+
+  try {
+    const r = checkLimit(bucket([]), NOW, POLICY);
+    check("an empty bucket is allowed and does not produce a nonsense retry time",
+      r.allowed === true && r.retryAfterMs === 0 && r.remaining === 4,
+      "allowed " + r.allowed + " retryAfterMs " + r.retryAfterMs + " remaining " + r.remaining);
+  } catch (e) { check("an empty bucket is allowed and does not produce a nonsense retry time", false, e.message); }
+
+  try {
+    const b = threeInWindow();
+    const before = JSON.stringify(b);
+    checkLimit(b, NOW, POLICY);
+    check("the bucket handed in is not modified",
+      JSON.stringify(b) === before,
+      "bucket now " + JSON.stringify(b));
+  } catch (e) { check("the bucket handed in is not modified", false, e.message); }
+
+} catch (e) {
+  console.log("Nothing to check yet -- " + e.message);
+}`);
+    </script>
+
+    <h3>Say it in your own words</h3>
+    <div id="explain-0003"></div>
+    <script>
+        createExplain("explain-0003", {
+            prompt: "When Redis is unreachable, one option is to fall back to an in-process counter so that requests keep being limited. Explain why that is worse than refusing outright &mdash; and worse than allowing everything &mdash; even though it is the only one of the three that still enforces a limit."
+        });
+    </script>
+
+    <h2>Quiz</h2>
+    <div id="lesson-quiz"></div>
+    <script>
+        createQuiz("lesson-quiz", [
+            {
+                question: "A limit of 5 per hour is enforced by an in-process counter on 3 replicas. What is actually enforced?",
+                options: [
+                    "15 per hour, without the caller doing anything clever",
+                    "5 per hour, since the replicas are identical",
+                    "Somewhere between 5 and 15 depending on load",
+                    "5 per hour per user but 15 in total"
+                ],
+                correct: 0,
+                explanation: "A round-robin load balancer spreads the requests across the replicas on the caller's behalf. Nothing had to be misconfigured and no request failed."
+            },
+            {
+                type: "predict-output",
+                code: "const limit = 5, replicas = 3;\nconsole.log(limit * replicas);",
+                answer: "15",
+                explanation: "The limiter did its job perfectly on every node. What was wrong is the population its job was defined over."
+            },
+            {
+                question: "Which three things does ADR-0003 say Redis is required for?",
+                options: [
+                    "Socket fan-out, presence as TTL keys, and rate limiting as shared counters",
+                    "Caching, sessions, and job queues",
+                    "Search, presence, and message storage",
+                    "Pub/sub, TLS termination, and connection pooling"
+                ],
+                correct: 0,
+                explanation: "All three are the same fact in different clothes: a number that has to be true of the system cannot live inside one process."
+            },
+            {
+                type: "predict-output",
+                code: "const windowMs = 60000;\nconsole.log(Math.floor(59500 / windowMs), Math.floor(60100 / windowMs));",
+                answer: "0 1",
+                explanation: "Two different windows, six hundred milliseconds apart. Each gets a full allowance, which is where the doubling comes from."
+            },
+            {
+                question: "How much can a fixed-window limiter let through across a boundary?",
+                options: [
+                    "Twice the stated limit, and no configuration fixes it",
+                    "About 10% more than the limit",
+                    "Exactly the limit, which is the point of the window",
+                    "It depends on the expiry time set on the key"
+                ],
+                correct: 0,
+                explanation: "The counter resets at a fixed instant and has no memory of the requests immediately before it. That is what the design is, rather than a tuning problem."
+            },
+            {
+                question: "Why is a predictable window boundary worse than an unpredictable one?",
+                options: [
+                    "Boundaries are clock time, so an attacker can aim at them without any knowledge of your system",
+                    "Predictable boundaries make the counter slower",
+                    "Redis expiry is less accurate on the minute",
+                    "It only matters for the OTP endpoint"
+                ],
+                correct: 0,
+                explanation: "Nothing has to be learned or probed. The doubling is available at a moment anyone with a clock can compute."
+            },
+            {
+                type: "fill-blank",
+                code: "const kept = bucket.hits.filter(at => at ___ now - policy.windowMs);",
+                answer: ">",
+                explanation: "Half-open: a hit sitting exactly on the edge is out. The same convention as c3/0002, and consistency across the codebase is worth more than an argument about which edge is fairer."
+            },
+            {
+                type: "predict-output",
+                code: "const now = 1000000, windowMs = 60000, edge = now - windowMs;\nconsole.log(edge > now - windowMs, edge >= now - windowMs);",
+                answer: "false true",
+                explanation: "One of those counts a request made exactly a minute ago against you, forever, whenever the clock lands on the boundary."
+            },
+            {
+                question: "What does a sliding window cost compared with a fixed window?",
+                options: [
+                    "One stored timestamp per request rather than one integer per window",
+                    "An extra network round trip",
+                    "It cannot be shared between replicas",
+                    "It requires a background job to prune"
+                ],
+                correct: 0,
+                explanation: "Trivial for a limit of ten and a real decision for a limit of ten thousand, which is where a token bucket starts to look better."
+            },
+            {
+                question: "c3/0002 ignores future timestamps and this lesson counts them. Why is that not a contradiction?",
+                options: [
+                    "There a future timestamp is untrusted evidence about a person; here it is a charge already made, and dropping it refunds a request",
+                    "c3/0002 is about reports and this is about messages",
+                    "Clock skew is only possible in one direction",
+                    "The two use different window sizes"
+                ],
+                correct: 0,
+                explanation: "The same anomaly gets opposite treatment because the direction of the harm is opposite. Dropping evidence is cautious; dropping a charge grants access."
+            },
+            {
+                type: "spot-the-bug",
+                code: "1  const kept = hits.filter(at => at > now - windowMs && at <= now);\n2  if (kept.length < limit) {\n3    return { allowed: true, keep: kept.concat([now]) };\n4  }\n5  return { allowed: false, keep: kept };",
+                bugLine: 1,
+                options: ["Line 1", "Line 2", "Line 3", "Line 5"],
+                correct: 0,
+                explanation: "Excluding timestamps later than now discards charges written by a node whose clock runs fast, which hands out free requests to whoever happens to be routed there."
+            },
+            {
+                question: "Why is the oldest kept hit found with Math.min rather than by taking the first element?",
+                options: [
+                    "A clock-skewed timestamp can arrive out of order, so arrival order and time order are not the same thing",
+                    "filter does not preserve order",
+                    "The array is sorted descending",
+                    "Math.min is faster on small arrays"
+                ],
+                correct: 0,
+                explanation: "The array holds hits in the order they were recorded. Once one of them is from a node running slightly ahead, position no longer implies age."
+            },
+            {
+                type: "which-breaks",
+                variants: [
+                    "if (policy.limit === 0) return noQuota;\nif (policy.limit == null) return uncapped;",
+                    "if (!policy.limit) return uncapped;",
+                    "if (policy.limit === null || policy.limit === undefined) return uncapped;\nif (policy.limit === 0) return noQuota;"
+                ],
+                correct: 1,
+                explanation: "The truthiness test collapses zero and null into one branch, so an endpoint deliberately switched off is thrown wide open — during an incident, which is when somebody turned it off."
+            },
+            {
+                type: "predict-output",
+                code: "for (const limit of [null, 5, 0]) console.log(limit == null ? \"uncapped\" : limit === 0 ? \"none\" : \"limit \" + limit);",
+                answer: "uncapped\nlimit 5\nnone",
+                explanation: "Three policies, three outcomes. The loose == null is the one place a loose comparison is the clearer choice, because it catches undefined as well."
+            },
+            {
+                question: "Which failure mode does the module README warn about, and which rate-limiting option is an instance of it?",
+                options: [
+                    "An optimisation that makes the product wrong rather than slow — the local counter fallback, which still returns a number",
+                    "An optimisation that makes the product slower — the sliding window",
+                    "A memory leak — storing timestamps",
+                    "A privacy leak — keying by phone number"
+                ],
+                correct: 0,
+                explanation: "A refusal is visible and a wrong answer that looks right is not. That is the whole reason this module is dangerous in a way the earlier ones are not."
+            },
+            {
+                question: "What is the stated cost of failing closed when Redis is unreachable?",
+                options: [
+                    "A Redis blip becomes a user-visible failure rather than a degraded experience",
+                    "Rate limits are enforced twice",
+                    "Requests are queued and replayed later",
+                    "There is no cost"
+                ],
+                correct: 0,
+                explanation: "ADR-0003 already accepts it: Redis is required, so an unreachable Redis is an outage whether or not the limiter pretends otherwise. Pretending changes which failure you get, not whether you have one."
+            },
+            {
+                type: "order-steps",
+                steps: [
+                    "Refuse because the shared store could not be reached",
+                    "Refuse because the limit is exactly zero",
+                    "Allow without counting because the limit is null",
+                    "Prune the window and compare the count against the limit"
+                ],
+                correctOrder: [0, 1, 2, 3],
+                explanation: "Four early returns, each producing a complete result, so nothing in the arithmetic below has to remember which of them might have applied."
+            },
+            {
+                question: "Under an uncapped policy, why is the hit still recorded?",
+                options: [
+                    "So that lowering the limit later takes effect at once rather than after a free window",
+                    "To keep the array lengths consistent",
+                    "Because Redis requires a write on every check",
+                    "It is not recorded"
+                ],
+                correct: 0,
+                explanation: "A bucket that stopped recording would have nothing to prune from, so the first window after a policy change would be unconstrained."
+            },
+            {
+                type: "predict-output",
+                code: "const kept = [950000, 960000, 970000, 980000, 990000];\nconsole.log(Math.min.apply(null, kept) + 60000 - 1000000);",
+                answer: "10000",
+                explanation: "The oldest hit leaves the window ten seconds from now, and that is the moment a slot frees. Anything sooner is a retry that will be refused again."
+            },
+            {
+                question: "retryAfterMs has three kinds of value. What does null mean?",
+                options: [
+                    "There is no later time at which this request would succeed",
+                    "The retry time is unknown",
+                    "Retry immediately",
+                    "Use the default retry interval"
+                ],
+                correct: 0,
+                explanation: "Zero says go now, a positive number says wait this long, and null says never — a quota of zero is not a wait, it is a closed door."
+            },
+            {
+                question: "Why must the request that reaches exactly the limit be allowed rather than denied?",
+                options: [
+                    "A limit of five means five requests succeed; denying the fifth enforces four",
+                    "It makes the arithmetic simpler",
+                    "The specification is ambiguous either way",
+                    "Because remaining would go negative otherwise"
+                ],
+                correct: 0,
+                explanation: "The comparison is the pruned count against the limit before this request is counted, which is why it is a strict less-than."
+            },
+            {
+                question: "C3's contact_limit caps messages per day. What does that not constrain?",
+                options: [
+                    "The distribution — ten messages in ten seconds is entirely within a cap of ten a day",
+                    "The total number of messages",
+                    "Which conversations are affected",
+                    "How long the rule lasts"
+                ],
+                correct: 0,
+                explanation: "The thing a user objects to is usually the distribution. CLAUDE.md records this as the gap dropping cooldown left open, and says not to describe it as covered."
+            },
+            {
+                question: "Why is adding cooldown later cheap?",
+                options: [
+                    "Rules are rows with a constrained rule_type, so it is one value added to a CHECK list rather than a redesign",
+                    "The evaluator already supports it",
+                    "It is a client-side setting",
+                    "JSONB payloads accept any shape"
+                ],
+                correct: 0,
+                explanation: "That is the concrete payoff of the access_rules decision — a rule the engine cannot evaluate is refused by the database, and a new one is a migration rather than an argument."
+            },
+            {
+                type: "predict-output",
+                code: "const bucket = null;\ntry { bucket.hits.filter(t => t > 0); } catch (e) { console.log(e.constructor.name); }",
+                answer: "TypeError",
+                explanation: "The crash fails closed by accident: the request errors and no SMS is sent. Right outcome, wrong route — a 500 and a stack trace instead of a retry hint, and behaviour nobody chose."
+            },
+            {
+                question: "Which of the three Redis-unavailable answers is the worst?",
+                options: [
+                    "Falling back to a local counter, because it is the per-node limiter this lesson exists to remove and it reports success",
+                    "Failing open, because no limits apply",
+                    "Failing closed, because users cannot log in",
+                    "They are equally bad"
+                ],
+                correct: 0,
+                explanation: "Failing open is at least honest about what it is doing. The fallback reintroduces the original bug and hides it behind a plausible number."
+            },
+            {
+                question: "What does this lesson share with the two before it?",
+                options: [
+                    "A fact that is true of one process being mistaken for a fact about the system",
+                    "All three are about Redis",
+                    "All three are about clock skew",
+                    "All three are about memory"
+                ],
+                correct: 0,
+                explanation: "One box's spare memory is not a capacity, one node's registry is not a set of recipients, and one process's counter is not a rate limit."
+            }
+        ]);
+    </script>
+
+    <div class="lesson-nav">
+        <a href="./0002-one-nodes-memory.html">&larr; One Node's Memory Is Not the System's State</a>
+        <span class="disabled">Next: The Cache That Outlives a Revocation &rarr;</span>
+    </div>
+
+</body>
+</html>
