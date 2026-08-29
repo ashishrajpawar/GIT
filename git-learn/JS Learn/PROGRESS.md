@@ -11,16 +11,16 @@ with this one, this one is right — everything below is measured, not asserted.
 
 | Metric | Value |
 |---|---|
-| Token-track lessons | 118 |
+| Token-track lessons | 119 |
 | Founder-track lessons (F1, counted separately) | 16 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
-| Quiz questions (track) | 3199 |
-| Avg teaching prose per track lesson | 2094 words |
-| Lessons with a playground | 118 / 118 |
-| Lessons with an exercise | 118 / 118 |
-| **Deepened** (all 3 spine sections) | 16 / 118 |
-| **Verified** (code executed) | 118 / 118 |
-| Ran clean but had nothing to run | 0 / 118 |
+| Quiz questions (track) | 3225 |
+| Avg teaching prose per track lesson | 2084 words |
+| Lessons with a playground | 119 / 119 |
+| Lessons with an exercise | 119 / 119 |
+| **Deepened** (all 3 spine sections) | 16 / 119 |
+| **Verified** (code executed) | 119 / 119 |
+| Ran clean but had nothing to run | 0 / 119 |
 | Errors | 0 |
 | Known and blocked | 0 |
 | Warnings | 2 |
@@ -30,12 +30,12 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 ## Answer-position distribution — **authored order, not what the student sees**
 
-1820 keyed questions (multiple-choice, spot-the-bug, which-breaks).
+1843 keyed questions (multiple-choice, spot-the-bug, which-breaks).
 
 > **This clustering is expected and already handled. Do not "fix" it again.**
 > `quiz.js` shuffles options at render time (`optionDisplayOrder`), so the
 > displayed distribution is roughly even — measured at 26.9 / 28.5 / 26.9 / 17.6
-> across all 1820 questions, versus the authored figures below. Index 3 sits
+> across all 1843 questions, versus the authored figures below. Index 3 sits
 > lower only because many questions have three options.
 >
 > The numbers here read `correct` straight from the lesson data, which is
@@ -54,20 +54,20 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Position | Count | Share |
 |---|---|---|
-| index 0 | 456 | 25.1% |
-| index 1 | 977 | 53.7% |
-| index 2 | 353 | 19.4% |
-| index 3 | 34 | 1.9% |
+| index 0 | 477 | 25.9% |
+| index 1 | 978 | 53.1% |
+| index 2 | 354 | 19.2% |
+| index 3 | 34 | 1.8% |
 
 ## Question types
 
 | Type | Count |
 |---|---|
-| multiple-choice | 1113 |
-| predict-output | 600 |
-| fill-blank | 487 |
-| spot-the-bug | 405 |
-| which-breaks | 302 |
+| multiple-choice | 1134 |
+| predict-output | 602 |
+| fill-blank | 488 |
+| spot-the-bug | 406 |
+| which-breaks | 303 |
 | order-steps | 292 |
 
 ## Modules
@@ -101,7 +101,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | c2-cicd-release | 4 | 1291 | 15 | 4 | 104 | 0/4 | 4/4 |
 | c3-trust-safety | 3 | 1126 | 12 | 3 | 78 | 0/3 | 3/3 |
 | c5-end-to-end-encryption | 5 | 1671 | 10 | 10 | 126 | 0/5 | 5/5 |
-| c7-observability | 3 | 1036 | 13 | 3 | 78 | 0/3 | 3/3 |
+| c7-observability | 4 | 1018 | 17 | 4 | 104 | 0/4 | 4/4 |
 | x1-git-dev-environment | 3 | 1202 | 4 | 6 | 83 | 0/3 | 3/3 |
 | x2-debugging | 2 | 1242 | 3 | 4 | 50 | 0/2 | 2/2 |
 
@@ -145,7 +145,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Tables queried but never created | ok |
 | Broken relative links | ok |
 | Widgets defined before they are called | ok |
-| search-index.json | 135 entries, 0 dead, 0 unindexed |
+| search-index.json | 136 entries, 0 dead, 0 unindexed |
 | Example tokens valid under alphabet | 2 invalid |
 
 ## Errors
@@ -275,6 +275,7 @@ None.
 | c7-observability/0001-the-log-line-you-can-publish.html | 1066 | 5 | 4 | 1 | 26 | — | yes |
 | c7-observability/0002-errors-and-what-they-carry.html | 1008 | 2 | 4 | 1 | 26 | — | yes |
 | c7-observability/0003-metrics-that-answer-a-question.html | 1035 | 0 | 5 | 1 | 26 | — | yes |
+| c7-observability/0004-alerts-and-the-page-nobody-answers.html | 963 | 0 | 4 | 1 | 26 | — | yes |
 | x1-git-dev-environment/0001-git-fundamentals.html | 1254 | 10 | 2 | 2 | 29 | — | yes |
 | x1-git-dev-environment/0002-github-workflow.html | 1170 | 9 | 1 | 2 | 27 | — | yes |
 | x1-git-dev-environment/0003-dev-environment.html | 1181 | 16 | 1 | 2 | 27 | — | yes |

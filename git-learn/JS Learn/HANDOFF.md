@@ -4655,3 +4655,104 @@ than on anything in these files.
 **Still unpushed** — `git log @{u}..HEAD` for the count. It includes the
 26-lesson widget repair, so the F1 explain prompts and the B2/B3 playgrounds
 remain broken on the published site.
+
+---
+
+## 2026-08-29 (third) — C7 complete: the tools whose defaults break the product
+
+Four lessons, four commits. C7 was chosen with no recommendation on file, so
+the reasoning and its cost are in `SESSION.md`: three of `CLAUDE.md`'s logging
+rules had no module that owned them and the same defect had been swept out of
+the course twice, and the TURN-bandwidth instruction in *Blocked on* had nothing
+teaching it. What it deferred was C6 — whose own row says scale must not be
+deferred — on the argument that you cannot tune what you cannot see.
+
+### The module's thesis
+
+**Every tool in this module has a default that is correct almost everywhere and
+wrong for Token specifically.** That is the hardest class of defect there is:
+no error, no warning, and a review of your own code shows nothing, because your
+code is fine and so is theirs.
+
+| Tool | The sensible default | What it does here |
+|---|---|---|
+| Any logger | Log the object you have | The token row has a `code` on it |
+| Error tracker | Attach the request body | ADR-0007 put the code in the body on purpose |
+| Metrics | Label by whatever helps you debug | A per-user label is the timeline ADR-0012 promises does not exist |
+| Alerting | Fire when the number is bad | A dead service has no number, so nothing fires |
+
+The same shape had already appeared once, in B9/B10: `rclone copy` and `rsync`
+without `--delete` are safe *because* they cannot destroy anything at the far
+end, and that property is what made a published retention promise false.
+
+### The four arguments worth keeping
+
+- **`0001`: an allow-list permits the container, not what is inside it.** Allow
+  `token` because logging the token is obviously useful, pass the row, and the
+  code goes out with every field technically permitted. The fix is to log
+  scalars; the tripwire covers the fix being a discipline. Both are kept because
+  **their blind spots do not overlap** — and redundancy is only worth its cost
+  when the failures are independent.
+- **`0002`: group on what does not vary.** A message with an interpolated id is
+  one issue per id, so the alert that should say *"40,000 times an hour"* says
+  *"a new issue"* forty thousand times. And the normalising order is
+  load-bearing: digits-first breaks a code into fragments the code pattern can
+  no longer match, so code-first fixes the grouping *and* a leak.
+- **`0003`: the cardinality rule and the privacy rule coincide.** Convenient,
+  because one rule serves both — and dangerous, because somebody who knows only
+  the cost argument will add a cheap label with fifty values that still singles
+  a person out.
+- **`0004`: three outcomes, not two.** A missing value is over, under, or *no
+  data*, and collapsing it into "under" is how an alert stays silent through the
+  outage it was written for. `0003` refusing to invent a zero is what makes
+  `0004` possible; that is why they are adjacent.
+
+### The decision with a stated cost
+
+**Missing data raises a ticket, never a page.** A stopped metric is far more
+often the exporter than the service, and a page needs a human who can act now.
+*The cost, in the lesson rather than hidden:* when the service genuinely is
+down, this rule is not what tells you — that job belongs to a separate alert on
+traffic falling to zero, which is why `0003` insisted `count` and `errorRate`
+stay separate fields.
+
+Reversible on evidence: if exporters turn out to be reliable and outages do not,
+make it page.
+
+### Three faults of mine that the wrong-cases caught
+
+All three were in the *checking*, not the lessons, which is the pattern for this
+whole session:
+
+- **An assertion about a type where a value was needed** (`0001`). It read
+  "every recorded value is a string", which the `String(value)` mistake passes
+  trivially — it hands the predicate a string every time and has still asked it
+  about `42`, `true` and `null`.
+- **A snapshot taken after first use** (`0003`). The mutation check recorded the
+  "original" order from a window the summariser had already run on, so the
+  sorting had happened before the baseline existed and the check compared a
+  sorted array with itself. That trap is listed in `SESSION.md` and was walked
+  into regardless.
+- **A fixture whose two sides could not differ** (`0003`). The samples were
+  emitted already ascending, so sorting them in place left them identical.
+
+All three are one error in different clothes: **an assertion whose two sides
+cannot differ always passes.**
+
+And one self-inflicted parse failure: a backtick inside a playground comment
+terminated the template literal and the whole self-check vanished silently.
+`CLAUDE.md` documents that for `createSolution` strings; it applies to
+`createPlayground` too.
+
+### State
+
+Audit green. **119/119 verified**, `render-as-authored` 0, seven suites pass,
+`known-issues.json` still empty. Four C-modules remain — C4, C6, C8, C9 —
+and `SESSION.md` records C8 as having the strongest claim, on the weak grounds
+that the plan specifies it after C7 and `0003` already argued its central
+boundary. **C6 has now been deferred twice**, which is worth someone weighing
+against its own row saying scale must not be deferred.
+
+**Still unpushed** — `git log @{u}..HEAD` for the count. It includes the
+26-lesson widget repair, so the F1 explain prompts and the B2/B3 playgrounds
+remain broken on the published site.

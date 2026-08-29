@@ -26,23 +26,23 @@ how far it got.
 > files either.** Make no claims about it at all — not in prose, not in a
 > commit message, not as a reason for prioritising anything.
 
-**W1 — C7, Observability.** Started 2026-08-29 straight after C3.
-`0001`, `0002` and `0003` are written, verified and have their `--wrong`
-cases; README, index row and search entries are in. **`0004` remains** —
-alerting and runbooks. It lands as its own green commit.
+**Nothing in flight.** C7 — Observability — landed complete on 2026-08-29:
+four lessons, each verified with its `--wrong` cases, each its own commit,
+README, index row and search entries in. C2 and C3 landed complete the same
+day.
 
-**Why C7 and not C4 or C6**, with the cost, because no recommendation was on
-record: three of `CLAUDE.md`'s hardest-won logging rules — never log a code,
-log the id, allow-list rather than delete — have no module that owns them, and
-the same defect has been swept out of the course twice. C7 gives them a home.
-Watching TURN bandwidth from the first deploy is a standing instruction in
-*Blocked on* with nothing that teaches it, and C2/0004's "a build you cannot map
-to a commit is a crash you cannot fix" needs an error tracker to be true.
-**The cost:** C6 says on its own row that scale must not be deferred, and this
-defers it. The counter-argument is that you cannot tune what you cannot see, so
-C7 before C6 is an ordering rather than a refusal.
+**The next unit is `W1` again: pick one C-module, write it, stop.** Four
+remain — C4, C6, C8, C9. The launch queue is the other open front and none of
+it is code; see *Next action*.
 
-C2 and C3 both landed complete earlier the same day.
+**C7 was taken on a dependency and the cost is on record**: three of
+`CLAUDE.md`'s logging rules had no module that owned them and the same defect
+had been swept out twice; the TURN-bandwidth instruction in *Blocked on* had
+nothing teaching it. What it deferred was C6, whose own row says scale must not
+be deferred — the counter-argument being that you cannot tune what you cannot
+see. **C8 now has a claim it did not have before**, since it is specified as
+following C7 and the analytics/telemetry boundary is what `0003` spent its
+callout on.
 
 ### State as of 2026-08-29
 
@@ -113,22 +113,21 @@ L7 RoPA ─┬▶ privacy policy   ├▶ L12 Play Data Safety   ├▶ L13 Appl
 Drafts for four of Wave 0 are written and waiting in `token/docs/launch/` —
 fill the angle brackets and send. The folder README has the send order.
 
-**Writing side — `W1` continues, one module at a time.** C0, C1, C2 and C3
-have landed; **five remain**: C4, C6, C7, C8, C9. Written just-in-time, never
+**Writing side — `W1` continues, one module at a time.** C0, C1, C2, C3 and
+C7 have landed; **four remain**: C4, C6, C8, C9. Written just-in-time, never
 batched. `W2` is closed and there is no maintenance tail left to slot between
 units.
 
-**C3 was taken on a dependency**, recorded so it can be argued with: `L23` and
-`L26` are the UGC evidence both stores audit, `L23` is still blocked below, and
-C3 is where the engineering argument behind it now lives — `0003` builds
-ADR-0011's interim suspension as a function with no way to express an
-account-wide scope. **The cost paid** was deferring C6 (scale) and C7
-(observability), both of which attach to work that is closer to hand.
+**C8 has the strongest claim of the four**, and it is a weak one: the plan
+specifies it as following C7, and C7/0003 already argued the boundary it turns
+on — analytics are event counts with no subject, and the moment a label
+identifies a person the age decision reopens with it. Two lessons, so it is
+also the cheapest.
 
-**No recommendation for the next one.** C4 follows A6 in the plan, C6 is meant
-to run alongside the B-track rather than after it, and C7 extends B9 — three
-different anchors, and which one is nearest depends on where the build is
-rather than on anything in these files.
+**Against that:** C6 has now been deferred twice, and its own row says scale
+must not be deferred because you cannot defer what you are building for. C4
+follows A6, which is further out. **Neither of those is settled by anything in
+these files** — it depends on where the build actually is.
 
 ---
 
@@ -165,7 +164,7 @@ Per-item status only. The plan is in `TOKEN-TRACK.md`; the counts are in
 | 1 — unblock where the student is | **done**, all five items |
 | 1.5 — the practice pattern in Module 02 | **done** — all 14, 2026-08-17 |
 | 2 — deepen the spine | done (16 of 16 deepenable; 4 skipped as rewrites) |
-| **3 — the C-modules** | **C0 written 2026-08-27, C1 2026-08-28, C2 and C3 2026-08-29** (2, 5, 4 and 3 lessons, all verified). C5 already existed; **five remain** — C4, C6, C7, C8, C9. Queue item **W1** |
+| **3 — the C-modules** | **C0 written 2026-08-27, C1 2026-08-28, C2, C3 and C7 2026-08-29** (2, 5, 4, 3 and 4 lessons, all verified). C5 already existed; **four remain** — C4, C6, C8, C9. Queue item **W1** |
 | 4 — the operating track | not started, deliberately. Queue item **W3** |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |

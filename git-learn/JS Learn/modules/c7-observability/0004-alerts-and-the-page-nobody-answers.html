@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>C7 — Alerts, and the Page Nobody Answers</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Observability</a> &rsaquo;
+        <span>Alerts, and the Page Nobody Answers</span>
+    </nav>
+
+    <h1>Alerts, and the Page Nobody Answers</h1>
+    <p class="lesson-meta">C7 &mdash; Lesson 4 of 4 &nbsp;|&nbsp; ~50 min</p>
+
+    <div class="callout">
+        <div class="callout-title">Why this matters for Token</div>
+        <p>Three lessons have produced logs, crash reports and metrics. None of them wakes anybody
+        up, and that is the point of this one &mdash; along with the reason it is the last: you
+        cannot alert on a number you are not collecting.</p>
+        <p><strong>The company is two people.</strong> The same arithmetic that forced ADR-0011's
+        automatic suspension applies here: there is no rota that turns two into three, and a pager
+        rotation of two is one person being woken by every alert half the time. So the alert set has
+        to be small enough that <em>every page is real</em>, and everything else has to be something
+        that waits until morning without anybody feeling nervous about it.</p>
+    </div>
+
+    <h2>1 &middot; The rule this course keeps arriving at</h2>
+
+    <p>C2/0001 said it about a build that is always red. C7/0002 said it about a tracker full of
+    expected failures. Here it is again, at the layer where it costs the most:</p>
+
+    <p><strong>An alert that fires and is ignored is worse than no alert, because it occupies the
+    space where a working one would go.</strong></p>
+
+    <p>The mechanism is always the same. Something fires often and means nothing; people learn to
+    dismiss it; the dismissal becomes a reflex applied to the whole channel; and then the real one
+    arrives and is dismissed in the same second by somebody who is not being careless, just fast.
+    Nobody decides to ignore alerts. It is trained.</p>
+
+    <h2>2 &middot; Alert on what the user feels</h2>
+
+    <p>The distinction that removes most bad alerts is <strong>symptom versus cause</strong>.</p>
+
+    <div id="pg-symptom"></div>
+    <script>
+        createPlayground("pg-symptom", `const minutes = [
+  { cpu: 0.91, p99: 120, errorRate: 0.001, note: "nightly backup compressing" },
+  { cpu: 0.40, p99: 8400, errorRate: 0.22,  note: "pgbouncer pool exhausted" },
+  { cpu: 0.88, p99: 140, errorRate: 0.002, note: "busy Monday, all fine" }
+];
+
+for (const m of minutes) {
+  const causeAlert = m.cpu > 0.85;
+  const symptomAlert = m.errorRate > 0.05 || m.p99 > 2000;
+  console.log(
+    (causeAlert ? "CPU!  " : "      ") +
+    (symptomAlert ? "USER! " : "      ") + m.note);
+}
+
+console.log("");
+console.log("The cause alert fired twice on healthy minutes and stayed silent");
+console.log("through the outage. It is measuring the wrong thing, not badly.");`);
+    </script>
+
+    <p>A cause alert is a guess about which resource will run out first. Sometimes the guess is
+    wrong, and then the alert is loud when nothing is wrong and silent when everything is. A symptom
+    alert &mdash; error rate, latency, traffic disappearing &mdash; is about what somebody is
+    actually experiencing, and it is true regardless of which component caused it.</p>
+
+    <p>Causes still belong on a <em>dashboard</em>. That is where you look after the symptom alert
+    fires, and it is exactly what the runbook tells you to open.</p>
+
+    <h2>3 &middot; The alert that cannot fire when the service is down</h2>
+
+    <p>Here is the trap the previous lesson was built to set up. An error-rate alert is
+    <code>errors / count &gt; 0.05</code>, and if the service has stopped receiving requests
+    entirely, <code>count</code> is zero.</p>
+
+    <div id="pg-nodata"></div>
+    <script>
+        createPlayground("pg-nodata", `const windows = [
+  { count: 900, errors: 5,   note: "healthy" },
+  { count: 800, errors: 240, note: "half the redemptions failing" },
+  { count: 0,   errors: 0,   note: "the container is not running" }
+];
+
+for (const w of windows) {
+  const rate = w.count === 0 ? null : w.errors / w.count;
+  const naive = w.errors / w.count;                 // 0/0 is NaN
+  const zeroed = w.count === 0 ? 0 : rate;          // "no errors, so 0%"
+
+  console.log(
+    (String(rate).padEnd(22)) +
+    "NaN>0.05: " + (naive > 0.05) +
+    "   zeroed>0.05: " + (zeroed > 0.05) + "   " + w.note);
+}
+
+console.log("");
+console.log("The worst outage in the list is the one no version of the alert");
+console.log("fires on. NaN compares false; zero is simply below the threshold.");`);
+    </script>
+
+    <div class="callout warning">
+        <div class="callout-title">So <code>null</code> is a third answer, and it must never be read as &ldquo;fine&rdquo;</div>
+        <p>An alert rule evaluating a missing value has three possible outcomes, not two: over,
+        under, and <strong>no data</strong>. Collapsing the third into &ldquo;under&rdquo; is the
+        failure above, and collapsing it into &ldquo;over&rdquo; pages you every time an exporter
+        restarts.</p>
+        <p><strong>The decision taken here: missing data raises a ticket, never a page</strong>
+        &mdash; because a metric that has stopped arriving is far more often the exporter than the
+        service, and a page needs a human who can act right now. <em>The cost, stated rather than
+        hidden:</em> when the service genuinely is down, this rule is not what tells you. That job
+        belongs to a separate alert on <strong>traffic falling to zero</strong>, which is why the
+        previous lesson insisted that <code>count</code> and <code>errorRate</code> stay separate
+        fields rather than one summary number.</p>
+    </div>
+
+    <h2>4 &middot; Sustained, not instantaneous</h2>
+
+    <p>One scrape over the line is noise: a slow query, a garbage collection pause, a deploy. An
+    alert fires only when the condition has <em>held</em> for some duration, and the timer works in
+    both directions &mdash; the moment the value drops back under the threshold, the clock is
+    cleared.</p>
+
+    <p>That clearing is the part people get wrong twice over:</p>
+
+    <ul>
+        <li><strong>Forgetting to clear it</strong> means a condition that was briefly over an hour
+        ago combines with one that is briefly over now, and the alert fires for a problem that never
+        lasted a minute.</li>
+        <li><strong>Resetting it on every evaluation</strong> &mdash; writing <code>now</code> into
+        the pending timestamp each time round &mdash; means the elapsed time is always zero and the
+        alert can never fire at all. This one is worse, because it looks like everything is fine.</li>
+    </ul>
+
+    <h2>5 &middot; Page or ticket, and the question that decides it</h2>
+
+    <table>
+        <thead><tr><th></th><th>Page</th><th>Ticket</th></tr></thead>
+        <tbody>
+            <tr><td>Wakes somebody</td><td>Yes</td><td>No</td></tr>
+            <tr><td>Test</td><td>A human is needed <em>now</em>, and there is something they can do</td><td>Everything else</td></tr>
+            <tr><td>Token examples</td><td>Redemption failing; the API down; TLS expiring today</td><td>Backup older than expected; disk 70% full; a metric stopped arriving</td></tr>
+        </tbody>
+    </table>
+
+    <p><strong>Both halves of the test are required.</strong> &ldquo;A human is needed now&rdquo; and
+    &ldquo;there is something they can do&rdquo; are different questions, and an alert that passes
+    only the first is the definition of a page that trains people to ignore pages.</p>
+
+    <div class="callout">
+        <div class="callout-title">An alert with no runbook cannot be a page</div>
+        <p>A runbook is four things: what this alert means, what to open first, what to do, and how
+        to know it is over. Without one, a page at 3am is a puzzle handed to somebody at their least
+        capable, and the honest response is to make it a ticket instead.</p>
+        <p>This is the same shape as the forced update with no store link in C2/0004. In both cases
+        the configuration is what is missing, and in both cases <strong>the person who did not write
+        it is not the person who should pay for it.</strong> Downgrading is reversible and visible;
+        waking somebody up is neither.</p>
+    </div>
+
+    <h3>Try it yourself &mdash; broken on purpose</h3>
+    <p>Read the error. It happens the first time any new alert rule is evaluated.</p>
+
+    <div id="pg-firstrun"></div>
+    <script>
+        createPlayground("pg-firstrun", `const state = {
+  "api_error_rate": { pendingSince: 1000, firing: false }
+};
+
+function pendingFor(ruleName, now) {
+  return now - state[ruleName].pendingSince;
+}
+
+console.log("known rule: ", pendingFor("api_error_rate", 5000));
+console.log("new rule:   ", pendingFor("turn_bandwidth", 5000));
+
+// Fix it. A rule added in the deploy that is happening right now has no
+// stored state, and that is the ordinary case rather than a corrupt one.`);
+    </script>
+
+    <h2>Now build it yourself</h2>
+
+    <div id="exercise-1"></div>
+    <script>
+        createSolution("exercise-1", {
+            exercise:
+                "Write <code>evaluateAlert(rule, value, state, now)</code> &mdash; run once per rule, every scrape interval.<br><br>" +
+                "<code>rule</code> is <code>{ name, threshold, forMs, severity, runbook }</code>. <code>severity</code> is <code>\"page\"</code> or <code>\"ticket\"</code>; <code>runbook</code> is a URL or missing.<br><br>" +
+                "<code>value</code> is the metric for this window, and <strong>may be <code>null</code></strong> &mdash; that is what <code>summariseWindow</code> returns for a window with no traffic.<br><br>" +
+                "<code>state</code> is what you stored last time: <code>{ pendingSince, firing }</code>. It <strong>may be missing entirely</strong>, because a rule added in the deploy happening right now has never been evaluated.<br><br>" +
+                "Return <code>{ status, action, reason, pendingSince, firing }</code> &mdash; the last two being what to store for next time.<br><br>" +
+                "Take the first rule that applies:<br><br>" +
+                "1. <strong><code>value</code> is null</strong> &rarr; <code>status: \"unknown\"</code>, <code>action: \"ticket\"</code>, <code>reason: \"no_data\"</code>, <code>pendingSince: null</code>, <code>firing: false</code>. <strong>Never <code>ok</code></strong>: a metric that has stopped arriving must not read as healthy. A ticket rather than a page because it is usually the exporter, not the service.<br>" +
+                "2. <strong><code>value</code> is not above <code>threshold</code></strong> &rarr; <code>\"ok\"</code>, <code>action: \"none\"</code>, <code>reason: \"under_threshold\"</code>, and <strong><code>pendingSince: null</code></strong> &mdash; the clock is cleared, so a brief excursion an hour ago cannot combine with one now. Exactly at the threshold is not above it.<br>" +
+                "3. <strong>Above, and there is no clock running</strong> &rarr; <code>\"pending\"</code>, <code>action: \"none\"</code>, <code>reason: \"pending\"</code>, <code>pendingSince: now</code>.<br>" +
+                "4. <strong>Above, clock running, and <code>now - pendingSince</code> is less than <code>forMs</code></strong> &rarr; <code>\"pending\"</code>, <code>action: \"none\"</code>, <code>reason: \"pending\"</code>, and <strong><code>pendingSince</code> unchanged</strong>. Writing <code>now</code> here makes the elapsed time permanently zero and the alert can never fire.<br>" +
+                "5. <strong>Held long enough and already firing</strong> &rarr; <code>\"firing\"</code>, <code>action: \"none\"</code>, <code>reason: \"already_firing\"</code>. Nobody is paged twice for one incident.<br>" +
+                "6. <strong>Otherwise it fires now.</strong> <code>status: \"firing\"</code>. If <code>severity</code> is <code>\"page\"</code> <em>and</em> <code>rule.runbook</code> is present &rarr; <code>action: \"page\"</code>, <code>reason: \"fired\"</code>. If the severity is <code>\"page\"</code> but there is no runbook &rarr; <code>action: \"ticket\"</code>, <code>reason: \"no_runbook\"</code> &mdash; a page with no runbook is a puzzle handed to somebody at 3am. Otherwise <code>action: \"ticket\"</code>, <code>reason: \"fired\"</code>.<br><br>" +
+                "In rules 3&ndash;6, <code>firing</code> comes back as whether the returned status is <code>\"firing\"</code>. Do not modify <code>rule</code> or <code>state</code>.",
+            hints: [
+                "Read the stored state defensively in one line at the top &mdash; <code>const previous = state || {}</code> &mdash; and take <code>pendingSince</code> and <code>firing</code> from it. A rule's first evaluation is the ordinary case, not an edge one.",
+                "Rules 1 and 2 both return immediately and both clear the clock, so write them as two early returns. Everything after them is the above-threshold path, which makes the remaining logic a single question: has it been above for long enough?",
+                "Rule 6 is easier as two steps than one: decide whether it wants to page, then decide whether it is allowed to. That way the runbook rule reads as the downgrade it is, rather than being buried inside a three-way conditional."
+            ],
+            solution: `function evaluateAlert(rule, value, state, now) {
+  // A rule added in the deploy happening right now has no stored state,
+  // and that is ordinary rather than corrupt.
+  const previous = state || {};
+  const pendingSince = previous.pendingSince === undefined ? null : previous.pendingSince;
+  const wasFiring = previous.firing === true;
+
+  // Three outcomes, not two. Collapsing this into "under" is how an alert
+  // stays quiet through the outage it was written for.
+  if (value === null) {
+    return {
+      status: "unknown", action: "ticket", reason: "no_data",
+      pendingSince: null, firing: false
+    };
+  }
+
+  // Not ABOVE: exactly at the threshold is fine. Clearing the clock here
+  // is what stops two brief excursions an hour apart adding up.
+  if (!(value > rule.threshold)) {
+    return {
+      status: "ok", action: "none", reason: "under_threshold",
+      pendingSince: null, firing: false
+    };
+  }
+
+  if (pendingSince === null) {
+    return {
+      status: "pending", action: "none", reason: "pending",
+      pendingSince: now, firing: false
+    };
+  }
+
+  if (now - pendingSince < rule.forMs) {
+    // Unchanged. Writing now here makes the elapsed time permanently zero.
+    return {
+      status: "pending", action: "none", reason: "pending",
+      pendingSince: pendingSince, firing: false
+    };
+  }
+
+  if (wasFiring) {
+    return {
+      status: "firing", action: "none", reason: "already_firing",
+      pendingSince: pendingSince, firing: true
+    };
+  }
+
+  // Wants to page, then: is it allowed to? A page with no runbook is a
+  // puzzle handed to somebody at their least capable.
+  const wantsPage = rule.severity === "page";
+  const hasRunbook = rule.runbook !== undefined && rule.runbook !== null && rule.runbook !== "";
+
+  let action = "ticket";
+  let reason = "fired";
+  if (wantsPage && hasRunbook) action = "page";
+  else if (wantsPage) reason = "no_runbook";
+
+  return {
+    status: "firing", action: action, reason: reason,
+    pendingSince: pendingSince, firing: true
+  };
+}`
+        });
+    </script>
+
+    <div id="pg-exercise"></div>
+    <script>
+        createPlayground("pg-exercise", `// --- Write evaluateAlert(rule, value, state, now) here, then press Run ---
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label);
+  if (!passed && detail) console.log("      " + detail);
+}
+
+const NOW = 1000000;
+const FOR = 300000;   // five minutes
+
+const PAGEABLE = {
+  name: "api_error_rate", threshold: 0.05, forMs: FOR,
+  severity: "page", runbook: "https://wiki/runbooks/api-error-rate"
+};
+const NO_RUNBOOK = { name: "turn_bandwidth", threshold: 500, forMs: FOR, severity: "page" };
+const TICKETY = {
+  name: "disk_used", threshold: 0.7, forMs: FOR,
+  severity: "ticket", runbook: "https://wiki/runbooks/disk"
+};
+
+function summary(r) { return r.status + "/" + r.action + "/" + r.reason; }
+
+try {
+  // Rule 1. The one the previous lesson exists to make possible.
+  const dead = evaluateAlert(PAGEABLE, null, { pendingSince: NOW - FOR, firing: true }, NOW);
+  check("a null value is unknown, never ok",
+    summary(dead) === "unknown/ticket/no_data",
+    "got: " + summary(dead) + " - a metric that stopped arriving must not read as healthy");
+  check("...and it clears the clock and the firing flag",
+    dead.pendingSince === null && dead.firing === false,
+    "got: " + JSON.stringify([dead.pendingSince, dead.firing]));
+
+  // Rule 2, including the boundary. 0.05 is not ABOVE 0.05.
+  const calm = evaluateAlert(PAGEABLE, 0.01, { pendingSince: NOW - 60000, firing: false }, NOW);
+  check("a value under the threshold is ok",
+    summary(calm) === "ok/none/under_threshold", "got: " + summary(calm));
+  check("...and clears a clock that was already running",
+    calm.pendingSince === null,
+    "got: " + calm.pendingSince + " - two brief excursions an hour apart must not add up");
+
+  const exact = evaluateAlert(PAGEABLE, 0.05, {}, NOW);
+  check("exactly at the threshold is not above it",
+    exact.status === "ok", "got: " + summary(exact) + " - the rule is ABOVE");
+
+  // Rule 3. First time over, and the first time this rule has ever run.
+  const first = evaluateAlert(PAGEABLE, 0.4, undefined, NOW);
+  check("a rule with no stored state at all does not crash",
+    summary(first) === "pending/none/pending",
+    "got: " + summary(first) + " - a rule added in this deploy has never been evaluated");
+  check("...and starts the clock at now",
+    first.pendingSince === NOW, "got: " + first.pendingSince);
+
+  // Rule 4, and the mistake that means an alert can never fire.
+  const started = NOW - 120000;   // two minutes ago, of a five-minute wait
+  const waiting = evaluateAlert(PAGEABLE, 0.4, { pendingSince: started, firing: false }, NOW);
+  check("still inside forMs is pending, not firing",
+    summary(waiting) === "pending/none/pending", "got: " + summary(waiting));
+  check("...and the clock is NOT restarted",
+    waiting.pendingSince === started,
+    "got: " + waiting.pendingSince + " (expected " + started + ")" +
+    " - writing now here makes the elapsed time permanently zero");
+
+  // The boundary in the other direction: held for exactly forMs is enough.
+  const ripe = evaluateAlert(PAGEABLE, 0.4, { pendingSince: NOW - FOR, firing: false }, NOW);
+  check("held for exactly forMs fires",
+    ripe.status === "firing",
+    "got: " + summary(ripe) + " - held FOR five minutes means five minutes is enough");
+
+  // Rule 6, the page.
+  check("a pageable rule with a runbook pages",
+    summary(ripe) === "firing/page/fired", "got: " + summary(ripe));
+  check("...and records that it is now firing",
+    ripe.firing === true, "got: " + ripe.firing);
+
+  // Rule 5. Nobody is paged twice for one incident.
+  const again = evaluateAlert(PAGEABLE, 0.9, { pendingSince: NOW - FOR * 3, firing: true }, NOW);
+  check("an alert already firing does not page again",
+    summary(again) === "firing/none/already_firing",
+    "got: " + summary(again) + " - one incident, one page");
+
+  // Rule 6's downgrade. Same shape as a forced update with no store link.
+  const puzzle = evaluateAlert(NO_RUNBOOK, 900, { pendingSince: NOW - FOR, firing: false }, NOW);
+  check("a pageable rule with no runbook is downgraded to a ticket",
+    summary(puzzle) === "firing/ticket/no_runbook",
+    "got: " + summary(puzzle) + " - a page with no runbook is a puzzle at 3am");
+  check("...and still counts as firing",
+    puzzle.status === "firing" && puzzle.firing === true,
+    "got: " + JSON.stringify([puzzle.status, puzzle.firing]) +
+    " - it is real; what changed is who gets woken");
+
+  const ticketed = evaluateAlert(TICKETY, 0.9, { pendingSince: NOW - FOR, firing: false }, NOW);
+  check("a ticket-severity rule raises a ticket, not a page",
+    summary(ticketed) === "firing/ticket/fired", "got: " + summary(ticketed));
+
+  // A firing alert that recovers.
+  const recovered = evaluateAlert(PAGEABLE, 0.001, { pendingSince: NOW - FOR * 2, firing: true }, NOW);
+  check("a firing alert that recovers goes back to ok and stops firing",
+    recovered.status === "ok" && recovered.firing === false && recovered.pendingSince === null,
+    "got: " + JSON.stringify(recovered));
+
+  // The whole point of the module, asserted: nothing wakes anybody unless
+  // it is a real, sustained, symptom-level problem with somewhere to look.
+  const all = [dead, calm, exact, first, waiting, ripe, again, puzzle, ticketed, recovered];
+  check("nothing pages except a firing rule that wanted to and could",
+    all.every(function (r) {
+      return r.action !== "page" || (r.status === "firing" && r.reason === "fired");
+    }),
+    "got: " + JSON.stringify(all.map(summary)));
+  check("firing is recorded exactly when the status says firing",
+    all.every(function (r) { return r.firing === (r.status === "firing"); }),
+    "got: " + JSON.stringify(all.map(function (r) { return r.status + "/" + r.firing; })));
+  check("every outcome that is not above the threshold clears the clock",
+    all.every(function (r) {
+      return (r.status === "ok" || r.status === "unknown") ? r.pendingSince === null : true;
+    }),
+    "got: " + JSON.stringify(all.map(function (r) { return r.status + "/" + r.pendingSince; })));
+
+  // Nothing goes back into the caller's data.
+  const storedState = { pendingSince: NOW - 60000, firing: false };
+  const snapshot = JSON.stringify([PAGEABLE, storedState]);
+  evaluateAlert(PAGEABLE, 0.4, storedState, NOW);
+  check("the rule and the stored state are not modified",
+    JSON.stringify([PAGEABLE, storedState]) === snapshot,
+    "the input changed - what to store next time belongs on the returned object");
+} catch (err) {
+  console.log("FAIL  " + err.name + ": " + err.message);
+  console.log("      Usually this means evaluateAlert is missing or misspelt, or that");
+  console.log("      the stored state was read for a rule that has never run before.");
+}`);
+    </script>
+
+    <h2>Explain it in your own words</h2>
+    <div id="explain-0004"></div>
+    <script>
+        createExplain("explain-0004", {
+            prompt: "Missing data raises a ticket rather than a page, and the lesson admits this means the rule is not what tells you the service is down. Explain what <em>is</em> supposed to tell you, and why accepting that gap is better than making a missing metric page somebody."
+        });
+    </script>
+
+    <div id="lesson-quiz"></div>
+    <script>
+        createQuiz("lesson-quiz", [
+            {
+                question: "Why is an alert that fires and is ignored worse than no alert?",
+                options: [
+                    "It occupies the space where a working one would go",
+                    "It costs more to run",
+                    "It creates a misleading audit trail",
+                    "It delays the real alert"
+                ],
+                correct: 0,
+                explanation: "Nobody adds a second alert for a thing that already has one. The same sentence appears about a build that is always red and a tracker full of expected failures — three layers, one failure mode."
+            },
+            {
+                question: "How does a team come to ignore its alerts?",
+                options: [
+                    "It is trained — something fires often and means nothing, and the dismissal becomes a reflex",
+                    "People become complacent over time",
+                    "The alerts are badly worded",
+                    "Notifications get filtered by email rules"
+                ],
+                correct: 0,
+                explanation: "Nobody decides to ignore alerts. The reflex is applied to the whole channel, so the real one is dismissed in the same second by somebody who is being fast rather than careless."
+            },
+            {
+                question: "What is wrong with alerting on CPU above 85%?",
+                options: [
+                    "It is a guess about which resource will run out, so it fires on healthy minutes and stays silent through outages",
+                    "CPU is hard to measure accurately",
+                    "The threshold is too low",
+                    "It cannot be evaluated per container"
+                ],
+                correct: 0,
+                explanation: "A nightly backup pins the CPU and nothing is wrong; a pool exhaustion has low CPU and everything is. The cause alert is measuring the wrong thing rather than measuring it badly."
+            },
+            {
+                question: "What is a symptom alert?",
+                options: [
+                    "One about what somebody is experiencing — error rate, latency, traffic disappearing",
+                    "One that fires only after a cause alert",
+                    "One derived from several metrics at once",
+                    "One that fires on a rate of change"
+                ],
+                correct: 0,
+                explanation: "It is true regardless of which component caused it, which is exactly the property you want at 3am. Causes still belong on a dashboard — that is what the runbook tells you to open after the symptom alert fires."
+            },
+            {
+                type: "predict-output",
+                code: "console.log(0/0, 0/0 > 0.05, 0 > 0.05);",
+                answer: "NaN false false",
+                explanation: "Both versions of an error-rate alert stay silent for a window with no traffic at all. The worst outage on the list is the one nothing fires on, which is why a missing value has to be its own outcome."
+            },
+            {
+                question: "An alert rule evaluating a missing value has how many possible outcomes?",
+                options: [
+                    "Three — over, under, and no data",
+                    "Two — over and under",
+                    "Two — fire and do not fire",
+                    "Four, once pending is included"
+                ],
+                correct: 0,
+                explanation: "Collapsing no-data into under is how an alert stays quiet through the outage it was written for; collapsing it into over pages you every time an exporter restarts. It needs a name of its own."
+            },
+            {
+                question: "Missing data raises a ticket rather than a page. What is the cost of that choice?",
+                options: [
+                    "When the service really is down, this rule is not what tells you",
+                    "Exporter failures go unnoticed",
+                    "The alert cannot be escalated later",
+                    "Tickets are not tracked out of hours"
+                ],
+                correct: 0,
+                explanation: "It is accepted because a stopped metric is far more often the exporter than the service. The job of noticing a dead service belongs to a separate alert on traffic falling to zero, which is why count and errorRate stay separate fields."
+            },
+            {
+                question: "Why must the pending clock be cleared when a value drops back under the threshold?",
+                options: [
+                    "Otherwise a brief excursion an hour ago combines with one now and fires for a problem that never lasted a minute",
+                    "The stored state would grow unbounded",
+                    "The timestamp would become stale",
+                    "It prevents the alert from resolving"
+                ],
+                correct: 0,
+                explanation: "The timer is meant to measure a continuous stretch above the line. Leaving it running turns it into a measure of how long ago the condition was ever true, which is a different and useless quantity."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This alert can never fire, however long the condition lasts. Which line?",
+                code: "1  if (value > rule.threshold) {\n2    const started = state.pendingSince || now;\n3    if (now - started >= rule.forMs) return fire();\n4    return { status: 'pending', pendingSince: now };\n5  }",
+                bugLine: 4,
+                options: ["Line 2", "Line 3", "Line 4"],
+                correct: 2,
+                explanation: "Writing now into the pending timestamp on every evaluation makes the elapsed time permanently zero. It is worse than firing spuriously because it looks like everything is fine."
+            },
+            {
+                question: "What are the two halves of the page-or-ticket test?",
+                options: [
+                    "A human is needed now, and there is something they can do",
+                    "It is urgent, and it is severe",
+                    "It affects users, and it is not self-healing",
+                    "It is unexpected, and it is reproducible"
+                ],
+                correct: 0,
+                explanation: "Both are required. An alert that passes only the first is the definition of a page that trains people to ignore pages — genuinely urgent and there is nothing to be done until morning anyway."
+            },
+            {
+                question: "Which of these is a ticket rather than a page for Token?",
+                options: [
+                    "A backup is older than expected",
+                    "Redemption is failing for everybody",
+                    "The API is not responding",
+                    "The TLS certificate expires today"
+                ],
+                correct: 0,
+                explanation: "It needs attention and there is nothing useful to do about it at 3am that cannot be done at 9. The other three fail the users right now and have an action attached."
+            },
+            {
+                question: "Why can an alert with no runbook not be a page?",
+                options: [
+                    "A page at 3am with no runbook is a puzzle handed to somebody at their least capable",
+                    "The paging system requires a link",
+                    "Alerts without runbooks are usually misconfigured",
+                    "It cannot be resolved automatically"
+                ],
+                correct: 0,
+                explanation: "A runbook is four things: what it means, what to open first, what to do, and how to know it is over. Without them the page is a mystery rather than a task, and mysteries at 3am are how a channel gets muted."
+            },
+            {
+                question: "The runbook downgrade has the same shape as which earlier decision?",
+                options: [
+                    "A forced update with no store link becoming an optional one",
+                    "A migration deferred to a later release",
+                    "An expected error kept out of the tracker",
+                    "A report with no evidence still being recorded"
+                ],
+                correct: 0,
+                explanation: "In both, the configuration is what is missing, and the person who did not write it is not the person who should pay for it. Downgrading is reversible and visible; bricking an app and waking somebody up are neither."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the guard so a rule's first ever evaluation does not crash.",
+                code: "const previous = state ___ {};\nconst pendingSince = previous.pendingSince === undefined ? null : previous.pendingSince;",
+                answer: "||",
+                explanation: "A rule added in the deploy happening right now has never been evaluated, and that is the ordinary case. Same instinct as defaulting a first-time reporter's history to an empty array."
+            },
+            {
+                question: "A value is exactly equal to the threshold. What happens?",
+                options: [
+                    "Nothing — the rule is above, so equal is fine",
+                    "It fires, since it has reached the limit",
+                    "It becomes pending",
+                    "It depends on the severity"
+                ],
+                correct: 0,
+                explanation: "A boundary worth its own case, and note that this lesson has two boundaries pointing in opposite directions: above the threshold is strict, and held for the duration is not. Both are deliberate."
+            },
+            {
+                question: "The condition has held for exactly <code>forMs</code>. Does it fire?",
+                options: [
+                    "Yes — held for five minutes means five minutes is enough",
+                    "No, it needs to exceed the duration",
+                    "Only if the severity is page",
+                    "Only on the next evaluation"
+                ],
+                correct: 0,
+                explanation: "The phrase is 'for five minutes', not 'for more than five minutes'. Getting this one backwards delays every alert by one scrape interval, which is invisible in testing and matters during an incident."
+            },
+            {
+                question: "Why does an alert already firing not page again on the next evaluation?",
+                options: [
+                    "One incident, one page — repeated pages for an unchanged state are how a channel gets muted",
+                    "The paging provider rate-limits duplicates",
+                    "The state has not been written yet",
+                    "It would restart the pending timer"
+                ],
+                correct: 0,
+                explanation: "The same exactly-once shape as a second report about an already-suspended conversation. Nothing about the situation changed, so nothing should be re-triggered."
+            },
+            {
+                question: "A firing alert's value drops back under the threshold. What should come back?",
+                options: [
+                    "ok, with firing false and the clock cleared",
+                    "firing, until somebody acknowledges it",
+                    "pending, while it stabilises",
+                    "unknown, since the state changed"
+                ],
+                correct: 0,
+                explanation: "Resolution is just the ordinary under-threshold path, and it has to clear both the flag and the timer. An alert that cannot resolve itself is one somebody has to remember to close, which nobody does."
+            },
+            {
+                type: "which-breaks",
+                question: "Which of these lets a brief spike an hour ago count towards firing now?",
+                variants: [
+                    "under threshold: return { status: 'ok', pendingSince: null }",
+                    "under threshold: return { status: 'ok', pendingSince: state.pendingSince }",
+                    "under threshold: return { status: 'ok', pendingSince: null, firing: false }"
+                ],
+                correct: 1,
+                explanation: "Carrying the old timestamp through the recovery means the next excursion inherits an hour of accumulated time and fires immediately. The timer measures a continuous stretch, so recovery has to end it."
+            },
+            {
+                question: "Why is this the last lesson of the module rather than the first?",
+                options: [
+                    "You cannot alert on a number you are not collecting",
+                    "Alerting is the most advanced topic",
+                    "It depends on the error tracker being self-hosted",
+                    "The runbooks refer to the dashboards"
+                ],
+                correct: 0,
+                explanation: "Logs, errors and metrics all produce something to look at; this is the only one that reaches out. The null-value rule in particular exists because the previous lesson decided an empty window has no error rate."
+            },
+            {
+                question: "Two people cannot cover a 24/7 rotation. What follows for the alert set?",
+                options: [
+                    "It has to be small enough that every page is real",
+                    "It has to be automated end to end",
+                    "It should escalate after fifteen minutes",
+                    "Pages should be disabled overnight"
+                ],
+                correct: 0,
+                explanation: "The same arithmetic that produced ADR-0011's automatic suspension. A rotation of two is one person being woken by every alert half the time, and their tolerance for a false page is exactly as long as you would expect."
+            },
+            {
+                type: "predict-output",
+                code: "const state = { a: { p: 1 } };\nconsole.log((state['b'] || {}).p);",
+                answer: "undefined",
+                explanation: "Which is the whole fix for a rule's first evaluation: an absent entry becomes an empty object rather than a crash. Reading a property of undefined is what happens without it."
+            },
+            {
+                question: "Where do cause metrics like CPU and pool saturation belong, if not in alerts?",
+                options: [
+                    "On a dashboard, which is what the runbook tells you to open",
+                    "In the error tracker as breadcrumbs",
+                    "In the logs, at debug level",
+                    "Nowhere — they are not useful"
+                ],
+                correct: 0,
+                explanation: "They are how you find out why the symptom alert fired, which is a different job from noticing that something is wrong. Deleting them would leave you with an alert and no way to act on it."
+            },
+            {
+                question: "Why does the exercise return what to store rather than storing it?",
+                options: [
+                    "The decision is the part worth testing, and it can be exercised without any storage at all",
+                    "The storage layer is asynchronous",
+                    "It allows several rules to be batched",
+                    "The state may be shared between processes"
+                ],
+                correct: 0,
+                explanation: "The fifth exercise in this course built the same way, after the redemption handler, the plan review, the suspension decision and the crash-report hook. A function that only decides is one a wrong-case file can interrogate properly."
+            },
+            {
+                question: "What is the honest summary of this module?",
+                options: [
+                    "Collect what you can publish, group what does not vary, measure the distribution, and wake somebody only for a real problem with somewhere to look",
+                    "Self-host everything and retain it for a year",
+                    "Instrument thoroughly and tune the thresholds later",
+                    "Logs are for debugging and metrics are for alerting"
+                ],
+                correct: 0,
+                explanation: "Four lessons and four ways the tooling defeats itself: a log that leaks, a dashboard of forty thousand issues, a number describing nobody, and a page nobody answers."
+            },
+            {
+                question: "Which statement fairly describes the relationship between this lesson and C7/0003?",
+                options: [
+                    "The null error rate exists so that an alert can tell no-traffic apart from no-errors",
+                    "They both use percentiles",
+                    "This lesson replaces the metrics with alerts",
+                    "The metrics are computed by the alerting rules"
+                ],
+                correct: 0,
+                explanation: "The previous lesson refused to invent a number, and this one is where refusing pays off. Had it returned zero, every alert built on it would report perfect health for a service receiving nothing at all."
+            }
+        ]);
+    </script>
+
+    <div class="lesson-nav">
+        <a href="./0003-metrics-that-answer-a-question.html">&larr; Metrics That Answer a Question</a>
+        <a href="./README.html">Module home &rarr;</a>
+    </div>
+
+</body>
+</html>

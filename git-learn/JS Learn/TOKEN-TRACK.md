@@ -264,7 +264,7 @@ unverified lessons against a student on lesson 5.
 | **C3** | Trust, Safety & Abuse | 3 | **WRITTEN 2026-08-29.** After A5 — redesigned around client-side report packaging (ADR-0006), since E2EE removes server-side moderation. The exercises are the screening of a submitted report, the metadata assessment that ranks and never decides, and the automatic interim suspension of ADR-0011. Its engineering half only: F1/0006 keeps the threat model, triage matrix, SLA and transparency report |
 | **C6** | Scale & Performance | 5 | **Alongside B-track**, not after B9 — you cannot defer what you are building for |
 | **C4** | Data, Media & Offline | 4 | After A6 — SQLite cache, offline outbox, attachments, background jobs |
-| **C7** | Observability | 4 | Extends B9 — self-hosted error tracking, metrics, logs, alerting, runbooks |
+| **C7** | Observability | 4 | **WRITTEN 2026-08-29.** Extends B9 — self-hosted error tracking, metrics, logs, alerting, runbooks. The module where Token's privacy promises meet the tools that habitually break them: a tracker attaching request bodies, a metrics label per user, a log line pasted into chat. Exercises are the log line, the crash-report hook, the scrape summary and the alert evaluation |
 | **C8** | Product Analytics | 2 | After C7 — privacy-first analytics for a privacy product |
 | **C9** | Launch, Support & Operations | 5 | Replaces the A11 tail — store compliance, account deletion, i18n/a11y, support, incident response |
 | **F1** | Founder Track — Non-Technical | 16 | **WRITTEN 2026-08-26.** Phase 7 / "Ship it", but six of its items are ⏳ and start on day one. See below |
@@ -767,7 +767,7 @@ whole launch.
 
 | # | Unit | Owns the detail | Gate |
 |---|---|---|---|
-| W1 | **Phase 3 — the C-modules. C0 landed 2026-08-27, C1 on 2026-08-28, C2 and C3 on 2026-08-29**; C5 already existed. **Five remain**: C4, C6, C7, C8, C9. Written **just-in-time**, one module then stop — never batched | this file, § Phase 3 | the student reaching each one |
+| W1 | **Phase 3 — the C-modules. C0 landed 2026-08-27, C1 on 2026-08-28, C2, C3 and C7 on 2026-08-29**; C5 already existed. **Four remain**: C4, C6, C8, C9. Written **just-in-time**, one module then stop — never batched | this file, § Phase 3 | the student reaching each one |
 | W3 | **Phase 4 — the operating track.** C6, C7, C8, C9 studied after launch, but instrumented into the product from Phase 3 onward | this file, § Phase 4 | W1 |
 
 > **W2 was the maintenance tail — `--wrong` cases for every self-check that had
