@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>C6 — The Query on the Authorisation Path</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Scale &amp; Performance</a> &rsaquo;
+        <span>The Query on the Authorisation Path</span>
+    </nav>
+
+    <h1>The Query on the Authorisation Path</h1>
+    <p class="lesson-meta">C6 &mdash; Lesson 5 of 5 &nbsp;|&nbsp; ~55 min</p>
+
+    <div class="callout">
+        <div class="callout-title">Why this matters for Token</div>
+        <p>Lesson one worked out which resource runs out first. On a box whose descriptor limit has
+        been raised &mdash; a one-line change &mdash; the answer is <strong>the Postgres pool</strong>.
+        This lesson is about what spends it.</p>
+        <p>And it closes the module by connecting the two ends: an N+1 is usually described as slow.
+        It is worse than slow. It is a request holding the binding resource for five times as long as
+        it needs to, on the path that runs <em>before</em> a message is delivered &mdash; so when it
+        finally matters, every user is queueing behind it at once.</p>
+    </div>
+
+    <h2>1 &middot; Not all queries are equal, and the difference is not size</h2>
+
+    <p>Token's redemption and message paths run a small set of queries before anything is allowed to
+    happen: find the token by <code>code_hash</code>, count its conversations, load its rules. None of
+    them returns much. All of them run before the request has done anything useful.</p>
+
+    <p><strong>A slow query on that path is a denial of service you built yourself.</strong> Not
+    because it is slow &mdash; because it is slow <em>while holding a pooled connection</em>, and the
+    pool is a fixed, small number that every other request is also waiting for.</p>
+
+    <div id="pg-hold"></div>
+    <script>
+        createPlayground("pg-hold", `const poolSize = 90;
+
+function throughput(msPerRequest) {
+  return Math.floor(poolSize * (1000 / msPerRequest));
+}
+
+console.log("holding a connection for  3ms ->", throughput(3), "requests/sec");
+console.log("holding a connection for 40ms ->", throughput(40), "requests/sec");
+console.log("");
+console.log("Same pool, same hardware, same query count. One unindexed lookup.");`);
+    </script>
+
+    <p>Nothing about that is a database problem. The pool is a queue, and how long each request holds
+    a slot is the whole of its capacity.</p>
+
+    <h2>2 &middot; An index that is load-bearing, not an optimisation</h2>
+
+    <p><code>CLAUDE.md</code> records a deliberate decision: <strong>there is no
+    <code>use_count</code> column.</strong> A stored counter is a second copy of a fact, and every way
+    it drifts ends with a token permitting the wrong number of uses, silently.</p>
+
+    <p>The cost of that decision is named in the same paragraph, and it lands exactly here:</p>
+
+    <blockquote>
+        <p>Enforcement lives in the redemption transaction, which takes <code>FOR UPDATE</code> on the
+        token row, counts, then inserts. <code>idx_conversations_token_id</code> is load-bearing
+        rather than an optimisation.</p>
+    </blockquote>
+
+    <p>Read that carefully, because it is a category most indexes do not belong to. An ordinary index
+    makes a screen feel quicker; drop it and somebody complains. <strong>This one is the only reason a
+    correctness mechanism is affordable.</strong> Drop it and the count becomes a sequential scan
+    inside a row lock, on the redemption path, at which point the honest description is not "slow" but
+    "the use limit no longer works at any reasonable traffic".</p>
+
+    <div class="callout warning">
+        <div class="callout-title">Which is why the review has to know the path</div>
+        <p>An unindexed query on a settings screen is a performance ticket. The identical query on the
+        authorisation path is a correctness and availability problem. <strong>The same SQL, and two
+        different severities, decided entirely by where it runs.</strong></p>
+        <p>Same shape as the previous lesson: the purpose of the read decided whether it could be
+        cached, and nothing about the data itself did.</p>
+    </div>
+
+    <h2>3 &middot; N+1, and why counting repetitions is enough</h2>
+
+    <p>The classic: one query returns N rows, and then one query per row.</p>
+
+    <div id="pg-nplus1"></div>
+    <script>
+        createPlayground("pg-nplus1", `const conversations = [
+  { id: "cv-1", holderId: "h-1" },
+  { id: "cv-2", holderId: "h-2" },
+  { id: "cv-3", holderId: "h-3" }
+];
+
+console.log("1 query for the list");
+for (const c of conversations) {
+  console.log("  + 1 query for holder", c.holderId);
+}
+console.log("");
+console.log("total:", 1 + conversations.length, "queries for", conversations.length, "rows");
+console.log("at 200 conversations that is 201, and the code did not change.");`);
+    </script>
+
+    <p>A detector for this can be simple, and it is worth being honest about what the simple version
+    actually knows: <strong>it detects repetition, not causation.</strong> Seeing the same query label
+    twelve times in one request does not prove it was driven by a previous result set. It is still the
+    right thing to report, because there is no good reason for it either way &mdash; twelve identical
+    queries want to be one query with an <code>IN (...)</code> or a join, whatever produced them.</p>
+
+    <p>A detector that tried to prove causation would need the parameters, and the parameters are the
+    values you spent <code>c7/0001</code> learning not to keep.</p>
+
+    <h2>4 &middot; The fix that makes it worse</h2>
+
+    <p>Faced with 201 sequential queries, the obvious improvement is to stop doing them one after
+    another:</p>
+
+    <pre><code>const holders = await Promise.all(rows.map(r =&gt; findHolder(r.holderId)));</code></pre>
+
+    <p>The request gets faster. Watch what it costs:</p>
+
+    <div id="pg-parallel"></div>
+    <script>
+        createPlayground("pg-parallel", `const poolSize = 90;
+const queriesPerRequest = 20;
+
+console.log("sequential: each request holds", 1, "connection");
+console.log("  concurrent requests supported:", poolSize);
+console.log("");
+console.log("parallel:   each request holds", queriesPerRequest, "connections");
+console.log("  concurrent requests supported:", Math.floor(poolSize / queriesPerRequest));
+console.log("");
+console.log("Latency improved. Capacity fell by a factor of", queriesPerRequest + ".");`);
+    </script>
+
+    <p>This is why the review reports <strong>peak concurrent connections</strong> rather than a query
+    count. A count says how much work was done; the peak says how much of the binding resource was
+    held at once, and lesson one established that the binding resource is what a capacity number is
+    made of.</p>
+
+    <p>The actual fix is neither: one query returning the twenty rows. It holds one connection, for
+    about as long as one of the twenty did.</p>
+
+    <h2>5 &middot; OFFSET gets slower the further in you go</h2>
+
+    <p><code>LIMIT 20 OFFSET 4000</code> does not skip 4,000 rows. It <em>produces</em> 4,000 rows and
+    throws them away.</p>
+
+    <div id="pg-offset"></div>
+    <script>
+        createPlayground("pg-offset", `for (const page of [1, 10, 100, 200]) {
+  const offset = (page - 1) * 20;
+  console.log("page " + String(page).padStart(3),
+              " offset " + String(offset).padStart(5),
+              " rows the database must produce:", offset + 20);
+}
+console.log("");
+console.log("The cost of a page grows with its number, which is why the deepest");
+console.log("pages are both the slowest and the least often looked at.");`);
+    </script>
+
+    <p>The alternative is keyset pagination: instead of "skip 4,000", say "after this one", with a
+    <code>WHERE (created_at, id) &lt; ($1, $2)</code> that an index can seek straight to. Every page
+    then costs the same.</p>
+
+    <p>Note the second column. A cursor on <code>created_at</code> alone breaks when two rows share a
+    timestamp &mdash; rows are skipped or repeated across pages, silently, exactly the class of bug
+    <code>a3/0004</code> dealt with on the client. The tiebreaker has to be something unique.</p>
+
+    <h2>6 &middot; The query that is fine today</h2>
+
+    <p><code>SELECT * FROM conversations WHERE token_id = $1</code> with no <code>LIMIT</code> is
+    perfectly reasonable, and stays reasonable right up until one token has been redeemed by eight
+    hundred people.</p>
+
+    <p>This is the one finding in the review that is about the <em>future</em>, and it is worth
+    keeping separate from the others for that reason. An unindexed query on the auth path is wrong
+    now. An unbounded query is a decision that nothing will grow, written down in a place where nobody
+    will ever read it as a decision.</p>
+
+    <h2>7 &middot; Half-open intervals, for the third time</h2>
+
+    <p>Peak concurrency is an overlap question, and overlap needs an edge rule. A query that ends at
+    exactly the millisecond another begins did not overlap it.</p>
+
+    <p>The rate limiter's window was half-open. The cache's freshness test was half-open. This is the
+    same convention and it is the third place in one module, which is the point: <strong>one
+    convention applied everywhere is worth more than each site choosing the fairer edge.</strong></p>
+
+    <div id="pg-overlap"></div>
+    <script>
+        createPlayground("pg-overlap", `const spans = [
+  { label: "a", from: 0,  to: 3 },
+  { label: "b", from: 3,  to: 41 },
+  { label: "c", from: 20, to: 25 }
+];
+
+function activeAt(t) {
+  return spans.filter(s => s.from <= t && t < s.to).map(s => s.label);
+}
+
+for (const t of [0, 3, 20, 41]) {
+  console.log("t=" + String(t).padStart(2), "active:", JSON.stringify(activeAt(t)));
+}
+console.log("");
+console.log("At t=3 only one is active: a has finished at exactly the moment b starts.");`);
+    </script>
+
+    <h2>8 &middot; Broken on purpose</h2>
+
+    <div id="pg-broken"></div>
+    <script>
+        createPlayground("pg-broken", `const trace = [];   // a request that touched the database not at all
+
+const slowest = trace.reduce((worst, q) => (q.ms > worst.ms ? q : worst));
+console.log(slowest);`);
+    </script>
+
+    <p>A request that ran no queries is not an error and is not rare &mdash; a cache hit from the
+    previous lesson produces exactly that trace. <code>reduce</code> without an initial value throws on
+    an empty array, so the tooling that watches for slow requests falls over on the fastest ones.</p>
+
+    <h2>9 &middot; Now build it yourself</h2>
+
+    <div id="exercise-1"></div>
+    <script>
+        createSolution("exercise-1", {
+            exercise: "Write <code>reviewAccessPath(trace, policy)</code>, which reads the queries one request ran and reports what is wrong with them.<br><br><code>trace</code> is an ordered array of <code>{ label, path, indexed, rows, limit, offset, startedAt, endedAt }</code>. <code>path</code> is <code>\"authorise\"</code> or <code>\"display\"</code>; times are milliseconds. <code>policy</code> is <code>{ repeatThreshold, maxOffset, rowWarn }</code>.<br><br>Return <code>{ ok, findings, peakConnections }</code>.<br><br>Four kinds of finding, and the findings array is ordered by kind in exactly this order, then by where the label first appears in the trace:<br>1. <code>\"unindexed_on_auth_path\"</code> &mdash; a label with <code>indexed</code> false and <code>path</code> <code>\"authorise\"</code>. Its <code>value</code> is the total milliseconds spent across all its occurrences.<br>2. <code>\"n_plus_one\"</code> &mdash; a label appearing at least <code>repeatThreshold</code> times. Its <code>value</code> is the number of occurrences.<br>3. <code>\"offset_pagination\"</code> &mdash; a label whose <code>offset</code> is present and greater than <code>maxOffset</code>. Its <code>value</code> is the largest offset seen for that label.<br>4. <code>\"unbounded\"</code> &mdash; a label with no <code>limit</code> that returned at least <code>rowWarn</code> rows. Its <code>value</code> is the largest row count seen for that label.<br><br>Each finding is <code>{ kind, label, value }</code>, and there is at most one per kind per label.<br><br>And:<br>5. An <code>offset</code> of <code>0</code> is a real first page, not a missing offset. Only <code>null</code> and <code>undefined</code> mean absent.<br>6. <code>peakConnections</code> is the largest number of queries in flight at any instant, treating each query as occupying <code>startedAt</code> up to but not including <code>endedAt</code>. An empty trace gives <code>0</code>.<br>7. <code>ok</code> is true when there are no findings.<br>8. Do not modify <code>trace</code> or anything in it.",
+            hints: [
+                "Walk the trace once and build a per-label summary — first position, occurrences, total ms, largest offset, largest row count, and whether it was ever unindexed on the authorisation path. Every finding is then a question about that summary rather than another pass over the trace.",
+                "Ordering by kind and then by first appearance falls out for free if you loop over the four kinds in order and, inside each, over the labels sorted by the position you recorded.",
+                "For the peak, you do not need a sweep line. The maximum overlap always occurs at the instant some query starts, so counting how many spans contain each start time is enough — and it is obviously correct, which matters more here than being clever."
+            ],
+            solution: `const KINDS = ["unindexed_on_auth_path", "n_plus_one", "offset_pagination", "unbounded"];
+
+function reviewAccessPath(trace, policy) {
+  const summary = new Map();
+
+  trace.forEach((query, position) => {
+    let entry = summary.get(query.label);
+    if (entry === undefined) {
+      entry = {
+        label: query.label, position: position, count: 0, totalMs: 0,
+        unindexedOnAuth: false, maxOffset: null, maxRowsUnbounded: null
+      };
+      summary.set(query.label, entry);
+    }
+
+    entry.count += 1;
+    entry.totalMs += query.endedAt - query.startedAt;
+
+    if (query.indexed === false && query.path === "authorise") entry.unindexedOnAuth = true;
+
+    // Rule 5. Zero is a first page and null is no page at all — the same
+    // distinction as max_uses, and only one of them is falsy.
+    if (query.offset !== null && query.offset !== undefined) {
+      if (entry.maxOffset === null || query.offset > entry.maxOffset) entry.maxOffset = query.offset;
+    }
+
+    if (query.limit === null || query.limit === undefined) {
+      if (entry.maxRowsUnbounded === null || query.rows > entry.maxRowsUnbounded) {
+        entry.maxRowsUnbounded = query.rows;
+      }
+    }
+  });
+
+  const ordered = Array.from(summary.values()).sort((a, b) => a.position - b.position);
+
+  const findings = [];
+  for (const kind of KINDS) {
+    for (const entry of ordered) {
+      if (kind === "unindexed_on_auth_path" && entry.unindexedOnAuth) {
+        findings.push({ kind: kind, label: entry.label, value: entry.totalMs });
+      } else if (kind === "n_plus_one" && entry.count >= policy.repeatThreshold) {
+        findings.push({ kind: kind, label: entry.label, value: entry.count });
+      } else if (kind === "offset_pagination"
+                 && entry.maxOffset !== null && entry.maxOffset > policy.maxOffset) {
+        findings.push({ kind: kind, label: entry.label, value: entry.maxOffset });
+      } else if (kind === "unbounded"
+                 && entry.maxRowsUnbounded !== null && entry.maxRowsUnbounded >= policy.rowWarn) {
+        findings.push({ kind: kind, label: entry.label, value: entry.maxRowsUnbounded });
+      }
+    }
+  }
+
+  // Rule 6. The maximum overlap always occurs at some query's start, so the
+  // starts are the only instants worth testing. Half-open: a query that ends
+  // exactly when another begins did not overlap it.
+  let peakConnections = 0;
+  for (const at of trace) {
+    let inFlight = 0;
+    for (const other of trace) {
+      if (other.startedAt <= at.startedAt && at.startedAt < other.endedAt) inFlight += 1;
+    }
+    if (inFlight > peakConnections) peakConnections = inFlight;
+  }
+
+  return { ok: findings.length === 0, findings: findings, peakConnections: peakConnections };
+}`
+        });
+    </script>
+
+    <div id="pg-exercise"></div>
+    <script>
+        createPlayground("pg-exercise", `// Write reviewAccessPath(trace, policy) here.
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed ? "" : "  -> " + detail));
+}
+
+const POLICY = { repeatThreshold: 3, maxOffset: 1000, rowWarn: 200 };
+
+function q(label, extra) {
+  return Object.assign({
+    label: label, path: "display", indexed: true, rows: 1,
+    limit: 1, offset: null, startedAt: 0, endedAt: 1
+  }, extra);
+}
+
+// Two things about this fixture are load-bearing. Every query ends at exactly
+// the millisecond the next begins, so the peak is 1 and not 8. And the labels
+// appear in a DIFFERENT order from the kinds they trigger -- the paginated
+// query comes first and is reported third -- so an answer that groups by label
+// instead of by kind produces a different array rather than the same one.
+function realTrace() {
+  return [
+    q("list tokens page", { rows: 20, limit: 20, offset: 4000, startedAt: 0, endedAt: 45 }),
+    q("select token by code_hash", { path: "authorise", startedAt: 45, endedAt: 48 }),
+    q("count conversations", { path: "authorise", indexed: false, limit: null, startedAt: 48, endedAt: 86 }),
+    q("select rules for token", { path: "authorise", rows: 3, limit: null, startedAt: 86, endedAt: 89 }),
+    q("select holder", { startedAt: 89, endedAt: 91 }),
+    q("select holder", { startedAt: 91, endedAt: 93 }),
+    q("select holder", { startedAt: 93, endedAt: 95 }),
+    q("all conversations", { rows: 800, limit: null, startedAt: 95, endedAt: 140 })
+  ];
+}
+
+try {
+  if (typeof reviewAccessPath !== "function") throw new Error("reviewAccessPath is not defined yet");
+
+  try {
+    const r = reviewAccessPath(realTrace(), POLICY);
+    check("the four kinds are reported in kind order, one finding each",
+      JSON.stringify(r.findings.map(f => f.kind))
+        === JSON.stringify(["unindexed_on_auth_path", "n_plus_one", "offset_pagination", "unbounded"]),
+      "got " + JSON.stringify(r.findings.map(f => f.kind)));
+  } catch (e) { check("the four kinds are reported in kind order, one finding each", false, e.message); }
+
+  try {
+    const r = reviewAccessPath(realTrace(), POLICY);
+    check("each finding carries the number that made it one",
+      JSON.stringify(r.findings.map(f => f.label + "=" + f.value))
+        === JSON.stringify(["count conversations=38", "select holder=3",
+                            "list tokens page=4000", "all conversations=800"]),
+      "got " + JSON.stringify(r.findings.map(f => f.label + "=" + f.value)));
+  } catch (e) { check("each finding carries the number that made it one", false, e.message); }
+
+  try {
+    const r = reviewAccessPath(realTrace(), POLICY);
+    check("queries that merely follow one another do not overlap",
+      r.peakConnections === 1 && r.ok === false,
+      "peakConnections " + r.peakConnections + " ok " + r.ok);
+  } catch (e) { check("queries that merely follow one another do not overlap", false, e.message); }
+
+  try {
+    const parallel = realTrace().map(function (x) {
+      return x.label === "select holder"
+        ? Object.assign({}, x, { startedAt: 89, endedAt: 95 })
+        : x;
+    });
+    const r = reviewAccessPath(parallel, POLICY);
+    check("running the repeated query in parallel triples what the request holds",
+      r.peakConnections === 3,
+      "peakConnections " + r.peakConnections);
+  } catch (e) { check("running the repeated query in parallel triples what the request holds", false, e.message); }
+
+  try {
+    const r = reviewAccessPath([q("first page", { offset: 0 })], POLICY);
+    check("an offset of zero is a real first page and is not reported",
+      r.ok === true && r.findings.length === 0,
+      "findings " + JSON.stringify(r.findings));
+  } catch (e) { check("an offset of zero is a real first page and is not reported", false, e.message); }
+
+  try {
+    const r = reviewAccessPath([q("page", { offset: 1000 })], POLICY);
+    check("an offset exactly at the ceiling is allowed, one past it is not",
+      r.ok === true,
+      "findings " + JSON.stringify(r.findings));
+  } catch (e) { check("an offset exactly at the ceiling is allowed, one past it is not", false, e.message); }
+
+  try {
+    const three = [q("holder"), q("holder"), q("holder")];
+    const r = reviewAccessPath(three, POLICY);
+    check("a label repeated exactly the threshold number of times is reported",
+      r.findings.length === 1 && r.findings[0].kind === "n_plus_one" && r.findings[0].value === 3,
+      "findings " + JSON.stringify(r.findings));
+  } catch (e) { check("a label repeated exactly the threshold number of times is reported", false, e.message); }
+
+  try {
+    const r = reviewAccessPath([q("settings lookup", { indexed: false })], POLICY);
+    check("an unindexed query away from the authorisation path is not this report's business",
+      r.ok === true,
+      "findings " + JSON.stringify(r.findings));
+  } catch (e) { check("an unindexed query away from the authorisation path is not this report's business", false, e.message); }
+
+  try {
+    const r = reviewAccessPath([q("all rows", { rows: 200, limit: null })], POLICY);
+    check("a row count exactly at the warning level counts as unbounded",
+      r.findings.length === 1 && r.findings[0].kind === "unbounded" && r.findings[0].value === 200,
+      "findings " + JSON.stringify(r.findings));
+  } catch (e) { check("a row count exactly at the warning level counts as unbounded", false, e.message); }
+
+  try {
+    const r = reviewAccessPath([q("small list", { rows: 12, limit: null })], POLICY);
+    check("a query with no limit that returned twelve rows is left alone",
+      r.ok === true,
+      "findings " + JSON.stringify(r.findings));
+  } catch (e) { check("a query with no limit that returned twelve rows is left alone", false, e.message); }
+
+  try {
+    const r = reviewAccessPath([], POLICY);
+    check("a request that ran no queries is fine and holds nothing",
+      r.ok === true && r.peakConnections === 0 && r.findings.length === 0,
+      "peakConnections " + r.peakConnections + " ok " + r.ok);
+  } catch (e) { check("a request that ran no queries is fine and holds nothing", false, e.message); }
+
+  try {
+    const mixed = [
+      q("a", { path: "authorise", indexed: false, startedAt: 0, endedAt: 5 }),
+      q("a", { path: "authorise", indexed: true, startedAt: 5, endedAt: 9 }),
+      q("a", { path: "authorise", indexed: true, startedAt: 9, endedAt: 11 })
+    ];
+    const r = reviewAccessPath(mixed, POLICY);
+    check("one label producing two kinds gives two findings, in kind order",
+      JSON.stringify(r.findings) === JSON.stringify([
+        { kind: "unindexed_on_auth_path", label: "a", value: 11 },
+        { kind: "n_plus_one", label: "a", value: 3 }
+      ]),
+      "findings " + JSON.stringify(r.findings));
+  } catch (e) { check("one label producing two kinds gives two findings, in kind order", false, e.message); }
+
+  try {
+    const t = realTrace();
+    const before = JSON.stringify(t);
+    reviewAccessPath(t, POLICY);
+    check("the trace is not modified or reordered",
+      JSON.stringify(t) === before,
+      "trace now differs");
+  } catch (e) { check("the trace is not modified or reordered", false, e.message); }
+
+} catch (e) {
+  console.log("Nothing to check yet -- " + e.message);
+}`);
+    </script>
+
+    <h3>Say it in your own words</h3>
+    <div id="explain-0005"></div>
+    <script>
+        createExplain("explain-0005", {
+            prompt: "A colleague replaces twenty sequential queries with <code>Promise.all</code> and the endpoint's p99 halves. Explain, using lesson one's idea of a binding limit, why the review still reports this as a regression &mdash; and what number you would show them to make the case."
+        });
+    </script>
+
+    <h2>Quiz</h2>
+    <div id="lesson-quiz"></div>
+    <script>
+        createQuiz("lesson-quiz", [
+            {
+                question: "Why is a slow query on the authorisation path worse than the same query on a settings screen?",
+                options: [
+                    "It holds a pooled connection before any useful work happens, so every other request queues behind it",
+                    "Authorisation queries return more rows",
+                    "It runs more often per user",
+                    "Settings screens are cached"
+                ],
+                correct: 0,
+                explanation: "The pool is a queue and how long each request holds a slot is the whole of its capacity. The same SQL gets two different severities decided entirely by where it runs."
+            },
+            {
+                type: "predict-output",
+                code: "const poolSize = 90;\nconsole.log(Math.floor(poolSize * (1000 / 3)), Math.floor(poolSize * (1000 / 40)));",
+                answer: "30000 2250",
+                explanation: "Same pool, same hardware, same query count. One unindexed lookup, and throughput falls by more than a factor of ten."
+            },
+            {
+                question: "Why is idx_conversations_token_id described as load-bearing rather than an optimisation?",
+                options: [
+                    "There is no use_count column, so the use limit is enforced by counting inside the redemption transaction",
+                    "It is the primary key of the conversations table",
+                    "Postgres requires it for the foreign key",
+                    "It makes the token list render faster"
+                ],
+                correct: 0,
+                explanation: "Drop it and the count becomes a sequential scan inside a row lock on the redemption path. The honest description then is not slow but that the use limit no longer works at any real traffic."
+            },
+            {
+                question: "Why was use_count left out of the schema in the first place?",
+                options: [
+                    "A stored counter is a second copy of a fact, and every way it drifts ends with a token permitting the wrong number of uses",
+                    "Counting is faster than storing",
+                    "Postgres cannot maintain a counter reliably",
+                    "It would have required another migration"
+                ],
+                correct: 0,
+                explanation: "The cost is stated in the same decision and lands in this lesson: the limit can no longer be a CHECK constraint, and an index becomes part of the correctness argument."
+            },
+            {
+                type: "predict-output",
+                code: "const rows = 3;\nconsole.log(1 + rows);",
+                answer: "4",
+                explanation: "One query for the list and one per row. The shape does not change as the data grows, which is why two hundred rows quietly becomes two hundred and one queries."
+            },
+            {
+                question: "The simple N+1 detector counts repetitions of a query label. What does it not know?",
+                options: [
+                    "Whether the repetition was caused by a previous result set — it detects repetition, not causation",
+                    "How long each query took",
+                    "Which table was queried",
+                    "Whether the query used an index"
+                ],
+                correct: 0,
+                explanation: "Reporting it anyway is right, because twelve identical queries want to be one query with an IN list whatever produced them."
+            },
+            {
+                question: "Why does the detector not try to prove causation by comparing parameters?",
+                options: [
+                    "The parameters are the values c7/0001 spent a lesson keeping out of the telemetry",
+                    "Parameters are not available to any database driver",
+                    "Comparing them would be too slow",
+                    "Causation can be inferred from timing instead"
+                ],
+                correct: 0,
+                explanation: "A tool that needs the values in order to be clever is a tool that has to store the values, which is where a token code ends up somewhere nobody designed."
+            },
+            {
+                type: "spot-the-bug",
+                code: "1  const rows = await listConversations(tokenId);\n2  const holders = await Promise.all(\n3    rows.map(r => findHolder(r.holderId))\n4  );\n5  return rows.map((r, i) => ({ ...r, holder: holders[i] }));",
+                bugLine: 2,
+                options: ["Line 1", "Line 2", "Line 4", "Line 5"],
+                correct: 1,
+                explanation: "Latency improves and capacity falls by the number of parallel queries, because each request now holds that many pooled connections at once instead of one."
+            },
+            {
+                type: "predict-output",
+                code: "const poolSize = 90, perRequest = 20;\nconsole.log(poolSize, Math.floor(poolSize / perRequest));",
+                answer: "90 4",
+                explanation: "Ninety concurrent requests becomes four. The endpoint got faster and the box got roughly twenty times smaller."
+            },
+            {
+                question: "Why does the review report peak concurrent connections rather than a query count?",
+                options: [
+                    "A count says how much work was done; the peak says how much of the binding resource was held at once",
+                    "Query counts are hard to measure",
+                    "The peak is easier to compute",
+                    "They are equivalent for sequential code"
+                ],
+                correct: 0,
+                explanation: "Lesson one established that a capacity figure is made out of the binding limit, and on a box with descriptors raised that limit is the pool."
+            },
+            {
+                question: "What is the correct fix for twenty per-row queries?",
+                options: [
+                    "One query that returns the twenty rows, holding one connection for about as long as one of them did",
+                    "Running them in parallel",
+                    "Caching each holder lookup",
+                    "Raising the pool size"
+                ],
+                correct: 0,
+                explanation: "Neither the sequential nor the parallel version is the answer. Both do twenty queries; only one of them also spends twenty connections."
+            },
+            {
+                type: "predict-output",
+                code: "const offset = 4000, limit = 20;\nconsole.log(offset + limit);",
+                answer: "4020",
+                explanation: "OFFSET does not skip rows, it produces them and throws them away, so the cost of a page grows with its number."
+            },
+            {
+                question: "What does keyset pagination replace OFFSET with?",
+                options: [
+                    "A WHERE clause naming the last row seen, which an index can seek straight to",
+                    "A cached page count",
+                    "A random sample of rows",
+                    "A larger LIMIT"
+                ],
+                correct: 0,
+                explanation: "Every page then costs the same, because the database seeks to a position instead of counting its way there."
+            },
+            {
+                question: "Why must a keyset cursor include a unique tiebreaker column?",
+                options: [
+                    "Two rows sharing a timestamp otherwise get skipped or repeated across pages, silently",
+                    "The index requires two columns",
+                    "It makes the cursor shorter",
+                    "Postgres cannot compare single columns in a tuple"
+                ],
+                correct: 0,
+                explanation: "The same class of bug a3/0004 dealt with on the client, and it stays invisible because the response is a perfectly plausible page either way."
+            },
+            {
+                question: "Why is the unbounded-query finding kept separate from the other three?",
+                options: [
+                    "It is the only one about the future — a decision that nothing will grow, recorded where nobody reads it as a decision",
+                    "It is less severe",
+                    "It cannot be detected reliably",
+                    "It applies only to display reads"
+                ],
+                correct: 0,
+                explanation: "An unindexed query on the authorisation path is wrong now. A query with no LIMIT is fine right up until one token has eight hundred conversations."
+            },
+            {
+                type: "fill-blank",
+                code: "if (query.offset !== null && query.offset !== ___) { /* a real page number */ }",
+                answer: "undefined",
+                explanation: "An offset of zero is a first page and only null or undefined mean there was no offset. The same distinction as max_uses, and only one of the values is falsy."
+            },
+            {
+                question: "Writing the offset test as <code>if (q.offset && q.offset > policy.maxOffset)</code> produces the same findings as the explicit null check, on every input. What is the accurate thing to say about it?",
+                options: [
+                    "It is a latent hazard rather than a live defect: zero can never exceed a positive ceiling, so the bug is invisible until the habit is copied to a field where zero matters",
+                    "It is a live defect that reports the first page as deep pagination",
+                    "It is correct and the explicit version is needlessly verbose",
+                    "It is a live defect that misses genuinely deep pages"
+                ],
+                correct: 0,
+                explanation: "Worth being precise about: no fixture in this lesson can tell the two apart, and pretending otherwise would be inventing a failure. The reason to write the explicit form anyway is that max_uses, expires_at and the rate limiter's null all punish the same habit, and there the difference is not invisible."
+            },
+            {
+                type: "order-steps",
+                steps: [
+                    "Walk the trace once and summarise each label",
+                    "Emit the unindexed authorisation-path findings",
+                    "Emit the repeated-query findings",
+                    "Emit the pagination and unbounded findings"
+                ],
+                correctOrder: [0, 1, 2, 3],
+                explanation: "Looping over the kinds in order, and over labels by first appearance inside each, makes the required ordering fall out rather than needing a sort at the end."
+            },
+            {
+                question: "Peak concurrency uses a half-open interval. What does that mean here?",
+                options: [
+                    "A query ending at exactly the millisecond another begins did not overlap it",
+                    "Queries with equal durations are counted once",
+                    "The final query is excluded",
+                    "Only queries longer than a millisecond are counted"
+                ],
+                correct: 0,
+                explanation: "The third half-open edge in this module, after the rate limiter's window and the cache's freshness test. One convention applied everywhere beats each site choosing the fairer edge."
+            },
+            {
+                type: "predict-output",
+                code: "const spans = [{ from: 0, to: 3 }, { from: 3, to: 41 }];\nconsole.log(spans.filter(s => s.from <= 3 && 3 < s.to).length);",
+                answer: "1",
+                explanation: "At t=3 the first has finished and the second has just begun. With an inclusive end they would both be counted and the request would appear to hold two connections it never held."
+            },
+            {
+                question: "Why is it enough to test overlap only at the instants queries start?",
+                options: [
+                    "The maximum number in flight can only increase when something starts, so a maximum always occurs at a start",
+                    "Queries always start at round millisecond values",
+                    "The trace is sorted by start time",
+                    "It is an approximation that is close enough"
+                ],
+                correct: 0,
+                explanation: "It is exact rather than approximate, and being obviously correct matters more here than being clever."
+            },
+            {
+                type: "predict-output",
+                code: "try { [].reduce((a, b) => a + b); } catch (e) { console.log(e.constructor.name); }",
+                answer: "TypeError",
+                explanation: "A request that ran no queries is not rare — a cache hit from the previous lesson produces exactly that trace — so the tooling that watches for slow requests falls over on the fastest ones."
+            },
+            {
+                question: "One label is both unindexed on the authorisation path and repeated three times. What does the review report?",
+                options: [
+                    "Two findings for that label, ordered by kind",
+                    "One finding naming the more severe problem",
+                    "One finding with both kinds listed",
+                    "Three findings, one per occurrence"
+                ],
+                correct: 0,
+                explanation: "At most one finding per kind per label, and a label can legitimately fail more than one test. Collapsing them would hide whichever was reported second."
+            },
+            {
+                question: "An unindexed query on a settings screen is not reported by this review. Why not?",
+                options: [
+                    "It is a performance ticket rather than an availability problem, and mixing the two trains people to skim the list",
+                    "Settings queries are always fast",
+                    "The review only reads authorisation traces",
+                    "Display queries are cached, so the index does not matter"
+                ],
+                correct: 0,
+                explanation: "The same argument as c7/0004's alert set and c2/0001's build: a report containing things that do not need action is a report people stop reading."
+            },
+            {
+                question: "What is the module's closing claim about scale work?",
+                options: [
+                    "The cheapest capacity win is the query you stopped running, because the binding resource is held per request rather than bought per box",
+                    "Vertical scaling is always cheaper than horizontal",
+                    "Caching is the first thing to reach for",
+                    "Capacity problems are best solved by adding replicas"
+                ],
+                correct: 0,
+                explanation: "Lesson one made capacity a function of the binding limit and how long each request holds it. Every lesson since has been about one way of holding it for longer than necessary."
+            },
+            {
+                question: "What single idea runs through all five lessons of this module?",
+                options: [
+                    "A change that makes Token faster can make it wrong instead, and nothing errors either way",
+                    "Redis solves most scaling problems",
+                    "Measure before optimising",
+                    "One box is enough until it is not"
+                ],
+                correct: 0,
+                explanation: "A local counter still returns a number, a cache still returns a token, a node's registry still returns recipients, and a parallelised N+1 still returns the right rows and a better p99."
+            }
+        ]);
+    </script>
+
+    <div class="lesson-nav">
+        <a href="./0004-the-cache-that-outlives-a-revocation.html">&larr; The Cache That Outlives a Revocation</a>
+        <a href="./README.html">Module home &rarr;</a>
+    </div>
+
+</body>
+</html>

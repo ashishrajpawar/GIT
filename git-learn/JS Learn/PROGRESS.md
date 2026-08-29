@@ -11,16 +11,16 @@ with this one, this one is right — everything below is measured, not asserted.
 
 | Metric | Value |
 |---|---|
-| Token-track lessons | 123 |
+| Token-track lessons | 124 |
 | Founder-track lessons (F1, counted separately) | 16 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
-| Quiz questions (track) | 3329 |
-| Avg teaching prose per track lesson | 2060 words |
-| Lessons with a playground | 123 / 123 |
-| Lessons with an exercise | 123 / 123 |
-| **Deepened** (all 3 spine sections) | 16 / 123 |
-| **Verified** (code executed) | 123 / 123 |
-| Ran clean but had nothing to run | 0 / 123 |
+| Quiz questions (track) | 3355 |
+| Avg teaching prose per track lesson | 2052 words |
+| Lessons with a playground | 124 / 124 |
+| Lessons with an exercise | 124 / 124 |
+| **Deepened** (all 3 spine sections) | 16 / 124 |
+| **Verified** (code executed) | 124 / 124 |
+| Ran clean but had nothing to run | 0 / 124 |
 | Errors | 0 |
 | Known and blocked | 0 |
 | Warnings | 2 |
@@ -30,12 +30,12 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 ## Answer-position distribution — **authored order, not what the student sees**
 
-1917 keyed questions (multiple-choice, spot-the-bug, which-breaks).
+1935 keyed questions (multiple-choice, spot-the-bug, which-breaks).
 
 > **This clustering is expected and already handled. Do not "fix" it again.**
 > `quiz.js` shuffles options at render time (`optionDisplayOrder`), so the
 > displayed distribution is roughly even — measured at 26.9 / 28.5 / 26.9 / 17.6
-> across all 1917 questions, versus the authored figures below. Index 3 sits
+> across all 1935 questions, versus the authored figures below. Index 3 sits
 > lower only because many questions have three options.
 >
 > The numbers here read `correct` straight from the lesson data, which is
@@ -54,21 +54,21 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Position | Count | Share |
 |---|---|---|
-| index 0 | 542 | 28.3% |
-| index 1 | 983 | 51.3% |
-| index 2 | 358 | 18.7% |
+| index 0 | 559 | 28.9% |
+| index 1 | 984 | 50.9% |
+| index 2 | 358 | 18.5% |
 | index 3 | 34 | 1.8% |
 
 ## Question types
 
 | Type | Count |
 |---|---|
-| multiple-choice | 1197 |
-| predict-output | 623 |
-| fill-blank | 493 |
-| spot-the-bug | 412 |
+| multiple-choice | 1214 |
+| predict-output | 629 |
+| fill-blank | 494 |
+| spot-the-bug | 413 |
 | which-breaks | 308 |
-| order-steps | 296 |
+| order-steps | 297 |
 
 ## Modules
 
@@ -101,7 +101,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | c2-cicd-release | 4 | 1291 | 15 | 4 | 104 | 0/4 | 4/4 |
 | c3-trust-safety | 3 | 1126 | 12 | 3 | 78 | 0/3 | 3/3 |
 | c5-end-to-end-encryption | 5 | 1671 | 10 | 10 | 126 | 0/5 | 5/5 |
-| c6-scale-performance | 4 | 1341 | 31 | 4 | 104 | 0/4 | 4/4 |
+| c6-scale-performance | 5 | 1293 | 38 | 5 | 130 | 0/5 | 5/5 |
 | c7-observability | 4 | 1018 | 17 | 4 | 104 | 0/4 | 4/4 |
 | x1-git-dev-environment | 3 | 1202 | 4 | 6 | 83 | 0/3 | 3/3 |
 | x2-debugging | 2 | 1242 | 3 | 4 | 50 | 0/2 | 2/2 |
@@ -146,7 +146,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Tables queried but never created | ok |
 | Broken relative links | ok |
 | Widgets defined before they are called | ok |
-| search-index.json | 140 entries, 0 dead, 0 unindexed |
+| search-index.json | 141 entries, 0 dead, 0 unindexed |
 | Example tokens valid under alphabet | 2 invalid |
 
 ## Errors
@@ -277,6 +277,7 @@ None.
 | c6-scale-performance/0002-one-nodes-memory.html | 1336 | 1 | 8 | 1 | 26 | — | yes |
 | c6-scale-performance/0003-a-limit-that-holds-everywhere.html | 1368 | 2 | 8 | 1 | 26 | — | yes |
 | c6-scale-performance/0004-the-cache-that-outlives-a-revocation.html | 1409 | 1 | 7 | 1 | 26 | — | yes |
+| c6-scale-performance/0005-the-query-on-the-authorisation-path.html | 1104 | 1 | 7 | 1 | 26 | — | yes |
 | c7-observability/0001-the-log-line-you-can-publish.html | 1066 | 5 | 4 | 1 | 26 | — | yes |
 | c7-observability/0002-errors-and-what-they-carry.html | 1008 | 2 | 4 | 1 | 26 | — | yes |
 | c7-observability/0003-metrics-that-answer-a-question.html | 1035 | 0 | 5 | 1 | 26 | — | yes |

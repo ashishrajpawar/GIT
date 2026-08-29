@@ -26,17 +26,14 @@ how far it got.
 > files either.** Make no claims about it at all — not in prose, not in a
 > commit message, not as a reason for prioritising anything.
 
-**In flight: `W1` — C6, Scale & Performance, 5 lessons.** Started 2026-08-29
-after C7 landed. Per-lesson status below; the module is complete when all five
-are verified, wired and committed.
+**Nothing in flight.** C6 — Scale & Performance — landed complete on
+2026-08-29: five lessons, each verified with its `--wrong` cases, each its own
+commit, README, index row and search entries in. C2, C3 and C7 landed complete
+the same day.
 
-| | Lesson | State |
-|---|---|---|
-| `0001` | The ceiling is a minimum, not a number | **landed**, verified, 11 wrong-cases |
-| `0002` | One node's memory is not the system's state | **landed**, verified, 13 wrong-cases |
-| `0003` | A limit that holds on one node is not a limit | **landed**, verified, 11 wrong-cases |
-| `0004` | The cache that outlives a revocation | **landed**, verified, 13 wrong-cases |
-| `0005` | The query on the authorisation path | not started |
+**The next unit is `W1` again: pick one C-module, write it, stop.** Three
+remain — C4, C8, C9. The launch queue is the other open front and none of it is
+code; see *Next action*.
 
 **Why C6 and not C8, with the cost of the rejection.** C6 had been deferred
 twice, both times on the same argument — *you cannot tune what you cannot see*.
@@ -131,21 +128,23 @@ L7 RoPA ─┬▶ privacy policy   ├▶ L12 Play Data Safety   ├▶ L13 Appl
 Drafts for four of Wave 0 are written and waiting in `token/docs/launch/` —
 fill the angle brackets and send. The folder README has the send order.
 
-**Writing side — `W1` continues, one module at a time.** C0, C1, C2, C3 and
-C7 have landed; **four remain**: C4, C6, C8, C9. Written just-in-time, never
+**Writing side — `W1` continues, one module at a time.** C0, C1, C2, C3, C6 and
+C7 have landed; **three remain**: C4, C8, C9. Written just-in-time, never
 batched. `W2` is closed and there is no maintenance tail left to slot between
 units.
 
-**C8 has the strongest claim of the four**, and it is a weak one: the plan
-specifies it as following C7, and C7/0003 already argued the boundary it turns
-on — analytics are event counts with no subject, and the moment a label
-identifies a person the age decision reopens with it. Two lessons, so it is
-also the cheapest.
+**C8 now has the strongest claim, and this time nothing argues back.** The plan
+specifies it as following C7; C7/0003 already argued the boundary it turns on —
+analytics are event counts with no subject, and the moment a label identifies a
+person the age decision reopens with it; and at two lessons it is the cheapest
+of the three. The C6 counter-argument that beat it twice is spent, because C6
+is written.
 
-**Against that:** C6 has now been deferred twice, and its own row says scale
-must not be deferred because you cannot defer what you are building for. C4
-follows A6, which is further out. **Neither of those is settled by anything in
-these files** — it depends on where the build actually is.
+**C4 and C9 are both further out and for different reasons.** C4 follows A6.
+C9 replaces the A11 tail and overlaps F1, which already states the obligations
+C9 would build the mechanisms for — so it wants writing *near* the launch work
+rather than ahead of it, or the cross-links will be to documents that have
+since changed.
 
 ---
 
@@ -182,7 +181,7 @@ Per-item status only. The plan is in `TOKEN-TRACK.md`; the counts are in
 | 1 — unblock where the student is | **done**, all five items |
 | 1.5 — the practice pattern in Module 02 | **done** — all 14, 2026-08-17 |
 | 2 — deepen the spine | done (16 of 16 deepenable; 4 skipped as rewrites) |
-| **3 — the C-modules** | **C0 written 2026-08-27, C1 2026-08-28, C2, C3 and C7 2026-08-29** (2, 5, 4, 3 and 4 lessons, all verified). C5 already existed; **four remain** — C4, C6, C8, C9. Queue item **W1** |
+| **3 — the C-modules** | **C0 written 2026-08-27, C1 2026-08-28, C2, C3, C7 and C6 2026-08-29** (2, 5, 4, 3, 4 and 5 lessons, all verified). C5 already existed; **three remain** — C4, C8, C9. Queue item **W1** |
 | 4 — the operating track | not started, deliberately. Queue item **W3** |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |
@@ -224,6 +223,17 @@ is in `docs/archive/session-log-2026-08-17-to-25.md`.
 - **Snapshot before first use** when checking that an input is not mutated.
   Taken after an earlier call, an in-place sort has already happened and
   sorting again changes nothing.
+- **An assertion whose two sides cannot differ always passes.** The single
+  most common fault in this project's own *checking*, hit five times across
+  2026-08-29 alone: a fixture already sorted so an in-place sort was invisible;
+  `available / 0` already `Infinity` so a guard changed nothing; a grace window
+  that only matters at exactly one age; a trace already in `startedAt` order so
+  a sort mutated nothing observable; a mistake asserted against a type rather
+  than a value. **Before writing a wrong-case, say out loud what the two
+  implementations print differently.** If the answer is "nothing on this
+  fixture", change the fixture — and if no fixture can separate them, the case
+  is not a case: drop it and write down why, so nobody adds it back and
+  concludes the checker is broken.
 - **A lesson can argue for the right thing in prose and ship the wrong thing in
   the code block underneath**, and only the code block gets copied. Found five
   times out of five across A5.

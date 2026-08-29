@@ -4756,3 +4756,122 @@ against its own row saying scale must not be deferred.
 **Still unpushed** — `git log @{u}..HEAD` for the count. It includes the
 26-lesson widget repair, so the F1 explain prompts and the B2/B3 playgrounds
 remain broken on the published site.
+
+---
+
+## 2026-08-29 (fourth) — C6 complete: the optimisation that makes the product wrong
+
+Five lessons, five commits, and the first push in this repo's recent history —
+eighteen commits went to `origin/main` on the student's instruction at the start
+of the session, including the 26-lesson widget repair, so the F1 `createExplain`
+prompts and the B2/B3 playgrounds are live again.
+
+C6 was chosen over C8 on one new fact rather than a re-argument. It had been
+deferred twice, both times because *you cannot tune what you cannot see*, and
+C7 landing discharges exactly that. Two supporting pointers were already in
+`SESSION.md`: C6's plan row is the only one in the table carrying an explicit
+warning against deferring it, and *Blocked on* has said **"monitor TURN
+bandwidth from the first deploy"** since 2026-08-20 with nothing teaching the
+arithmetic. The cost of deferring C8 is recorded as low rather than zero,
+because `C7/0003` already wrote down the boundary C8 turns on — a deferred
+module whose central argument is on record is not at risk of being written
+wrong later.
+
+### The module's thesis
+
+**A fact that is true of one process is not a fact about the system**, in five
+costumes:
+
+| Lesson | The local reading | What it is mistaken for |
+|---|---|---|
+| `0001` | this box's spare memory | a capacity |
+| `0002` | this node's socket registry | the set of recipients |
+| `0003` | this process's counter | a rate limit |
+| `0004` | this cache entry | the token's current state |
+| `0005` | this request's query count | what the request costs |
+
+And the second half, which is what makes the module dangerous in a way the
+earlier ones are not: **every optimisation here can make Token wrong rather
+than slow, and nothing errors either way.** A local counter still returns a
+number. A cache still returns a token. A node's registry still returns
+recipients. A parallelised N+1 still returns the right rows *and a better p99*.
+
+### The five arguments worth keeping
+
+- **`0001`: every casual error in a capacity calculation makes the number
+  larger.** Dividing the whole box, rounding instead of flooring, treating an
+  unmeasured limit as no limit, quoting the figure on the dashboard — each is a
+  step skipped, and skipping a step can only remove a constraint. Nobody
+  accidentally under-estimates. The binding limit in the worked example is
+  `1024`, the default open-file limit, fourteen times below what the memory
+  allows and a value nobody involved in Token ever typed.
+- **`0002`: `if (recipients.length === 0) return;`** is exactly right on one
+  node, because there "nobody here wanted it" and "nobody wanted it" are the
+  same sentence. On two they come apart and the message is dropped by the branch
+  that exists to avoid pointless work.
+- **`0003`: the local-counter fallback is worse than failing open.** Failing
+  open is at least honest. The fallback reintroduces the original bug and hides
+  it behind a plausible number.
+- **`0004`: a cache in front of the redemption lookup defeats ADR-0010 without
+  changing a byte.** The bodies stay identical; a found token answers from
+  memory and a nonexistent one queries Postgres. An enumerator needs a
+  *measurable* difference, not a readable one, and latency is a channel nobody
+  diffs. **Sixth layer for the denial-oracle rule.**
+- **`0005`: `idx_conversations_token_id` is the only reason a correctness
+  mechanism is affordable.** There is no `use_count` column, so the use limit is
+  enforced by counting inside the redemption transaction. Drop the index and the
+  honest description is not "slow" but "the use limit no longer works at any
+  real traffic".
+
+### The decision with a stated cost
+
+**When Redis is unreachable, the rate limiter fails closed.** *The cost:* a
+Redis blip becomes a login outage rather than a degraded one. ADR-0003 already
+accepts it — Redis is *required*, so an unreachable Redis is an outage whether
+or not the limiter pretends otherwise, and pretending changes which failure you
+get rather than whether you have one. Reversible if Redis proves more fragile
+than the endpoints it protects.
+
+### One rule the module states three times on purpose
+
+**Half-open intervals**, at the limiter's window, the cache's freshness test and
+the query overlap. Three sites, one convention, and the reason is written down
+in `0005`: one convention applied everywhere is worth more than each site
+choosing the fairer edge.
+
+`0003` and `0004` also handle a *future timestamp* in opposite ways, and the
+principle that produces both is stated in each: **ask which way the error grants
+access.** Dropping a charge refunds a request; trusting a future stamp serves a
+stale answer.
+
+### The fault that keeps being mine
+
+Five wrong-cases across this session did not discriminate — they passed against
+the mistake they were written to catch:
+
+- a fixture already sorted, so an in-place sort was invisible (`c7/0003`)
+- `available / 0` already `Infinity`, so a guard changed nothing (`c6/0001`)
+- a grace window that differs from its absence at exactly one age (`c6/0004`)
+- a trace already in `startedAt` order, so a sort mutated nothing (`c6/0005`)
+- an assertion about a *type* where a value was needed (`c7/0001`)
+
+**An assertion whose two sides cannot differ always passes.** It is now written
+into `SESSION.md` § *Notes for the next session* as a standing rule with the
+procedure attached: before writing a wrong-case, say what the two
+implementations print differently; if the answer is "nothing on this fixture",
+change the fixture.
+
+And one case was **dropped rather than forced**. `c6/0005`'s truthiness test on
+`offset` cannot be distinguished from the explicit null check by any input,
+since zero can never exceed a non-negative ceiling. Rigging an assertion about
+the shape of the code is how a self-check stops testing behaviour and starts
+testing resemblance, so the case file carries a comment saying it is
+deliberately absent, and the lesson's quiz says the same in words: a latent
+hazard, not a live defect. Same call as `c3/0002`'s `Math.max`.
+
+### State
+
+Audit green. **124/124 verified**, `render-as-authored` 0, all seven suites
+pass, `known-issues.json` still empty. Three C-modules remain — C4, C8, C9 —
+and `SESSION.md` now records **C8 as the strongest claim with nothing arguing
+back**, the C6 counter-argument being spent.
