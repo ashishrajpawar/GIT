@@ -4545,3 +4545,113 @@ warnings, both the long-standing deliberate token fixtures.
 26-lesson widget repair of 2026-08-28. Until that is pushed, the F1 explain
 prompts and the B2/B3 playgrounds remain broken on the published site. Pushing
 publishes, so it is the student's call and not this session's.
+
+---
+
+## 2026-08-29 (second) — C3 complete: abuse handling on a server that cannot read
+
+Three lessons, three commits. C3 was taken next on a dependency rather than a
+preference — `L23` and `L26` are the UGC evidence both stores audit and `L23` is
+still blocked — and the cost of that choice was deferring C6 and C7, both of
+which attach to work closer to hand. That trade is recorded in `SESSION.md`.
+
+**The module has one premise and everything descends from it.** ADR-0002 means
+the server holds ciphertext and no key, so it cannot scan content, cannot run a
+classifier, and cannot show a moderator what was reported. Client-side scanning
+was rejected — surveillance on the user's own hardware, bypassed by a patched
+build — and the cost of rejecting it is stated rather than hedged: **abuse in
+message content can never be detected proactively.**
+
+### The four mechanisms, and what each can honestly do
+
+| | |
+|---|---|
+| **Revocation** | The strongest control, and it needs no operator at all. Abuse through a token ends when the token dies — instant, and it does not require anybody to believe the user |
+| **Reports** | The only thing that can be *acted on*. Packaged by the reporter's device, because that is the one place the message exists in the clear |
+| **Metadata** | The only thing that can be *noticed*. Orders a queue and decides nothing |
+| **Interim suspension** | The only part of a 24-hour promise that can be automated honestly |
+
+The one thing none of them does is decide that somebody is guilty. That stays
+with a person and a deadline, and the module is arranged so that no function in
+it can express such a verdict.
+
+### The three sharpest arguments in it
+
+- **`0001`: the author field is a claim until the signature makes it a fact.**
+  `authorId` is a number a client put in a field, so without a signature check
+  the report form is a way to have anyone suspended by typing their id into it.
+  The gate order — `unknown_key` → `bad_signature` → `third_party` — matters for
+  a reason worth keeping: asking whether the author is party to the report
+  *before* the signature verifies is reasoning about an attribute of a claim, and
+  it files an attempted fabrication as what reads like a clerical error.
+- **`0002`: a 99%-accurate detector produces a queue that is 99% wrong.** Ten
+  abusive senders in 100,000 gives ten true flags and about a thousand false
+  ones, and ten times better accuracy barely moves it. That arithmetic is the
+  entire reason a signal ranks rather than decides.
+- **`0003`: the part of a promise that must never slip cannot depend on somebody
+  being awake.** A 24-hour SLA held by two people is untrue on a predictable
+  Saturday. ADR-0011 automates the protective half — reversible, proportionate,
+  and exactly what a human would have done — and leaves every judgement to a
+  person.
+
+### Two tensions resolved rather than glossed
+
+- **Abuse counters versus ADR-0012.** The ADR promises no per-user behavioural
+  timelines, and abuse counters are per-user and behavioural. They coexist by
+  **retention and purpose**: short-TTL Redis keys that order one queue and then
+  expire. The cost is in the lesson — a slow, patient campaign is invisible once
+  its evidence leaves the window — and the reversible fix is a *longer* window,
+  never a permanent one.
+- **Interim suspension is abusable.** A malicious reporter can silence somebody
+  for hours. Accepted because the alternative is a threat report sitting unread
+  overnight; **smaller, not zero**. The honest way to hold that is to publish the
+  reversal rate, which is the number that gets worse if the serious categories
+  are ever quietly widened.
+
+### What the wrong-cases caught, including twice about my own reasoning
+
+Thirty mistakes and nine alternative styles across the three lessons. Two
+findings worth carrying forward:
+
+- **`0001`'s key-lookup mistake was rewritten.** It forced a throw with a
+  contrived `.toString()`, which aborted the whole self-check instead of tripping
+  a named one — the abort trap, hit a fourth time. Without the contrivance the
+  mistake is realistic *and* worse: the fake verifier answers from the signature
+  and ignores the key, so an item with **no key at all** is admitted as evidence
+  with nothing verified.
+- **`0002` lost a mistake case that was not a mistake.** `Math.max` of an empty
+  array is `-Infinity`, and omitting the guard passed everything, because
+  `-Infinity` is never greater than a positive threshold and `observed` is only
+  reported when a flag fired. Rigging an assertion until it failed was tried and
+  did not discriminate either. **Adding an assertion purely to fail a case you
+  have decided is wrong is how a self-check stops testing behaviour and starts
+  testing resemblance** — the gap is documented in the case file instead.
+
+That is the second time in two days a wrong-case has corrected me rather than
+the lesson. The files are worth their length for that alone.
+
+### The fixtures that make any of it testable
+
+Each lesson has at least one fixture whose only job is to make a wrong answer
+produce a *different* number:
+
+- `0001`'s fake verifier **records its calls**, because "never verify without a
+  key" and "check each signature against its own author's key" are statements
+  about a call that did or did not happen, invisible in the return value.
+- `0002`'s twelve-messages-across-three-tokens separates per-token from overall;
+  eight-messages-to-two-people separates distinct peers from message volume.
+- `0003`'s mixed history — five rows, two reversed, one distinct person among
+  them — covers *reversed-only* and *distinct-people* in a single case, so
+  neither mistake can hide behind the other.
+
+### State
+
+Audit green. **115/115 verified**, `render-as-authored` 0, seven suites pass,
+`known-issues.json` still empty. Five C-modules remain and **no recommendation
+is recorded for which is next** — C4 follows A6, C6 runs alongside the B-track,
+C7 extends B9, and which anchor is nearest depends on where the build is rather
+than on anything in these files.
+
+**Still unpushed** — `git log @{u}..HEAD` for the count. It includes the
+26-lesson widget repair, so the F1 explain prompts and the B2/B3 playgrounds
+remain broken on the published site.

@@ -261,7 +261,7 @@ unverified lessons against a student on lesson 5.
 | **C5** | End-to-End Encryption | 5 | **COMPLETE, 2026-08-22/23.** Written after B4 — the plan said before B2, and the dependency was met anyway because `b2/0002` did the E2EE schema rewrite up front, so the prerequisite was satisfied by *anticipation* rather than by ordering. `0005` was planned as multi-device and became *why Token is one phone, and what a second would cost* when the student chose one device for v1; it also resolved the `participants` orphan, by deletion |
 | **C1** | Testing & Quality | 5 | **WRITTEN 2026-08-28.** After B3 — test the API as it is built, not at the end. The exercises are a test runner, an injected clock and byte source, the redemption handler as a plain function, the pure half of a `LEFT JOIN`, and a property checker |
 | **C2** | CI/CD & Release Engineering | 4 | **WRITTEN 2026-08-29.** After C1 — nothing to automate until tests exist. The exercises are a build verdict, a startup configuration check, a migration-plan review and the update verdict the server gives a launching app. Its spine is one asymmetry followed down three layers: a container is replaceable, a dropped column is not, and a phone in somebody's pocket is not even reachable |
-| **C3** | Trust, Safety & Abuse | 3 | After A5 — redesigned around client-side report packaging (ADR-0006), since E2EE removes server-side moderation |
+| **C3** | Trust, Safety & Abuse | 3 | **WRITTEN 2026-08-29.** After A5 — redesigned around client-side report packaging (ADR-0006), since E2EE removes server-side moderation. The exercises are the screening of a submitted report, the metadata assessment that ranks and never decides, and the automatic interim suspension of ADR-0011. Its engineering half only: F1/0006 keeps the threat model, triage matrix, SLA and transparency report |
 | **C6** | Scale & Performance | 5 | **Alongside B-track**, not after B9 — you cannot defer what you are building for |
 | **C4** | Data, Media & Offline | 4 | After A6 — SQLite cache, offline outbox, attachments, background jobs |
 | **C7** | Observability | 4 | Extends B9 — self-hosted error tracking, metrics, logs, alerting, runbooks |
@@ -767,7 +767,7 @@ whole launch.
 
 | # | Unit | Owns the detail | Gate |
 |---|---|---|---|
-| W1 | **Phase 3 — the C-modules. C0 landed 2026-08-27, C1 on 2026-08-28, C2 on 2026-08-29**; C5 already existed. **Six remain**: C3, C4, C6, C7, C8, C9. Written **just-in-time**, one module then stop — never batched | this file, § Phase 3 | the student reaching each one |
+| W1 | **Phase 3 — the C-modules. C0 landed 2026-08-27, C1 on 2026-08-28, C2 and C3 on 2026-08-29**; C5 already existed. **Five remain**: C4, C6, C7, C8, C9. Written **just-in-time**, one module then stop — never batched | this file, § Phase 3 | the student reaching each one |
 | W3 | **Phase 4 — the operating track.** C6, C7, C8, C9 studied after launch, but instrumented into the product from Phase 3 onward | this file, § Phase 4 | W1 |
 
 > **W2 was the maintenance tail — `--wrong` cases for every self-check that had
