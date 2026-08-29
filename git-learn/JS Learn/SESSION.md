@@ -43,14 +43,17 @@ that will have moved. **`W1` may genuinely be finished for now** — Phase 3 sai
 just-in-time, and just-in-time has caught up with where the rest of the project
 is.
 
-> **A decision that belongs in an ADR and is not in one yet.** `C8/0002`
-> settles that **Token measures daily actives and not retention**, over a device
-> hash salted with a per-day secret destroyed each night. The cost is stated in
-> the lesson — retention, cohorts and multi-day funnels are permanently
-> unavailable — and the rejected alternative is a stable device id, which
-> reopens ADR-0012. It lives only in course HTML today, which is precisely the
-> condition that produced ADR-0009 → 0015. **Write it up in
-> `token/docs/adr/` when that repo is next touched.**
+**The ADR debt from this week's modules is cleared.** Three product decisions
+were settled in C6 and C8 and existed only in course HTML — the condition that
+produced ADR-0009 → 0015, caught earlier this time. Written 2026-08-29 as
+`ADR-0016` (daily actives over a rotating salt, and no retention), `ADR-0017`
+(the authorisation path is never cached) and `ADR-0018` (rate limiting fails
+closed), plus a pointer from `ARCHITECTURE.md`'s revocation section to 0017,
+since *"not when a cache expires"* was an intention there and is now enforced.
+
+> **Committed in `GIT/token/`, which still has no remote and has never been
+> pushed.** Eighteen ADRs, `ARCHITECTURE.md` and the launch drafts exist on one
+> machine. Do not report anything in that repo as pushed.
 
 **Why C6 and not C8, with the cost of the rejection.** C6 had been deferred
 twice, both times on the same argument — *you cannot tune what you cannot see*.
