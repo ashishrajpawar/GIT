@@ -4875,3 +4875,90 @@ Audit green. **124/124 verified**, `render-as-authored` 0, all seven suites
 pass, `known-issues.json` still empty. Three C-modules remain — C4, C8, C9 —
 and `SESSION.md` now records **C8 as the strongest claim with nothing arguing
 back**, the C6 counter-argument being spent.
+
+---
+
+## 2026-08-29 (fifth) — C8 complete, and Phase 3 runs out of work it can do
+
+Two lessons, two commits. C8 was taken with no counter-argument left: the plan
+sequences it after C7, `C7/0003` had already argued the boundary it turns on,
+it is the cheapest of the three at two lessons, and the C6 objection that had
+beaten it twice was spent because C6 was written that morning.
+
+### The module's premise
+
+**Operational telemetry describes a system. Product analytics describes
+people.** The plumbing is nearly identical — counters, labels, a dashboard —
+and that similarity is the entire reason the module exists separately from C7.
+One side of the line is about your machines; the other is personal data under
+the DPDP Act, and the code looks the same either way.
+
+The coupling that makes it more than taste is already in `CLAUDE.md`:
+ADR-0012's minimum age of 18 with no under-18 flow is affordable partly because
+**DPDP's ban on behavioural tracking of children is satisfied for free by there
+being no per-user timelines.** So the row with a user id on it reopens a
+decision two modules away, and the person adding it will be adding a column,
+not making a decision.
+
+### The two arguments worth keeping
+
+- **`0001`: suppressing one cell suppresses nothing.** Publish a total, hide one
+  cell below the floor, and the hidden cell is the total minus the visible rows.
+  It is on the page. So the rule has a second half — a lone suppressed cell
+  takes the smallest reportable one with it — and that costs a real number which
+  was above the floor and fine to publish. **A privacy control defeated by one
+  subtraction is worse than none, because it is believed.** And where there is
+  nowhere to hide (one cell, below the floor), the honest output is the
+  suppression and no total at all: the same refusal as `c7/0003` declining to
+  invent an error rate of zero.
+- **`0002`: purpose limitation is a function you can run.** Two severities, and
+  the split is not by how bad the number feels. Blocking is *may you collect
+  this*; advisory is *is it worth what it costs*. **Identifiability sits on the
+  blocking side, in the allow-list; the cardinality budget is advisory and
+  protects the bill** — kept apart deliberately, so nobody argues past the
+  identity control by pointing at the cost one.
+
+### The decision, with its cost, and where it needs to go
+
+**Token measures daily actives and not retention.** The daily count is taken
+over a device hash salted with a per-day secret that is destroyed each night, so
+yesterday's rows cannot be joined to today's by anybody, including us.
+
+*Cost:* retention, week-one cohorts and any funnel spanning days are
+permanently unavailable — the single most-requested growth number.
+*Rejected:* a stable device id, which supplies all of it and is a pseudonymous
+per-user record, pulling ADR-0012 back open.
+
+**This currently lives only in course HTML, which is exactly the condition that
+produced ADR-0009 → 0015.** `SESSION.md` carries a note to write it up in
+`token/docs/adr/` next time that repo is touched.
+
+### One more instance of the session's recurring fault
+
+`0001`'s "validate late and return the rows anyway" case only changed the return
+statement, leaving the counting loop behind its `problems.length === 0` guard —
+so the map was empty on precisely the input meant to expose it, and the case
+passed. Moving the validation *after* the counting is the part that had to be
+wrong. Sixth instance in one day; the standing rule and its procedure are now in
+`SESSION.md` § *Notes for the next session*.
+
+`0002` was clean on the first run: sixteen wrong-cases, all discriminating.
+
+### Phase 3 has run out of work it can honestly do
+
+**Two C-modules remain and both are gated on something other than hours**, which
+is new — every earlier `W1` unit could have been written on any day. C4 follows
+A6, which is not written. C9 builds the mechanisms F1 *states the obligations
+for*, and F1's launch items have not started.
+
+Writing either now means writing against a version of the project that does not
+exist yet, which is the failure mode the just-in-time rule was written against
+and the one that produced 95 unverified lessons against a student on lesson 5.
+So `SESSION.md` now records that **the launch queue is the work**, and `W1`
+resumes when A6 lands or the launch documents come back.
+
+### State
+
+Audit green. **126/126 verified**, `render-as-authored` 0, all seven suites
+pass, `known-issues.json` still empty. Seven C-modules written in three days
+(C0, C1, C2, C3, C6, C7, C8) plus C5 already existing.

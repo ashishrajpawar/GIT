@@ -26,23 +26,31 @@ how far it got.
 > files either.** Make no claims about it at all — not in prose, not in a
 > commit message, not as a reason for prioritising anything.
 
-**In flight: `W1` — C8, Product Analytics, 2 lessons.** Started 2026-08-29
-after C6 landed. The module is complete when both are verified, wired and
-committed.
+**Nothing in flight.** C8 — Product Analytics — landed complete on 2026-08-29:
+two lessons, verified, wrong-cases, README, index row and search entries in.
+C2, C3, C7 and C6 landed complete the same day.
 
-| | Lesson | State |
-|---|---|---|
-| `0001` | An event with no subject | **landed**, verified, 14 wrong-cases |
-| `0002` | The number that changes a decision | not started |
+**The next unit is `W1` again: pick one C-module, write it, stop.** Two remain
+— **C4** (Data, Media & Offline, 4 lessons, follows A6) and **C9** (Launch,
+Support & Operations, 5 lessons). The launch queue is the other open front and
+none of it is code; see *Next action*.
 
-**Why C8, and there was no counter-argument left.** The plan sequences it
-directly after C7; `C7/0003` already argued the boundary it turns on; it is the
-cheapest of the three at two lessons; and the C6 objection that beat it twice
-is spent, because C6 is written. **C4 follows A6 and C9 wants writing near the
-launch work** — C9 builds the mechanisms F1 states the obligations for, so
-writing it ahead means cross-linking to documents that will have moved.
+**Neither of the two has a strong claim, and the reason is the same for both:
+they are the ones whose place in the sequence actually matters.** C4 follows
+A6, which is not written. C9 builds the mechanisms F1 states the obligations
+for, so writing it ahead of the launch work means cross-linking to documents
+that will have moved. **`W1` may genuinely be finished for now** — Phase 3 said
+just-in-time, and just-in-time has caught up with where the rest of the project
+is.
 
-C2, C3, C7 and C6 all landed complete on 2026-08-29.
+> **A decision that belongs in an ADR and is not in one yet.** `C8/0002`
+> settles that **Token measures daily actives and not retention**, over a device
+> hash salted with a per-day secret destroyed each night. The cost is stated in
+> the lesson — retention, cohorts and multi-day funnels are permanently
+> unavailable — and the rejected alternative is a stable device id, which
+> reopens ADR-0012. It lives only in course HTML today, which is precisely the
+> condition that produced ADR-0009 → 0015. **Write it up in
+> `token/docs/adr/` when that repo is next touched.**
 
 **Why C6 and not C8, with the cost of the rejection.** C6 had been deferred
 twice, both times on the same argument — *you cannot tune what you cannot see*.
@@ -137,23 +145,20 @@ L7 RoPA ─┬▶ privacy policy   ├▶ L12 Play Data Safety   ├▶ L13 Appl
 Drafts for four of Wave 0 are written and waiting in `token/docs/launch/` —
 fill the angle brackets and send. The folder README has the send order.
 
-**Writing side — `W1` continues, one module at a time.** C0, C1, C2, C3, C6 and
-C7 have landed; **three remain**: C4, C8, C9. Written just-in-time, never
-batched. `W2` is closed and there is no maintenance tail left to slot between
-units.
+**Writing side — `W1` may be finished for now.** C0, C1, C2, C3, C6, C7 and C8
+have landed; **two remain**: C4 and C9. `W2` is closed and there is no
+maintenance tail left to slot between units.
 
-**C8 now has the strongest claim, and this time nothing argues back.** The plan
-specifies it as following C7; C7/0003 already argued the boundary it turns on —
-analytics are event counts with no subject, and the moment a label identifies a
-person the age decision reopens with it; and at two lessons it is the cheapest
-of the three. The C6 counter-argument that beat it twice is spent, because C6
-is written.
+**Both remaining modules are gated on something other than available hours**,
+which is new — every earlier `W1` unit could have been written on any day. C4
+follows A6. C9 builds the mechanisms F1 states the obligations for, and F1's
+launch items have not started. **Writing either now means writing against a
+version of the project that does not exist yet**, which is the failure mode
+Phase 3's just-in-time rule was written against.
 
-**C4 and C9 are both further out and for different reasons.** C4 follows A6.
-C9 replaces the A11 tail and overlaps F1, which already states the obligations
-C9 would build the mechanisms for — so it wants writing *near* the launch work
-rather than ahead of it, or the cross-links will be to documents that have
-since changed.
+So the honest reading is that **the launch queue is now the work**, and `W1`
+resumes when A6 lands or the launch documents come back from the people they
+are waiting on.
 
 ---
 
@@ -190,7 +195,7 @@ Per-item status only. The plan is in `TOKEN-TRACK.md`; the counts are in
 | 1 — unblock where the student is | **done**, all five items |
 | 1.5 — the practice pattern in Module 02 | **done** — all 14, 2026-08-17 |
 | 2 — deepen the spine | done (16 of 16 deepenable; 4 skipped as rewrites) |
-| **3 — the C-modules** | **C0 written 2026-08-27, C1 2026-08-28, C2, C3, C7 and C6 2026-08-29** (2, 5, 4, 3, 4 and 5 lessons, all verified). C5 already existed; **three remain** — C4, C8, C9. Queue item **W1** |
+| **3 — the C-modules** | **C0 written 2026-08-27, C1 2026-08-28, C2, C3, C7, C6 and C8 2026-08-29** (2, 5, 4, 3, 4, 5 and 2 lessons, all verified). C5 already existed; **two remain** — C4 and C9, both gated on work that has not happened rather than on hours. Queue item **W1** |
 | 4 — the operating track | not started, deliberately. Queue item **W3** |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |

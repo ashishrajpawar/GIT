@@ -11,16 +11,16 @@ with this one, this one is right — everything below is measured, not asserted.
 
 | Metric | Value |
 |---|---|
-| Token-track lessons | 125 |
+| Token-track lessons | 126 |
 | Founder-track lessons (F1, counted separately) | 16 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
-| Quiz questions (track) | 3381 |
-| Avg teaching prose per track lesson | 2044 words |
-| Lessons with a playground | 125 / 125 |
-| Lessons with an exercise | 125 / 125 |
-| **Deepened** (all 3 spine sections) | 16 / 125 |
-| **Verified** (code executed) | 125 / 125 |
-| Ran clean but had nothing to run | 0 / 125 |
+| Quiz questions (track) | 3407 |
+| Avg teaching prose per track lesson | 2038 words |
+| Lessons with a playground | 126 / 126 |
+| Lessons with an exercise | 126 / 126 |
+| **Deepened** (all 3 spine sections) | 16 / 126 |
+| **Verified** (code executed) | 126 / 126 |
+| Ran clean but had nothing to run | 0 / 126 |
 | Errors | 0 |
 | Known and blocked | 0 |
 | Warnings | 2 |
@@ -30,12 +30,12 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 ## Answer-position distribution — **authored order, not what the student sees**
 
-1953 keyed questions (multiple-choice, spot-the-bug, which-breaks).
+1973 keyed questions (multiple-choice, spot-the-bug, which-breaks).
 
 > **This clustering is expected and already handled. Do not "fix" it again.**
 > `quiz.js` shuffles options at render time (`optionDisplayOrder`), so the
 > displayed distribution is roughly even — measured at 26.9 / 28.5 / 26.9 / 17.6
-> across all 1953 questions, versus the authored figures below. Index 3 sits
+> across all 1973 questions, versus the authored figures below. Index 3 sits
 > lower only because many questions have three options.
 >
 > The numbers here read `correct` straight from the lesson data, which is
@@ -54,21 +54,21 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Position | Count | Share |
 |---|---|---|
-| index 0 | 576 | 29.5% |
-| index 1 | 985 | 50.4% |
-| index 2 | 358 | 18.3% |
+| index 0 | 594 | 30.1% |
+| index 1 | 987 | 50.0% |
+| index 2 | 358 | 18.1% |
 | index 3 | 34 | 1.7% |
 
 ## Question types
 
 | Type | Count |
 |---|---|
-| multiple-choice | 1230 |
-| predict-output | 635 |
-| fill-blank | 495 |
-| spot-the-bug | 414 |
-| which-breaks | 309 |
-| order-steps | 298 |
+| multiple-choice | 1248 |
+| predict-output | 639 |
+| fill-blank | 496 |
+| spot-the-bug | 415 |
+| which-breaks | 310 |
+| order-steps | 299 |
 
 ## Modules
 
@@ -103,7 +103,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | c5-end-to-end-encryption | 5 | 1671 | 10 | 10 | 126 | 0/5 | 5/5 |
 | c6-scale-performance | 5 | 1293 | 38 | 5 | 130 | 0/5 | 5/5 |
 | c7-observability | 4 | 1018 | 17 | 4 | 104 | 0/4 | 4/4 |
-| c8-product-analytics | 1 | 1039 | 8 | 1 | 26 | 0/1 | 1/1 |
+| c8-product-analytics | 2 | 1181 | 15 | 2 | 52 | 0/2 | 2/2 |
 | x1-git-dev-environment | 3 | 1202 | 4 | 6 | 83 | 0/3 | 3/3 |
 | x2-debugging | 2 | 1242 | 3 | 4 | 50 | 0/2 | 2/2 |
 
@@ -147,7 +147,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Tables queried but never created | ok |
 | Broken relative links | ok |
 | Widgets defined before they are called | ok |
-| search-index.json | 142 entries, 0 dead, 0 unindexed |
+| search-index.json | 143 entries, 0 dead, 0 unindexed |
 | Example tokens valid under alphabet | 2 invalid |
 
 ## Errors
@@ -284,6 +284,7 @@ None.
 | c7-observability/0003-metrics-that-answer-a-question.html | 1035 | 0 | 5 | 1 | 26 | — | yes |
 | c7-observability/0004-alerts-and-the-page-nobody-answers.html | 963 | 0 | 4 | 1 | 26 | — | yes |
 | c8-product-analytics/0001-an-event-with-no-subject.html | 1039 | 0 | 8 | 1 | 26 | — | yes |
+| c8-product-analytics/0002-the-number-that-changes-a-decision.html | 1323 | 0 | 7 | 1 | 26 | — | yes |
 | x1-git-dev-environment/0001-git-fundamentals.html | 1254 | 10 | 2 | 2 | 29 | — | yes |
 | x1-git-dev-environment/0002-github-workflow.html | 1170 | 9 | 1 | 2 | 27 | — | yes |
 | x1-git-dev-environment/0003-dev-environment.html | 1181 | 16 | 1 | 2 | 27 | — | yes |

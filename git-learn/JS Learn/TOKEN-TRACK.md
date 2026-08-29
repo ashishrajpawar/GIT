@@ -265,7 +265,7 @@ unverified lessons against a student on lesson 5.
 | **C6** | Scale & Performance | 5 | **WRITTEN 2026-08-29.** Planned alongside the B-track — you cannot defer what you are building for — and in the event written after C7, on the argument that you cannot tune what you cannot see. The exercises are a capacity ceiling, a socket fan-out plan, a sliding-window limiter, a cache read plan and a query-trace review. Its spine is one sentence in five costumes: **a fact that is true of one process is not a fact about the system**, and every optimisation in it makes Token wrong rather than slow |
 | **C4** | Data, Media & Offline | 4 | After A6 — SQLite cache, offline outbox, attachments, background jobs |
 | **C7** | Observability | 4 | **WRITTEN 2026-08-29.** Extends B9 — self-hosted error tracking, metrics, logs, alerting, runbooks. The module where Token's privacy promises meet the tools that habitually break them: a tracker attaching request bodies, a metrics label per user, a log line pasted into chat. Exercises are the log line, the crash-report hook, the scrape summary and the alert evaluation |
-| **C8** | Product Analytics | 2 | After C7 — privacy-first analytics for a privacy product |
+| **C8** | Product Analytics | 2 | **WRITTEN 2026-08-29.** After C7, and the module exists because the plumbing is nearly identical to C7's while the rules are not: operational telemetry describes a system, product analytics describes people. The exercises are an aggregation with small-cell suppression and a metric register read against purpose limitation. It settles that **Token measures daily actives and not retention** |
 | **C9** | Launch, Support & Operations | 5 | Replaces the A11 tail — store compliance, account deletion, i18n/a11y, support, incident response |
 | **F1** | Founder Track — Non-Technical | 16 | **WRITTEN 2026-08-26.** Phase 7 / "Ship it", but six of its items are ⏳ and start on day one. See below |
 
@@ -767,7 +767,7 @@ whole launch.
 
 | # | Unit | Owns the detail | Gate |
 |---|---|---|---|
-| W1 | **Phase 3 — the C-modules. C0 landed 2026-08-27, C1 on 2026-08-28, C2, C3, C7 and C6 on 2026-08-29**; C5 already existed. **Three remain**: C4, C8, C9. Written **just-in-time**, one module then stop — never batched | this file, § Phase 3 | the student reaching each one |
+| W1 | **Phase 3 — the C-modules. C0 landed 2026-08-27, C1 on 2026-08-28, C2, C3, C7, C6 and C8 on 2026-08-29**; C5 already existed. **Two remain**: C4 (follows A6) and C9 (follows the launch work). Written **just-in-time**, one module then stop — never batched, and both remaining modules are now genuinely waiting on something | this file, § Phase 3 | A6 for C4; the F1 launch items for C9 |
 | W3 | **Phase 4 — the operating track.** C6, C7, C8, C9 studied after launch, but instrumented into the product from Phase 3 onward | this file, § Phase 4 | W1 |
 
 > **W2 was the maintenance tail — `--wrong` cases for every self-check that had
