@@ -27,11 +27,9 @@ how far it got.
 > commit message, not as a reason for prioritising anything.
 
 **W1 — C7, Observability.** Started 2026-08-29 straight after C3.
-`0001-the-log-line-you-can-publish.html` and
-`0002-errors-and-what-they-carry.html` are written, verified and have their
-`--wrong` cases; README, index row and search entries are in. **`0003`–`0004`
-remain**: metrics, and alerting with runbooks. Each lands as its own green
-commit.
+`0001`, `0002` and `0003` are written, verified and have their `--wrong`
+cases; README, index row and search entries are in. **`0004` remains** —
+alerting and runbooks. It lands as its own green commit.
 
 **Why C7 and not C4 or C6**, with the cost, because no recommendation was on
 record: three of `CLAUDE.md`'s hardest-won logging rules — never log a code,

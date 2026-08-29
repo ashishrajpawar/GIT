@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>C7 — Metrics That Answer a Question</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Observability</a> &rsaquo;
+        <span>Metrics That Answer a Question</span>
+    </nav>
+
+    <h1>Metrics That Answer a Question</h1>
+    <p class="lesson-meta">C7 &mdash; Lesson 3 of 4 &nbsp;|&nbsp; ~50 min</p>
+
+    <div class="callout">
+        <div class="callout-title">Why this matters for Token</div>
+        <p>Logs tell you what happened to <em>one</em> request. Metrics tell you whether things are
+        getting worse, and they are the only one of the three that is cheap enough to keep for a
+        year.</p>
+        <p>Token has one number that has to be watched from the very first deploy, and it is not a
+        latency: <strong>TURN relay bandwidth.</strong> ADR-0008 puts
+        <code>iceTransportPolicy: 'relay'</code> on every call, so 100% of media crosses the server
+        and crosses it <em>twice</em> &mdash; in from one peer, out to the other. That is a
+        certainty rather than a risk, and it is the likeliest surprise on the bill. A trend you can
+        see in month one is a decision; a trend you discover from an invoice is an emergency.</p>
+        <p>And there is a shape of metric Token must never collect, which is the same shape that
+        makes metrics expensive. That coincidence is the most useful thing in this lesson.</p>
+    </div>
+
+    <h2>1 &middot; Four numbers per service, and they have names</h2>
+
+    <p>The standard set for anything serving requests is <strong>RED</strong>:</p>
+
+    <ul>
+        <li><strong>Rate</strong> &mdash; requests per second.</li>
+        <li><strong>Errors</strong> &mdash; how many of them failed.</li>
+        <li><strong>Duration</strong> &mdash; how long they took, as a distribution.</li>
+    </ul>
+
+    <p>For a resource &mdash; Postgres, Redis, the disk, coturn &mdash; the equivalent is
+    <strong>USE</strong>: utilisation, saturation, errors. Saturation is the interesting one and the
+    one people skip: a connection pool at 100% utilisation is <em>working</em>; a connection pool
+    with a queue of forty waiting is about to time out.</p>
+
+    <p>Everything else is a follow-up question. Start with these and add a metric when an incident
+    proves you could not answer something.</p>
+
+    <h2>2 &middot; The average is the one number that hides the problem</h2>
+
+    <p>Duration is a distribution, and reducing it to a mean throws away the part that matters.</p>
+
+    <div id="pg-average"></div>
+    <script>
+        createPlayground("pg-average", `// Nineteen fast requests and one that fell into a lock wait.
+const durations = [];
+for (let i = 1; i <= 19; i++) durations.push(i);
+durations.push(2000);
+
+const mean = durations.reduce((a, b) => a + b, 0) / durations.length;
+
+function nearestRank(values, p) {
+  const sorted = values.slice().sort((a, b) => a - b);
+  const rank = Math.ceil((p / 100) * sorted.length);
+  return sorted[Math.min(Math.max(rank, 1), sorted.length) - 1];
+}
+
+console.log("mean:", mean.toFixed(1) + "ms");
+console.log("p50: ", nearestRank(durations, 50) + "ms");
+console.log("p99: ", nearestRank(durations, 99) + "ms");
+console.log("");
+console.log("The mean is worse than the typical request and far better than");
+console.log("the worst. It describes nobody's experience.");`);
+    </script>
+
+    <p><strong>p50 is what a typical user gets; p99 is what your noisiest 1% get</strong> &mdash; and
+    on a busy service, 1% of requests is a lot of people, several times a day each.</p>
+
+    <div class="callout warning">
+        <div class="callout-title">Two things you cannot do with a percentile</div>
+        <p><strong>You cannot average percentiles.</strong> The mean of two instances' p99s is not
+        the p99 of the whole service, and it is not any number at all. Percentiles have to be
+        computed from the underlying distribution, which is why metric systems store latency as
+        buckets rather than as a single figure.</p>
+        <p><strong>You cannot get one from a counter.</strong> A total and a count give you a mean
+        and nothing else. If you want a p99, that has to be decided before you start recording.</p>
+    </div>
+
+    <h2>3 &middot; Sorting numbers, and the default nobody expects</h2>
+
+    <p>Every percentile starts by sorting, and JavaScript's default sort compares values <em>as
+    strings</em>:</p>
+
+    <div id="pg-sort"></div>
+    <script>
+        createPlayground("pg-sort", `const durations = [9, 10, 100, 2, 30];
+
+console.log("default sort: ", durations.slice().sort());
+console.log("numeric sort: ", durations.slice().sort((a, b) => a - b));
+console.log("");
+console.log("Both are 'sorted'. Only one is in order.");
+console.log("");
+
+// And the second trap, which does not look like one:
+const original = [3, 1, 2];
+original.sort((a, b) => a - b);
+console.log("the caller's array afterwards:", original);
+console.log("sort() rearranges in place -- it does not return a new array.");`);
+    </script>
+
+    <p>Two bugs in one line, then. The comparator is missing, which produces a plausible-looking
+    wrong answer; and <code>sort</code> mutates, so a function that "just reads" a caller's samples
+    has quietly reordered them. Neither throws.</p>
+
+    <h2>4 &middot; Cardinality: the bill and the privacy problem are the same problem</h2>
+
+    <p>A metric with labels is not one series. It is one series <em>per combination of label
+    values</em>:</p>
+
+    <div id="pg-cardinality"></div>
+    <script>
+        createPlayground("pg-cardinality", `function series(metrics, labels) {
+  return metrics * labels.reduce((acc, n) => acc * n, 1);
+}
+
+console.log("route(20) x status(5) x method(4):", series(5, [20, 5, 4]));
+console.log("...and now add user_id(50000):    ", series(5, [20, 5, 4, 50000]));
+console.log("");
+console.log("Each series is a separate time series, kept for as long as the");
+console.log("retention says. One label turned a small install into a cluster.");`);
+    </script>
+
+    <p>That is the cost argument, and it is the one everybody knows. Here is the one that matters
+    more for Token:</p>
+
+    <div class="callout warning">
+        <div class="callout-title">A per-user label <em>is</em> the behavioural timeline ADR-0012 forbids</div>
+        <p>A time series named <code>requests_total{user_id="4102"}</code>, sampled every fifteen
+        seconds and kept for a year, is a minute-by-minute record of when one person used the
+        product. Nobody set out to build that. It arrives as a debugging convenience.</p>
+        <p>ADR-0012's promise is not kept by policy but by <strong>there being nothing behavioural in
+        the system to prohibit</strong> &mdash; event counts have no subject. A user-labelled metric
+        creates the subject, and it does so in the one system whose retention is measured in
+        <em>years</em> rather than the minutes C3/0002 gave the abuse counters.</p>
+        <p><strong>So: no user id, no token id, no code, no phone hash, in a label. Ever.</strong>
+        The cardinality argument and the privacy argument point the same way here, which is
+        convenient and slightly dangerous &mdash; convenient because one rule serves both, dangerous
+        because somebody who only knows the cost argument will happily add a label with fifty
+        possible values that happens to identify a person.</p>
+    </div>
+
+    <p>The rule that follows: <strong>a label's value set must be small and known in advance.</strong>
+    Route, method, status class, region. Anything unbounded &mdash; an id, a URL with an id in it, an
+    error message &mdash; is a bug, and a budget on distinct values per label catches it before the
+    disk does.</p>
+
+    <h2>5 &middot; What Token actually watches</h2>
+
+    <table>
+        <thead><tr><th>Metric</th><th>Why it is on the list</th></tr></thead>
+        <tbody>
+            <tr><td>RED on the API, by route</td><td>The baseline. Route is a bounded label; the URL with ids in it is not</td></tr>
+            <tr><td><strong>TURN relay bandwidth</strong></td><td>100% of call media, crossing twice. A certainty, and the likeliest surprise on the bill</td></tr>
+            <tr><td>WebSocket connections held</td><td>The single-box ceiling is a few thousand, bounded by memory and file descriptors</td></tr>
+            <tr><td>Postgres pool saturation</td><td>Waiting, not busy. Busy is fine</td></tr>
+            <tr><td>Redis availability</td><td>Not optional (ADR-0003) &mdash; without it a second replica silently drops messages</td></tr>
+            <tr><td>Backup age and verification</td><td>The retention promise in B10 is a claim about every copy</td></tr>
+        </tbody>
+    </table>
+
+    <h2>6 &middot; The window with nothing in it</h2>
+
+    <p>A window containing no requests has no error <em>rate</em>. Zero divided by zero is not zero;
+    it is undefined, and JavaScript will hand you <code>NaN</code>, which compares false against
+    every threshold you will ever write.</p>
+
+    <p>Reporting <code>0</code> instead is worse than <code>NaN</code>, because it is plausible:
+    <strong>a service that has stopped receiving requests altogether has a 0% error rate, and an
+    alert watching error rate will never fire.</strong> That failure belongs to the next lesson; the
+    part that belongs here is refusing to invent the number in the first place.</p>
+
+    <h3>Try it yourself &mdash; broken on purpose</h3>
+    <p>Read the error. One sample was recorded before the labels were attached.</p>
+
+    <div id="pg-labels"></div>
+    <script>
+        createPlayground("pg-labels", `const samples = [
+  { durationMs: 12, ok: true, labels: { route: "/api/redeem" } },
+  { durationMs: 40, ok: true, labels: { route: "/api/tokens" } },
+  { durationMs: 8, ok: false }
+];
+
+const routes = new Set(samples.map((s) => s.labels.route));
+
+console.log("distinct routes:", routes.size);
+
+// Fix it. Instrumentation is added over time, so a sample recorded by
+// an older code path is the ordinary case rather than a corrupt one.`);
+    </script>
+
+    <h2>Now build it yourself</h2>
+
+    <div id="exercise-1"></div>
+    <script>
+        createSolution("exercise-1", {
+            exercise:
+                "Write <code>summariseWindow(samples, policy)</code> &mdash; what one scrape interval reports.<br><br>" +
+                "<code>samples</code> is an array of <code>{ durationMs, ok, labels }</code>. <code>labels</code> is an object of name to string and <strong>may be missing</strong>. <code>policy</code> is <code>{ maxDistinctPerLabel }</code>.<br><br>" +
+                "Return <code>{ count, errors, errorRate, p50, p95, p99, labels, rejected }</code>.<br><br>" +
+                "1. <code>count</code> is the number of samples; <code>errors</code> is how many have <code>ok === false</code>.<br>" +
+                "2. <code>errorRate</code> is <code>errors / count</code> &mdash; and <strong><code>null</code> when there are no samples at all</strong>. Not zero: a window with no traffic has no error rate, and reporting 0% makes a service that has stopped receiving requests look perfectly healthy.<br>" +
+                "3. The percentiles use <strong>nearest rank</strong>: sort the durations ascending, take <code>Math.ceil(p / 100 * n)</code>, and read the value at that rank (so rank 1 is the first element). All three are <code>null</code> for an empty window &mdash; a percentile of nothing does not exist.<br>" +
+                "4. <strong>Sort numerically and on a copy.</strong> JavaScript's default comparison is textual, so 100 sorts before 9; and <code>sort</code> rearranges in place, so sorting the caller's array reorders data you were only supposed to read.<br>" +
+                "5. <code>labels</code> maps each label name to its number of <strong>distinct values</strong> across the window &mdash; that is what decides how many time series the metric becomes. A sample with no <code>labels</code> contributes nothing and must not crash anything.<br>" +
+                "6. A label whose distinct-value count <strong>exceeds</strong> <code>maxDistinctPerLabel</code> goes in <code>rejected</code> instead, by name, and does <strong>not</strong> appear in <code>labels</code>. Exactly at the budget is fine.<br>" +
+                "7. Both <code>labels</code> and <code>rejected</code> follow <strong>first-seen order</strong> &mdash; the order the label names first appear while walking the samples.<br><br>" +
+                "Do not modify <code>samples</code> or anything inside it.",
+            hints: [
+                "Handle the empty window first and return immediately. Every rule below then has at least one sample to work with, and the nulls are decided in one place instead of four.",
+                "One pass over the samples collects everything: the error count, the durations, and a map from label name to a <code>Set</code> of its values. Using a plain object for that map gives you first-seen ordering for free, because string keys keep their insertion order.",
+                "For rule 4, <code>samples.map(s =&gt; s.durationMs).sort((a, b) =&gt; a - b)</code> is already safe &mdash; <code>map</code> made a new array, so the sort has nothing of the caller's to disturb. It is sorting <code>samples</code> itself that does the damage."
+            ],
+            solution: `function summariseWindow(samples, policy) {
+  const count = samples.length;
+
+  // Decided once. A window with no traffic has no error rate and no
+  // percentiles -- reporting 0% would make a dead service look healthy.
+  if (count === 0) {
+    return {
+      count: 0, errors: 0, errorRate: null,
+      p50: null, p95: null, p99: null,
+      labels: {}, rejected: []
+    };
+  }
+
+  let errors = 0;
+  const durations = [];
+  const values = {};   // label name -> Set of values, in first-seen order
+
+  for (const sample of samples) {
+    if (sample.ok === false) errors++;
+    durations.push(sample.durationMs);
+
+    // Instrumentation arrives over time, so a sample from an older code
+    // path having no labels is ordinary rather than corrupt.
+    const labels = sample.labels;
+    if (labels) {
+      for (const name of Object.keys(labels)) {
+        if (values[name] === undefined) values[name] = new Set();
+        values[name].add(labels[name]);
+      }
+    }
+  }
+
+  // map() already made a new array, so this sort has nothing of the
+  // caller's to disturb -- and the comparator stops 100 sorting before 9.
+  const sorted = durations.sort(function (a, b) { return a - b; });
+
+  function nearestRank(p) {
+    const rank = Math.ceil((p / 100) * sorted.length);
+    return sorted[Math.min(Math.max(rank, 1), sorted.length) - 1];
+  }
+
+  const labels = {};
+  const rejected = [];
+  for (const name of Object.keys(values)) {
+    const distinct = values[name].size;
+    // Exceeds, not reaches. A label at exactly the budget is allowed.
+    if (distinct > policy.maxDistinctPerLabel) rejected.push(name);
+    else labels[name] = distinct;
+  }
+
+  return {
+    count: count,
+    errors: errors,
+    errorRate: errors / count,
+    p50: nearestRank(50),
+    p95: nearestRank(95),
+    p99: nearestRank(99),
+    labels: labels,
+    rejected: rejected
+  };
+}`
+        });
+    </script>
+
+    <div id="pg-exercise"></div>
+    <script>
+        createPlayground("pg-exercise", `// --- Write summariseWindow(samples, policy) here, then press Run ---
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label);
+  if (!passed && detail) console.log("      " + detail);
+}
+
+const POLICY = { maxDistinctPerLabel: 3 };
+
+// 1..19 and one 2000. Chosen so that the mean (109.5) is nothing like the
+// median (10), and so that a textual sort gives a DIFFERENT p50 -- with
+// values all the same digit length, both sorts would agree and the
+// commonest bug in this function would pass unnoticed.
+//
+// Emitted in DESCENDING order, which is the second deliberate choice: if the
+// samples arrived already ascending, an implementation that sorts them in
+// place would leave the array looking untouched and the mutation check below
+// would pass against the very mistake it exists to catch.
+function window20() {
+  const out = [{ durationMs: 2000, ok: false, labels: { route: "/a" } }];
+  for (let i = 19; i >= 1; i--) out.push({ durationMs: i, ok: true, labels: { route: "/a" } });
+  return out;
+}
+
+try {
+  const w = window20();
+  const r = summariseWindow(w, POLICY);
+
+  check("count and errors are the plain totals",
+    r.count === 20 && r.errors === 1, "got: " + JSON.stringify([r.count, r.errors]));
+  check("errorRate is errors over count",
+    r.errorRate === 0.05, "got: " + r.errorRate);
+
+  // Rule 3 and 4 together. A textual sort puts 18 at this rank.
+  check("p50 is the middle by numeric order",
+    r.p50 === 10,
+    "got: " + r.p50 + " - the default sort compares as text, so 100 comes before 9");
+  check("p95 and p99 reach the tail",
+    r.p95 === 19 && r.p99 === 2000,
+    "got: " + JSON.stringify([r.p95, r.p99]) + " - nearest rank, so p99 of 20 samples is the last");
+
+  // The point of percentiles at all.
+  const mean = w.reduce(function (a, s) { return a + s.durationMs; }, 0) / w.length;
+  check("...and none of them is the mean",
+    r.p50 !== mean && r.p99 !== mean,
+    "the mean here is " + mean + "ms, which describes nobody's experience");
+
+  // Rule 4's second half. sort() rearranges in place.
+  //
+  // A FRESH window on purpose: taking the snapshot from w would take it
+  // after summariseWindow had already run on w above, so an implementation
+  // that sorts in place would have done its damage before the "original"
+  // order was recorded, and the check would compare a sorted array with
+  // itself. Snapshot before first use, or the assertion tests nothing.
+  const untouched = window20();
+  const order = untouched.map(function (s) { return s.durationMs; });
+  summariseWindow(untouched, POLICY);
+  check("the caller's samples are not reordered",
+    JSON.stringify(untouched.map(function (s) { return s.durationMs; })) === JSON.stringify(order),
+    "the input was rearranged - sort() works in place and returns the same array");
+
+  // Rule 2. The one that matters for the next lesson.
+  const empty = summariseWindow([], POLICY);
+  check("an empty window has a null error rate, not zero",
+    empty.errorRate === null,
+    "got: " + empty.errorRate + " - 0% would make a service receiving nothing look healthy");
+  check("...and null percentiles",
+    empty.p50 === null && empty.p95 === null && empty.p99 === null,
+    "got: " + JSON.stringify([empty.p50, empty.p95, empty.p99]));
+  check("...with count and errors still zero rather than null",
+    empty.count === 0 && empty.errors === 0,
+    "got: " + JSON.stringify([empty.count, empty.errors]) + " - nothing happened is a real answer");
+
+  const one = summariseWindow([{ durationMs: 42, ok: true }], POLICY);
+  check("a single sample is its own p50, p95 and p99",
+    one.p50 === 42 && one.p95 === 42 && one.p99 === 42,
+    "got: " + JSON.stringify([one.p50, one.p95, one.p99]));
+
+  // Rule 5, and the sample with no labels at all.
+  const mixed = summariseWindow([
+    { durationMs: 5, ok: true, labels: { route: "/a", method: "GET" } },
+    { durationMs: 6, ok: true, labels: { route: "/b", method: "GET" } },
+    { durationMs: 7, ok: true, labels: { route: "/a", method: "POST" } },
+    { durationMs: 8, ok: true }
+  ], POLICY);
+  check("a label is counted by its distinct values, not its occurrences",
+    mixed.labels.route === 2 && mixed.labels.method === 2,
+    "got: " + JSON.stringify(mixed.labels) +
+    " - four samples, two routes; the series count follows the distinct values");
+  check("a sample with no labels contributes nothing and crashes nothing",
+    mixed.count === 4, "got: " + JSON.stringify(mixed));
+
+  // Rule 6. Four distinct values against a budget of three.
+  const wide = summariseWindow([
+    { durationMs: 1, ok: true, labels: { route: "/a", userId: "u1" } },
+    { durationMs: 2, ok: true, labels: { route: "/a", userId: "u2" } },
+    { durationMs: 3, ok: true, labels: { route: "/a", userId: "u3" } },
+    { durationMs: 4, ok: true, labels: { route: "/a", userId: "u4" } }
+  ], POLICY);
+  check("a label over the cardinality budget is rejected",
+    JSON.stringify(wide.rejected) === JSON.stringify(["userId"]),
+    "got: " + JSON.stringify(wide.rejected));
+  check("...and does not appear among the accepted labels",
+    wide.labels.userId === undefined && wide.labels.route === 1,
+    "got: " + JSON.stringify(wide.labels) +
+    " - a per-user label is a behavioural timeline kept for a year");
+
+  // The boundary. Exactly at the budget is allowed.
+  const atBudget = summariseWindow([
+    { durationMs: 1, ok: true, labels: { status: "2xx" } },
+    { durationMs: 2, ok: true, labels: { status: "4xx" } },
+    { durationMs: 3, ok: true, labels: { status: "5xx" } }
+  ], POLICY);
+  check("exactly maxDistinctPerLabel is allowed",
+    atBudget.labels.status === 3 && atBudget.rejected.length === 0,
+    "got: " + JSON.stringify([atBudget.labels, atBudget.rejected]) + " - the rule is EXCEEDS");
+
+  // Rule 7. First-seen order, which is not alphabetical here.
+  const ordered = summariseWindow([
+    { durationMs: 1, ok: true, labels: { zone: "z1", alpha: "a1" } },
+    { durationMs: 2, ok: true, labels: { zone: "z2", alpha: "a2" } }
+  ], POLICY);
+  check("labels follow first-seen order",
+    JSON.stringify(Object.keys(ordered.labels)) === JSON.stringify(["zone", "alpha"]),
+    "got: " + JSON.stringify(Object.keys(ordered.labels)));
+
+  const twoWide = summariseWindow([
+    { durationMs: 1, ok: true, labels: { userId: "u1", tokenId: "t1" } },
+    { durationMs: 2, ok: true, labels: { userId: "u2", tokenId: "t2" } },
+    { durationMs: 3, ok: true, labels: { userId: "u3", tokenId: "t3" } },
+    { durationMs: 4, ok: true, labels: { userId: "u4", tokenId: "t4" } }
+  ], POLICY);
+  check("several rejected labels keep first-seen order too",
+    JSON.stringify(twoWide.rejected) === JSON.stringify(["userId", "tokenId"]),
+    "got: " + JSON.stringify(twoWide.rejected));
+
+  // The invariant.
+  const all = [r, empty, one, mixed, wide, atBudget, ordered, twoWide];
+  check("errorRate is null exactly when the window is empty",
+    all.every(function (x) { return (x.errorRate === null) === (x.count === 0); }),
+    "got: " + JSON.stringify(all.map(function (x) { return x.count + "/" + x.errorRate; })));
+  check("no label name is both accepted and rejected",
+    all.every(function (x) {
+      return x.rejected.every(function (n) { return x.labels[n] === undefined; });
+    }),
+    "a name appeared in both lists");
+} catch (err) {
+  console.log("FAIL  " + err.name + ": " + err.message);
+  console.log("      Usually this means summariseWindow is missing or misspelt, or that");
+  console.log("      a sample without labels was read as though it had some.");
+}`);
+    </script>
+
+    <h2>Explain it in your own words</h2>
+    <div id="explain-0003"></div>
+    <script>
+        createExplain("explain-0003", {
+            prompt: "A per-user label is rejected here for two independent reasons, and only one of them is about money. Explain both, and why somebody who knows only the cost argument would still add a label that identifies a person."
+        });
+    </script>
+
+    <div id="lesson-quiz"></div>
+    <script>
+        createQuiz("lesson-quiz", [
+            {
+                question: "What do metrics answer that logs do not?",
+                options: [
+                    "Whether things are getting worse, cheaply enough to keep for a year",
+                    "What happened to one particular request",
+                    "Which line of code threw",
+                    "Who was affected"
+                ],
+                correct: 0,
+                explanation: "A metric is a number over time with no per-event detail, which is exactly why it can be retained for years. Logs answer the single-request question and are far too expensive to keep at that horizon."
+            },
+            {
+                question: "Which number does Token have to watch from the very first deploy?",
+                options: [
+                    "TURN relay bandwidth",
+                    "Average API latency",
+                    "Daily active users",
+                    "Database size"
+                ],
+                correct: 0,
+                explanation: "Relay-only ICE puts 100% of call media through the server, crossing it twice — in from one peer, out to the other. It is a certainty rather than a risk, and a trend you see in month one is a decision where an invoice is an emergency."
+            },
+            {
+                type: "predict-output",
+                code: "console.log([9, 10, 100, 2, 30].sort().join(','));",
+                answer: "10,100,2,30,9",
+                explanation: "The default comparison is textual, so every percentile computed from it is wrong in a way that looks plausible. It is the single most common bug in a hand-written percentile and it never throws."
+            },
+            {
+                question: "Why is the mean a poor summary of request duration?",
+                options: [
+                    "It is worse than the typical request and far better than the worst, so it describes nobody",
+                    "It is expensive to compute",
+                    "It cannot be stored as a metric",
+                    "It changes too slowly to alert on"
+                ],
+                correct: 0,
+                explanation: "Nineteen fast requests and one lock wait give a mean of 109ms against a median of 10ms. The number is real and there is no user having that experience."
+            },
+            {
+                question: "Why can percentiles not be averaged across instances?",
+                options: [
+                    "The mean of two p99s is not the p99 of the whole, and is not any number at all",
+                    "Instances have different traffic volumes",
+                    "Percentiles are stored as strings",
+                    "They can be, as long as the instances are equally loaded"
+                ],
+                correct: 0,
+                explanation: "A percentile has to be computed from the underlying distribution, which is why metric systems store latency as buckets rather than as a single figure. Averaging them produces something with no interpretation whatsoever."
+            },
+            {
+                type: "predict-output",
+                code: "const a = [3, 1, 2];\nconst b = a.sort((x, y) => x - y);\nconsole.log(a.join(','), b === a);",
+                answer: "1,2,3 true",
+                explanation: "sort rearranges in place and returns the same array, so a function that appears only to read its input has reordered the caller's data. slice() or map() first, and there is nothing of theirs to disturb."
+            },
+            {
+                question: "A metric has 5 names, 20 routes, 5 statuses and 4 methods. Adding a <code>user_id</code> label with 50,000 values does what?",
+                options: [
+                    "Multiplies the series count by 50,000",
+                    "Adds 50,000 series",
+                    "Adds one series with 50,000 values",
+                    "Nothing, until the label is queried"
+                ],
+                correct: 0,
+                explanation: "Series are the product of the label cardinalities, not the sum. One label turns a small install into something needing a cluster, and each series is retained for as long as the retention policy says."
+            },
+            {
+                question: "Why is a per-user metric label a privacy problem and not only a cost one?",
+                options: [
+                    "Sampled every fifteen seconds and kept for a year, it is a minute-by-minute record of when one person used the product",
+                    "Metrics are published publicly",
+                    "User ids are personal data under DPDP",
+                    "It allows correlation with the error tracker"
+                ],
+                correct: 0,
+                explanation: "Nobody sets out to build that; it arrives as a debugging convenience. ADR-0012's promise is kept by there being nothing behavioural in the system to prohibit, and a user-labelled series creates the subject that promise depends on not existing."
+            },
+            {
+                question: "The cost argument and the privacy argument point the same way here. Why is that slightly dangerous?",
+                options: [
+                    "Somebody who knows only the cost argument will happily add a low-cardinality label that identifies a person",
+                    "It means one of the arguments is redundant",
+                    "It makes the rule harder to explain",
+                    "The two disagree at high volumes"
+                ],
+                correct: 0,
+                explanation: "A label with fifty possible values is cheap and can still single somebody out. The convenient coincidence is that one rule usually serves both; the trap is treating the cheap rule as though it were the whole rule."
+            },
+            {
+                question: "What makes a label name acceptable?",
+                options: [
+                    "Its value set is small and known in advance",
+                    "It is short",
+                    "It is not personal data",
+                    "It appears on every sample"
+                ],
+                correct: 0,
+                explanation: "Route, method, status class, region. Anything unbounded — an id, a URL with an id in it, an error message — is a bug, and a budget on distinct values catches it before the disk does."
+            },
+            {
+                question: "A window contains no requests at all. What is the error rate?",
+                options: [
+                    "There is not one — null, because zero over zero is undefined",
+                    "Zero, since no requests failed",
+                    "One hundred percent, since nothing succeeded",
+                    "The previous window's rate"
+                ],
+                correct: 0,
+                explanation: "Zero is worse than NaN here because it is plausible: a service receiving nothing at all reports a perfect error rate, and an alert watching that number will never fire. Refusing to invent it is the honest answer."
+            },
+            {
+                type: "predict-output",
+                code: "console.log(0 / 0, 0 / 0 > 0.05, 0 / 0 < 0.05);",
+                answer: "NaN false false",
+                explanation: "NaN compares false against everything, in both directions, so a threshold check silently passes and so does its opposite. That is worse than an error and better than a plausible zero."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the nearest-rank index so rank 1 is the first element.",
+                code: "const rank = Math.ceil((p / 100) * sorted.length);\nreturn sorted[rank - ___];",
+                answer: "1",
+                explanation: "Nearest rank is one-based by definition and arrays are zero-based, so the conversion has to happen exactly once. Doing it twice or not at all shifts every percentile by one position, which is invisible on smooth data and wrong at the tail."
+            },
+            {
+                question: "Twenty samples, p99. Which one is it?",
+                options: [
+                    "The largest, because ceil(0.99 × 20) is 20",
+                    "The nineteenth, because 99% of 20 is 19.8",
+                    "There is no p99 with only 20 samples",
+                    "The mean of the top two"
+                ],
+                correct: 0,
+                explanation: "Nearest rank rounds up, so a small window's p99 is simply its worst sample. Worth knowing rather than being surprised by: at these sizes p99 and maximum are the same number."
+            },
+            {
+                type: "which-breaks",
+                question: "Which of these reorders the caller's array?",
+                variants: [
+                    "samples.map(s => s.durationMs).sort((a, b) => a - b)",
+                    "samples.sort((a, b) => a.durationMs - b.durationMs)",
+                    "samples.slice().sort((a, b) => a.durationMs - b.durationMs)"
+                ],
+                correct: 1,
+                explanation: "Sorting the samples themselves rearranges the array the caller passed in. map and slice both produce a new array first, so the sort has nothing of theirs to touch."
+            },
+            {
+                question: "Why is saturation the interesting half of USE?",
+                options: [
+                    "A pool at 100% utilisation is working; a pool with forty waiting is about to time out",
+                    "Utilisation is hard to measure",
+                    "Saturation predicts errors before they happen",
+                    "Utilisation is already covered by RED"
+                ],
+                correct: 0,
+                explanation: "Full and overwhelmed look identical if you only watch utilisation, and one of them is fine. The queue depth is what distinguishes a resource being used from a resource being exceeded."
+            },
+            {
+                question: "Why does a sample arriving with no labels have to be handled rather than treated as corrupt?",
+                options: [
+                    "Instrumentation is added over time, so older code paths are the ordinary case",
+                    "Labels are optional in the metric format",
+                    "The scraper strips labels under load",
+                    "It indicates a background job"
+                ],
+                correct: 0,
+                explanation: "A handler written before the label convention existed is not a bug, and crashing the summariser on it takes out the metric for every other path too. Same shape as an error with no request in the previous lesson."
+            },
+            {
+                question: "Why does the exercise report the distinct-value count per label rather than just accepting or rejecting?",
+                options: [
+                    "The distinct count is what decides how many series the metric becomes, so it is the number worth seeing",
+                    "It is needed to compute the percentiles",
+                    "The scraper requires it",
+                    "It makes rejection reversible"
+                ],
+                correct: 0,
+                explanation: "A label at three of a budget of three is fine today and one deploy from being a problem. A boolean tells you the state; the number tells you the trend, which is the whole business of this lesson."
+            },
+            {
+                question: "A label has exactly <code>maxDistinctPerLabel</code> distinct values. Accepted or rejected?",
+                options: [
+                    "Accepted — the rule is exceeds",
+                    "Rejected, to leave headroom",
+                    "Accepted only if it is on every sample",
+                    "It depends on the label name"
+                ],
+                correct: 0,
+                explanation: "A boundary worth a case of its own, because it is where a budget you chose and the behaviour you get can differ by one whole label. Getting it wrong rejects a status-class label with exactly three values."
+            },
+            {
+                question: "Which of these belongs on Token's watch list for reasons of a published promise rather than performance?",
+                options: [
+                    "Backup age and verification",
+                    "WebSocket connections held",
+                    "Postgres pool saturation",
+                    "API request rate by route"
+                ],
+                correct: 0,
+                explanation: "B10 publishes a sentence to users about copies being overwritten within seven days, and that is a claim about every copy in every location. It is a compliance metric that happens to live on the same dashboard."
+            },
+            {
+                question: "The count and errors of an empty window are zero, while the rate is null. Why the difference?",
+                options: [
+                    "Nothing happened is a real answer for a count and not one for a ratio",
+                    "Zero is falsy and null is not",
+                    "Counts are integers and rates are floats",
+                    "The count is used by the alerting and the rate is not"
+                ],
+                correct: 0,
+                explanation: "Zero requests is a fact worth reporting; zero over zero is not a number. Keeping the distinction is what lets an alert notice that traffic stopped, which is a different problem from requests failing."
+            },
+            {
+                question: "Why start with RED and add metrics later rather than instrumenting everything?",
+                options: [
+                    "Everything else is a follow-up question, and an incident tells you which one you could not answer",
+                    "Extra metrics are expensive to compute",
+                    "Too many dashboards confuse reviewers",
+                    "The scraper has a limit on metric names"
+                ],
+                correct: 0,
+                explanation: "Rate, errors and duration answer the first question about any service. A metric added because an incident proved you needed it is a metric somebody will look at; a metric added speculatively is dashboard furniture."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This throws on the third sample. Which line?",
+                code: "1  const samples = [ { labels: { route: '/a' } }, { labels: { route: '/b' } }, { durationMs: 8 } ];\n2  const routes = new Set(samples.map((s) => s.labels.route));\n3  console.log(routes.size);",
+                bugLine: 2,
+                options: ["Line 1", "Line 2", "Line 3"],
+                correct: 1,
+                explanation: "Reading .route of undefined for a sample recorded before labels existed. The guard belongs on the labels object, and the sample should contribute nothing rather than being treated as an error."
+            },
+            {
+                question: "What is the honest summary of this lesson?",
+                options: [
+                    "Measure the distribution rather than the average, and let nothing unbounded become a label",
+                    "Collect as much as possible and decide later",
+                    "Use averages for dashboards and percentiles for alerts",
+                    "Metrics replace logs for most questions"
+                ],
+                correct: 0,
+                explanation: "Two sentences, and each removes a way of being wrong: a number that describes nobody's experience, and a label that is a bill and a behavioural record at the same time."
+            },
+            {
+                question: "Which of these is a fair statement about a p99 of 8 seconds with a mean of 200ms?",
+                options: [
+                    "One request in a hundred is a broken experience, several times a day for a regular user",
+                    "The service is healthy, since the average is good",
+                    "The p99 is an outlier and can be ignored",
+                    "The mean must be wrong"
+                ],
+                correct: 0,
+                explanation: "Both numbers are correct and they describe different populations. On a busy service 1% of requests is a great many people, and each of them hits it repeatedly rather than once."
+            },
+            {
+                question: "Why is the empty-window case handled first and returned immediately?",
+                options: [
+                    "Every rule below then has at least one sample, and the nulls are decided in one place",
+                    "It is the most common case",
+                    "The percentiles would throw otherwise",
+                    "It avoids allocating the label map"
+                ],
+                correct: 0,
+                explanation: "The same shape as the absent-variable guard before a length check and the no-request guard in the previous lesson. An early return that removes a case is what lets the rest of the body stop worrying about it."
+            }
+        ]);
+    </script>
+
+    <div class="lesson-nav">
+        <a href="./0002-errors-and-what-they-carry.html">&larr; Errors, and the Body the Tracker Attaches by Default</a>
+        <span class="disabled">Next: Alerts, and the Page Nobody Answers &rarr;</span>
+    </div>
+
+</body>
+</html>
