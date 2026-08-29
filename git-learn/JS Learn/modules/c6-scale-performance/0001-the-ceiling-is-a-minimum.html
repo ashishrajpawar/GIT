@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>C6 — The Ceiling Is a Minimum, Not a Number</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Scale &amp; Performance</a> &rsaquo;
+        <span>The Ceiling Is a Minimum, Not a Number</span>
+    </nav>
+
+    <h1>The Ceiling Is a Minimum, Not a Number</h1>
+    <p class="lesson-meta">C6 &mdash; Lesson 1 of 5 &nbsp;|&nbsp; ~50 min</p>
+
+    <div class="callout">
+        <div class="callout-title">Why this matters for Token</div>
+        <p>ADR-0003 says Token is <strong>built to scale out and deployed on one box.</strong>
+        <code>CLAUDE.md</code> even names the ceiling: <em>a few thousand concurrent WebSocket
+        connections and low tens of thousands of users, bounded by memory and file descriptors first,
+        then Postgres connections.</em></p>
+        <p>That sentence is worth almost nothing until you can derive it. A ceiling you were told is
+        a number you will defend or panic about; a ceiling you computed is a <strong>list of config
+        lines with your own arithmetic beside each one</strong>, and you know which to change.</p>
+    </div>
+
+    <h2>1 &middot; A box does not have "a capacity"</h2>
+
+    <p>The question <em>how many users can this server handle?</em> has no answer, because a server
+    does not run out of one thing. It runs out of several, at different moments, and it stops at the
+    first.</p>
+
+    <p>For Token's API, three of them matter and they are not interchangeable:</p>
+
+    <ul>
+        <li><strong>Memory.</strong> Every open WebSocket costs kilobytes &mdash; the socket, its
+        buffers, and whatever your process hangs off it.</li>
+        <li><strong>File descriptors.</strong> On Linux every socket is a file descriptor, and a
+        process has a hard cap on how many it may hold.</li>
+        <li><strong>Database connections.</strong> Not one per user &mdash; that is what pgbouncer is
+        for &mdash; but a fraction of one, held for as long as a query runs.</li>
+    </ul>
+
+    <p>Three limits, three ceilings, and the one that matters is the smallest.</p>
+
+    <div id="pg-three"></div>
+    <script>
+        createPlayground("pg-three", `// One box, three separate ceilings.
+const memoryCeiling   = Math.floor(3072 * 1024 / 220);  // 3072 MB spare, 220 KB per socket
+const fdCeiling       = 1000;                            // 1024 descriptors, 24 spoken for
+const databaseCeiling = Math.floor(90 / 0.0625);         // 90 pooled conns, one per 16 sockets
+
+console.log("memory   ", memoryCeiling);
+console.log("fds      ", fdCeiling);
+console.log("database ", databaseCeiling);
+
+console.log("the box holds", Math.min(memoryCeiling, fdCeiling, databaseCeiling));`);
+    </script>
+
+    <p>Fourteen thousand, one thousand, one thousand four hundred and forty. <strong>The box holds a
+    thousand connections</strong> &mdash; and it has memory for fourteen times that, sitting
+    unusable.</p>
+
+    <h2>2 &middot; The number nobody chose</h2>
+
+    <p>Look at what is binding. It is not memory, which you paid for and can see on a dashboard. It
+    is <code>1024</code> &mdash; the default open-file limit on a great many Linux systems, a value
+    that arrived with the operating system and that nobody involved in Token ever typed.</p>
+
+    <p><strong>The binding limit is very often a default</strong>, and defaults are invisible in
+    exactly the way this course keeps meeting: <code>rclone copy</code> that never deletes,
+    an error tracker that attaches the request body, a metrics library that will happily label by
+    user id. Nothing errors. Nothing warns. It is just quietly true.</p>
+
+    <p>Which is why the useful output of a capacity calculation is not the number. It is the
+    <em>name</em>.</p>
+
+    <div id="pg-binding"></div>
+    <script>
+        createPlayground("pg-binding", `function ceiling(limits) {
+  let best = Infinity;
+  let binding = null;
+  for (const name of Object.keys(limits)) {
+    if (limits[name] < best) {
+      best = limits[name];
+      binding = name;
+    }
+  }
+  return { connections: best, binding: binding };
+}
+
+console.log(ceiling({ memory: 14298, fds: 1000, database: 1440 }));
+
+// Now raise one line in a config file: ulimit -n 65536
+console.log(ceiling({ memory: 14298, fds: 65512, database: 1440 }));`);
+    </script>
+
+    <p>One line of configuration and the ceiling goes from 1,000 to 1,440. Not from 1,000 to 14,298
+    &mdash; because raising the binding limit does not give you the next-largest number, <strong>it
+    gives you the next-smallest limit.</strong> The database is now what stops you, and the
+    conversation moves to pgbouncer.</p>
+
+    <div class="callout">
+        <div class="callout-title">This is why the name is the deliverable</div>
+        <p>"We can hold a thousand" invites the wrong follow-up &mdash; buy a bigger box. "File
+        descriptors bind at a thousand and the pool binds at 1,440 behind it" tells you the first
+        change is free, the second is a pgbouncer setting, and neither of them is a purchase.</p>
+    </div>
+
+    <h2>3 &middot; Subtract before you divide</h2>
+
+    <p>A box with 4 GB does not have 4 GB for sockets. The operating system needs some. On a Coolify
+    single-box deployment, Postgres and Redis are containers on the <em>same machine</em> and need a
+    great deal more.</p>
+
+    <p>So every one of the three calculations has the same shape, and the subtraction comes
+    first:</p>
+
+    <div id="pg-reserve"></div>
+    <script>
+        createPlayground("pg-reserve", `const totalMb = 4096;
+const reservedMb = 1024;   // OS, Postgres, Redis, the web container
+const perSocketKb = 220;
+
+const optimistic = Math.floor(totalMb * 1024 / perSocketKb);
+const honest     = Math.floor((totalMb - reservedMb) * 1024 / perSocketKb);
+
+console.log("dividing the whole box :", optimistic);
+console.log("dividing what is spare :", honest);
+console.log("difference             :", optimistic - honest, "connections that do not exist");`);
+    </script>
+
+    <p>Note the direction of the error. Forgetting the reserve does not give you a cautious number
+    that you later relax. It gives you a number that is <strong>too big</strong>.</p>
+
+    <h2>4 &middot; Floor, never round</h2>
+
+    <p>The memory calculation comes out at 14,298.76. There is no such thing as three quarters of a
+    connection, and rounding up admits one the box cannot hold.</p>
+
+    <div id="pg-floor"></div>
+    <script>
+        createPlayground("pg-floor", `const exact = (3072 * 1024) / 220;
+console.log("exact  ", exact);
+console.log("floor  ", Math.floor(exact));
+console.log("round  ", Math.round(exact));
+console.log("the difference is one connection with nowhere to live");`);
+    </script>
+
+    <p>One connection is not a crisis. The habit is the point: <strong>every rounding decision in a
+    capacity calculation goes downwards</strong>, because the cost of being wrong is not symmetric.
+    Too low and you buy a bigger box a month early. Too high and the box falls over at the moment it
+    is busiest, which is the moment you least want to be reading a stack trace.</p>
+
+    <h2>5 &middot; An unknown limit is not an unlimited one</h2>
+
+    <p>Now the case that matters most and looks least important. Suppose nobody has told you what
+    pgbouncer's pool size is.</p>
+
+    <p>There are two ways to write that, and they produce very different software:</p>
+
+    <div id="pg-unknown"></div>
+    <script>
+        createPlayground("pg-unknown", `const limits = { memory: 14298, fds: 1000, database: undefined };
+
+// One reading: what we did not measure cannot stop us.
+const optimistic = Math.min(limits.memory, limits.fds, limits.database || Infinity);
+
+// The other: we do not know, and the answer has to say so.
+const known = Object.keys(limits).filter(k => limits[k] !== undefined);
+const honest = Math.min(...known.map(k => limits[k]));
+
+console.log("treating the gap as unlimited :", optimistic);
+console.log("computed from", known.length, "of 3 limits  :", honest);
+console.log("unknown:", Object.keys(limits).filter(k => limits[k] === undefined));`);
+    </script>
+
+    <p>Both print 1,000. That is the trap: <strong>on this input the two readings agree, so the
+    difference is invisible until the day it is not.</strong> The moment the database is the tightest
+    of the three, the optimistic version reports a ceiling it has no evidence for, cheerfully, with
+    no warning of any kind.</p>
+
+    <p>A ceiling computed from two limits out of three is not a ceiling. It is an <em>upper bound on
+    a number you have not worked out</em>, and the honest thing for the function to do is hand back
+    both the figure and the list of what it could not see.</p>
+
+    <div class="callout warning">
+        <div class="callout-title">There is exactly one place Infinity is the right answer</div>
+        <p>An <strong>unknown limit</strong> is not infinite &mdash; you simply have not looked.</p>
+        <p>A <strong>zero cost</strong> genuinely is. If a workload holds no file descriptor per
+        connection &mdash; plain HTTP requests that open and close rather than a persistent socket
+        &mdash; then descriptors do not bind that workload at any number, and
+        <code>available / 0</code> giving <code>Infinity</code> is arithmetic telling the truth.</p>
+        <p>The two look alike in a result object and mean opposite things. Keep them in different
+        fields.</p>
+    </div>
+
+    <h2>6 &middot; The thesis</h2>
+
+    <p>Read back over the four mistakes in this lesson.</p>
+
+    <ul>
+        <li>Dividing the whole box instead of the spare part &mdash; <strong>too big.</strong></li>
+        <li>Rounding instead of flooring &mdash; <strong>too big.</strong></li>
+        <li>Treating an unmeasured limit as no limit &mdash; <strong>too big.</strong></li>
+        <li>Quoting the memory number because it is the one on the dashboard &mdash; <strong>too
+        big.</strong></li>
+    </ul>
+
+    <p><strong>Every casual error in a capacity calculation makes the number larger.</strong> Nobody
+    accidentally under-estimates. That asymmetry is not a coincidence &mdash; each of these mistakes
+    is a step you skipped, and skipping a step can only remove a constraint.</p>
+
+    <p>So the working assumption for the rest of this module: <em>a capacity figure you did not
+    derive is too high, and by an unknown factor.</em></p>
+
+    <h2>7 &middot; When two limits are close together</h2>
+
+    <p>One last piece of the report. If descriptors bind at 1,000 and the pool binds at 1,056,
+    raising the descriptor limit buys you <strong>5.6%</strong>, and then you are back in the same
+    conversation having spent an afternoon.</p>
+
+    <p>A capacity report that says <em>"file descriptors bind, and the database is right behind
+    it"</em> is telling you to fix both or neither.</p>
+
+    <div id="pg-near"></div>
+    <script>
+        createPlayground("pg-near", `const limits = { memory: 14298, fds: 1000, database: 1056 };
+const ceiling = Math.min(limits.memory, limits.fds, limits.database);
+const cutoff = ceiling * 1.10;
+
+const near = Object.keys(limits).filter(n => limits[n] !== ceiling && limits[n] <= cutoff);
+
+console.log("ceiling      ", ceiling);
+console.log("within 10%   ", near);
+console.log("raising fds alone would buy you", Math.min(limits.memory, limits.database) - ceiling);`);
+    </script>
+
+    <h2>8 &middot; Broken on purpose</h2>
+
+    <p>This one fails. Read the error before you look at the code &mdash; it names the exact
+    assumption that is wrong.</p>
+
+    <div id="pg-broken"></div>
+    <script>
+        createPlayground("pg-broken", `function ceiling(limits) {
+  // limits arrives as an object, keyed by resource name
+  return Math.min(...limits);
+}
+
+console.log(ceiling({ memory: 14298, fds: 1000, database: 1440 }));`);
+    </script>
+
+    <p>Spreading works on things that are iterable, and a plain object is not one. The fix is to
+    spread the <em>values</em> &mdash; and the reason it matters for this lesson is that the moment
+    you reach for <code>Object.values()</code> you have thrown the names away, which are the part you
+    actually wanted.</p>
+
+    <h2>9 &middot; Now build it yourself</h2>
+
+    <div id="exercise-1"></div>
+    <script>
+        createSolution("exercise-1", {
+            exercise: "Write <code>capacityCeiling(box, workload, policy)</code>, which works out how many concurrent connections one box holds.<br><br>Three resources, always reported in this order: <strong>memory</strong>, <strong>fds</strong>, <strong>database</strong>. For each, the box supplies a limit and an optional reserve, and the workload supplies a per-connection cost:<br><br><code>memory</code>: <code>box.memoryMb</code>, <code>box.reservedMemoryMb</code>, <code>workload.memoryPerConnectionKb</code> &mdash; note the units, so the available megabytes must be multiplied by 1024.<br><code>fds</code>: <code>box.fileDescriptors</code>, <code>box.reservedFds</code>, <code>workload.fdsPerConnection</code>.<br><code>database</code>: <code>box.dbConnections</code>, <code>box.reservedDbConnections</code>, <code>workload.dbConnectionsPerConnection</code>.<br><br>Return <code>{ connections, binding, near, limits, unknown }</code>.<br><br>The rules:<br>1. Each resource's own ceiling is <code>floor(available / cost)</code>, where available is the limit minus the reserve (a missing reserve is 0), never below zero.<br>2. A per-connection cost of <code>0</code> gives <code>Infinity</code> &mdash; that resource does not bind.<br>3. A box limit that is missing goes into <code>unknown</code> by name, its entry in <code>limits</code> is <code>null</code>, and it takes no part in the minimum.<br>4. <code>connections</code> is the smallest known ceiling. <code>binding</code> is the name that achieved it, resolving ties in the order memory, fds, database. If nothing is known, both are <code>null</code>. If nothing binds, <code>binding</code> is <code>null</code>.<br>5. <code>near</code> lists the other known, finite resources whose ceiling is within <code>policy.nearPct</code> percent of the answer &mdash; default 10 when no policy is passed. Never include the binding resource itself.<br>6. Do not modify <code>box</code> or <code>workload</code>.",
+            hints: [
+                "Drive the whole thing off one array of resource descriptors, each naming its three field names and its unit scale. Then the order of that array is the report order and the tie-break order at the same time, for free.",
+                "Handle the missing limit before anything else in the loop, with a continue. Once you are past that point every value is a number, which is what makes the rest of the arithmetic readable.",
+                "Two different reasons for a null-ish binding: nothing was known at all, and nothing binds because every known cost was zero. Work out what connections should be in each case before you write the near list, because near is computed against it."
+            ],
+            solution: `const RESOURCES = [
+  { name: "memory",   limit: "memoryMb",        reserve: "reservedMemoryMb",      cost: "memoryPerConnectionKb",      scale: 1024 },
+  { name: "fds",      limit: "fileDescriptors", reserve: "reservedFds",           cost: "fdsPerConnection",           scale: 1 },
+  { name: "database", limit: "dbConnections",   reserve: "reservedDbConnections", cost: "dbConnectionsPerConnection", scale: 1 }
+];
+
+function capacityCeiling(box, workload, policy) {
+  const nearPct = policy && policy.nearPct !== undefined ? policy.nearPct : 10;
+
+  const limits = {};
+  const unknown = [];
+
+  for (const res of RESOURCES) {
+    const total = box[res.limit];
+
+    // Rule 3. Not knowing a limit is not the same as there being no limit,
+    // so this resource is recorded as absent and then left out of the minimum.
+    if (total === undefined || total === null) {
+      limits[res.name] = null;
+      unknown.push(res.name);
+      continue;
+    }
+
+    const reserved = box[res.reserve] || 0;
+    const available = Math.max(0, (total - reserved) * res.scale);
+    const cost = workload[res.cost];
+
+    // Rule 2. A cost of zero is the one honest Infinity in the function.
+    limits[res.name] = cost === 0 ? Infinity : Math.floor(available / cost);
+  }
+
+  const known = RESOURCES.map(r => r.name).filter(name => limits[name] !== null);
+
+  if (known.length === 0) {
+    return { connections: null, binding: null, near: [], limits: limits, unknown: unknown };
+  }
+
+  let connections = Infinity;
+  for (const name of known) {
+    if (limits[name] < connections) connections = limits[name];
+  }
+
+  // Walking RESOURCES order rather than stopping at the first improvement is
+  // what makes the tie-break memory, fds, database rather than input order.
+  let binding = null;
+  if (connections !== Infinity) {
+    for (const name of known) {
+      if (limits[name] === connections) {
+        binding = name;
+        break;
+      }
+    }
+  }
+
+  const near = [];
+  if (binding !== null) {
+    const cutoff = connections * (1 + nearPct / 100);
+    for (const name of known) {
+      if (name === binding) continue;
+      if (limits[name] !== Infinity && limits[name] <= cutoff) near.push(name);
+    }
+  }
+
+  return {
+    connections: connections,
+    binding: binding,
+    near: near,
+    limits: limits,
+    unknown: unknown
+  };
+}`
+        });
+    </script>
+
+    <div id="pg-exercise"></div>
+    <script>
+        createPlayground("pg-exercise", `// Write capacityCeiling(box, workload, policy) here.
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed ? "" : "  -> " + detail));
+}
+
+// The costs are chosen so no two ceilings come out equal and the memory
+// division does not land on a whole number. Do not tidy them.
+function realBox() {
+  return {
+    memoryMb: 4096, reservedMemoryMb: 1024,
+    fileDescriptors: 1024, reservedFds: 24,
+    dbConnections: 100, reservedDbConnections: 10
+  };
+}
+function realWorkload() {
+  return { memoryPerConnectionKb: 220, fdsPerConnection: 1, dbConnectionsPerConnection: 0.0625 };
+}
+
+try {
+  if (typeof capacityCeiling !== "function") throw new Error("capacityCeiling is not defined yet");
+
+  try {
+    const r = capacityCeiling(realBox(), realWorkload());
+    check("the descriptor default binds, at 1000",
+      r.connections === 1000 && r.binding === "fds",
+      "got connections " + r.connections + " binding " + r.binding);
+  } catch (e) { check("the descriptor default binds, at 1000", false, e.message); }
+
+  try {
+    const r = capacityCeiling(realBox(), realWorkload());
+    check("the memory ceiling floors 14298.76 rather than rounding it",
+      r.limits.memory === 14298,
+      "got " + r.limits.memory);
+  } catch (e) { check("the memory ceiling floors 14298.76 rather than rounding it", false, e.message); }
+
+  try {
+    const box = realBox();
+    box.fileDescriptors = 65536;
+    const r = capacityCeiling(box, realWorkload());
+    check("raising the descriptor limit moves the binding limit to the pool, not to memory",
+      r.connections === 1440 && r.binding === "database",
+      "got connections " + r.connections + " binding " + r.binding);
+  } catch (e) { check("raising the descriptor limit moves the binding limit to the pool, not to memory", false, e.message); }
+
+  try {
+    const box = realBox();
+    box.reservedMemoryMb = 3968;   // only 128 MB spare: memory now binds
+    const r = capacityCeiling(box, realWorkload());
+    check("the reserve is subtracted before the division",
+      r.binding === "memory" && r.connections === 595,
+      "got binding " + r.binding + " connections " + r.connections);
+  } catch (e) { check("the reserve is subtracted before the division", false, e.message); }
+
+  try {
+    const box = realBox();
+    delete box.dbConnections;
+    const r = capacityCeiling(box, realWorkload());
+    check("a missing box limit is reported by name and left out of the minimum",
+      r.unknown.length === 1 && r.unknown[0] === "database" && r.limits.database === null,
+      "unknown " + JSON.stringify(r.unknown) + " limits.database " + r.limits.database);
+  } catch (e) { check("a missing box limit is reported by name and left out of the minimum", false, e.message); }
+
+  try {
+    const box = realBox();
+    box.dbConnections = 4;         // would bind at 64 if it counted
+    delete box.dbConnections;
+    const r = capacityCeiling(box, realWorkload());
+    check("an unknown limit does not silently become the answer",
+      r.connections === 1000 && r.binding === "fds",
+      "got connections " + r.connections + " binding " + r.binding);
+  } catch (e) { check("an unknown limit does not silently become the answer", false, e.message); }
+
+  try {
+    const workload = realWorkload();
+    workload.fdsPerConnection = 0;
+    const r = capacityCeiling(realBox(), workload);
+    check("a zero per-connection cost is Infinity and does not bind",
+      r.limits.fds === Infinity && r.binding === "database" && r.connections === 1440,
+      "limits.fds " + r.limits.fds + " binding " + r.binding);
+  } catch (e) { check("a zero per-connection cost is Infinity and does not bind", false, e.message); }
+
+  try {
+    const box = realBox();
+    box.reservedFds = 5000;          // nothing available...
+    const workload = realWorkload();
+    workload.fdsPerConnection = 0;   // ...and nothing needed either
+    const r = capacityCeiling(box, workload);
+    check("a resource needing nothing per connection does not bind even when nothing is spare",
+      r.limits.fds === Infinity && r.connections === 1440,
+      "limits.fds " + r.limits.fds + " connections " + r.connections);
+  } catch (e) { check("a resource needing nothing per connection does not bind even when nothing is spare", false, e.message); }
+
+  try {
+    const box = realBox();
+    box.reservedFds = 4000;        // more reserved than the box has
+    const r = capacityCeiling(box, realWorkload());
+    check("a reserve larger than the limit gives zero, never a negative",
+      r.limits.fds === 0 && r.connections === 0 && r.binding === "fds",
+      "limits.fds " + r.limits.fds + " connections " + r.connections);
+  } catch (e) { check("a reserve larger than the limit gives zero, never a negative", false, e.message); }
+
+  try {
+    const box = realBox();
+    box.dbConnections = 66; box.reservedDbConnections = 0;   // 1056, within 10% of 1000
+    const r = capacityCeiling(box, realWorkload());
+    check("a limit sitting just behind the binding one is reported as near",
+      r.near.length === 1 && r.near[0] === "database",
+      "got " + JSON.stringify(r.near));
+  } catch (e) { check("a limit sitting just behind the binding one is reported as near", false, e.message); }
+
+  try {
+    const box = { memoryMb: 500, fileDescriptors: 2000, dbConnections: 500 };
+    const workload = { memoryPerConnectionKb: 256, fdsPerConnection: 1, dbConnectionsPerConnection: 0.0625 };
+    const r = capacityCeiling(box, workload);
+    check("an exact tie breaks towards memory, and the loser is near rather than binding",
+      r.binding === "memory" && r.connections === 2000 && r.near.length === 1 && r.near[0] === "fds",
+      "binding " + r.binding + " near " + JSON.stringify(r.near));
+  } catch (e) { check("an exact tie breaks towards memory, and the loser is near rather than binding", false, e.message); }
+
+  try {
+    const r = capacityCeiling({}, realWorkload());
+    check("a box with no known limits reports null rather than a number",
+      r.connections === null && r.binding === null && r.unknown.length === 3,
+      "connections " + r.connections + " unknown " + JSON.stringify(r.unknown));
+  } catch (e) { check("a box with no known limits reports null rather than a number", false, e.message); }
+
+  try {
+    const box = realBox();
+    const workload = realWorkload();
+    const boxBefore = JSON.stringify(box);
+    const workloadBefore = JSON.stringify(workload);
+    capacityCeiling(box, workload);
+    check("neither argument is modified",
+      JSON.stringify(box) === boxBefore && JSON.stringify(workload) === workloadBefore,
+      "box now " + JSON.stringify(box));
+  } catch (e) { check("neither argument is modified", false, e.message); }
+
+} catch (e) {
+  console.log("Nothing to check yet -- " + e.message);
+}`);
+    </script>
+
+    <h3>Say it in your own words</h3>
+    <div id="explain-0001"></div>
+    <script>
+        createExplain("explain-0001", {
+            prompt: "A colleague computes the ceiling from two of the three limits because nobody could find the pgbouncer setting, and reports the result as the box's capacity. Explain why the number they produce is not merely incomplete but <em>wrong in a specific direction</em>, and why that direction is the same one as forgetting to subtract the reserve."
+        });
+    </script>
+
+    <h2>Quiz</h2>
+    <div id="lesson-quiz"></div>
+    <script>
+        createQuiz("lesson-quiz", [
+            {
+                question: "What does ADR-0003 commit Token to?",
+                options: [
+                    "An architecture that assumes N replicas, deployed on a single box until traffic says otherwise",
+                    "A single-box architecture that will be redesigned when it runs out",
+                    "Kubernetes from the first deploy",
+                    "Serverless functions with no long-lived process"
+                ],
+                correct: 0,
+                explanation: "Retrofitting statelessness is a rewrite; adding a replica is a config change. Paying the small cost early buys the ability to make the later change cheaply."
+            },
+            {
+                type: "predict-output",
+                code: "console.log(Math.min(14298, 1000, 1440));",
+                answer: "1000",
+                explanation: "Three ceilings, and the box stops at the first one reached. The other two are capacity you own and cannot use."
+            },
+            {
+                question: "Why is the name of the binding resource more useful than the ceiling number?",
+                options: [
+                    "It tells you which configuration line to change, and whether the change costs money",
+                    "It is easier to remember",
+                    "The number changes over time and the name does not",
+                    "Monitoring tools cannot display numbers"
+                ],
+                correct: 0,
+                explanation: "\"We hold a thousand\" invites someone to buy a bigger box. \"Descriptors bind at a thousand\" points at a ulimit setting that is free to change."
+            },
+            {
+                type: "predict-output",
+                code: "const limits = { memory: 14298, fds: 65512, database: 1440 };\nconsole.log(Math.min(limits.memory, limits.fds, limits.database));",
+                answer: "1440",
+                explanation: "Raising the binding limit does not hand you the largest number in the set. It hands you the next-smallest, which is now the thing to argue about."
+            },
+            {
+                type: "spot-the-bug",
+                code: "1  const totalMb = 4096;\n2  const reservedMb = 1024;\n3  const perSocketKb = 220;\n4  const ceiling = Math.floor(totalMb * 1024 / perSocketKb);\n5  console.log(ceiling);",
+                bugLine: 4,
+                options: ["Line 1", "Line 3", "Line 4", "Line 5"],
+                correct: 2,
+                explanation: "The reserve is declared and never used, so the whole box is divided rather than the spare part. The reported ceiling is roughly a third too large."
+            },
+            {
+                question: "Forgetting to subtract the reserve produces a ceiling that is…",
+                options: [
+                    "Too high, which is the dangerous direction",
+                    "Too low, which is safe",
+                    "Unchanged, since the reserve is small",
+                    "Impossible to predict"
+                ],
+                correct: 0,
+                explanation: "Skipping a step can only remove a constraint, so it can only make the answer bigger. That is why every casual error in this calculation points the same way."
+            },
+            {
+                type: "fill-blank",
+                code: "const perResource = Math.___(available / costPerConnection);",
+                answer: "floor",
+                explanation: "There is no such thing as three quarters of a connection, and rounding up admits one the box cannot hold."
+            },
+            {
+                type: "predict-output",
+                code: "const exact = (3072 * 1024) / 220;\nconsole.log(Math.floor(exact), Math.round(exact));",
+                answer: "14298 14299",
+                explanation: "14298.76 floors down and rounds up. One connection either way is not a crisis; the habit of always going downwards is the thing being learned."
+            },
+            {
+                question: "Why is an unmeasured limit different from an absent one?",
+                options: [
+                    "An unmeasured limit still constrains the system; you simply have not looked at it yet",
+                    "An unmeasured limit is always larger than the others",
+                    "There is no difference in practice",
+                    "An absent limit is a configuration error"
+                ],
+                correct: 0,
+                explanation: "Treating the gap as Infinity produces a ceiling with no evidence behind it, and does so silently on exactly the input where it matters."
+            },
+            {
+                type: "which-breaks",
+                variants: [
+                    "const known = names.filter(n => limits[n] !== null);\nconst ceiling = Math.min(...known.map(n => limits[n]));",
+                    "const ceiling = Math.min(limits.memory, limits.fds, limits.database || Infinity);",
+                    "let ceiling = Infinity;\nfor (const n of names) { if (limits[n] !== null && limits[n] < ceiling) ceiling = limits[n]; }"
+                ],
+                correct: 1,
+                explanation: "Substituting Infinity for a missing pool size reports a ceiling derived from two limits as though it came from three, with nothing in the result recording that it did."
+            },
+            {
+                question: "In this function, when is Infinity the honest answer?",
+                options: [
+                    "When the per-connection cost of a resource is zero, so that resource cannot bind",
+                    "Whenever a box limit is missing",
+                    "Whenever the available amount is zero",
+                    "Whenever the reserve exceeds the limit"
+                ],
+                correct: 0,
+                explanation: "A workload holding no descriptor per connection is genuinely unbounded by descriptors. An unknown limit is a gap in your knowledge, which is a different fact and belongs in a different field."
+            },
+            {
+                type: "predict-output",
+                code: "const available = Math.max(0, (1024 - 4000) * 1);\nconsole.log(available);",
+                answer: "0",
+                explanation: "A reserve larger than the limit means there is nothing left, not that the box owes you connections. Clamping at zero is what keeps a negative ceiling out of the report."
+            },
+            {
+                type: "spot-the-bug",
+                code: "1  for (const res of RESOURCES) {\n2    const reserved = box[res.reserve] || 0;\n3    const available = (box[res.limit] - reserved) * res.scale;\n4    limits[res.name] = Math.floor(available / workload[res.cost]);\n5  }",
+                bugLine: 3,
+                options: ["Line 1", "Line 2", "Line 3", "Line 4"],
+                correct: 2,
+                explanation: "Nothing clamps the subtraction at zero, so an over-large reserve yields a negative ceiling. A negative then wins every comparison against the other resources and becomes the reported capacity."
+            },
+            {
+                question: "Why does the solution walk a fixed RESOURCES array when choosing the binding name rather than iterating the limits object?",
+                options: [
+                    "It makes the tie-break order a property of the code rather than of the input's key order",
+                    "Objects cannot be iterated in JavaScript",
+                    "It is faster",
+                    "Object keys are always alphabetical"
+                ],
+                correct: 0,
+                explanation: "The report order and the tie-break order come from the same array, so they cannot drift apart, and neither depends on how a caller happened to build the input."
+            },
+            {
+                type: "order-steps",
+                steps: [
+                    "Subtract the reserve from the limit and clamp at zero",
+                    "Convert the available amount into the cost's units",
+                    "Divide by the per-connection cost and floor the result",
+                    "Take the smallest ceiling among the known resources"
+                ],
+                correctOrder: [0, 1, 2, 3],
+                explanation: "Every resource follows the same four steps. Reversing the first two is the units bug; skipping the first is the optimistic one."
+            },
+            {
+                question: "What is the purpose of the near list?",
+                options: [
+                    "To show that raising the binding limit alone would buy very little",
+                    "To list the resources that have not been measured",
+                    "To rank the resources by cost",
+                    "To warn that a resource is close to being exhausted right now"
+                ],
+                correct: 0,
+                explanation: "If descriptors bind at 1,000 and the pool sits at 1,056, an afternoon of work buys 5.6% and returns you to the same conversation."
+            },
+            {
+                type: "predict-output",
+                code: "const limits = { memory: 14298, fds: 1000, database: 1056 };\nconst ceiling = 1000;\nconsole.log(Object.keys(limits).filter(n => limits[n] !== ceiling && limits[n] <= ceiling * 1.10));",
+                answer: "[\"database\"]",
+                explanation: "Memory is fourteen times away and is not near anything. The pool is 5.6% behind and is the reason raising descriptors alone is not worth much."
+            },
+            {
+                question: "Why must the binding resource itself be excluded from near?",
+                options: [
+                    "The list exists to name what else you would have to fix, and the binding one is already named",
+                    "Including it would cause an infinite loop",
+                    "Its ceiling is always Infinity",
+                    "It would make the list unsorted"
+                ],
+                correct: 0,
+                explanation: "The result already carries binding. Repeating it in near turns a list of additional work into a list with one item that is not additional work."
+            },
+            {
+                type: "fill-blank",
+                code: "const available = Math.max(0, (total - reserved) * res.___);",
+                answer: "scale",
+                explanation: "Memory arrives in megabytes and is charged in kilobytes, so it carries a scale of 1024 while the other two carry 1. Putting the conversion in the descriptor keeps one loop rather than three special cases."
+            },
+            {
+                question: "A capacity report says the box holds 1,000 connections and lists database under unknown. What is the correct reading?",
+                options: [
+                    "The box holds at most 1,000, and possibly fewer once the pool is measured",
+                    "The box holds exactly 1,000",
+                    "The box holds at least 1,000",
+                    "The report is unusable and should be discarded"
+                ],
+                correct: 0,
+                explanation: "Every limit you add can only lower the minimum. A figure computed from a subset is an upper bound, which is why the subset has to be reported alongside it."
+            },
+            {
+                type: "which-breaks",
+                variants: [
+                    "return { connections: connections, binding: binding, limits: limits, unknown: unknown };",
+                    "return Math.min(limits.memory, limits.fds, limits.database);",
+                    "return { connections: connections, binding: binding, near: near, limits: limits, unknown: unknown };"
+                ],
+                correct: 1,
+                explanation: "Returning a bare number throws away the name that tells you what to change and the list that says what was never measured, leaving a figure that cannot be acted on or trusted."
+            },
+            {
+                question: "Which of these is the strongest reason the default open-file limit is a likely binding constraint?",
+                options: [
+                    "It was set by the operating system and nobody involved in the product ever chose it",
+                    "File descriptors are more expensive than memory",
+                    "Linux limits are always too low",
+                    "WebSocket connections use several descriptors each"
+                ],
+                correct: 0,
+                explanation: "It is the same shape as an error tracker attaching request bodies or a sync command that never deletes: a value that arrived with the tooling, that nothing warns about, and that is quietly true."
+            },
+            {
+                type: "predict-output",
+                code: "function f(limits) { return Math.min(...limits); }\ntry { f({ a: 1, b: 2 }); } catch (e) { console.log(e.constructor.name); }",
+                answer: "TypeError",
+                explanation: "Spread requires an iterable and a plain object is not one. Reaching for Object.values fixes it and discards the names, which were the useful half of the result."
+            },
+            {
+                question: "The memory ceiling is 14,298 and descriptors bind at 1,000. What does the memory figure tell you?",
+                options: [
+                    "That roughly thirteen thousand connections' worth of memory is paid for and unusable until something else is raised",
+                    "That memory will bind next",
+                    "That the box is over-provisioned and should be downsized immediately",
+                    "Nothing useful"
+                ],
+                correct: 0,
+                explanation: "Knowing how far away the non-binding limits are is what tells you whether raising the binding one is worth the afternoon. Here it plainly is, since the next stop is 1,440 and after that 14,298."
+            },
+            {
+                question: "Why does this module come after C7 in practice, despite its plan row placing it alongside the B-track?",
+                options: [
+                    "The optimisations here fail silently, and measurement is the only way to see that they did",
+                    "C7 introduces the syntax C6 relies on",
+                    "The plan row was a mistake",
+                    "Scale work cannot begin until the product has users"
+                ],
+                correct: 0,
+                explanation: "A shared counter that quietly falls back to a local one still returns a number, and a cache serving a revoked token still returns a token. Nothing about either looks wrong from inside the code."
+            },
+            {
+                question: "What is the single sentence this lesson is built around?",
+                options: [
+                    "Every casual error in a capacity calculation makes the number larger",
+                    "Memory is usually the binding constraint",
+                    "One box is enough for Token",
+                    "Capacity should be measured under load rather than calculated"
+                ],
+                correct: 0,
+                explanation: "Each of the four mistakes shown is a step that was skipped, and skipping a step removes a constraint. Nobody accidentally under-estimates, which is why an underived figure should be assumed too high."
+            }
+        ]);
+    </script>
+
+    <div class="lesson-nav">
+        <a href="./README.html">&larr; Module home</a>
+        <span class="disabled">Next: One Node's Memory Is Not the System's State &rarr;</span>
+    </div>
+
+</body>
+</html>

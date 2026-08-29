@@ -26,23 +26,41 @@ how far it got.
 > files either.** Make no claims about it at all — not in prose, not in a
 > commit message, not as a reason for prioritising anything.
 
-**Nothing in flight.** C7 — Observability — landed complete on 2026-08-29:
-four lessons, each verified with its `--wrong` cases, each its own commit,
-README, index row and search entries in. C2 and C3 landed complete the same
-day.
+**In flight: `W1` — C6, Scale & Performance, 5 lessons.** Started 2026-08-29
+after C7 landed. Per-lesson status below; the module is complete when all five
+are verified, wired and committed.
 
-**The next unit is `W1` again: pick one C-module, write it, stop.** Four
-remain — C4, C6, C8, C9. The launch queue is the other open front and none of
-it is code; see *Next action*.
+| | Lesson | State |
+|---|---|---|
+| `0001` | The ceiling is a minimum, not a number | **landed**, verified, 11 wrong-cases |
+| `0002` | One node's memory is not the system's state | not started |
+| `0003` | A limit that holds on one node is not a limit | not started |
+| `0004` | The cache that outlives a revocation | not started |
+| `0005` | The query on the authorisation path | not started |
 
-**C7 was taken on a dependency and the cost is on record**: three of
+**Why C6 and not C8, with the cost of the rejection.** C6 had been deferred
+twice, both times on the same argument — *you cannot tune what you cannot see*.
+**C7 landing discharges it.** That is a new fact, not a re-argument, and it is
+the only thing that changed. Two further pointers, both already in this file:
+C6's own plan row is the one row in the table carrying an explicit warning
+against deferring it, and *Blocked on* has said **"monitor TURN bandwidth from
+the first deploy"** since 2026-08-20 with no module teaching the arithmetic.
+
+*Cost of deferring C8:* the plan sequences it directly after C7, and it is the
+cheapest of the four at two lessons. The reason that cost is low rather than
+zero: **the boundary C8 turns on is already written down** — `C7/0003`'s
+callout argues that an analytics event has no subject and that a label
+identifying a person reopens ADR-0012. A deferred module whose central argument
+is already on record is not at risk of being written wrong later. Reverse this
+if the build reaches a point where a shipping decision needs the numbers.
+
+**C7 was itself taken on a dependency and that cost is on record**: three of
 `CLAUDE.md`'s logging rules had no module that owned them and the same defect
-had been swept out twice; the TURN-bandwidth instruction in *Blocked on* had
-nothing teaching it. What it deferred was C6, whose own row says scale must not
-be deferred — the counter-argument being that you cannot tune what you cannot
-see. **C8 now has a claim it did not have before**, since it is specified as
-following C7 and the analytics/telemetry boundary is what `0003` spent its
-callout on.
+had been swept out twice.
+
+**All 18 commits pushed 2026-08-29**, on the student's instruction — the first
+push since the widget repair, so the F1 `createExplain` prompts and the B2/B3
+playgrounds are live again.
 
 ### State as of 2026-08-29
 
