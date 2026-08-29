@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>C8 — An Event With No Subject</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Product Analytics</a> &rsaquo;
+        <span>An Event With No Subject</span>
+    </nav>
+
+    <h1>An Event With No Subject</h1>
+    <p class="lesson-meta">C8 &mdash; Lesson 1 of 2 &nbsp;|&nbsp; ~50 min</p>
+
+    <div class="callout">
+        <div class="callout-title">Why this matters for Token</div>
+        <p>You need to know whether people are creating tokens, whether QR sharing is used more than
+        typing a code into a form, whether anybody ever opens the rules screen. Without that you are
+        building on guesses.</p>
+        <p>And Token is a product whose entire pitch is that it does not accumulate a record of who
+        contacted whom. <strong>The ordinary way to answer those questions is to build exactly such a
+        record</strong>, one event at a time, with a user id on every row &mdash; which is what every
+        analytics tutorial shows you, because for most products it is fine.</p>
+    </div>
+
+    <h2>1 &middot; The two shapes, and only one of them is a fact about people</h2>
+
+    <p>Here are two ways of storing the same afternoon.</p>
+
+    <div id="pg-shapes"></div>
+    <script>
+        createPlayground("pg-shapes", `// Shape one: a row per action, with a subject.
+const timeline = [
+  { at: "14:02", user: "u-1", action: "token_created" },
+  { at: "14:05", user: "u-1", action: "qr_shown" },
+  { at: "14:31", user: "u-2", action: "token_created" },
+  { at: "16:44", user: "u-1", action: "token_revoked" }
+];
+
+// Shape two: counts, and nothing that says who.
+const counts = { token_created: 2, qr_shown: 1, token_revoked: 1 };
+
+console.log("timeline rows:", timeline.length);
+console.log("counts       :", JSON.stringify(counts));
+console.log("");
+console.log("Both answer 'how many tokens were created'. Only one also answers");
+console.log("'what did u-1 do this afternoon, and when did they stop'.");`);
+    </script>
+
+    <p>The second question is the product. Answering it is the thing Token exists not to do, and the
+    timeline answers it whether or not anybody meant it to &mdash; a subject plus a timestamp
+    <em>is</em> a behavioural record, regardless of what the dashboard on top of it chooses to
+    show.</p>
+
+    <div class="callout warning">
+        <div class="callout-title">This is not only a matter of taste</div>
+        <p>ADR-0012 set the minimum age at 18 with no under-18 flow, and part of what makes that
+        affordable is that <strong>DPDP's outright ban on behavioural tracking of children is
+        satisfied for free by having no per-user timelines at all.</strong></p>
+        <p>So the row with a user id on it is not a small extra. It reopens a decision two modules
+        away, and the person who adds it will be adding a column, not making a decision.</p>
+    </div>
+
+    <h2>2 &middot; Build the key from the allow-list, not from the event</h2>
+
+    <p><code>c7/0001</code> made this argument about log lines and it is the same argument here, with
+    a different consequence at the end of it.</p>
+
+    <div id="pg-allowlist"></div>
+    <script>
+        createPlayground("pg-allowlist", `const event = {
+  action: "token_created",
+  platform: "ios",
+  userId: "u-1",            // present in the stream because something upstream added it
+  phoneHash: "a91f..."      // and so is this
+};
+
+// Walking the event: you get whatever is in it.
+const fromEvent = Object.keys(event).map(k => k + "=" + event[k]).join("|");
+
+// Walking the allow-list: you get what you asked for, and nothing else.
+const allowed = ["action", "platform"];
+const fromAllowList = allowed.map(k => k + "=" + event[k]).join("|");
+
+console.log("from the event    :", fromEvent);
+console.log("from the allow-list:", fromAllowList);`);
+    </script>
+
+    <p>The difference is not the output on this event. It is what happens on the day somebody adds a
+    field upstream: the allow-list version is unchanged, and the other one quietly starts grouping by
+    something new.</p>
+
+    <p><strong>An allow-list is the only kind of filter that is still correct after code you did not
+    write has changed.</strong> A deny-list &mdash; "strip <code>userId</code> and
+    <code>phoneHash</code>" &mdash; is a list of the mistakes somebody has already thought of.</p>
+
+    <h2>3 &middot; Cardinality is identifiability</h2>
+
+    <p><code>c7/0003</code> settled this as a cost argument: a label with one value per user turns one
+    time series into a million, and that is a bill. It also recorded the sentence this lesson depends
+    on &mdash; <strong>the cardinality rule and the privacy rule coincide</strong> &mdash; and warned
+    about exactly the way that convenience misleads:</p>
+
+    <blockquote>
+        <p>Somebody who knows only the cost argument will add a cheap label with fifty values that
+        still singles a person out.</p>
+    </blockquote>
+
+    <div id="pg-cardinality"></div>
+    <script>
+        createPlayground("pg-cardinality", `const dimensions = [
+  { name: "platform",     values: 2,      cheap: true },
+  { name: "action",       values: 14,     cheap: true },
+  { name: "city",         values: 4000,   cheap: false },
+  { name: "device_model", values: 900,    cheap: false },
+  { name: "user_id",      values: 100000, cheap: false }
+];
+
+for (const d of dimensions) {
+  console.log(d.name.padEnd(13), String(d.values).padStart(6),
+              d.values <= 50 ? " within budget" : " over budget");
+}
+console.log("");
+console.log("A cell of platform x action x city x device_model is,");
+console.log("for many people in India,", 2 * 14 * 4000 * 900, "possibilities and one of them.");`);
+    </script>
+
+    <p>Neither <code>city</code> nor <code>device_model</code> is an identifier. Together, in a
+    country where most towns have very few users of a new app, they can be. That is why the budget is
+    on the <em>cell count</em> as well as on any single dimension.</p>
+
+    <h2>4 &middot; A cell of one is a person</h2>
+
+    <p>A report saying <em>"Android, revoked a token, 1"</em> has published a fact about an
+    individual, and it did so through a table of aggregates that nobody would call personal data.</p>
+
+    <p>The standard answer is a floor: any cell below a minimum is not reported. Pick the floor
+    deliberately &mdash; it is the size of the smallest group you are willing to describe.</p>
+
+    <div id="pg-mincell"></div>
+    <script>
+        createPlayground("pg-mincell", `const minCell = 5;
+const cells = [
+  { key: "ios|token_created", count: 12 },
+  { key: "android|token_created", count: 9 },
+  { key: "ios|token_revoked", count: 6 },
+  { key: "android|token_revoked", count: 2 },
+  { key: "ios|call_started", count: 3 }
+];
+
+const reported = cells.filter(c => c.count >= minCell);
+const held = cells.filter(c => c.count < minCell);
+
+console.log("reported  :", reported.map(c => c.key + "=" + c.count).join(", "));
+console.log("suppressed:", held.map(c => c.key).join(", "));
+console.log("their sum :", held.reduce((n, c) => n + c.count, 0));`);
+    </script>
+
+    <h2>5 &middot; Suppressing one cell suppresses nothing</h2>
+
+    <p>Now the part that is genuinely counter-intuitive, and the reason a naive implementation of the
+    previous section is worse than not bothering.</p>
+
+    <div id="pg-complement"></div>
+    <script>
+        createPlayground("pg-complement", `const total = 23;
+const reported = [
+  { key: "ios|token_created", count: 12 },
+  { key: "android|token_created", count: 9 }
+];
+// One cell was below the floor and is not shown.
+
+const shown = reported.reduce((n, c) => n + c.count, 0);
+
+console.log("total reported at the top of the page:", total);
+console.log("sum of the rows you can see          :", shown);
+console.log("");
+console.log("the hidden cell contains exactly     :", total - shown);
+console.log("");
+console.log("It was suppressed, and it is on the page.");`);
+    </script>
+
+    <p>A suppressed cell is recoverable by subtraction whenever everything else is visible. So the
+    rule has a second half: <strong>if exactly one cell would be suppressed, suppress the smallest
+    remaining one as well.</strong> Two hidden cells leave a sum with two unknowns, which is a
+    genuine hiding place.</p>
+
+    <p>This costs you a real number &mdash; the second cell was above the floor and was fine to
+    publish. Accept it. A privacy control that is defeated by one subtraction is not a control, and
+    is worse than none because it is believed.</p>
+
+    <h2>6 &middot; Sometimes the honest output is no number</h2>
+
+    <p>The complement rule needs somewhere to hide. If the whole report has one cell and that cell is
+    below the floor, there is no second cell to suppress, and publishing the total republishes the
+    thing you just hid.</p>
+
+    <div id="pg-nototal"></div>
+    <script>
+        createPlayground("pg-nototal", `const minCell = 5;
+const cells = [{ key: "ios|token_created", count: 3 }];
+
+const suppressed = cells.filter(c => c.count < minCell);
+const remaining = cells.filter(c => c.count >= minCell);
+
+console.log("cells to report   :", remaining.length);
+console.log("cells suppressed  :", suppressed.length);
+console.log("somewhere to hide?:", remaining.length > 0 ? "yes" : "no");
+console.log("");
+console.log("total = 3 would be the suppressed cell, spelled differently.");`);
+    </script>
+
+    <p>The right answer is to report the suppression and withhold the total. It is unsatisfying, and
+    it is the same shape as <code>c7/0003</code> refusing to return an error rate of zero for a window
+    with no traffic: <strong>the function will not invent a number it cannot honestly produce, even
+    though a number is what the caller wanted.</strong></p>
+
+    <h2>7 &middot; What is not in this module, and why</h2>
+
+    <p>No vendor SDK. Not Google Analytics, not Mixpanel, not Amplitude, not Firebase &mdash; and the
+    last of those is out of scope for the whole project anyway.</p>
+
+    <p>The reason is narrower than "third parties are bad". A mobile analytics SDK collects a device
+    identifier, and it does so <em>on initialisation</em>, which is normally before your consent
+    screen has rendered. That is not a setting you missed. It is what the library is for, and it means
+    the first thing your privacy product does on first launch is send an identifier to somebody
+    else.</p>
+
+    <p>Self-hosting has a cost and it is the same one C7 recorded: <strong>you now operate the thing
+    that watches the thing.</strong> Another container, another table, another backup.</p>
+
+    <h2>8 &middot; Broken on purpose</h2>
+
+    <div id="pg-broken"></div>
+    <script>
+        createPlayground("pg-broken", `const counts = new Map();
+counts.set("ios|token_created", 12);
+counts.set("android|token_created", 9);
+
+// Report the busiest cells first.
+const ranked = counts.sort((a, b) => b[1] - a[1]);
+console.log(ranked);`);
+    </script>
+
+    <p>A <code>Map</code> is not an array and has no <code>sort</code>. <code>Array.from(counts)</code>
+    or a spread gives you the entries as pairs, at which point the comparator above is right &mdash;
+    and the ordering matters here for a reason beyond tidiness, because "the smallest remaining cell"
+    is a question you can only answer once the cells are in order.</p>
+
+    <h2>9 &middot; Now build it yourself</h2>
+
+    <div id="exercise-1"></div>
+    <script>
+        createSolution("exercise-1", {
+            exercise: "Write <code>aggregate(events, spec, policy)</code>, which turns a stream of events into one publishable report.<br><br><code>events</code> is an array of plain objects. <code>spec</code> is <code>{ dimensions }</code> &mdash; the field names to group by, in order. <code>policy</code> is <code>{ allowedDimensions, minCell, maxCells }</code>.<br><br>Return <code>{ ok, problems, cells, suppressed, suppressedTotal, total }</code>.<br><br>The rules:<br>1. Any name in <code>spec.dimensions</code> that is not in <code>policy.allowedDimensions</code> is a problem <code>{ kind: \"dimension_not_allowed\", detail: name }</code>, in spec order.<br>2. A cell key is the values of <code>spec.dimensions</code> read from the event, in spec order, joined with <code>\"|\"</code>. A value that is <code>undefined</code> or <code>null</code> becomes the string <code>\"unknown\"</code>. Read only the named dimensions &mdash; never whatever the event happens to carry.<br>3. If the number of distinct keys is greater than <code>policy.maxCells</code>, that is a problem <code>{ kind: \"too_many_cells\", detail: theCount }</code>.<br>4. If there are any problems: <code>ok</code> false, <code>cells</code> and <code>suppressed</code> empty, <code>suppressedTotal</code> 0, and <code>total</code> the number of events. Otherwise <code>ok</code> is true.<br>5. Order the cells by count descending, and by key ascending where counts are equal.<br>6. A cell whose count is below <code>minCell</code> is suppressed.<br>7. If that leaves exactly one suppressed cell and there is at least one cell still reportable, suppress the smallest of those as well &mdash; the last one in the order from rule 5.<br>8. <code>cells</code> is the surviving cells as <code>{ key, count }</code> in that order. <code>suppressed</code> is the suppressed keys, sorted ascending.<br>9. <code>suppressedTotal</code> is the sum of the suppressed counts, and <code>total</code> is the number of events &mdash; <strong>except</strong> when exactly one cell is suppressed, in which case both are <code>null</code>, because either would republish it.<br>10. Do not modify <code>events</code>, <code>spec</code> or <code>policy</code>.",
+            hints: [
+                "Validate the spec before you count anything. Once the dimension list is known to be legal, the counting loop has one job and no branches about legality in it.",
+                "Sort once, into a single ordered array of { key, count }. Rules 6 and 7 are then both questions about the end of that array, and 'the smallest remaining' is just the last surviving element.",
+                "Rule 9 is easiest as a final adjustment rather than something threaded through the earlier steps: work out the suppressed set completely, then decide what may be reported about it."
+            ],
+            solution: `function aggregate(events, spec, policy) {
+  const problems = [];
+
+  // Rule 1. Validate before counting, so nothing below has to ask whether the
+  // dimensions it is reading were allowed.
+  for (const name of spec.dimensions) {
+    if (policy.allowedDimensions.indexOf(name) === -1) {
+      problems.push({ kind: "dimension_not_allowed", detail: name });
+    }
+  }
+
+  const counts = new Map();
+  if (problems.length === 0) {
+    for (const event of events) {
+      // Rule 2. The key is built by walking the allow-listed dimensions. An
+      // extra field on the event is not filtered out; it is never read.
+      const key = spec.dimensions.map(function (name) {
+        const value = event[name];
+        return value === undefined || value === null ? "unknown" : String(value);
+      }).join("|");
+
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+
+    if (counts.size > policy.maxCells) {
+      problems.push({ kind: "too_many_cells", detail: counts.size });
+    }
+  }
+
+  if (problems.length > 0) {
+    return {
+      ok: false, problems: problems,
+      cells: [], suppressed: [], suppressedTotal: 0, total: events.length
+    };
+  }
+
+  // Rule 5. One ordering, used for the report and for "the smallest remaining".
+  const ordered = Array.from(counts, function (pair) {
+    return { key: pair[0], count: pair[1] };
+  }).sort(function (a, b) {
+    return (b.count - a.count) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+  });
+
+  const kept = [];
+  const held = [];
+  for (const cell of ordered) {
+    if (cell.count < policy.minCell) held.push(cell);
+    else kept.push(cell);
+  }
+
+  // Rule 7. A lone suppressed cell is recoverable by subtraction, so it needs
+  // company. The cost is a legitimate number withheld, and that is the trade.
+  if (held.length === 1 && kept.length > 0) {
+    held.push(kept.pop());
+  }
+
+  const alone = held.length === 1;
+
+  return {
+    ok: true,
+    problems: problems,
+    cells: kept,
+    suppressed: held.map(function (c) { return c.key; }).sort(),
+    // Rule 9. Both of these are the suppressed cell written another way when
+    // it is the only one, so neither may be published.
+    suppressedTotal: alone ? null : held.reduce(function (n, c) { return n + c.count; }, 0),
+    total: alone ? null : events.length
+  };
+}`
+        });
+    </script>
+
+    <div id="pg-exercise"></div>
+    <script>
+        createPlayground("pg-exercise", `// Write aggregate(events, spec, policy) here.
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed ? "" : "  -> " + detail));
+}
+
+const POLICY = {
+  allowedDimensions: ["platform", "action", "day"],
+  minCell: 5,
+  maxCells: 20
+};
+const SPEC = { dimensions: ["platform", "action"] };
+
+function many(n, platform, action, extra) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    out.push(Object.assign({ platform: platform, action: action }, extra || {}));
+  }
+  return out;
+}
+
+// 12 / 9 / 6 / 2 / 3 -- two cells below the floor, so no complement is needed
+// and the reported sum is deliberately not the total.
+function stream() {
+  return [].concat(
+    many(12, "ios", "token_created"),
+    many(9, "android", "token_created"),
+    many(6, "ios", "token_revoked"),
+    many(2, "android", "token_revoked"),
+    many(3, "ios", "call_started")
+  );
+}
+
+try {
+  if (typeof aggregate !== "function") throw new Error("aggregate is not defined yet");
+
+  try {
+    const r = aggregate(stream(), SPEC, POLICY);
+    check("the surviving cells come back largest first",
+      JSON.stringify(r.cells) === JSON.stringify([
+        { key: "ios|token_created", count: 12 },
+        { key: "android|token_created", count: 9 },
+        { key: "ios|token_revoked", count: 6 }
+      ]),
+      "cells " + JSON.stringify(r.cells));
+  } catch (e) { check("the surviving cells come back largest first", false, e.message); }
+
+  try {
+    const r = aggregate(stream(), SPEC, POLICY);
+    check("cells below the floor are named but not counted out loud",
+      JSON.stringify(r.suppressed) === JSON.stringify(["android|token_revoked", "ios|call_started"])
+        && r.suppressedTotal === 5 && r.total === 32,
+      "suppressed " + JSON.stringify(r.suppressed) + " suppressedTotal " + r.suppressedTotal);
+  } catch (e) { check("cells below the floor are named but not counted out loud", false, e.message); }
+
+  try {
+    const lonely = [].concat(
+      many(12, "ios", "token_created"),
+      many(9, "android", "token_created"),
+      many(2, "ios", "token_revoked")
+    );
+    const r = aggregate(lonely, SPEC, POLICY);
+    check("a lone suppressed cell drags the smallest reportable one down with it",
+      JSON.stringify(r.cells) === JSON.stringify([{ key: "ios|token_created", count: 12 }])
+        && JSON.stringify(r.suppressed) === JSON.stringify(["android|token_created", "ios|token_revoked"]),
+      "cells " + JSON.stringify(r.cells) + " suppressed " + JSON.stringify(r.suppressed));
+  } catch (e) { check("a lone suppressed cell drags the smallest reportable one down with it", false, e.message); }
+
+  try {
+    const lonely = [].concat(
+      many(12, "ios", "token_created"),
+      many(9, "android", "token_created"),
+      many(2, "ios", "token_revoked")
+    );
+    const r = aggregate(lonely, SPEC, POLICY);
+    check("with two cells hidden the sum may be published again",
+      r.suppressedTotal === 11 && r.total === 23,
+      "suppressedTotal " + r.suppressedTotal + " total " + r.total);
+  } catch (e) { check("with two cells hidden the sum may be published again", false, e.message); }
+
+  try {
+    const r = aggregate(many(3, "ios", "token_created"), SPEC, POLICY);
+    check("when the only cell is suppressed there is no total to give",
+      r.ok === true && r.cells.length === 0
+        && JSON.stringify(r.suppressed) === JSON.stringify(["ios|token_created"])
+        && r.total === null && r.suppressedTotal === null,
+      JSON.stringify(r));
+  } catch (e) { check("when the only cell is suppressed there is no total to give", false, e.message); }
+
+  try {
+    const tied = [].concat(
+      many(6, "zebra", "token_created"),
+      many(6, "alpha", "token_created"),
+      many(6, "mango", "token_created")
+    );
+    const r = aggregate(tied, SPEC, POLICY);
+    check("equal counts are ordered by key, so the report is the same every run",
+      JSON.stringify(r.cells.map(c => c.key))
+        === JSON.stringify(["alpha|token_created", "mango|token_created", "zebra|token_created"]),
+      "cells " + JSON.stringify(r.cells.map(c => c.key)));
+  } catch (e) { check("equal counts are ordered by key, so the report is the same every run", false, e.message); }
+
+  try {
+    const r = aggregate(stream(), { dimensions: ["platform", "userId"] }, POLICY);
+    check("a dimension that is not on the allow-list stops the whole report",
+      r.ok === false && r.cells.length === 0
+        && JSON.stringify(r.problems) === JSON.stringify([{ kind: "dimension_not_allowed", detail: "userId" }]),
+      JSON.stringify(r.problems) + " cells " + JSON.stringify(r.cells));
+  } catch (e) { check("a dimension that is not on the allow-list stops the whole report", false, e.message); }
+
+  try {
+    const wide = [];
+    for (let i = 0; i < 21; i++) wide.push({ platform: "p" + i, action: "token_created" });
+    const r = aggregate(wide, SPEC, POLICY);
+    check("more cells than the budget allows is refused, and the count is reported",
+      r.ok === false
+        && JSON.stringify(r.problems) === JSON.stringify([{ kind: "too_many_cells", detail: 21 }])
+        && r.total === 21,
+      JSON.stringify(r.problems));
+  } catch (e) { check("more cells than the budget allows is refused, and the count is reported", false, e.message); }
+
+  try {
+    const wide = [];
+    for (let i = 0; i < 20; i++) wide.push({ platform: "p" + i, action: "token_created" });
+    const r = aggregate(wide, SPEC, POLICY);
+    check("exactly the budget is allowed, not one fewer",
+      r.ok === true,
+      "problems " + JSON.stringify(r.problems));
+  } catch (e) { check("exactly the budget is allowed, not one fewer", false, e.message); }
+
+  try {
+    const gappy = [].concat(
+      many(6, "ios", "token_created"),
+      many(7, undefined, "token_created")
+    );
+    const r = aggregate(gappy, SPEC, POLICY);
+    check("a missing dimension value becomes unknown rather than the word undefined",
+      JSON.stringify(r.cells.map(c => c.key))
+        === JSON.stringify(["unknown|token_created", "ios|token_created"]),
+      "cells " + JSON.stringify(r.cells.map(c => c.key)));
+  } catch (e) { check("a missing dimension value becomes unknown rather than the word undefined", false, e.message); }
+
+  try {
+    const carrying = [].concat(
+      many(12, "ios", "token_created", { userId: "u-1", phoneHash: "a91f" }),
+      many(9, "android", "token_created", { userId: "u-2", phoneHash: "b02c" })
+    );
+    const r = aggregate(carrying, SPEC, POLICY);
+    const keys = r.cells.map(c => c.key).join(" ");
+    check("fields the event happens to carry never reach the key",
+      keys.indexOf("u-1") === -1 && keys.indexOf("a91f") === -1 && r.cells.length === 2,
+      "cells " + JSON.stringify(r.cells.map(c => c.key)));
+  } catch (e) { check("fields the event happens to carry never reach the key", false, e.message); }
+
+  try {
+    // 5 is exactly the floor and must survive. Nothing else here is below it,
+    // so if it were suppressed it would also be alone, and the complement rule
+    // would take a second cell with it.
+    const edge = [].concat(
+      many(5, "ios", "token_created"),
+      many(7, "android", "token_created"),
+      many(9, "ios", "token_revoked")
+    );
+    const r = aggregate(edge, SPEC, POLICY);
+    check("a cell of exactly the minimum is reported rather than suppressed",
+      r.cells.length === 3 && r.suppressed.length === 0 && r.total === 21,
+      "cells " + JSON.stringify(r.cells) + " suppressed " + JSON.stringify(r.suppressed));
+  } catch (e) { check("a cell of exactly the minimum is reported rather than suppressed", false, e.message); }
+
+  try {
+    const r = aggregate([], SPEC, POLICY);
+    check("an empty stream is a valid report of nothing",
+      r.ok === true && r.cells.length === 0 && r.suppressed.length === 0
+        && r.suppressedTotal === 0 && r.total === 0,
+      JSON.stringify(r));
+  } catch (e) { check("an empty stream is a valid report of nothing", false, e.message); }
+
+  try {
+    const events = stream();
+    const before = JSON.stringify(events);
+    aggregate(events, SPEC, POLICY);
+    check("the event stream is not modified",
+      JSON.stringify(events) === before,
+      "stream now differs");
+  } catch (e) { check("the event stream is not modified", false, e.message); }
+
+} catch (e) {
+  console.log("Nothing to check yet -- " + e.message);
+}`);
+    </script>
+
+    <h3>Say it in your own words</h3>
+    <div id="explain-0001"></div>
+    <script>
+        createExplain("explain-0001", {
+            prompt: "A report hides every cell below five and publishes the total at the top of the page. Explain why a report with exactly one hidden cell has hidden nothing, and why the fix &mdash; hiding a second cell that was perfectly safe to publish &mdash; is worth the number it costs you."
+        });
+    </script>
+
+    <h2>Quiz</h2>
+    <div id="lesson-quiz"></div>
+    <script>
+        createQuiz("lesson-quiz", [
+            {
+                question: "What distinguishes a behavioural record from an aggregate count?",
+                options: [
+                    "A subject plus a timestamp — it answers what one person did and when, whatever the dashboard chooses to show",
+                    "The number of rows stored",
+                    "Whether the data is encrypted at rest",
+                    "Whether it is displayed to users"
+                ],
+                correct: 0,
+                explanation: "The dashboard on top is a presentation choice. The record underneath answers the question regardless."
+            },
+            {
+                type: "predict-output",
+                code: "const counts = { token_created: 2, qr_shown: 1 };\nconsole.log(Object.keys(counts).length);",
+                answer: "2",
+                explanation: "Two facts about the product and nothing about any person. The same afternoon stored as a timeline answers a question this shape cannot."
+            },
+            {
+                question: "Why does adding a user id to the analytics stream reopen ADR-0012?",
+                options: [
+                    "The age decision is affordable partly because DPDP's ban on behavioural tracking of children is satisfied for free by having no per-user timelines",
+                    "ADR-0012 forbids all analytics",
+                    "User ids are personal data and analytics may not contain any",
+                    "It does not — the two are unrelated"
+                ],
+                correct: 0,
+                explanation: "The person adding the column will be adding a column, not making a decision, which is exactly why the coupling is written down where it can be found."
+            },
+            {
+                type: "predict-output",
+                code: "const event = { action: \"a\", platform: \"ios\", userId: \"u-1\" };\nconsole.log([\"action\", \"platform\"].map(k => event[k]).join(\"|\"));",
+                answer: "a|ios",
+                explanation: "The user id is not filtered out. It is never read, which is a stronger property and one that survives somebody adding another field upstream."
+            },
+            {
+                question: "What is the difference between an allow-list and a deny-list here?",
+                options: [
+                    "An allow-list is still correct after code you did not write has changed; a deny-list is a record of the mistakes already thought of",
+                    "An allow-list is faster to evaluate",
+                    "A deny-list cannot express nested fields",
+                    "They are equivalent if kept up to date"
+                ],
+                correct: 0,
+                explanation: "The same argument c7/0001 made about log lines, with a different consequence at the end of it."
+            },
+            {
+                type: "spot-the-bug",
+                code: "1  const key = Object.keys(event)\n2    .filter(k => k !== \"userId\")\n3    .map(k => event[k])\n4    .join(\"|\");",
+                bugLine: 0,
+                options: ["Line 1", "Line 2", "Line 3", "Line 4"],
+                correct: 0,
+                explanation: "Reading the event's own keys means any field added upstream joins the grouping silently. Removing one known offender does not change that."
+            },
+            {
+                question: "c7/0003 says the cardinality rule and the privacy rule coincide. Why is that dangerous as well as convenient?",
+                options: [
+                    "Somebody who knows only the cost argument will add a cheap label with fifty values that still singles a person out",
+                    "The two rules give different answers for high-cardinality labels",
+                    "Cardinality budgets are hard to enforce",
+                    "It means privacy work can be deferred to the metrics team"
+                ],
+                correct: 0,
+                explanation: "One rule serving two purposes is efficient right up until somebody learns only one of the purposes."
+            },
+            {
+                question: "Neither city nor device model is an identifier. Why is a budget on the cell count still needed?",
+                options: [
+                    "Together they can be — in a country where most towns have very few users of a new app",
+                    "Because each one is expensive on its own",
+                    "Because Prometheus rejects labels with many values",
+                    "They are identifiers, which is why the budget exists"
+                ],
+                correct: 0,
+                explanation: "Identifiability is a property of the combination, so a per-dimension limit alone permits a cell that names one person out of a few thousand possibilities."
+            },
+            {
+                type: "predict-output",
+                code: "const minCell = 5;\nconst cells = [12, 9, 6, 2, 3];\nconsole.log(cells.filter(c => c >= minCell).length, cells.filter(c => c < minCell).length);",
+                answer: "3 2",
+                explanation: "Three reportable cells and two below the floor. Because two are hidden rather than one, their sum is a genuine hiding place."
+            },
+            {
+                question: "What does a minimum cell size actually express?",
+                options: [
+                    "The size of the smallest group you are willing to describe in public",
+                    "The point at which a number becomes statistically significant",
+                    "The storage cost of a row",
+                    "The default in most analytics tools"
+                ],
+                correct: 0,
+                explanation: "Which is why it is a decision rather than a default: a report saying Android, revoked a token, 1 has published a fact about an individual through a table of aggregates."
+            },
+            {
+                type: "predict-output",
+                code: "const total = 23, shown = 12 + 9;\nconsole.log(total - shown);",
+                answer: "2",
+                explanation: "The suppressed cell, recovered by subtraction, from a page that believed it had hidden it."
+            },
+            {
+                question: "Why must a lone suppressed cell drag a second one down with it?",
+                options: [
+                    "One unknown against a published total is solvable; two unknowns sharing a sum are not",
+                    "Two cells look more deliberate in a report",
+                    "It keeps the row count even",
+                    "The floor applies to pairs rather than single cells"
+                ],
+                correct: 0,
+                explanation: "A privacy control defeated by one subtraction is worse than none, because it is believed."
+            },
+            {
+                question: "The second suppressed cell was above the floor and safe to publish. What follows from suppressing it anyway?",
+                options: [
+                    "A real number is lost, and that is the accepted price of the first one actually being hidden",
+                    "Nothing — the second cell contained no information",
+                    "The total becomes unusable",
+                    "The floor should be lowered instead"
+                ],
+                correct: 0,
+                explanation: "Costs that are stated can be reconsidered later. This one is not hidden: the report is measurably less useful and measurably less leaky."
+            },
+            {
+                question: "A report has one cell, and it is below the floor. What is the correct output?",
+                options: [
+                    "Name the suppression and withhold the total, because the total would republish the cell",
+                    "Publish the total and suppress the cell",
+                    "Publish the cell, since suppressing everything is useless",
+                    "Round the cell up to the floor"
+                ],
+                correct: 0,
+                explanation: "The same refusal as c7/0003 declining to report an error rate of zero for a window with no traffic: the function will not invent a number it cannot honestly produce."
+            },
+            {
+                type: "which-breaks",
+                variants: [
+                    "return { total: suppressed.length === 1 ? null : events.length };",
+                    "return { total: events.length };",
+                    "const alone = held.length === 1;\nreturn { total: alone ? null : events.length };"
+                ],
+                correct: 1,
+                explanation: "Publishing the count unconditionally hands back the suppressed cell whenever it is the only one, which is precisely the case the suppression was for."
+            },
+            {
+                type: "fill-blank",
+                code: "if (held.length === 1 && kept.length > 0) held.push(kept.___());",
+                answer: "pop",
+                explanation: "The cells are already ordered largest first, so the last surviving element is the smallest one — the cheapest to give up."
+            },
+            {
+                question: "Why validate the dimension list before counting anything?",
+                options: [
+                    "So the counting loop has no branches about legality in it and cannot half-produce a report from an illegal spec",
+                    "It is faster",
+                    "The counts would otherwise be wrong",
+                    "Validation requires the counts"
+                ],
+                correct: 0,
+                explanation: "A partial answer computed from a spec that was rejected is the worst of both: it looks like a report and nobody agreed it could be produced."
+            },
+            {
+                question: "An event carries a phone hash that no dimension names. What happens to it?",
+                options: [
+                    "Nothing reads it, so it never reaches the key — no filtering step is involved",
+                    "It is stripped by the deny-list",
+                    "It is included but hashed again",
+                    "It causes a dimension_not_allowed problem"
+                ],
+                correct: 0,
+                explanation: "Never-read is a stronger guarantee than filtered-out, because it does not depend on the filter having heard of the field."
+            },
+            {
+                type: "order-steps",
+                steps: [
+                    "Check every requested dimension against the allow-list",
+                    "Count events into cells keyed by the allowed dimensions",
+                    "Order the cells by count and then by key",
+                    "Suppress what is below the floor, and a companion if it is alone"
+                ],
+                correctOrder: [0, 1, 2, 3],
+                explanation: "The ordering step is not cosmetic — the smallest remaining cell is a question you can only answer once the cells are in order."
+            },
+            {
+                question: "Why are equal counts broken by key rather than left in insertion order?",
+                options: [
+                    "So the same events produce the same report every run, which is what makes two reports comparable",
+                    "Alphabetical order is easier to read",
+                    "Insertion order is not defined for a Map",
+                    "It affects which cell is suppressed first"
+                ],
+                correct: 0,
+                explanation: "A report whose row order depends on the order events happened to arrive is one where a difference between two runs means nothing."
+            },
+            {
+                type: "predict-output",
+                code: "const value = undefined;\nconsole.log(value === undefined || value === null ? \"unknown\" : String(value));",
+                answer: "unknown",
+                explanation: "String(undefined) is the text undefined, which becomes a cell key that reads like a bug report rather than a category."
+            },
+            {
+                type: "predict-output",
+                code: "const m = new Map([[\"a\", 1]]);\ntry { m.sort(); } catch (e) { console.log(e.constructor.name); }",
+                answer: "TypeError",
+                explanation: "A Map is not an array. Array.from or a spread gives the entries as pairs, at which point the comparator is right."
+            },
+            {
+                question: "Why is a hosted analytics SDK ruled out even before any configuration question?",
+                options: [
+                    "It collects a device identifier on initialisation, which is before your consent screen has rendered",
+                    "The vendors are not DPDP compliant",
+                    "Their pricing scales with events",
+                    "They cannot be self-hosted"
+                ],
+                correct: 0,
+                explanation: "That is not a setting anybody missed. It is what the library is for, and it makes the first act of a privacy product on first launch the sending of an identifier to somebody else."
+            },
+            {
+                question: "What is the stated cost of self-hosting the analytics?",
+                options: [
+                    "You now operate the thing that watches the thing — another container, another table, another backup",
+                    "The data is less accurate",
+                    "Reports are slower to generate",
+                    "There is no cost"
+                ],
+                correct: 0,
+                explanation: "The same cost C7 recorded for self-hosted error tracking, and it is recorded rather than argued away."
+            },
+            {
+                question: "Which pair of properties makes this report publishable?",
+                options: [
+                    "No row identifies a person, and no arithmetic over the published rows recovers one",
+                    "It is aggregated, and it is stored encrypted",
+                    "It has no user ids, and it is only shown internally",
+                    "It has a cardinality budget, and a retention period"
+                ],
+                correct: 0,
+                explanation: "The first half is what people check and the second is the one that gets missed, because it is a property of the whole page rather than of any row on it."
+            },
+            {
+                question: "How does this lesson relate to C7's metrics lesson?",
+                options: [
+                    "The plumbing is nearly identical and the rules are not — one describes a system, the other describes people",
+                    "It replaces the metrics with analytics events",
+                    "It uses the same percentile arithmetic",
+                    "It is the same lesson applied to a different dashboard"
+                ],
+                correct: 0,
+                explanation: "That similarity is the trap the module exists for. Counters, labels and a dashboard look the same whichever side of the line they are on."
+            }
+        ]);
+    </script>
+
+    <div class="lesson-nav">
+        <a href="./README.html">&larr; Module home</a>
+        <span class="disabled">Next: The Number That Changes a Decision &rarr;</span>
+    </div>
+
+</body>
+</html>

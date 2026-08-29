@@ -26,14 +26,23 @@ how far it got.
 > files either.** Make no claims about it at all — not in prose, not in a
 > commit message, not as a reason for prioritising anything.
 
-**Nothing in flight.** C6 — Scale & Performance — landed complete on
-2026-08-29: five lessons, each verified with its `--wrong` cases, each its own
-commit, README, index row and search entries in. C2, C3 and C7 landed complete
-the same day.
+**In flight: `W1` — C8, Product Analytics, 2 lessons.** Started 2026-08-29
+after C6 landed. The module is complete when both are verified, wired and
+committed.
 
-**The next unit is `W1` again: pick one C-module, write it, stop.** Three
-remain — C4, C8, C9. The launch queue is the other open front and none of it is
-code; see *Next action*.
+| | Lesson | State |
+|---|---|---|
+| `0001` | An event with no subject | **landed**, verified, 14 wrong-cases |
+| `0002` | The number that changes a decision | not started |
+
+**Why C8, and there was no counter-argument left.** The plan sequences it
+directly after C7; `C7/0003` already argued the boundary it turns on; it is the
+cheapest of the three at two lessons; and the C6 objection that beat it twice
+is spent, because C6 is written. **C4 follows A6 and C9 wants writing near the
+launch work** — C9 builds the mechanisms F1 states the obligations for, so
+writing it ahead means cross-linking to documents that will have moved.
+
+C2, C3, C7 and C6 all landed complete on 2026-08-29.
 
 **Why C6 and not C8, with the cost of the rejection.** C6 had been deferred
 twice, both times on the same argument — *you cannot tune what you cannot see*.
