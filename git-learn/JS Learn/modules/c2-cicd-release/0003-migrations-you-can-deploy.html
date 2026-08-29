@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>C2 — Migrations You Can Deploy</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">CI/CD &amp; Release Engineering</a> &rsaquo;
+        <span>Migrations You Can Deploy</span>
+    </nav>
+
+    <h1>Migrations You Can Deploy</h1>
+    <p class="lesson-meta">C2 &mdash; Lesson 3 of 4 &nbsp;|&nbsp; ~50 min</p>
+
+    <div class="callout">
+        <div class="callout-title">Why this matters for Token</div>
+        <p>A deploy that goes wrong is a thirty-second problem. You put the old container back and
+        the site is exactly as it was.</p>
+        <p><strong>A migration that goes wrong is not.</strong> Token's rules used to live in a
+        <code>tokens.rules</code> JSONB column and now live as <code>access_rules</code> rows, one
+        per rule. Moving them meant creating a table, copying the data across, shipping an engine
+        that reads the rows, and eventually dropping the column. The moment that column is dropped,
+        every rule a user set is only in the new table &mdash; and if the copy was wrong, the
+        evidence is gone with it.</p>
+        <p>Putting the old container back does not put the old column back. That asymmetry is the
+        whole lesson, and it has one consequence worth stating up front: <strong>the risky step is
+        never the one that ships the code.</strong> It is the one that ran quietly before the
+        containers even started.</p>
+    </div>
+
+    <h2>1 &middot; During a deploy, both versions are running</h2>
+
+    <p>This is the fact everything else follows from, and it is easy to miss because nothing on a
+    dashboard shows it. A deploy is not a switch. For some window &mdash; seconds if you are lucky,
+    minutes if a container is slow to drain &mdash; the old code and the new code are both connected
+    to the same database, serving real requests.</p>
+
+    <p>So consider the most natural migration anybody ever writes:</p>
+
+    <pre><code>ALTER TABLE tokens RENAME COLUMN rules TO legacy_rules;</code></pre>
+
+    <p>It is one line, it is instant, and it is atomic. It is also the single most dangerous
+    migration in common use, because the instant it commits, every running instance of the old code
+    &mdash; which is still serving requests &mdash; is querying a column that no longer exists. Not
+    slowly degraded. Erroring on every request, until the new containers finish starting.</p>
+
+    <p>And the rollback is worse. Rolling back means deploying the old code again, against the
+    schema you just changed, and the old code has no idea the column was renamed.</p>
+
+    <div class="callout warning">
+        <div class="callout-title">Two questions, asked about every migration</div>
+        <p><strong>Does the code that is currently deployed survive this change?</strong> If not, the
+        migration breaks production the moment it commits, before the new code is anywhere near
+        ready.</p>
+        <p><strong>Does the new code survive without this change?</strong> If not, the migration has
+        to come first, which is why migrations run before containers start.</p>
+        <p>A rename answers <em>no</em> to the first. That is the definition of an unsafe migration,
+        and it is why the fix is never "deploy faster" &mdash; there is no speed at which the two
+        versions stop overlapping.</p>
+    </div>
+
+    <h3>Try it yourself</h3>
+
+    <div id="pg-overlap"></div>
+    <script>
+        createPlayground("pg-overlap", `// A rename, and the sixty seconds in the middle of the deploy.
+
+let row = { id: 7, label: "Courier", rules: { channel_restrict: "text" } };
+
+function oldCode(r) { return r.rules; }            // deployed, still serving
+function newCode(r) { return r.legacy_rules; }     // starting up
+
+console.log("before: old =", oldCode(row), " new =", newCode(row));
+
+// ALTER TABLE tokens RENAME COLUMN rules TO legacy_rules;
+row = { id: 7, label: "Courier", legacy_rules: row.rules };
+
+console.log("after:  old =", oldCode(row), " new =", newCode(row));
+console.log("");
+console.log("The old code is not slow or degraded. It is reading undefined,");
+console.log("on every request, until the last old container is gone.");`);
+    </script>
+
+    <h2>2 &middot; Expand and contract</h2>
+
+    <p>The alternative is to never change anything &mdash; only to add, and much later, to remove.
+    A rename becomes four steps spread across two releases:</p>
+
+    <table>
+        <thead>
+            <tr><th>Phase</th><th>What it does</th><th>Old code survives?</th></tr>
+        </thead>
+        <tbody>
+            <tr><td><strong>expand</strong></td><td>Add the new table or nullable column. Nothing reads it yet</td><td>Yes &mdash; it does not know it exists</td></tr>
+            <tr><td><strong>backfill</strong></td><td>Copy the existing data into the new shape, in batches</td><td>Yes &mdash; still reading the old shape</td></tr>
+            <tr><td><strong>code</strong></td><td>Ship the version that uses the new shape</td><td>Yes &mdash; the old shape is still there</td></tr>
+            <tr><td><strong>contract</strong></td><td>Drop the old column, <em>in a later release</em></td><td>No &mdash; which is why it waits</td></tr>
+        </tbody>
+    </table>
+
+    <p>For Token's rules move, that is:</p>
+
+    <pre><code>-- Release 1, expand
+CREATE TABLE access_rules (
+  id          BIGSERIAL PRIMARY KEY,
+  token_id    BIGINT NOT NULL REFERENCES tokens(id) ON DELETE CASCADE,
+  rule_type   TEXT NOT NULL CHECK (rule_type IN ('time_window', 'contact_limit', 'channel_restrict')),
+  payload     JSONB NOT NULL,
+  enabled     BOOLEAN NOT NULL DEFAULT true
+);
+
+-- Release 1, backfill: one batch, repeated until it copies nothing
+INSERT INTO access_rules (token_id, rule_type, payload)
+SELECT id, key, value FROM tokens, jsonb_each(tokens.rules)
+ WHERE tokens.id BETWEEN $1 AND $2;
+
+-- Release 1, code: the engine reads access_rules and writes both shapes
+
+-- Release 2, contract, and only once release 1 is known good
+ALTER TABLE tokens DROP COLUMN rules;</code></pre>
+
+    <p>The contract step sits in a <strong>later release</strong>, not merely later in the file. That
+    is the part people compress, and compressing it puts the drop in the same window where the old
+    code is still running.</p>
+
+    <div class="callout">
+        <div class="callout-title">Why the gap is worth the inconvenience</div>
+        <p>Between the two releases, the old column is still there and still correct. If the new
+        engine turns out to read the rules wrongly &mdash; and <code>b7/0002</code> had exactly that
+        class of bug, an unknown rule type falling through to <em>allowed</em> &mdash; you can put
+        release 1's predecessor back and everything works, because nothing was destroyed.</p>
+        <p>Once the drop runs, that option is gone. <strong>The release gap is not caution for its
+        own sake; it is the window in which the migration can still be found to be wrong.</strong></p>
+    </div>
+
+    <h2>3 &middot; The steps that lock the table</h2>
+
+    <p>An unsafe migration is not always unsafe because of what it removes. Some are unsafe because
+    of how long they hold the table:</p>
+
+    <ul>
+        <li><strong><code>CREATE INDEX</code> without <code>CONCURRENTLY</code></strong> takes a lock
+        that blocks every write to the table for as long as the index takes to build. On
+        <code>conversations</code> that is every redemption in the country, waiting.</li>
+        <li><strong><code>ADD COLUMN ... NOT NULL</code> with no default</strong> is rejected
+        outright if any row exists. With a constant default, modern Postgres does it instantly; with
+        a <em>volatile</em> default such as <code>now()</code> it rewrites the whole table.</li>
+        <li><strong>Adding a <code>CHECK</code> constraint</strong> scans every existing row, and
+        fails if a single one disagrees. Token's biconditional constraints &mdash;
+        <code>CHECK ((status = 'revoked') = (revoked_at IS NOT NULL))</code> &mdash; are exactly the
+        kind that will refuse to be added to a table with historical rows that were never held to
+        them.</li>
+        <li><strong>An unbatched backfill</strong> is one transaction over millions of rows: a long
+        lock, a very large write-ahead log, and a replica falling behind.</li>
+    </ul>
+
+    <p>The pattern for all four is the same. Split the fast, exclusive part from the slow, scanning
+    part: add the constraint <code>NOT VALID</code> so it applies to new rows immediately, then
+    <code>VALIDATE CONSTRAINT</code> in its own statement, which takes a much weaker lock.</p>
+
+    <h2>4 &middot; A migration runs exactly once, in order</h2>
+
+    <p>Every migration tool keeps a table of what it has applied, and applies each file once. That
+    part is easy to get right because the tool does it. The part that is easy to get wrong is what
+    "in order" means:</p>
+
+    <h3>Try it yourself &mdash; broken on purpose</h3>
+    <p>Read the error. The bug is in one word, and the fix is in how the files are named.</p>
+
+    <div id="pg-order"></div>
+    <script>
+        createPlayground("pg-order", `const files = [
+  "1_create_tokens.sql",
+  "2_add_status.sql",
+  "9_create_access_rules.sql",
+  "10_add_rules_index.sql"
+];
+
+const tables = {};
+
+function apply(file) {
+  if (file.indexOf("create_tokens") !== -1) tables.tokens = true;
+  else if (file.indexOf("create_access_rules") !== -1) tables.access_rules = true;
+  else if (file.indexOf("rules_index") !== -1) {
+    if (!tables.access_rules) {
+      throw new Error('relation "access_rules" does not exist  (while applying ' + file + ')');
+    }
+  }
+  console.log("applied " + file);
+}
+
+// The runner sorts the directory listing before applying.
+for (const file of files.sort()) apply(file);
+
+// Fix it. Note the fix is not in this loop.`);
+    </script>
+
+    <p>Sorting strings puts <code>10_</code> before <code>9_</code>, because <code>"1"</code> is
+    less than <code>"9"</code>. The answer is to zero-pad the names &mdash;
+    <code>0009_</code>, <code>0010_</code> &mdash; so that the ordering you want and the ordering
+    you get are the same thing. A timestamp prefix does the same job and additionally stops two
+    people on two branches from both writing <code>0007_</code>.</p>
+
+    <div class="callout warning">
+        <div class="callout-title">And the migration you already applied is not editable</div>
+        <p>A migration file that has run somewhere is finished. Editing it changes nothing on the
+        machine that already applied it, and the tool will not notice, so your laptop and production
+        now have different schemas from the same repository.</p>
+        <p>The fix for a wrong migration is <strong>another migration</strong>. This is the same rule
+        as the ADRs in <code>token/docs/adr/</code>, which are append-only for the same reason: what
+        has already been acted on cannot be quietly revised.</p>
+    </div>
+
+    <h2>5 &middot; "Down" migrations mostly do not exist</h2>
+
+    <p>Migration tools invite you to write a <code>down</code> beside every <code>up</code>, and for
+    an expand step that is honest &mdash; the down for <code>CREATE TABLE access_rules</code> is
+    <code>DROP TABLE access_rules</code>, and nothing is lost because nothing was there.</p>
+
+    <p>For a contract step it is a lie:</p>
+
+    <pre><code>-- up
+ALTER TABLE tokens DROP COLUMN rules;
+
+-- down
+ALTER TABLE tokens ADD COLUMN rules JSONB;   -- the column is back. It is empty.</code></pre>
+
+    <h3>Try it yourself</h3>
+
+    <div id="pg-down"></div>
+    <script>
+        createPlayground("pg-down", `let token = { id: 7, label: "Courier", rules: { channel_restrict: { allow_text: true } } };
+
+console.log("before drop:", JSON.stringify(token));
+
+// up
+delete token.rules;
+console.log("after drop: ", JSON.stringify(token));
+
+// down -- "restores" the column
+token.rules = null;
+console.log("after down: ", JSON.stringify(token));
+
+console.log("");
+console.log("The shape is back. The rule the user set is not.");
+console.log("A down migration that returns a schema is not a rollback of a migration");
+console.log("that moved data.");`);
+    </script>
+
+    <p>The useful thing to write is not a fictional <code>down</code>. It is a note on the step
+    saying <strong>this one cannot be undone</strong>, so that whoever runs the release knows which
+    of its steps is the point of no return. That is what the exercise below reports.</p>
+
+    <h2>Now build it yourself</h2>
+
+    <div id="exercise-1"></div>
+    <script>
+        createSolution("exercise-1", {
+            exercise:
+                "Write <code>reviewPlan(steps)</code> &mdash; the check that reads a migration plan before anyone runs it.<br><br>" +
+                "Each step is <code>{ name, kind, subject, release }</code>. <code>kind</code> is one of <code>\"expand\"</code>, <code>\"backfill\"</code>, <code>\"code\"</code>, <code>\"contract\"</code>, which is the order the phases must happen in. <code>subject</code> is the thing being changed (a table or a column) &mdash; <strong>every rule below is per subject</strong>. <code>release</code> is a number; the array is in the order the steps happen.<br><br>" +
+                "Return <code>{ ok, violations, irreversible }</code>.<br><br>" +
+                "<code>violations</code> is an array of <code>{ step, problem }</code> in step order, <strong>at most one per step</strong>, choosing the first that applies in this fixed precedence:<br><br>" +
+                "1. <code>\"releases_go_backwards\"</code> &mdash; this step's release is lower than the highest release seen so far. The array is a sequence of events, so it cannot go back in time.<br>" +
+                "2. <code>\"wrong_phase_order\"</code> &mdash; a phase for this subject that is earlier than one already seen for it. Backfilling after the code has switched over copies stale data over live data.<br>" +
+                "3. <code>\"contract_without_code\"</code> &mdash; a contract step for a subject with no earlier <code>code</code> step. Nothing has stopped using it yet.<br>" +
+                "4. <code>\"contract_not_deferred\"</code> &mdash; a contract step whose release is not <em>strictly greater</em> than the release of the most recent <code>code</code> step for that subject. Both versions run during a deploy.<br><br>" +
+                "<code>irreversible</code> is the names of every <code>contract</code> step, in order &mdash; <strong>reported whether or not the plan is ok</strong>. A correct plan is still a plan with a point of no return in it.<br><br>" +
+                "<code>ok</code> is true when <code>violations</code> is empty. An empty plan is ok.",
+            hints: [
+                "Three things need remembering as you walk the array: the highest release seen anywhere, the highest phase seen <em>per subject</em>, and the release of the last <code>code</code> step <em>per subject</em>. Two of those three are keyed by subject, and that is the whole reason one subject's code step cannot authorise another's drop.",
+                "Give the four kinds a numeric rank &mdash; <code>{ expand: 0, backfill: 1, code: 2, contract: 3 }</code> &mdash; and rule 2 becomes a comparison of two numbers.",
+                "The precedence in rules 1&ndash;4 is an if/else-if chain, so a step that trips two of them reports only the first. Keep the three values as running <em>maxima</em> and update them after the checks &mdash; assigning this step's own release and phase before comparing makes every comparison a value against itself, which is a check that is always green."
+            ],
+            solution: `const PHASE_ORDER = { expand: 0, backfill: 1, code: 2, contract: 3 };
+
+function reviewPlan(steps) {
+  const violations = [];
+  const irreversible = [];
+
+  let highestRelease = -Infinity;   // across the whole plan
+  const highestPhase = {};          // subject -> highest phase rank seen
+  const lastCode = {};              // subject -> release of the last code step
+
+  for (const step of steps) {
+    const rank = PHASE_ORDER[step.kind];
+
+    // Recorded before the checks: a step being unsafe does not make it
+    // reversible. A valid plan can still have a point of no return.
+    if (step.kind === "contract") irreversible.push(step.name);
+
+    // The precedence is fixed, so a step that trips two reports the first.
+    if (step.release < highestRelease) {
+      violations.push({ step: step.name, problem: "releases_go_backwards" });
+
+    } else if (highestPhase[step.subject] !== undefined &&
+               rank < highestPhase[step.subject]) {
+      violations.push({ step: step.name, problem: "wrong_phase_order" });
+
+    } else if (step.kind === "contract" && lastCode[step.subject] === undefined) {
+      violations.push({ step: step.name, problem: "contract_without_code" });
+
+    } else if (step.kind === "contract" && step.release <= lastCode[step.subject]) {
+      violations.push({ step: step.name, problem: "contract_not_deferred" });
+    }
+
+    // Updated after, so a step is never compared against itself.
+    if (step.release > highestRelease) highestRelease = step.release;
+    if (highestPhase[step.subject] === undefined || rank > highestPhase[step.subject]) {
+      highestPhase[step.subject] = rank;
+    }
+    if (step.kind === "code") lastCode[step.subject] = step.release;
+  }
+
+  return { ok: violations.length === 0, violations: violations, irreversible: irreversible };
+}`
+        });
+    </script>
+
+    <div id="pg-exercise"></div>
+    <script>
+        createPlayground("pg-exercise", `// --- Write reviewPlan(steps) here, then press Run ---
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label);
+  if (!passed && detail) console.log("      " + detail);
+}
+
+function step(name, kind, subject, release) {
+  return { name: name, kind: kind, subject: subject, release: release };
+}
+
+function problems(r) {
+  return JSON.stringify(r.violations.map(function (v) { return v.step + ":" + v.problem; }));
+}
+
+// Token's real move: rules from a JSONB column to access_rules rows.
+const GOOD = [
+  step("create access_rules", "expand", "rules", 1),
+  step("copy rules across", "backfill", "rules", 1),
+  step("engine reads the rows", "code", "rules", 1),
+  step("drop tokens.rules", "contract", "rules", 2)
+];
+
+try {
+  const good = reviewPlan(GOOD);
+  check("a correct expand/contract plan has no violations",
+    good.ok === true && good.violations.length === 0,
+    "got: " + problems(good));
+
+  // The point of the irreversible list, and the reason it is not just
+  // "the plan is fine". A valid plan still destroys something.
+  check("...and still reports the drop as irreversible",
+    JSON.stringify(good.irreversible) === JSON.stringify(["drop tokens.rules"]),
+    "got: " + JSON.stringify(good.irreversible) +
+    " - ok means the plan is safe to run, not that it can be undone");
+
+  const empty = reviewPlan([]);
+  check("an empty plan is ok",
+    empty.ok === true && empty.violations.length === 0 && empty.irreversible.length === 0,
+    "got: " + JSON.stringify(empty));
+
+  // Rule 4. The compression everybody reaches for.
+  const sameRelease = [
+    step("create access_rules", "expand", "rules", 1),
+    step("engine reads the rows", "code", "rules", 1),
+    step("drop tokens.rules", "contract", "rules", 1)
+  ];
+  const same = reviewPlan(sameRelease);
+  check("a drop in the same release as the code is a violation",
+    problems(same) === JSON.stringify(["drop tokens.rules:contract_not_deferred"]),
+    "got: " + problems(same) +
+    " - both versions run during the deploy, so the old one is still reading it");
+
+  // Rule 3, which is a different problem from rule 4 and must not be folded
+  // into it: there is no code release to compare against at all.
+  const noCode = reviewPlan([
+    step("create access_rules", "expand", "rules", 1),
+    step("drop tokens.rules", "contract", "rules", 2)
+  ]);
+  check("a drop with nothing having switched over is contract_without_code",
+    problems(noCode) === JSON.stringify(["drop tokens.rules:contract_without_code"]),
+    "got: " + problems(noCode) +
+    " - release 2 is later than release 1, so a release comparison alone finds nothing");
+
+  // Per subject, not globally. This is the rule that a single running
+  // variable gets wrong, and it gets it wrong in the permissive direction.
+  const crossed = reviewPlan([
+    step("create access_rules", "expand", "rules", 1),
+    step("app stops reading tokens.label_v1", "code", "label", 1),
+    step("drop tokens.rules", "contract", "rules", 2)
+  ]);
+  check("one subject's code step does not authorise another's drop",
+    problems(crossed) === JSON.stringify(["drop tokens.rules:contract_without_code"]),
+    "got: " + problems(crossed) +
+    " - the label switchover says nothing about whether the rules are still read");
+
+  // Rule 2.
+  const late = reviewPlan([
+    step("create access_rules", "expand", "rules", 1),
+    step("engine reads the rows", "code", "rules", 1),
+    step("copy rules across", "backfill", "rules", 1)
+  ]);
+  check("a backfill after the code has switched over is wrong_phase_order",
+    problems(late) === JSON.stringify(["copy rules across:wrong_phase_order"]),
+    "got: " + problems(late) +
+    " - it would copy the old shape over rows the new code has already written");
+
+  // Rule 1, and rule 1 beating rule 4 on the same step. An implementation
+  // that checks the contract rules first reports contract_not_deferred here,
+  // which is true and is not the most fundamental thing wrong with it.
+  const backwards = reviewPlan([
+    step("engine reads the rows", "code", "rules", 2),
+    step("drop tokens.rules", "contract", "rules", 1)
+  ]);
+  check("a release going backwards outranks the contract rules",
+    problems(backwards) === JSON.stringify(["drop tokens.rules:releases_go_backwards"]),
+    "got: " + problems(backwards) +
+    " - both apply to that step; the precedence says which is reported");
+
+  // One violation per step, and every offending step named.
+  const messy = reviewPlan([
+    step("create access_rules", "expand", "rules", 1),
+    step("drop tokens.rules", "contract", "rules", 1),
+    step("engine reads the rows", "code", "rules", 1)
+  ]);
+  check("each offending step is reported once, in step order",
+    problems(messy) === JSON.stringify([
+      "drop tokens.rules:contract_without_code",
+      "engine reads the rows:wrong_phase_order"
+    ]),
+    "got: " + problems(messy));
+
+  // A plan with no contract step at all.
+  const additive = reviewPlan([
+    step("add tokens.paused_at", "expand", "paused_at", 1),
+    step("backfill from status", "backfill", "paused_at", 1),
+    step("writes both", "code", "paused_at", 1)
+  ]);
+  check("a plan that only adds is reversible",
+    additive.ok === true && additive.irreversible.length === 0,
+    "got: " + JSON.stringify(additive.irreversible));
+
+  // Two subjects moving at once, both correctly, and deliberately NOT
+  // interleaved neatly: the revoked_at expand comes after the rules code
+  // step, which is only fine because the phases are tracked per subject.
+  // A single highest-phase variable calls that expand out of order.
+  const parallel = reviewPlan([
+    step("create access_rules", "expand", "rules", 1),
+    step("copy rules across", "backfill", "rules", 1),
+    step("engine reads the rows", "code", "rules", 1),
+    step("add tokens.revoked_at", "expand", "revoked_at", 1),
+    step("writes revoked_at", "code", "revoked_at", 1),
+    step("drop tokens.rules", "contract", "rules", 2),
+    step("drop tokens.revoked", "contract", "revoked_at", 3)
+  ]);
+  check("one subject's phase does not constrain another's",
+    parallel.ok === true, "got: " + problems(parallel) +
+    " - the second migration starts at expand while the first has reached code");
+  check("...and both drops are listed, in step order",
+    JSON.stringify(parallel.irreversible) ===
+      JSON.stringify(["drop tokens.rules", "drop tokens.revoked"]),
+    "got: " + JSON.stringify(parallel.irreversible));
+
+  // A contract step that is itself a violation is still irreversible --
+  // running it destroys the column whether or not the plan was sound.
+  check("an unsafe drop is still reported as irreversible",
+    JSON.stringify(same.irreversible) === JSON.stringify(["drop tokens.rules"]),
+    "got: " + JSON.stringify(same.irreversible));
+
+  // The invariant, as in the two previous lessons.
+  const all = [good, empty, same, noCode, crossed, late, backwards, messy, additive, parallel];
+  const disagreed = all.filter(function (r) { return r.ok !== (r.violations.length === 0); });
+  check("ok always agrees with the violations list",
+    disagreed.length === 0, "disagreed in " + disagreed.length + " case(s)");
+} catch (err) {
+  console.log("FAIL  " + err.name + ": " + err.message);
+  console.log("      Usually this means reviewPlan is missing or misspelt, or that");
+  console.log("      a subject was looked up in a map before anything was put in it.");
+}`);
+    </script>
+
+    <h2>Explain it in your own words</h2>
+    <div id="explain-0003"></div>
+    <script>
+        createExplain("explain-0003", {
+            prompt: "<code>reviewPlan</code> reports a plan as <code>ok: true</code> while also listing <code>drop tokens.rules</code> as irreversible. Explain why those two are not a contradiction, and what a person running the release is supposed to do differently because of the irreversible list."
+        });
+    </script>
+
+    <div id="lesson-quiz"></div>
+    <script>
+        createQuiz("lesson-quiz", [
+            {
+                question: "What makes a migration different from a deploy?",
+                options: [
+                    "You can put the old container back in seconds; you cannot put the old column's data back",
+                    "Migrations take longer to run",
+                    "Migrations need a database password",
+                    "Deploys are automated and migrations are manual"
+                ],
+                correct: 0,
+                explanation: "Code is replaceable because the old version still exists in the registry and in git. Data that a contract step removed exists nowhere, which is why the two get different amounts of caution even though they ship together."
+            },
+            {
+                question: "Why is <code>ALTER TABLE tokens RENAME COLUMN rules TO legacy_rules</code> unsafe?",
+                options: [
+                    "The currently deployed code is still querying the old name and starts erroring the instant it commits",
+                    "Renaming rewrites the whole table",
+                    "It takes a lock for the duration of the rename",
+                    "Postgres does not support renaming columns"
+                ],
+                correct: 0,
+                explanation: "It is instant, atomic and cheap, which is exactly why it looks safe. The problem is not the operation's cost but that the old code is still running when it lands — and a rollback deploys that old code against the renamed schema again."
+            },
+            {
+                type: "predict-output",
+                code: "let row = { rules: { a: 1 } };\nconst oldCode = (r) => r.rules;\nrow = { legacy_rules: row.rules };\nconsole.log(oldCode(row));",
+                answer: "undefined",
+                explanation: "No error, no warning — just undefined flowing into whatever reads it. In SQL it is louder, because the query itself fails, but the shape of the problem is the same: code that was correct a moment ago is now asking for something that is not there."
+            },
+            {
+                question: "During a deploy, which versions of the application are connected to the database?",
+                options: [
+                    "Both the old and the new, for as long as it takes the old containers to drain",
+                    "Only the new one, once the migration has run",
+                    "Only the old one, until the migration finishes",
+                    "Neither, because the database is locked during a deploy"
+                ],
+                correct: 0,
+                explanation: "This is the fact everything else follows from and the one nothing on a dashboard shows. There is no speed at which the overlap disappears, which is why 'deploy faster' is not a fix for an unsafe migration."
+            },
+            {
+                question: "What are the two questions to ask about any migration?",
+                options: [
+                    "Does the currently deployed code survive it, and does the new code survive without it?",
+                    "How long does it take, and can it be run at night?",
+                    "Is it reversible, and has it been reviewed?",
+                    "Does it lock the table, and does it fit in one transaction?"
+                ],
+                correct: 0,
+                explanation: "The first question decides whether it can run before the deploy; the second decides whether it must. A rename fails the first, which is the definition of an unsafe migration."
+            },
+            {
+                type: "order-steps",
+                question: "Put the four phases of an expand/contract migration in order.",
+                steps: [
+                    "Add the new table or nullable column",
+                    "Copy the existing data into the new shape, in batches",
+                    "Ship the code that uses the new shape",
+                    "Drop the old column, in a later release"
+                ],
+                correctOrder: [0, 1, 2, 3],
+                explanation: "Adding, backfilling and switching the code over all leave the old shape intact, so the version deployed before them keeps working. Dropping the column is the only step that removes anything, and the only step that has to wait for a separate release."
+            },
+            {
+                question: "Why must the contract step be in a later release rather than simply later in the same one?",
+                options: [
+                    "The release it follows has to be known good first, and until the drop runs the old data is still there to go back to",
+                    "Migrations within one release run in an unpredictable order",
+                    "Postgres cannot drop a column in the same transaction as an insert",
+                    "The deploy tool applies only one migration per release"
+                ],
+                correct: 0,
+                explanation: "The gap is the window in which the migration can still be found to be wrong. Compressing it puts the drop inside the window where the old code is still running, and removes the evidence that would show whether the copy was correct."
+            },
+            {
+                type: "which-breaks",
+                question: "Which of these cannot be safely applied while the previous release is still serving traffic?",
+                variants: [
+                    "ALTER TABLE tokens ADD COLUMN paused_at TIMESTAMPTZ",
+                    "ALTER TABLE tokens DROP COLUMN rules",
+                    "CREATE INDEX CONCURRENTLY idx_rules_token_id ON access_rules (token_id)"
+                ],
+                correct: 1,
+                explanation: "Dropping a column removes something the running code may still be selecting. Adding a nullable column is invisible to code that does not know about it, and building an index concurrently avoids the write-blocking lock."
+            },
+            {
+                question: "Why does <code>CREATE INDEX</code> without <code>CONCURRENTLY</code> count as a dangerous migration?",
+                options: [
+                    "It blocks every write to the table until the index finishes building",
+                    "It removes data",
+                    "It cannot be rolled back",
+                    "It changes the meaning of existing queries"
+                ],
+                correct: 0,
+                explanation: "Nothing is destroyed and nothing is renamed, so it passes both of the two questions — and on a large table it still takes production down, because every redemption waits behind it. Danger is not only about what a migration removes."
+            },
+            {
+                question: "Adding <code>CHECK ((status = 'revoked') = (revoked_at IS NOT NULL))</code> to a table with existing rows. What happens?",
+                options: [
+                    "Postgres scans every row and refuses the constraint if any single one disagrees",
+                    "It applies to new rows only",
+                    "It rewrites the existing rows to match",
+                    "It is accepted and evaluated lazily"
+                ],
+                correct: 0,
+                explanation: "Historical rows were never held to a rule that did not exist, so a table with any inconsistency simply refuses it. Adding it NOT VALID first applies it to new rows immediately, and VALIDATE CONSTRAINT then does the scan under a weaker lock."
+            },
+            {
+                type: "predict-output",
+                code: "console.log([\"1_a\", \"2_b\", \"9_c\", \"10_d\"].sort().join(\" \"));",
+                answer: "10_d 1_a 2_b 9_c",
+                explanation: "String comparison is character by character, so '1' beats '9' at the first position and 10 sorts before 2. This is why migration files are zero-padded or timestamped — so the order you want and the order you get are the same thing."
+            },
+            {
+                question: "A migration file has already been applied in production. It contains a mistake. What do you do?",
+                options: [
+                    "Write another migration that corrects it",
+                    "Edit the file and redeploy",
+                    "Delete the row from the migrations table and let it re-run",
+                    "Edit the file and manually apply the difference in production"
+                ],
+                correct: 0,
+                explanation: "Editing changes nothing on a machine that already applied it, and the tool will not notice, so the repository and production silently diverge. Append-only is the same rule the ADRs follow, for the same reason: what has been acted on cannot be quietly revised."
+            },
+            {
+                question: "What is wrong with a <code>down</code> migration that re-adds a dropped column?",
+                options: [
+                    "It restores the shape and not the data, so it looks like a rollback and is not one",
+                    "It will fail because the column name is taken",
+                    "Down migrations are never run in production",
+                    "It cannot recreate the column's type"
+                ],
+                correct: 0,
+                explanation: "The column comes back empty. A rollback that leaves you with a correctly shaped column full of nulls is more dangerous than no rollback at all, because it reports success. Marking the step irreversible is the honest alternative."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This reviewer lets one subject's switchover authorise another subject's drop. Where?",
+                code: "1  let lastCodeRelease = -Infinity;\n2  for (const s of steps) {\n3    if (s.kind === 'contract' && s.release <= lastCodeRelease) {\n4      violations.push({ step: s.name, problem: 'contract_not_deferred' });\n5    }\n6    if (s.kind === 'code') lastCodeRelease = s.release;\n7  }",
+                bugLine: 1,
+                options: ["Line 1", "Line 3", "Line 6"],
+                correct: 0,
+                explanation: "A single running variable holds one number for the whole plan, so a code step for the label column makes a drop of the rules column look authorised. It has to be keyed by subject, and note the direction of the failure: it wrongly says yes."
+            },
+            {
+                question: "Why is <code>contract_without_code</code> a separate problem from <code>contract_not_deferred</code>?",
+                options: [
+                    "With no code step there is no release to compare against, so a release comparison alone finds nothing wrong",
+                    "One is more serious than the other",
+                    "They happen in different phases",
+                    "The first is about tables and the second about columns"
+                ],
+                correct: 0,
+                explanation: "An implementation that starts its last-code-release at zero or negative infinity will happily accept a drop that nothing ever stopped using, because any release number is greater than the starting value. The absence needs its own test."
+            },
+            {
+                question: "Why does a backfill run in batches rather than as a single <code>UPDATE</code>?",
+                options: [
+                    "One transaction over millions of rows means a long lock, an enormous write-ahead log and replicas falling behind",
+                    "Postgres limits how many rows one statement can touch",
+                    "Batches are faster in total",
+                    "A single UPDATE cannot read from another table"
+                ],
+                correct: 0,
+                explanation: "The total work is the same or slightly more; what changes is that no single moment of it is disruptive. It is the same instinct as splitting NOT VALID from VALIDATE CONSTRAINT — separate the fast exclusive part from the slow scanning part."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the rule that says a drop must wait for a later release than the switchover.",
+                code: "if (step.kind === \"contract\" && step.release ___ lastCode[step.subject]) { /* violation */ }",
+                answer: "<=",
+                explanation: "Strictly greater is required, so anything less than or equal is a violation — the same release is not good enough, because that is precisely the window where both versions are running."
+            },
+            {
+                question: "A plan reports <code>ok: true</code> and lists one step as irreversible. What does that mean?",
+                options: [
+                    "The plan is safe to run in this order, and one of its steps cannot be undone afterwards",
+                    "The plan has an error that was downgraded to a warning",
+                    "The plan is safe but should not be run",
+                    "The irreversible list is only populated when ok is false"
+                ],
+                correct: 0,
+                explanation: "Safety and reversibility are different questions and both deserve an answer. Reporting only the first would leave whoever runs the release with no idea which step is the point of no return."
+            },
+            {
+                question: "Why is a backfill that runs after the code has switched over a problem?",
+                options: [
+                    "It copies the old shape over rows the new code has already written",
+                    "It runs more slowly at that point",
+                    "The new code holds a lock the backfill needs",
+                    "The old column may already be gone"
+                ],
+                correct: 0,
+                explanation: "By then the new shape holds live data, and a copy from the old shape overwrites it with whatever was there before the switchover. The phases are an order for a reason and not simply a naming convention."
+            },
+            {
+                type: "predict-output",
+                code: "const rank = { expand: 0, backfill: 1, code: 2, contract: 3 };\nconsole.log(rank.backfill < rank.code, rank.contract < rank.expand);",
+                answer: "true false",
+                explanation: "Turning the phase names into numbers is what makes 'earlier than something already seen' a comparison rather than a table of special cases. The same trick underlies the status badge's five-state precedence."
+            },
+            {
+                question: "The running values are updated at the bottom of the loop. What breaks if a step <em>assigns</em> them at the top instead?",
+                options: [
+                    "Every comparison becomes a value against itself, so those checks can never fail",
+                    "The last step is skipped",
+                    "Steps with no subject are counted twice",
+                    "The irreversible list ends up in the wrong order"
+                ],
+                correct: 0,
+                explanation: "Set the highest release to this step's release and then ask whether this step's release is lower, and the answer is always no. Worth being precise about why: keeping them as running maxima and updating early would be harmless, because max(a, x) < a and x < a agree — it is the plain assignment that destroys the comparison."
+            },
+            {
+                question: "The plan is empty. Is that ok?",
+                options: [
+                    "Yes — an empty plan contains nothing unsafe",
+                    "No — an empty plan means nothing ran",
+                    "Only if the previous release had migrations",
+                    "It should throw, since there is nothing to review"
+                ],
+                correct: 0,
+                explanation: "Deliberately the opposite of the empty pipeline in this module's first lesson, and worth holding on to: there the question was 'did the checks run', where nothing is an absence of evidence, and here it is 'does this contain a hazard', where nothing is nothing."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This drops the column in the same release that ships the code. Which line is the problem?",
+                code: "1  { name: 'create access_rules', kind: 'expand',   subject: 'rules', release: 1 },\n2  { name: 'copy rules across',  kind: 'backfill', subject: 'rules', release: 1 },\n3  { name: 'engine reads rows',  kind: 'code',     subject: 'rules', release: 1 },\n4  { name: 'drop tokens.rules',  kind: 'contract', subject: 'rules', release: 1 }",
+                bugLine: 4,
+                options: ["Line 2", "Line 3", "Line 4"],
+                correct: 2,
+                explanation: "Everything up to the drop is additive and safe in one release. The drop needs the release after, so that the version still reading the column has finished being replaced and the old data is still there while the new engine is being trusted."
+            },
+            {
+                question: "What is the safest way to remove a column that a running service selects?",
+                options: [
+                    "Ship a release that stops selecting it, confirm that release is good, then drop it in the next one",
+                    "Drop it during a maintenance window",
+                    "Drop it and deploy the new code in the same release",
+                    "Set it to null everywhere first, then drop it"
+                ],
+                correct: 0,
+                explanation: "A maintenance window shortens the overlap and does not remove it, and it does nothing about the real risk, which is discovering after the drop that the new code was wrong. Setting it to null destroys the data without even removing the column."
+            },
+            {
+                question: "Which of these is a fair description of the module's headline claim about migrations?",
+                options: [
+                    "The risky step ran quietly before the containers started, not when the code shipped",
+                    "Migrations should be avoided where possible",
+                    "Schema changes belong in a separate repository",
+                    "The risk is proportional to how long the migration takes"
+                ],
+                correct: 0,
+                explanation: "Attention naturally goes to the deploy, because that is the part with a progress bar and a rollback button. The step that cannot be undone finished before either of those appeared."
+            },
+            {
+                question: "Why does the review report at most one problem per step?",
+                options: [
+                    "A step trips several rules for one underlying reason, and the most fundamental one is the one to fix",
+                    "Reporting more than one is slower",
+                    "The rules are mutually exclusive anyway",
+                    "Only the last rule to fire is accurate"
+                ],
+                correct: 0,
+                explanation: "A drop placed before the switchover and in an earlier release trips two rules; fixing the release order changes what the remaining rule says. Note this is a different choice from the environment check in the previous lesson, where each missing variable was an independent fact."
+            }
+        ]);
+    </script>
+
+    <div class="lesson-nav">
+        <a href="./0002-secrets-and-environments.html">&larr; Secrets and Environments</a>
+        <span class="disabled">Next: Releasing to Two Stores &rarr;</span>
+    </div>
+
+</body>
+</html>

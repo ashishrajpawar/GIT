@@ -27,16 +27,14 @@ how far it got.
 > commit message, not as a reason for prioritising anything.
 
 **W1 — C2, CI/CD & Release Engineering.** Started 2026-08-28 on the student's
-say-so, immediately after C1. `0001-continuous-integration.html` is written,
-verified and has its `--wrong` cases; the README, index row and search entry are
-in, and `0002-secrets-and-environments.html` likewise. **`0003`–`0004` remain**:
-migrations you can deploy, releasing to two stores. Each lands as its own green
-commit — the last written lesson's next-link is a disabled span until the one
-after it exists.
+say-so, immediately after C1. `0001-continuous-integration.html` , `0002-secrets-and-environments.html`
+and `0003-migrations-you-can-deploy.html` are written, verified and have their
+`--wrong` cases; the README and search entries are in. **`0004` remains** —
+releasing to two stores. It lands as its own green commit; the last written
+lesson's next-link is a disabled span until the one after it exists.
 
-Planned: `0001` what a test is · `0002` time, randomness and fakes · `0003`
-testing an HTTP handler without a network · `0004` testing against a real
-Postgres · `0005` what to test, and the coverage number that lies.
+Planned: `0001` continuous integration · `0002` secrets and environments ·
+`0003` migrations you can deploy · `0004` releasing to two stores.
 
 ### State as of 2026-08-28
 
@@ -44,7 +42,7 @@ Postgres · `0005` what to test, and the coverage number that lies.
 `CLAUDE.md`. Run `node scripts/audit.mjs` first; it regenerates that file. What
 this section records is only what a script cannot compute:
 
-- **Audit green, six suites pass.** No errors.
+- **Audit green, seven suites pass.** No errors.
 - **Every lesson executes something.** No `unverifiable` entries and none
   absent from the log — the flag that covered 17 lessons on 2026-08-23 covers
   none.
