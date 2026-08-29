@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>C6 — One Node's Memory Is Not the System's State</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Scale &amp; Performance</a> &rsaquo;
+        <span>One Node's Memory Is Not the System's State</span>
+    </nav>
+
+    <h1>One Node's Memory Is Not the System's State</h1>
+    <p class="lesson-meta">C6 &mdash; Lesson 2 of 5 &nbsp;|&nbsp; ~55 min</p>
+
+    <div class="callout">
+        <div class="callout-title">Why this matters for Token</div>
+        <p>The previous lesson worked out when one box runs out. This one is about the change you
+        make next &mdash; and ADR-0003 exists because that change has to be a config edit rather than
+        a rewrite.</p>
+        <p><strong>The thing standing between those two outcomes is a single JavaScript
+        <code>Map</code>.</strong> Almost every WebSocket tutorial keeps its connections in one. It
+        works flawlessly on your laptop, flawlessly in staging, flawlessly in production &mdash; and
+        then the day somebody sets replicas to 2, roughly half of all messages stop arriving, with no
+        error anywhere.</p>
+    </div>
+
+    <h2>1 &middot; The registry every tutorial writes</h2>
+
+    <p>A WebSocket server has to remember who is connected. The obvious way:</p>
+
+    <pre><code>const sockets = new Map();   // socketId -> ws
+
+wss.on("connection", (ws, req) =&gt; {
+  const id = newSocketId();
+  sockets.set(id, ws);
+  ws.on("close", () =&gt; sockets.delete(id));
+});</code></pre>
+
+    <p>This is correct. It is also <strong>node-local</strong>, which is a property nothing in the
+    code announces. <code>sockets</code> lives in one process's heap, and a second process has its
+    own, containing entirely different people.</p>
+
+    <div id="pg-split"></div>
+    <script>
+        createPlayground("pg-split", `// Two replicas behind one load balancer. Connections land wherever.
+const nodeA = ["owner-of-cv7", "holder-of-cv9"];
+const nodeB = ["holder-of-cv7", "owner-of-cv9"];
+
+function deliverLocally(registry, wanted) {
+  return registry.filter(s => s === wanted);
+}
+
+// The owner of cv-7 sends a message. Their socket is on node A,
+// so node A handles the request and looks for the recipient.
+console.log("node A can see:", nodeA);
+console.log("looking for   :", "holder-of-cv7");
+console.log("delivered to  :", deliverLocally(nodeA, "holder-of-cv7"));
+console.log("");
+console.log("No error. No exception. The message simply did not happen.");`);
+    </script>
+
+    <p>Note what did <em>not</em> occur. Nothing threw. Nothing logged. The send returned normally and
+    the sender's own screen shows the message, because their client displayed it optimistically. The
+    only party who finds out is the recipient, later, by not having been contacted.</p>
+
+    <h2>2 &middot; The fix, and the bug inside the fix</h2>
+
+    <p>The standard answer is Redis pub/sub, which is why <code>CLAUDE.md</code> says <strong>Redis is
+    required, not optional</strong>. The node that accepts a message writes to whichever recipients it
+    happens to hold, and publishes the message on a channel; every other node receives it and does the
+    same with its own.</p>
+
+    <p>Now the bug. Write it the way it reads naturally:</p>
+
+    <div id="pg-conditional"></div>
+    <script>
+        createPlayground("pg-conditional", `function handle(message, localSockets) {
+  const recipients = localSockets.filter(s => s.conversationId === message.conversationId);
+  recipients.forEach(s => console.log("  wrote to", s.socketId));
+
+  // "If nobody here wanted it, there is nothing to do."
+  if (recipients.length === 0) {
+    console.log("  nothing to publish");
+    return;
+  }
+  console.log("  published to the bus");
+}
+
+console.log("ONE node, everybody on it:");
+handle({ conversationId: "cv-7" }, [{ socketId: "s1", conversationId: "cv-7" }]);
+
+console.log("");
+console.log("TWO nodes, the recipient is on the other one:");
+handle({ conversationId: "cv-7" }, [{ socketId: "s9", conversationId: "cv-3" }]);`);
+    </script>
+
+    <p>The early return is an optimisation that is <em>exactly right</em> on one node, because on one
+    node "nobody here wanted it" and "nobody wanted it" are the same sentence. On two nodes they come
+    apart, and the message is dropped by the branch that exists to avoid pointless work.</p>
+
+    <div class="callout warning">
+        <div class="callout-title">The rule</div>
+        <p><strong>Whether to publish must not depend on whether there were local recipients.</strong>
+        A node's own registry is not evidence about the system. It is evidence about the node.</p>
+        <p>This is the whole reason ADR-0003 says <em>built to scale out, deployed on one box.</em>
+        The single-box deployment is fine; what is not fine is code that is <em>only</em> correct
+        because there is one box, since nothing distinguishes it from code that is correct.</p>
+    </div>
+
+    <h2>3 &middot; Redis publishes to you as well</h2>
+
+    <p>Redis pub/sub delivers a published message to every subscriber on the channel &mdash;
+    <strong>including the process that published it.</strong> So the node that just wrote to its local
+    sockets receives its own message back a millisecond later, and if the receive handler does what
+    the receive handler does, it writes to them again and publishes again.</p>
+
+    <div id="pg-echo"></div>
+    <script>
+        createPlayground("pg-echo", `// What each node does when an envelope arrives from the bus.
+function onBusMessage(envelope, selfNodeId, guard) {
+  if (guard && envelope.origin === selfNodeId) {
+    return "ignored: this node published it";
+  }
+  return "delivered locally, and re-published";
+}
+
+console.log("without the guard:", onBusMessage({ origin: "node-a" }, "node-a", false));
+console.log("with the guard   :", onBusMessage({ origin: "node-a" }, "node-a", true));`);
+    </script>
+
+    <p>Two separate defects come out of the same missing check, and they fail at different speeds.
+    <strong>Re-publishing is a loop</strong>, which is loud and will be found in minutes.
+    <strong>Re-delivering is a duplicate</strong>, which is quiet, looks like a client bug, and is
+    reported as "sometimes messages appear twice" three weeks later.</p>
+
+    <p>So the envelope carries the id of the node that first accepted it, and two rules fall out:</p>
+
+    <ul>
+        <li>Something arriving <em>from the bus</em> is never published onward, whoever sent it.</li>
+        <li>Something arriving from the bus that <em>this node published</em> is dropped entirely
+        &mdash; it was already delivered on the way out.</li>
+    </ul>
+
+    <h2>4 &middot; A registry that lies about itself</h2>
+
+    <p>Mobile clients reconnect constantly &mdash; a tunnel, a lift, a switch from wifi to 4G. The old
+    socket's <code>close</code> event can arrive <em>after</em> the new socket has registered, and for
+    a moment the registry holds two entries claiming to be the same client.</p>
+
+    <div id="pg-dupe"></div>
+    <script>
+        createPlayground("pg-dupe", `const registry = [
+  { socketId: "s1", conversationId: "cv-7", open: true },
+  { socketId: "s2", conversationId: "cv-7", open: true },
+  { socketId: "s2", conversationId: "cv-7", open: true },   // reconnect, close not yet processed
+  { socketId: "s3", conversationId: "cv-7", open: false }   // closing
+];
+
+const naive = registry.filter(s => s.conversationId === "cv-7").map(s => s.socketId);
+console.log("naive  :", naive);
+
+const seen = new Set();
+const careful = [];
+for (const s of registry) {
+  if (s.conversationId !== "cv-7") continue;
+  if (!s.open) continue;
+  if (seen.has(s.socketId)) continue;
+  seen.add(s.socketId);
+  careful.push(s.socketId);
+}
+console.log("careful:", careful);`);
+    </script>
+
+    <p>Two things are being fixed there and they are not the same kind of problem. Writing to a
+    <em>closed</em> socket throws, so it is noisy and self-announcing. Writing to a duplicate
+    <em>succeeds</em>, and the user sees the message twice.</p>
+
+    <p><strong>Exactly-once keeps arriving in this course</strong> &mdash; the redemption transaction
+    in <code>b7/0001</code>, the first ending winning in the <code>calls</code> table, one page per
+    incident in <code>c7/0004</code>. It is the same shape every time: the second occurrence is not an
+    error, which is precisely why nothing catches it.</p>
+
+    <h2>5 &middot; Two fields that both say who you are</h2>
+
+    <p>A Token socket has a principal, and the shape depends on which side it is:</p>
+
+    <ul>
+        <li><code>owner:&lt;userId&gt;</code> &mdash; the person who issued the token, signed in with
+        their phone.</li>
+        <li><code>holder:&lt;conversationId&gt;</code> &mdash; whoever redeemed it. There is no
+        account behind this one. The holder JWT is
+        <code>{ conversationId, tokenId, holderName }</code>, so <strong>the socket already knows its
+        conversation before the first message.</strong></li>
+    </ul>
+
+    <p>Which means a holder socket carries its conversation twice: once in the registry entry and once
+    inside the principal. Normally they agree. If they ever do not:</p>
+
+    <div id="pg-principal"></div>
+    <script>
+        createPlayground("pg-principal", `function scopeOf(principal) {
+  const [kind, rest] = principal.split(":");
+  return kind === "holder" ? rest : null;   // an owner is not scoped to one conversation
+}
+
+const sockets = [
+  { socketId: "s1", conversationId: "cv-7", principal: "owner:u-1" },
+  { socketId: "s2", conversationId: "cv-7", principal: "holder:cv-7" },
+  { socketId: "s5", conversationId: "cv-7", principal: "holder:cv-9" }
+];
+
+for (const s of sockets) {
+  const scope = scopeOf(s.principal);
+  const agrees = scope === null || scope === s.conversationId;
+  console.log(s.socketId, s.principal, agrees ? "consistent" : "DISAGREES -- do not deliver");
+}`);
+    </script>
+
+    <p>The temptation is to pick one and carry on, because one of them is presumably right. Do not.
+    <strong>When two fields both answer the same question and disagree, you have no reason to prefer
+    either</strong>, and the cheap options here are a message delivered into the wrong conversation
+    &mdash; on a product whose entire promise is that the wrong person cannot reach you.</p>
+
+    <p>Deny-by-default is the house style and it applies here: drop the socket, record that you did,
+    and let somebody find out why.</p>
+
+    <h2>6 &middot; The envelope carries no code</h2>
+
+    <p><code>CLAUDE.md</code> records this one as a swept defect rather than a theory:
+    <code>a8/0004</code> sent the token code over the WebSocket on every chat message, so it reached
+    the socket log <em>and</em> the Redis pub/sub payload.</p>
+
+    <p>The reasoning is worth having exactly, because "do not put the code in the payload" sounds like
+    a taste:</p>
+
+    <blockquote>
+        <p>Re-sending an identifier the connection already carries is how a credential ends up
+        somewhere nobody designed.</p>
+    </blockquote>
+
+    <p>The socket is already authenticated and already scoped to a conversation. A code in the
+    envelope answers a question that was settled at connect time, and answers it in a weaker way
+    &mdash; and then it travels through Redis, which is a component nobody thinks of as a place where
+    secrets are stored.</p>
+
+    <p>So the fan-out planner refuses an envelope carrying one, <strong>and refuses it before it looks
+    at anything else.</strong> A refusal whose correctness depends on other checks having run first
+    is a refusal you cannot reason about.</p>
+
+    <h2>7 &middot; Presence, and what absence is not</h2>
+
+    <p>Presence in a stateless system is a Redis key with a TTL &mdash; <code>online:u-1</code>, set on
+    connect, refreshed on a heartbeat, gone when it expires. Which makes the key's absence ambiguous
+    in a way worth naming:</p>
+
+    <div id="pg-presence"></div>
+    <script>
+        createPlayground("pg-presence", `const now = 1000000;
+const heartbeat = { "u-1": now - 4000, "u-2": now - 55000 };
+const ttlMs = 30000;
+
+for (const user of ["u-1", "u-2", "u-3"]) {
+  const last = heartbeat[user];
+  if (last === undefined) {
+    console.log(user, "no key at all -- never seen, OR the node holding them just died");
+  } else if (now - last > ttlMs) {
+    console.log(user, "expired -- silent for", (now - last) / 1000, "seconds");
+  } else {
+    console.log(user, "present");
+  }
+}`);
+    </script>
+
+    <p>All three of those states are reported to a user interface as "offline", and that is fine
+    &mdash; a grey dot is allowed to be approximate. What is not fine is letting the same fact reach
+    a <em>storage</em> decision. <strong>Never skip persisting a message because the recipient looked
+    offline.</strong> Presence is a hint about a socket; the message is a fact about a conversation,
+    and the two have different lifetimes.</p>
+
+    <h2>8 &middot; Broken on purpose</h2>
+
+    <p>Read the error first. It is precise, and it names an assumption the code makes about a data
+    structure it did not build.</p>
+
+    <div id="pg-broken"></div>
+    <script>
+        createPlayground("pg-broken", `// The registry, grouped by conversation for a faster lookup.
+const byConversation = new Map();
+byConversation.set("cv-7", new Set(["s1", "s2"]));
+
+function register(conversationId, socketId) {
+  const bucket = byConversation.get(conversationId) || new Set();
+  bucket.push(socketId);
+  byConversation.set(conversationId, bucket);
+}
+
+register("cv-7", "s3");
+console.log([...byConversation.get("cv-7")]);`);
+    </script>
+
+    <p>A <code>Set</code> has <code>add</code>, not <code>push</code>. The interesting part is
+    <em>why</em> the grouping was reached for: it makes the per-message lookup cheaper, and lesson
+    five is about exactly that trade &mdash; except that a second index is a second thing that can
+    disagree with the first.</p>
+
+    <h2>9 &middot; Now build it yourself</h2>
+
+    <div id="exercise-1"></div>
+    <script>
+        createSolution("exercise-1", {
+            exercise: "Write <code>planDelivery(envelope, sockets, self)</code> &mdash; the decision one node makes about one message. It writes nothing and sends nothing; it returns what should happen.<br><br><code>envelope</code> is <code>{ conversationId, messageId, origin, source, senderSocketId }</code>. <code>source</code> is <code>\"client\"</code> when this node accepted it from a connected client, or <code>\"bus\"</code> when it arrived over Redis pub/sub. <code>origin</code> is the node that first accepted it. <code>self</code> is <code>{ nodeId }</code>.<br><br><code>sockets</code> is this node's registry, in order: <code>{ socketId, conversationId, principal, open }</code>. A principal is <code>owner:&lt;userId&gt;</code> or <code>holder:&lt;conversationId&gt;</code>.<br><br>Return <code>{ deliver, publish, dropped, reason }</code>.<br><br>The rules, and the first three are a fixed precedence:<br>1. If the envelope has a <code>code</code> property at all, refuse: no delivery, no publish, reason <code>\"code_in_envelope\"</code>. This is checked before everything else.<br>2. If <code>source</code> is neither <code>\"client\"</code> nor <code>\"bus\"</code>, refuse with reason <code>\"unknown_source\"</code>.<br>3. If <code>source</code> is <code>\"bus\"</code> and <code>origin</code> equals <code>self.nodeId</code>, this node published it and has already delivered it: refuse with reason <code>\"own_echo\"</code>.<br>4. Otherwise the reason is <code>\"ok\"</code>. <code>publish</code> is true when and only when the source is <code>\"client\"</code> &mdash; never conditional on how many local sockets there were.<br>5. <code>deliver</code> lists the socket ids in this conversation that should be written to, in registry order: skip a different conversation, skip a socket that is not open, skip the sender's own socket, skip a socket id already listed, and skip a holder whose principal names a different conversation from its registry entry.<br>6. <code>dropped</code> lists, in registry order, the socket ids that were in this conversation and did not get the message &mdash; not open, duplicate, or a principal that disagrees. The sender is not dropped; it was never a recipient.<br>7. A refusal returns empty arrays for both.<br>8. Do not modify <code>envelope</code> or <code>sockets</code>.",
+            hints: [
+                "Do the three refusals first and return early from each. Once you are past them the rest of the function has one job, which is the loop, and no branch in that loop has to wonder whether the message was legitimate.",
+                "The principal check is asymmetric on purpose: an owner is not scoped to a single conversation, so there is nothing to compare and the socket passes. Only a holder carries a second copy of the conversation id.",
+                "deliver and dropped are built in the same pass over the registry, because they answer two halves of one question. A socket that is in the conversation goes into exactly one of them, unless it is the sender, which goes into neither."
+            ],
+            solution: `function conversationScopeOf(principal) {
+  if (typeof principal !== "string") return null;
+  const marker = principal.indexOf(":");
+  if (marker === -1) return null;
+  const kind = principal.slice(0, marker);
+  // An owner is signed in as a person and is not tied to one conversation,
+  // so there is no second copy of the id and nothing to disagree with.
+  return kind === "holder" ? principal.slice(marker + 1) : null;
+}
+
+function planDelivery(envelope, sockets, self) {
+  // Rule 1. First, and deliberately: a refusal that depends on other checks
+  // having run is a refusal you cannot reason about on its own.
+  if (envelope.code !== undefined) {
+    return { deliver: [], publish: false, dropped: [], reason: "code_in_envelope" };
+  }
+
+  // Rule 2. Deny by default — an unrecognised source is not a safe one.
+  if (envelope.source !== "client" && envelope.source !== "bus") {
+    return { deliver: [], publish: false, dropped: [], reason: "unknown_source" };
+  }
+
+  // Rule 3. Redis delivers to the publisher too. This node already wrote to
+  // its own sockets on the way out.
+  if (envelope.source === "bus" && envelope.origin === self.nodeId) {
+    return { deliver: [], publish: false, dropped: [], reason: "own_echo" };
+  }
+
+  const deliver = [];
+  const dropped = [];
+  const seen = new Set();
+
+  for (const socket of sockets) {
+    if (socket.conversationId !== envelope.conversationId) continue;
+    if (socket.socketId === envelope.senderSocketId) continue;
+
+    if (!socket.open) { dropped.push(socket.socketId); continue; }
+
+    const scope = conversationScopeOf(socket.principal);
+    if (scope !== null && scope !== socket.conversationId) {
+      dropped.push(socket.socketId);
+      continue;
+    }
+
+    if (seen.has(socket.socketId)) { dropped.push(socket.socketId); continue; }
+
+    seen.add(socket.socketId);
+    deliver.push(socket.socketId);
+  }
+
+  return {
+    deliver: deliver,
+    dropped: dropped,
+    // Rule 4. Not deliver.length > 0. That version is correct on one node and
+    // drops half the messages on two, which is the whole point of the lesson.
+    publish: envelope.source === "client",
+    reason: "ok"
+  };
+}`
+        });
+    </script>
+
+    <div id="pg-exercise"></div>
+    <script>
+        createPlayground("pg-exercise", `// Write planDelivery(envelope, sockets, self) here.
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed ? "" : "  -> " + detail));
+}
+
+// s2 appears twice on purpose (a reconnect whose close has not landed), s4 is
+// closing, s5's principal names cv-9 while its entry says cv-7, and s3 belongs
+// to another conversation entirely. Do not tidy this fixture.
+function registry() {
+  return [
+    { socketId: "s1", conversationId: "cv-7", principal: "owner:u-1",   open: true },
+    { socketId: "s2", conversationId: "cv-7", principal: "holder:cv-7", open: true },
+    { socketId: "s3", conversationId: "cv-9", principal: "owner:u-1",   open: true },
+    { socketId: "s4", conversationId: "cv-7", principal: "holder:cv-7", open: false },
+    { socketId: "s5", conversationId: "cv-7", principal: "holder:cv-9", open: true },
+    { socketId: "s2", conversationId: "cv-7", principal: "holder:cv-7", open: true }
+  ];
+}
+function fromClient(extra) {
+  const base = { conversationId: "cv-7", messageId: "m-1", origin: "node-a",
+                 source: "client", senderSocketId: "s1" };
+  return Object.assign(base, extra || {});
+}
+const NODE_A = { nodeId: "node-a" };
+const NODE_B = { nodeId: "node-b" };
+
+try {
+  if (typeof planDelivery !== "function") throw new Error("planDelivery is not defined yet");
+
+  try {
+    const r = planDelivery(fromClient(), registry(), NODE_A);
+    check("the sender, the other conversation, the closed, the duplicate and the mismatched are all excluded",
+      r.deliver.length === 1 && r.deliver[0] === "s2",
+      "delivered to " + JSON.stringify(r.deliver));
+  } catch (e) { check("the sender, the other conversation, the closed, the duplicate and the mismatched are all excluded", false, e.message); }
+
+  try {
+    const r = planDelivery(fromClient(), registry(), NODE_A);
+    check("dropped names the three in this conversation that were refused, in registry order",
+      JSON.stringify(r.dropped) === JSON.stringify(["s4", "s5", "s2"]),
+      "got " + JSON.stringify(r.dropped));
+  } catch (e) { check("dropped names the three in this conversation that were refused, in registry order", false, e.message); }
+
+  try {
+    const lonely = [{ socketId: "s9", conversationId: "cv-3", principal: "owner:u-2", open: true }];
+    const r = planDelivery(fromClient(), lonely, NODE_A);
+    check("a node with no local recipients still publishes",
+      r.publish === true && r.deliver.length === 0 && r.reason === "ok",
+      "publish " + r.publish + " deliver " + JSON.stringify(r.deliver));
+  } catch (e) { check("a node with no local recipients still publishes", false, e.message); }
+
+  try {
+    const r = planDelivery(fromClient({ source: "bus", origin: "node-a" }), registry(), NODE_B);
+    check("an envelope from the bus is delivered locally and never re-published",
+      r.publish === false && r.deliver.length === 1 && r.deliver[0] === "s2" && r.reason === "ok",
+      "publish " + r.publish + " deliver " + JSON.stringify(r.deliver));
+  } catch (e) { check("an envelope from the bus is delivered locally and never re-published", false, e.message); }
+
+  try {
+    const r = planDelivery(fromClient({ source: "bus", origin: "node-a" }), registry(), NODE_A);
+    check("a node ignores the echo of its own publish rather than delivering it twice",
+      r.reason === "own_echo" && r.deliver.length === 0 && r.publish === false,
+      "reason " + r.reason + " deliver " + JSON.stringify(r.deliver));
+  } catch (e) { check("a node ignores the echo of its own publish rather than delivering it twice", false, e.message); }
+
+  try {
+    const r = planDelivery(fromClient({ code: "MERC-8GH2-KP4X" }), registry(), NODE_A);
+    check("an envelope carrying a token code is refused outright",
+      r.reason === "code_in_envelope" && r.deliver.length === 0 && r.publish === false,
+      "reason " + r.reason + " publish " + r.publish);
+  } catch (e) { check("an envelope carrying a token code is refused outright", false, e.message); }
+
+  try {
+    const r = planDelivery(
+      fromClient({ code: "MERC-8GH2-KP4X", source: "bus", origin: "node-a" }), registry(), NODE_A);
+    check("the code refusal is reached before the echo check, not after it",
+      r.reason === "code_in_envelope",
+      "reason " + r.reason);
+  } catch (e) { check("the code refusal is reached before the echo check, not after it", false, e.message); }
+
+  try {
+    const r = planDelivery(fromClient({ source: "replay" }), registry(), NODE_A);
+    check("an unrecognised source is denied rather than treated as a client",
+      r.reason === "unknown_source" && r.publish === false && r.deliver.length === 0,
+      "reason " + r.reason + " publish " + r.publish);
+  } catch (e) { check("an unrecognised source is denied rather than treated as a client", false, e.message); }
+
+  try {
+    const r = planDelivery(fromClient({ senderSocketId: "s1" }), registry(), NODE_A);
+    check("the sender is neither delivered to nor listed as dropped",
+      r.deliver.indexOf("s1") === -1 && r.dropped.indexOf("s1") === -1,
+      "deliver " + JSON.stringify(r.deliver) + " dropped " + JSON.stringify(r.dropped));
+  } catch (e) { check("the sender is neither delivered to nor listed as dropped", false, e.message); }
+
+  try {
+    const owners = [
+      { socketId: "s7", conversationId: "cv-7", principal: "owner:u-3", open: true },
+      { socketId: "s8", conversationId: "cv-7", principal: "owner:u-4", open: true }
+    ];
+    const r = planDelivery(fromClient({ senderSocketId: "none" }), owners, NODE_A);
+    check("an owner principal is not scoped to a conversation and is never dropped for disagreeing",
+      JSON.stringify(r.deliver) === JSON.stringify(["s7", "s8"]) && r.dropped.length === 0,
+      "deliver " + JSON.stringify(r.deliver) + " dropped " + JSON.stringify(r.dropped));
+  } catch (e) { check("an owner principal is not scoped to a conversation and is never dropped for disagreeing", false, e.message); }
+
+  try {
+    const r = planDelivery(fromClient({ source: "bus", origin: "node-c" }), [], NODE_B);
+    check("a bus envelope from a third node with nobody local publishes nothing and delivers nothing",
+      r.publish === false && r.deliver.length === 0 && r.reason === "ok",
+      "publish " + r.publish + " reason " + r.reason);
+  } catch (e) { check("a bus envelope from a third node with nobody local publishes nothing and delivers nothing", false, e.message); }
+
+  try {
+    const env = fromClient();
+    const reg = registry();
+    const envBefore = JSON.stringify(env);
+    const regBefore = JSON.stringify(reg);
+    planDelivery(env, reg, NODE_A);
+    check("neither the envelope nor the registry is modified",
+      JSON.stringify(env) === envBefore && JSON.stringify(reg) === regBefore,
+      "envelope now " + JSON.stringify(env));
+  } catch (e) { check("neither the envelope nor the registry is modified", false, e.message); }
+
+} catch (e) {
+  console.log("Nothing to check yet -- " + e.message);
+}`);
+    </script>
+
+    <h3>Say it in your own words</h3>
+    <div id="explain-0002"></div>
+    <script>
+        createExplain("explain-0002", {
+            prompt: "A reviewer looks at <code>if (recipients.length === 0) return;</code> and sees a sensible early exit that avoids publishing for nothing. Explain why that line is not an optimisation but a message-dropping bug, and why no test, log or alert on a single-replica deployment can tell you so."
+        });
+    </script>
+
+    <h2>Quiz</h2>
+    <div id="lesson-quiz"></div>
+    <script>
+        createQuiz("lesson-quiz", [
+            {
+                question: "What is wrong with keeping connected sockets in a module-level Map?",
+                options: [
+                    "Nothing, until a second replica exists — at which point each process holds a different half of the users and neither knows",
+                    "Maps are too slow for thousands of entries",
+                    "It leaks memory when sockets close",
+                    "It cannot store objects as values"
+                ],
+                correct: 0,
+                explanation: "The Map is correct code. What is missing is any signal that it is node-local, which is the property that stops being harmless the day replicas go to two."
+            },
+            {
+                type: "predict-output",
+                code: "const nodeA = [\"owner-of-cv7\"];\nconsole.log(nodeA.filter(s => s === \"holder-of-cv7\"));",
+                answer: "[]",
+                explanation: "An empty result, not an error. The message is dropped by a filter doing exactly what it was asked, which is why nothing anywhere reports a problem."
+            },
+            {
+                question: "Why does CLAUDE.md call Redis required rather than optional?",
+                options: [
+                    "Without it a second replica silently drops messages between users on different nodes",
+                    "It is the only way to store sessions",
+                    "Postgres cannot handle the write volume",
+                    "It is needed for TLS termination"
+                ],
+                correct: 0,
+                explanation: "Socket fan-out, presence as TTL keys and shared rate-limit counters all need a place outside any one process. Take Redis away and each of the three quietly becomes per-node."
+            },
+            {
+                type: "spot-the-bug",
+                code: "1  const recipients = local.filter(s => s.conversationId === msg.conversationId);\n2  recipients.forEach(write);\n3  if (recipients.length === 0) return;\n4  bus.publish(\"messages\", msg);",
+                bugLine: 3,
+                options: ["Line 1", "Line 2", "Line 3", "Line 4"],
+                correct: 2,
+                explanation: "Publishing is made conditional on local delivery. On one node those two facts coincide; on two, a message whose only recipient is elsewhere never leaves the node that accepted it."
+            },
+            {
+                question: "Which statement about that early return is accurate?",
+                options: [
+                    "It is correct on one node and wrong on two, and nothing distinguishes it from code that is correct",
+                    "It is wrong on any number of nodes",
+                    "It is a performance problem rather than a correctness problem",
+                    "It only matters when Redis is unavailable"
+                ],
+                correct: 0,
+                explanation: "That is the hazard ADR-0003 is written against. Code that happens to work because there is one box looks identical to code that works, and the difference surfaces as a config change."
+            },
+            {
+                type: "predict-output",
+                code: "function onBus(env, self) {\n  if (env.origin === self) return \"ignored\";\n  return \"delivered\";\n}\nconsole.log(onBus({ origin: \"node-a\" }, \"node-a\"), onBus({ origin: \"node-b\" }, \"node-a\"));",
+                answer: "ignored delivered",
+                explanation: "Redis delivers a publish to every subscriber including the publisher, so a node has to recognise its own envelope coming back."
+            },
+            {
+                question: "Missing the origin guard causes two defects. Which is the one that survives longest in production?",
+                options: [
+                    "The duplicate delivery, because a message arriving twice is not an error anywhere",
+                    "The publish loop, because loops are hard to find",
+                    "Both are found immediately",
+                    "Neither is a real problem"
+                ],
+                correct: 0,
+                explanation: "A loop saturates something and gets attention within minutes. A duplicate looks like a client bug and is reported weeks later as messages sometimes appearing twice."
+            },
+            {
+                type: "fill-blank",
+                code: "if (envelope.source === \"bus\" && envelope.origin === self.___) return echo;",
+                answer: "nodeId",
+                explanation: "The envelope names the node that first accepted it, and each node compares that against its own identity to recognise its own publish coming back."
+            },
+            {
+                question: "Why can the registry hold two entries with the same socket id?",
+                options: [
+                    "A mobile client reconnects and the old socket's close event can arrive after the new one registers",
+                    "Two users can share a socket id",
+                    "The Map allows duplicate keys",
+                    "Redis replays registrations"
+                ],
+                correct: 0,
+                explanation: "Tunnels, lifts and a wifi-to-4G switch make reconnection constant on mobile, and the ordering of a close against a new connect is not guaranteed."
+            },
+            {
+                type: "predict-output",
+                code: "const reg = [{ id: \"s2\" }, { id: \"s2\" }, { id: \"s3\" }];\nconst seen = new Set();\nconst out = [];\nfor (const s of reg) { if (seen.has(s.id)) continue; seen.add(s.id); out.push(s.id); }\nconsole.log(out);",
+                answer: "[\"s2\",\"s3\"]",
+                explanation: "Exactly once, kept by remembering what has already been listed. The second s2 is not an error, which is why nothing else would have caught it."
+            },
+            {
+                question: "How do writing to a closed socket and writing to a duplicate differ?",
+                options: [
+                    "The closed one throws and announces itself; the duplicate succeeds and the user simply sees the message twice",
+                    "Both throw",
+                    "Both are silent",
+                    "The duplicate throws and the closed one is silent"
+                ],
+                correct: 0,
+                explanation: "Loud failures get fixed. Silent ones are the reason the deduplication has to be deliberate rather than a side effect of the socket layer complaining."
+            },
+            {
+                question: "A holder socket carries its conversation id twice — in the registry entry and inside its principal. What should happen when they disagree?",
+                options: [
+                    "Drop the socket and record it, because there is no reason to prefer either value",
+                    "Trust the principal, since it came from a signed token",
+                    "Trust the registry entry, since it is more recent",
+                    "Deliver to both conversations"
+                ],
+                correct: 0,
+                explanation: "Both cheap options end in a message delivered into the wrong conversation, on a product whose promise is that the wrong person cannot reach you."
+            },
+            {
+                type: "which-breaks",
+                variants: [
+                    "const scope = principal.startsWith(\"holder:\") ? principal.slice(7) : null;",
+                    "const scope = principal.split(\":\")[1];",
+                    "const i = principal.indexOf(\":\");\nconst scope = principal.slice(0, i) === \"holder\" ? principal.slice(i + 1) : null;"
+                ],
+                correct: 1,
+                explanation: "Taking the part after the colon unconditionally gives an owner socket a scope of its user id, which never matches a conversation id, so every owner is dropped as inconsistent."
+            },
+            {
+                question: "Why is the owner case asymmetric — no scope to compare?",
+                options: [
+                    "An owner is signed in as a person and takes part in many conversations, so their principal carries no conversation id",
+                    "Owners are trusted and holders are not",
+                    "Owner sockets are always local",
+                    "The owner's id is stored in Redis instead"
+                ],
+                correct: 0,
+                explanation: "A holder exists only inside one redemption and their token names it. An owner has a phone-verified account and a token list, so there is nothing to duplicate and therefore nothing to disagree."
+            },
+            {
+                question: "Why must the token-code refusal be checked before the source and echo checks?",
+                options: [
+                    "A refusal whose correctness depends on other checks having run first cannot be reasoned about on its own",
+                    "It is faster to check first",
+                    "The other checks would throw on a code",
+                    "Ordering makes no difference to the result"
+                ],
+                correct: 0,
+                explanation: "Put it third and it holds only while the two above it stay right. Put it first and it holds unconditionally, which is what a refusal about a credential has to do."
+            },
+            {
+                question: "What is the argument against putting the token code in the socket payload?",
+                options: [
+                    "The connection is already authenticated and scoped, so the code answers a settled question in a weaker way and then travels through Redis and the logs",
+                    "It makes the payload larger",
+                    "Codes are not valid JSON strings",
+                    "The client cannot read it"
+                ],
+                correct: 0,
+                explanation: "The holder JWT already carries conversationId and tokenId. CLAUDE.md records this as a swept defect: a8/0004 sent it on every chat message and it reached both the socket log and the pub/sub payload."
+            },
+            {
+                type: "order-steps",
+                steps: [
+                    "Refuse an envelope carrying a token code",
+                    "Refuse a source that is neither client nor bus",
+                    "Refuse a bus envelope this node published itself",
+                    "Build the delivery list from the local registry"
+                ],
+                correctOrder: [0, 1, 2, 3],
+                explanation: "Three refusals then one loop. Past the third, no branch inside the loop has to wonder whether the message was legitimate."
+            },
+            {
+                question: "publish should be true when…",
+                options: [
+                    "The source is client, regardless of how many local sockets there were",
+                    "There was at least one local recipient",
+                    "There were no local recipients",
+                    "The origin differs from this node"
+                ],
+                correct: 0,
+                explanation: "A node's own registry is evidence about the node, not about the system, so it cannot be allowed to decide whether other nodes hear about the message."
+            },
+            {
+                type: "predict-output",
+                code: "const source = \"replay\";\nconsole.log(source !== \"client\" && source !== \"bus\" ? \"denied\" : \"accepted\");",
+                answer: "denied",
+                explanation: "Deny by default. An unrecognised source is not evidence of a safe one, which is the same reasoning as an unrecognised share target in a5/0005."
+            },
+            {
+                question: "Why is the sender's own socket excluded from both deliver and dropped?",
+                options: [
+                    "It was never a candidate recipient, so listing it as refused would misdescribe what happened",
+                    "The sender's socket is always closing",
+                    "Senders are in a different conversation",
+                    "It would cause a duplicate id"
+                ],
+                correct: 0,
+                explanation: "dropped means in this conversation and did not get it, which is a list you would read while debugging. Putting the author in it turns a diagnostic into noise."
+            },
+            {
+                question: "What does presence being a Redis TTL key mean for a missing key?",
+                options: [
+                    "It is ambiguous — never seen, gone quiet, or the node holding them died — and all three read as offline",
+                    "The user has definitely disconnected",
+                    "The key was deleted by another node",
+                    "Redis is unavailable"
+                ],
+                correct: 0,
+                explanation: "A grey dot is allowed to be approximate. The rule is that the same fact must never reach a storage decision."
+            },
+            {
+                type: "spot-the-bug",
+                code: "1  const online = await redis.exists(\"online:\" + recipientId);\n2  if (!online) {\n3    return;                       // nobody there, nothing to store\n4  }\n5  await persistAndDeliver(message);",
+                bugLine: 3,
+                options: ["Line 1", "Line 2", "Line 3", "Line 5"],
+                correct: 2,
+                explanation: "Presence is a hint about a socket; the message is a fact about a conversation. Skipping the write means a recipient whose heartbeat lapsed for thirty seconds loses the message permanently."
+            },
+            {
+                type: "predict-output",
+                code: "const bucket = new Set([\"s1\"]);\ntry { bucket.push(\"s2\"); } catch (e) { console.log(e.constructor.name); }",
+                answer: "TypeError",
+                explanation: "A Set has add, not push. The grouping was reached for to make the per-message lookup cheaper, which is the trade lesson five is about."
+            },
+            {
+                question: "Which pair of facts does a single node's registry actually establish?",
+                options: [
+                    "Who is connected to this process right now, and nothing at all about anybody else",
+                    "Who is connected to the system, and who is online",
+                    "Who is online, and who has unread messages",
+                    "Which conversations exist"
+                ],
+                correct: 0,
+                explanation: "Every bug in this lesson comes from treating the first of those as though it were the second."
+            },
+            {
+                question: "What does this lesson share with C6/0001?",
+                options: [
+                    "Both are about a fact that is true of your machine being mistaken for a fact about the system",
+                    "Both are about Redis",
+                    "Both are about memory limits",
+                    "Both are about rounding"
+                ],
+                correct: 0,
+                explanation: "One box's spare memory is not a capacity, and one node's registry is not a set of recipients. In each case the local reading is the one that is easy to obtain and the wrong one to act on."
+            },
+            {
+                question: "A message arrives from the bus, from a third node, and this node holds nobody in that conversation. What is the correct plan?",
+                options: [
+                    "Deliver nothing, publish nothing, and report that as a normal outcome",
+                    "Publish it onward so other nodes receive it",
+                    "Refuse it as an unknown source",
+                    "Treat it as an echo"
+                ],
+                correct: 0,
+                explanation: "Doing nothing is the right answer and is not an error, which is why the reason stays ok. Republishing would put the message back on the bus a second time."
+            }
+        ]);
+    </script>
+
+    <div class="lesson-nav">
+        <a href="./0001-the-ceiling-is-a-minimum.html">&larr; The Ceiling Is a Minimum, Not a Number</a>
+        <span class="disabled">Next: A Limit That Holds on One Node Is Not a Limit &rarr;</span>
+    </div>
+
+</body>
+</html>

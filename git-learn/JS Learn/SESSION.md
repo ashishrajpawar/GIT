@@ -33,7 +33,7 @@ are verified, wired and committed.
 | | Lesson | State |
 |---|---|---|
 | `0001` | The ceiling is a minimum, not a number | **landed**, verified, 11 wrong-cases |
-| `0002` | One node's memory is not the system's state | not started |
+| `0002` | One node's memory is not the system's state | **landed**, verified, 13 wrong-cases |
 | `0003` | A limit that holds on one node is not a limit | not started |
 | `0004` | The cache that outlives a revocation | not started |
 | `0005` | The query on the authorisation path | not started |
