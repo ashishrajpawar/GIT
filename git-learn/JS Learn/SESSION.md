@@ -26,14 +26,24 @@ how far it got.
 > files either.** Make no claims about it at all — not in prose, not in a
 > commit message, not as a reason for prioritising anything.
 
-**Nothing in flight.** C3 — Trust, Safety & Abuse — landed complete on
-2026-08-29: three lessons, each verified with its `--wrong` cases, each its own
-commit, README, index row and search entries in. C2 landed complete the same
-day.
+**W1 — C7, Observability.** Started 2026-08-29 straight after C3.
+`0001-the-log-line-you-can-publish.html` is written, verified and has its
+`--wrong` cases; README, index row and search entry are in. **`0002`–`0004`
+remain**: error tracking, metrics, alerting and runbooks. Each lands as its own
+green commit.
 
-**The next unit is `W1` again: pick one C-module, write it, stop.** Five remain
-— C4, C6, C7, C8, C9. The launch queue is the other open front and none of it
-is code; see *Next action*.
+**Why C7 and not C4 or C6**, with the cost, because no recommendation was on
+record: three of `CLAUDE.md`'s hardest-won logging rules — never log a code,
+log the id, allow-list rather than delete — have no module that owns them, and
+the same defect has been swept out of the course twice. C7 gives them a home.
+Watching TURN bandwidth from the first deploy is a standing instruction in
+*Blocked on* with nothing that teaches it, and C2/0004's "a build you cannot map
+to a commit is a crash you cannot fix" needs an error tracker to be true.
+**The cost:** C6 says on its own row that scale must not be deferred, and this
+defers it. The counter-argument is that you cannot tune what you cannot see, so
+C7 before C6 is an ordering rather than a refusal.
+
+C2 and C3 both landed complete earlier the same day.
 
 ### State as of 2026-08-29
 

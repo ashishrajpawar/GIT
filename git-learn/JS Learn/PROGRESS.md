@@ -11,16 +11,16 @@ with this one, this one is right — everything below is measured, not asserted.
 
 | Metric | Value |
 |---|---|
-| Token-track lessons | 115 |
+| Token-track lessons | 116 |
 | Founder-track lessons (F1, counted separately) | 16 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
-| Quiz questions (track) | 3121 |
-| Avg teaching prose per track lesson | 2121 words |
-| Lessons with a playground | 115 / 115 |
-| Lessons with an exercise | 115 / 115 |
-| **Deepened** (all 3 spine sections) | 16 / 115 |
-| **Verified** (code executed) | 115 / 115 |
-| Ran clean but had nothing to run | 0 / 115 |
+| Quiz questions (track) | 3147 |
+| Avg teaching prose per track lesson | 2112 words |
+| Lessons with a playground | 116 / 116 |
+| Lessons with an exercise | 116 / 116 |
+| **Deepened** (all 3 spine sections) | 16 / 116 |
+| **Verified** (code executed) | 116 / 116 |
+| Ran clean but had nothing to run | 0 / 116 |
 | Errors | 0 |
 | Known and blocked | 0 |
 | Warnings | 2 |
@@ -30,12 +30,12 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 ## Answer-position distribution — **authored order, not what the student sees**
 
-1754 keyed questions (multiple-choice, spot-the-bug, which-breaks).
+1776 keyed questions (multiple-choice, spot-the-bug, which-breaks).
 
 > **This clustering is expected and already handled. Do not "fix" it again.**
 > `quiz.js` shuffles options at render time (`optionDisplayOrder`), so the
 > displayed distribution is roughly even — measured at 26.9 / 28.5 / 26.9 / 17.6
-> across all 1754 questions, versus the authored figures below. Index 3 sits
+> across all 1776 questions, versus the authored figures below. Index 3 sits
 > lower only because many questions have three options.
 >
 > The numbers here read `correct` straight from the lesson data, which is
@@ -54,20 +54,20 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Position | Count | Share |
 |---|---|---|
-| index 0 | 395 | 22.5% |
-| index 1 | 972 | 55.4% |
-| index 2 | 353 | 20.1% |
+| index 0 | 416 | 23.4% |
+| index 1 | 973 | 54.8% |
+| index 2 | 353 | 19.9% |
 | index 3 | 34 | 1.9% |
 
 ## Question types
 
 | Type | Count |
 |---|---|
-| multiple-choice | 1053 |
-| predict-output | 591 |
-| fill-blank | 484 |
-| spot-the-bug | 402 |
-| which-breaks | 299 |
+| multiple-choice | 1073 |
+| predict-output | 594 |
+| fill-blank | 485 |
+| spot-the-bug | 403 |
+| which-breaks | 300 |
 | order-steps | 292 |
 
 ## Modules
@@ -101,6 +101,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | c2-cicd-release | 4 | 1291 | 15 | 4 | 104 | 0/4 | 4/4 |
 | c3-trust-safety | 3 | 1126 | 12 | 3 | 78 | 0/3 | 3/3 |
 | c5-end-to-end-encryption | 5 | 1671 | 10 | 10 | 126 | 0/5 | 5/5 |
+| c7-observability | 1 | 1066 | 4 | 1 | 26 | 0/1 | 1/1 |
 | x1-git-dev-environment | 3 | 1202 | 4 | 6 | 83 | 0/3 | 3/3 |
 | x2-debugging | 2 | 1242 | 3 | 4 | 50 | 0/2 | 2/2 |
 
@@ -144,7 +145,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Tables queried but never created | ok |
 | Broken relative links | ok |
 | Widgets defined before they are called | ok |
-| search-index.json | 132 entries, 0 dead, 0 unindexed |
+| search-index.json | 133 entries, 0 dead, 0 unindexed |
 | Example tokens valid under alphabet | 2 invalid |
 
 ## Errors
@@ -271,6 +272,7 @@ None.
 | c5-end-to-end-encryption/0003-verification-safety-numbers.html | 1462 | 4 | 2 | 2 | 25 | — | yes |
 | c5-end-to-end-encryption/0004-backup-recovery.html | 2354 | 1 | 2 | 2 | 25 | — | yes |
 | c5-end-to-end-encryption/0005-single-device.html | 1386 | 2 | 2 | 2 | 25 | — | yes |
+| c7-observability/0001-the-log-line-you-can-publish.html | 1066 | 5 | 4 | 1 | 26 | — | yes |
 | x1-git-dev-environment/0001-git-fundamentals.html | 1254 | 10 | 2 | 2 | 29 | — | yes |
 | x1-git-dev-environment/0002-github-workflow.html | 1170 | 9 | 1 | 2 | 27 | — | yes |
 | x1-git-dev-environment/0003-dev-environment.html | 1181 | 16 | 1 | 2 | 27 | — | yes |

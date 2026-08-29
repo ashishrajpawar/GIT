@@ -1,0 +1,731 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>C7 — The Log Line You Can Publish</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Observability</a> &rsaquo;
+        <span>The Log Line You Can Publish</span>
+    </nav>
+
+    <h1>The Log Line You Can Publish</h1>
+    <p class="lesson-meta">C7 &mdash; Lesson 1 of 4 &nbsp;|&nbsp; ~50 min</p>
+
+    <div class="callout">
+        <div class="callout-title">Why this matters for Token</div>
+        <p>A log line is the most widely copied artefact any company produces. It gets pasted into
+        chat, attached to tickets, screenshotted, shipped to a collector, and read by whoever is
+        awake. <strong>Write logs as though they will be published, because in practice most of them
+        are.</strong></p>
+        <p>Token has one field that must never appear in one. A token code is a working credential:
+        anyone holding it can redeem it, and it stays valid until the token is revoked. The database
+        does not even store it in the clear &mdash; ADR-0007 keeps a peppered hash and an encrypted
+        copy precisely so that reading the table gives you nothing. Putting it in a log undoes all
+        of that with one string concatenation.</p>
+        <p>This is not hypothetical. A sweep on 2026-08-23 found it in three lessons at once,
+        including the one whose own callout forbids it.</p>
+    </div>
+
+    <h2>1 &middot; Structured, because you will need to search it</h2>
+
+    <p>A log line built by concatenation is readable by a person and useless to a machine:</p>
+
+    <pre><code>console.log("redeem failed for token " + id + " after " + ms + "ms");</code></pre>
+
+    <p>You cannot ask that "how many redemptions failed in the last hour" without writing a parser
+    for your own prose. The structured version is the same information as fields:</p>
+
+    <pre><code>log.warn({ event: "redeem_failed", requestId, tokenId: id, durationMs: ms });</code></pre>
+
+    <p>Now it is queryable, and &mdash; the part that matters here &mdash; <strong>every value has a
+    name, so a rule can be written about names.</strong> That is what makes the rest of this lesson
+    possible at all; you cannot allow-list a sentence.</p>
+
+    <h2>2 &middot; An allow-list, not a redaction list</h2>
+
+    <p>The obvious way to keep a secret out of a log is to remove it:</p>
+
+    <pre><code>const safe = { ...fields };
+delete safe.code;
+delete safe.password;      // there are no passwords in Token, but the habit arrives anyway
+log.info(safe);</code></pre>
+
+    <p>This is the same shape as the sanitiser in C3/0001 and it is wrong for the same reason:
+    <strong>it removes the fields you thought of, on the day you wrote it, and passes everything a
+    future caller adds.</strong> The allow-list inverts the default:</p>
+
+    <pre><code>const ALLOWED = ["event", "tokenId", "conversationId", "durationMs", "outcome"];
+const line = {};
+for (const name of ALLOWED) {
+  if (Object.prototype.hasOwnProperty.call(fields, name)) line[name] = fields[name];
+}</code></pre>
+
+    <p>Note what that loop iterates. Walking <code>ALLOWED</code> rather than <code>fields</code> is
+    what makes an invented field <em>unreachable</em> rather than merely unwanted &mdash; there is no
+    path through the code by which it can be copied.</p>
+
+    <h3>Try it yourself</h3>
+
+    <div id="pg-allowvsdeny"></div>
+    <script>
+        createPlayground("pg-allowvsdeny", `const fields = {
+  event: "redeem_failed",
+  tokenId: 7,
+  code: "MERC-8GH2-KP4X",
+  deviceFingerprint: "a91f...",
+  outcome: "expired"
+};
+
+function denyList(f) {
+  const out = Object.assign({}, f);
+  delete out.code;
+  return out;
+}
+
+function allowList(f) {
+  const ALLOWED = ["event", "tokenId", "outcome"];
+  const out = {};
+  for (const name of ALLOWED) {
+    if (Object.prototype.hasOwnProperty.call(f, name)) out[name] = f[name];
+  }
+  return out;
+}
+
+console.log("deny: ", JSON.stringify(denyList(fields)));
+console.log("allow:", JSON.stringify(allowList(fields)));
+console.log("");
+console.log("The deny list removed the field somebody remembered.");`);
+    </script>
+
+    <h2>3 &middot; Log the id, never the code</h2>
+
+    <p>The replacement for a code in a log is the row's <code>id</code>. It has exactly the property
+    an identifier in a log should have:</p>
+
+    <ul>
+        <li><strong>It identifies the row</strong> for anybody who can already query the database.</li>
+        <li><strong>It is worth nothing</strong> to anybody who cannot. An id is not a credential;
+        possessing it grants no access to anything.</li>
+    </ul>
+
+    <div class="callout warning">
+        <div class="callout-title">The dangerous line is the one with nothing to put in it</div>
+        <p>At <em>&ldquo;redemption attempt&rdquo;</em> the token has not been found yet, so there is
+        no id &mdash; and the pull towards writing <em>something</em> identifying is exactly how the
+        code got into three lessons at once. There is a real question being answered
+        (&ldquo;which request was this?&rdquo;) and the honest answer to it is
+        <code>requestId</code>.</p>
+        <p><strong>A request id is enough on its own, and it is enough deliberately.</strong> It ties
+        every line of one request together, it survives across services, and it identifies precisely
+        nothing about a person. When there is nothing safe to add, adding nothing is the answer.</p>
+    </div>
+
+    <h2>4 &middot; The field that is dangerous at any depth</h2>
+
+    <p>Here is where a top-level allow-list stops being sufficient. Suppose <code>token</code> is on
+    the list, because logging the token is obviously useful:</p>
+
+    <pre><code>log.info({ event: "redeem_ok", requestId, token: tokenRow });</code></pre>
+
+    <p><code>tokenRow</code> came from the database or from a service layer, and one of its
+    properties is <code>code</code>. The allow-list allowed <em>the container</em>; nobody allowed
+    what was inside it. The line is emitted, the code is in it, and every review of the allow-list
+    will keep saying it looks fine &mdash; because it does.</p>
+
+    <div id="pg-nested"></div>
+    <script>
+        createPlayground("pg-nested", `const ALLOWED = ["event", "token"];
+
+const fields = {
+  event: "redeem_ok",
+  token: { id: 7, label: "Courier", code: "MERC-8GH2-KP4X", status: "active" }
+};
+
+const line = {};
+for (const name of ALLOWED) {
+  if (Object.prototype.hasOwnProperty.call(fields, name)) line[name] = fields[name];
+}
+
+console.log(JSON.stringify(line));
+console.log("");
+console.log("Every field in that line was on the allow-list.");
+console.log("The list allowed the container, not its contents.");`);
+    </script>
+
+    <p>Two defences, and you want both:</p>
+
+    <ul>
+        <li><strong>Log scalars, not objects.</strong> Pass <code>tokenId: token.id</code> rather
+        than <code>token</code>. This is the fix, and it is a discipline &mdash; which means it holds
+        until somebody is in a hurry.</li>
+        <li><strong>A tripwire on the way out.</strong> Token codes have a known shape: twelve
+        characters from a 31-letter alphabet, in three groups of four. That is specific enough to
+        detect, so the logger can walk what it is about to emit and refuse anything containing one.</li>
+    </ul>
+
+    <div class="callout">
+        <div class="callout-title">Why a tripwire earns its keep even though the discipline is the real fix</div>
+        <p>A structural rule and a value-shaped rule fail in different ways, which is exactly why
+        running both is worth the duplication. The allow-list cannot see inside an allowed object.
+        The tripwire cannot see a code that has been mangled, encoded or split across two fields.
+        <strong>Neither is sufficient and their blind spots do not overlap.</strong></p>
+        <p>State the tripwire's limit honestly rather than trusting it: it catches a
+        <em>well-formed</em> code, which is the case that actually happens, because the code got
+        there by being copied rather than by being transformed.</p>
+    </div>
+
+    <h3>Try it yourself &mdash; broken on purpose</h3>
+    <p>Read the error. It is the shape of every recursive walk written in a hurry.</p>
+
+    <div id="pg-walk"></div>
+    <script>
+        createPlayground("pg-walk", `function containsCode(value) {
+  if (typeof value === "string") return value.indexOf("MERC") !== -1;
+  return Object.keys(value).some((k) => containsCode(value[k]));
+}
+
+console.log(containsCode({ token: { id: 7, code: "MERC-8GH2-KP4X" } }));
+console.log(containsCode({ event: "redeem_ok", durationMs: 12, label: null }));
+
+// Fix it. null is an object, and there is a whole category of values
+// this function assumes it will never meet.`);
+    </script>
+
+    <h2>5 &middot; What a dropped field is worth</h2>
+
+    <p>A field that did not survive the allow-list should be <em>reported</em>, not silently
+    discarded. Not in the log line itself &mdash; that would put the value back &mdash; but as a
+    count or a list of <em>names</em>.</p>
+
+    <p>The reason is the same one that gave every exclusion in C3/0001 a reason. A caller repeatedly
+    trying to log <code>code</code> is a bug somebody needs to fix, and it is invisible if the logger
+    quietly does the right thing. <strong>The safe behaviour and the visible behaviour are different
+    requirements, and doing only the first is how a defect survives for months.</strong></p>
+
+    <h2>Now build it yourself</h2>
+
+    <div id="exercise-1"></div>
+    <script>
+        createSolution("exercise-1", {
+            exercise:
+                "Write <code>buildLogLine(fields, allow, config)</code> &mdash; the last thing that touches a log line before it is emitted.<br><br>" +
+                "<code>fields</code> is what the caller wants to log. <code>allow</code> is the list of field names permitted at this log point. <code>config.looksLikeCode(s)</code> takes a <strong>string</strong> and returns whether it contains something shaped like a token code.<br><br>" +
+                "Return <code>{ line, dropped, blocked }</code>.<br><br>" +
+                "1. <code>line</code> always begins with <code>requestId</code>, taken from <code>fields.requestId</code>, or <code>null</code> when there is none. <strong>It is included whether or not it appears in <code>allow</code></strong> &mdash; a line nobody can tie to a request is a line nobody can use, and it is the honest answer when there is nothing else safe to say.<br>" +
+                "2. Then, <strong>walking <code>allow</code> in its own order</strong>, add each name that <code>fields</code> has as its own property. Iterating the allow-list rather than the fields is what makes an invented field unreachable instead of merely unwanted, and it is why the order of <code>line</code> follows <code>allow</code>.<br>" +
+                "3. <code>dropped</code> is the <strong>names</strong> of own properties of <code>fields</code> that are neither <code>requestId</code> nor in <code>allow</code>, in the order they appear in <code>fields</code>. Names only &mdash; putting the values in would be the leak you are preventing.<br>" +
+                "4. <code>blocked</code> is true when <code>config.looksLikeCode</code> matches any string reachable inside the values that would be in <code>line</code> &mdash; <strong>at any depth, including inside arrays</strong>. An allow-list permits a container; nobody permitted what is inside it.<br>" +
+                "5. When blocked, <code>line</code> is exactly <code>{ requestId, blocked: \"token_code\" }</code> and nothing else. Refusing must still emit something: a silent drop turns a leak into a gap in the record.<br>" +
+                "6. <code>config.looksLikeCode</code> is only ever called with strings. Numbers, booleans, <code>null</code> and objects go to it never.<br>" +
+                "7. Scan only what would be in <code>line</code>. A code in a <em>dropped</em> field never reaches the output, so blocking on it would throw away a perfectly good line.<br><br>" +
+                "Do not modify <code>fields</code> or <code>allow</code>.",
+            hints: [
+                "Build <code>line</code> first, then scan it, then decide. Doing it in that order is what makes rule 7 fall out for free &mdash; you are scanning the thing you are about to emit rather than the thing you were handed.",
+                "The scan is a small recursive function over a value: a string goes to <code>looksLikeCode</code>; an array or object recurses into its values; anything else is false. Watch <code>typeof null</code>, which is <code>\"object\"</code>, and put the null check before the object branch.",
+                "For rule 3, <code>Object.keys(fields)</code> gives you insertion order. For rule 2, <code>Object.prototype.hasOwnProperty.call(fields, name)</code> is safer than <code>name in fields</code>, which is also true for things every object inherits."
+            ],
+            solution: `function buildLogLine(fields, allow, config) {
+  // A string goes to the predicate; a container recurses; nothing else is
+  // ever passed to looksLikeCode. typeof null is "object", so it is tested
+  // before the object branch or it takes the recursive path.
+  function reachesACode(value) {
+    if (typeof value === "string") return config.looksLikeCode(value);
+    if (value === null || typeof value !== "object") return false;
+    if (Array.isArray(value)) return value.some(reachesACode);
+    return Object.keys(value).some(function (k) { return reachesACode(value[k]); });
+  }
+
+  const requestId = Object.prototype.hasOwnProperty.call(fields, "requestId")
+    ? fields.requestId
+    : null;
+
+  // Walking allow, not fields: an invented field has no path into the
+  // output at all, and the order of the line follows the list.
+  const line = { requestId: requestId };
+  for (const name of allow) {
+    if (name === "requestId") continue;
+    if (Object.prototype.hasOwnProperty.call(fields, name)) {
+      line[name] = fields[name];
+    }
+  }
+
+  // Names only. The values are the thing being kept out.
+  const dropped = Object.keys(fields).filter(function (name) {
+    return name !== "requestId" && allow.indexOf(name) === -1;
+  });
+
+  // Scanning the line rather than the fields, so a code in a dropped
+  // field costs nothing -- it was never going to be emitted.
+  const blocked = reachesACode(line);
+
+  return {
+    // Refusing still emits something. A silent drop turns a leak into a
+    // gap in the record, and the gap is where the incident was.
+    line: blocked ? { requestId: requestId, blocked: "token_code" } : line,
+    dropped: dropped,
+    blocked: blocked
+  };
+}`
+        });
+    </script>
+
+    <div id="pg-exercise"></div>
+    <script>
+        createPlayground("pg-exercise", `// --- Write buildLogLine(fields, allow, config) here, then press Run ---
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label);
+  if (!passed && detail) console.log("      " + detail);
+}
+
+const CODE = "MERC-8GH2-KP4X";
+
+// The real alphabet, so the fixture is a code the product could actually
+// generate rather than a lookalike: 31 characters, no 0 O 1 I L.
+const CODE_RE = /\\b[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}\\b/;
+
+function makeConfig() {
+  const seen = [];
+  return {
+    seen: seen,
+    looksLikeCode: function (s) {
+      seen.push(s);
+      return CODE_RE.test(s);
+    }
+  };
+}
+
+function keys(r) { return JSON.stringify(Object.keys(r.line)); }
+
+try {
+  const cfg = makeConfig();
+  const ordinary = buildLogLine(
+    { requestId: "r-1", event: "redeem_failed", tokenId: 7, outcome: "expired", code: CODE },
+    ["event", "tokenId", "outcome"], cfg);
+
+  check("only allow-listed fields reach the line",
+    keys(ordinary) === JSON.stringify(["requestId", "event", "tokenId", "outcome"]),
+    "got: " + keys(ordinary));
+  check("...and the field that was not allowed is named in dropped",
+    JSON.stringify(ordinary.dropped) === JSON.stringify(["code"]),
+    "got: " + JSON.stringify(ordinary.dropped));
+
+  // Rule 7. The code was dropped, so it was never going to be emitted and
+  // must not cost the line. An implementation scanning the INPUT blocks here.
+  check("a code in a dropped field does not block the line",
+    ordinary.blocked === false,
+    "got: " + JSON.stringify(ordinary) + " - scan what you are about to emit, not what you were handed");
+
+  // Rule 2. The line's order follows the allow-list, not the caller's object.
+  const ordered = buildLogLine(
+    { requestId: "r-2", zebra: 1, apple: 2 }, ["zebra", "apple"], makeConfig());
+  const reversed = buildLogLine(
+    { requestId: "r-2", zebra: 1, apple: 2 }, ["apple", "zebra"], makeConfig());
+  check("the line's field order follows the allow-list",
+    keys(ordered) === JSON.stringify(["requestId", "zebra", "apple"]) &&
+    keys(reversed) === JSON.stringify(["requestId", "apple", "zebra"]),
+    "got: " + keys(ordered) + " and " + keys(reversed) +
+    " - walking the fields instead would give the same order both times");
+
+  // Rule 1.
+  const bare = buildLogLine({ requestId: "r-3", secretish: "x" }, [], makeConfig());
+  check("requestId survives an empty allow-list",
+    keys(bare) === JSON.stringify(["requestId"]) && bare.line.requestId === "r-3",
+    "got: " + JSON.stringify(bare.line));
+
+  const anonymous = buildLogLine({ event: "boot" }, ["event"], makeConfig());
+  check("a missing requestId becomes null rather than vanishing",
+    anonymous.line.requestId === null &&
+      Object.keys(anonymous.line)[0] === "requestId",
+    "got: " + JSON.stringify(anonymous.line));
+  check("...and requestId is not reported as dropped",
+    JSON.stringify(buildLogLine({ requestId: "r", a: 1 }, ["a"], makeConfig()).dropped) ===
+      JSON.stringify([]),
+    "requestId is always kept, so it was never dropped");
+
+  // Rule 4. The lesson's whole point: the list allowed the container.
+  const nested = buildLogLine(
+    { requestId: "r-4", event: "redeem_ok",
+      token: { id: 7, label: "Courier", code: CODE, status: "active" } },
+    ["event", "token"], makeConfig());
+  check("a code inside an allowed object blocks the line",
+    nested.blocked === true,
+    "got: " + JSON.stringify(nested) + " - every field there was on the allow-list");
+  check("...and the blocked line carries only requestId and the reason",
+    JSON.stringify(nested.line) ===
+      JSON.stringify({ requestId: "r-4", blocked: "token_code" }),
+    "got: " + JSON.stringify(nested.line));
+
+  const deep = buildLogLine(
+    { requestId: "r-5", batch: { items: [{ id: 1 }, { id: 2, code: CODE }] } },
+    ["batch"], makeConfig());
+  check("a code inside an array inside an object still blocks",
+    deep.blocked === true, "got: " + JSON.stringify(deep));
+
+  // Rule 5. Refusing must still emit something.
+  check("a blocked result is still a line, not nothing",
+    deep.line !== null && deep.line !== undefined && deep.line.requestId === "r-5",
+    "got: " + JSON.stringify(deep.line) +
+    " - a silent drop turns a leak into a gap in the record");
+
+  // Rule 6. The predicate only ever sees strings.
+  const typed = makeConfig();
+  buildLogLine(
+    { requestId: "r-6", n: 42, ok: true, nothing: null, nested: { deep: [1, "two", null] } },
+    ["n", "ok", "nothing", "nested"], typed);
+  // Asserting the VALUES rather than their type on purpose: an
+  // implementation calling looksLikeCode(String(value)) passes a string
+  // every time and has still asked the predicate about 42, true and null.
+  check("looksLikeCode sees the two real strings and nothing else",
+    typed.seen.length === 2 &&
+      typed.seen.indexOf("r-6") !== -1 && typed.seen.indexOf("two") !== -1,
+    "got: " + JSON.stringify(typed.seen) +
+    " - expected exactly the string values in the line, not stringified numbers");
+  check("...and it did see the string buried in the array",
+    typed.seen.indexOf("two") !== -1,
+    "got: " + JSON.stringify(typed.seen) + " - arrays are containers too");
+
+  const plain = buildLogLine(
+    { requestId: "r-7", n: 42, ok: false, nothing: null },
+    ["n", "ok", "nothing"], makeConfig());
+  check("non-string values pass through unchanged",
+    plain.line.n === 42 && plain.line.ok === false && plain.line.nothing === null,
+    "got: " + JSON.stringify(plain.line));
+
+  // An allowed name the caller did not supply is absent, not undefined.
+  const sparse = buildLogLine({ requestId: "r-8", a: 1 }, ["a", "b"], makeConfig());
+  check("an allowed field the caller omitted does not appear as undefined",
+    keys(sparse) === JSON.stringify(["requestId", "a"]),
+    "got: " + keys(sparse) + " - a key holding undefined is noise in every query");
+
+  const nothingAtAll = buildLogLine({}, [], makeConfig());
+  check("an empty call still produces a usable line",
+    JSON.stringify(nothingAtAll.line) === JSON.stringify({ requestId: null }) &&
+      nothingAtAll.blocked === false,
+    "got: " + JSON.stringify(nothingAtAll));
+
+  // Nothing goes back into the caller's data.
+  const original = { requestId: "r-9", event: "x", code: CODE };
+  const allowList = ["event"];
+  const snapshot = JSON.stringify([original, allowList]);
+  buildLogLine(original, allowList, makeConfig());
+  check("the caller's fields and allow-list are not modified",
+    JSON.stringify([original, allowList]) === snapshot,
+    "the input changed - the line belongs on the returned object");
+
+  // The invariant.
+  const all = [ordinary, ordered, reversed, bare, anonymous, nested, deep, plain, sparse, nothingAtAll];
+  check("a line is blocked exactly when it says it is",
+    all.every(function (r) {
+      return r.blocked === (r.line.blocked === "token_code");
+    }),
+    "got: " + JSON.stringify(all.map(function (r) { return r.blocked + "/" + r.line.blocked; })));
+} catch (err) {
+  console.log("FAIL  " + err.name + ": " + err.message);
+  console.log("      Usually this means buildLogLine is missing or misspelt, or that");
+  console.log("      the recursive scan met null and took it for an object.");
+}`);
+    </script>
+
+    <h2>Explain it in your own words</h2>
+    <div id="explain-0001"></div>
+    <script>
+        createExplain("explain-0001", {
+            prompt: "The allow-list and the code-shaped tripwire overlap, and the lesson keeps both. Explain what each one catches that the other cannot &mdash; and why <em>&ldquo;log scalars, not objects&rdquo;</em> being the real fix does not make either of them redundant."
+        });
+    </script>
+
+    <div id="lesson-quiz"></div>
+    <script>
+        createQuiz("lesson-quiz", [
+            {
+                question: "Why should a log line be written as though it will be published?",
+                options: [
+                    "It gets pasted into chat, attached to tickets, screenshotted and shipped to a collector",
+                    "Logs are legally discoverable",
+                    "Log storage is not encrypted",
+                    "Users can request their logs under DPDP"
+                ],
+                correct: 0,
+                explanation: "It is the most widely copied artefact a company produces, and every one of those journeys happens at the moment something is going wrong and somebody needs help. In practice most log lines are published; the only question is whether they were written that way."
+            },
+            {
+                question: "Why is a token code specifically forbidden in a log?",
+                options: [
+                    "It is a working credential that stays valid until the token is revoked",
+                    "It is too long to log usefully",
+                    "It contains characters that break log parsers",
+                    "It is personally identifying under DPDP"
+                ],
+                correct: 0,
+                explanation: "Anyone holding it can redeem it. The database does not even store it in the clear — a peppered hash and an encrypted copy, so that reading the table gives you nothing — and one concatenation into a log undoes all of that."
+            },
+            {
+                question: "What does structured logging make possible that a concatenated string does not?",
+                options: [
+                    "Every value has a name, so rules can be written about names",
+                    "Smaller log files",
+                    "Coloured output in the terminal",
+                    "Automatic error grouping"
+                ],
+                correct: 0,
+                explanation: "Searchability is the usual argument and the naming is the one that matters here. You cannot allow-list a sentence, so everything else in this lesson depends on the fields having names in the first place."
+            },
+            {
+                type: "predict-output",
+                code: "const f = { a: 1, b: 2, c: 3 };\nconst out = Object.assign({}, f);\ndelete out.b;\nconsole.log(Object.keys(out).join(','));",
+                answer: "a,c",
+                explanation: "c survives because nobody thought about it, which is the entire objection to a deny list. It removes what you remembered on the day you wrote it and passes everything a future caller adds."
+            },
+            {
+                question: "The allow-list loop iterates the permitted names rather than the caller's fields. Why does that matter?",
+                options: [
+                    "An invented field becomes unreachable rather than merely unwanted",
+                    "It is faster when there are many fields",
+                    "It preserves the caller's ordering",
+                    "It avoids reading inherited properties"
+                ],
+                correct: 0,
+                explanation: "There is no path through the code by which a field nobody listed can be copied. Filtering the caller's object gets the same answer today and leaves the copying machinery in place for somebody to loosen later."
+            },
+            {
+                question: "What makes a row <code>id</code> the right thing to log in place of a code?",
+                options: [
+                    "It identifies the row for anyone who can already query the database and is worth nothing to anyone who cannot",
+                    "It is shorter",
+                    "It is not personal data",
+                    "It cannot be guessed"
+                ],
+                correct: 0,
+                explanation: "That is precisely the property an identifier in a log should have. An id is not a credential — possessing it grants no access — where a code is one until the token is revoked."
+            },
+            {
+                question: "At \"redemption attempt\" the token has not been found, so there is no id. What goes in the line?",
+                options: [
+                    "requestId, and nothing else identifying",
+                    "The code, since it is the only identifier available",
+                    "A hash of the code",
+                    "Nothing — skip the log line"
+                ],
+                correct: 0,
+                explanation: "This is the dangerous line, because there is a real question being asked and the pull to write something identifying is strong. A request id ties every line of one request together, survives across services, and identifies nothing about a person."
+            },
+            {
+                type: "spot-the-bug",
+                question: "Every field in this line was allow-listed and the code is still in it. Where did it get in?",
+                code: "1  const ALLOWED = ['event', 'token'];\n2  const line = {};\n3  for (const n of ALLOWED) if (n in fields) line[n] = fields[n];\n4  log.info(line);",
+                bugLine: 1,
+                options: ["Line 1", "Line 3", "Line 4"],
+                correct: 0,
+                explanation: "Allowing token permits the container and says nothing about its contents, and the row it came from has a code property. Every review of the list will keep concluding it looks fine, because it does."
+            },
+            {
+                question: "Which is the real fix for a code nested inside an allowed object?",
+                options: [
+                    "Log scalars — pass tokenId rather than the whole token row",
+                    "Add code to the deny list",
+                    "Serialise the object before logging it",
+                    "Allow-list the nested keys as well"
+                ],
+                correct: 0,
+                explanation: "It removes the container, so there is nothing to be hidden inside. It is a discipline rather than a mechanism, which is exactly why the tripwire is worth having alongside it — a discipline holds until somebody is in a hurry."
+            },
+            {
+                question: "Why keep the code-shaped tripwire when logging scalars already fixes the problem?",
+                options: [
+                    "The two fail in different ways and their blind spots do not overlap",
+                    "The tripwire is faster than reviewing code",
+                    "It satisfies a store requirement",
+                    "It allows the deny list to be removed"
+                ],
+                correct: 0,
+                explanation: "The allow-list cannot see inside an allowed object; the tripwire cannot see a code that has been mangled, encoded or split. Neither is sufficient, and running both is worth the duplication precisely because they miss different things."
+            },
+            {
+                type: "predict-output",
+                code: "console.log(typeof null, Array.isArray([]), typeof []);",
+                answer: "object true object",
+                explanation: "Which is why a recursive walk must test null before the object branch and arrays before the plain-object branch. Both are the standard way this kind of function crashes on its first real payload."
+            },
+            {
+                question: "Why does the scan run over the assembled line rather than over the incoming fields?",
+                options: [
+                    "A code in a dropped field was never going to be emitted, so blocking on it discards a good line",
+                    "The line is smaller",
+                    "The fields may contain functions",
+                    "The order would otherwise be wrong"
+                ],
+                correct: 0,
+                explanation: "Scanning what you are about to emit is both more correct and less work. Scanning the input over-blocks on exactly the case the allow-list already handled, which trains people to route around the logger."
+            },
+            {
+                question: "When the tripwire fires, why emit a line at all rather than dropping it?",
+                options: [
+                    "A silent drop turns a leak into a gap in the record, and the gap is where the incident was",
+                    "Log collectors require a line per request",
+                    "It keeps the line count accurate",
+                    "The caller would otherwise retry"
+                ],
+                correct: 0,
+                explanation: "Refusing is right; disappearing is not. The requestId and the reason are enough to find the caller that needs fixing and to know that something happened at that point in the request."
+            },
+            {
+                question: "Why report the <em>names</em> of dropped fields rather than dropping them silently?",
+                options: [
+                    "A caller repeatedly trying to log a code is a bug that is invisible if the logger quietly does the right thing",
+                    "The names are needed to reconstruct the line",
+                    "Auditors require a record of what was removed",
+                    "It helps size the log volume"
+                ],
+                correct: 0,
+                explanation: "Safe behaviour and visible behaviour are different requirements, and doing only the first is how a defect survives for months. Names only, though — putting the values in would be the leak you are preventing."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the guard so the recursive walk does not treat null as an object.",
+                code: "if (typeof value === \"string\") return config.looksLikeCode(value);\nif (value === ___ || typeof value !== \"object\") return false;",
+                answer: "null",
+                explanation: "typeof null is 'object', so without this line the walk calls Object.keys(null) and throws on the first payload containing a nullable column. Ordering guards from most specific to most general is the same shape as the null check before a date parse."
+            },
+            {
+                type: "which-breaks",
+                question: "Which of these puts a field the caller invented into the log line?",
+                variants: [
+                    "for (const n of allow) if (has(fields, n)) line[n] = fields[n]",
+                    "const line = { ...fields }; for (const n of Object.keys(line)) if (!allow.includes(n)) delete line[n]",
+                    "Object.keys(fields).filter(n => allow.includes(n)).forEach(n => { line[n] = fields[n]; })"
+                ],
+                correct: 1,
+                explanation: "Spreading first means everything is present before anything is removed, so any bug in the removal step leaks. The other two never copy an unlisted field at all — and the middle one also loses the allow-list's ordering."
+            },
+            {
+                question: "Why does the line's field order follow the allow-list rather than the caller's object?",
+                options: [
+                    "It falls out of iterating the allow-list, which is the property worth having",
+                    "Sorted keys compress better",
+                    "Log collectors require a fixed order",
+                    "It makes the tripwire faster"
+                ],
+                correct: 0,
+                explanation: "The ordering is a consequence rather than a goal, and it is a useful one to test because it is the visible difference between the two loops. Two implementations can produce the same keys and only one of them is structurally safe."
+            },
+            {
+                question: "An allow-listed field is absent from <code>fields</code>. What should the line contain?",
+                options: [
+                    "Nothing for that name — an absent key rather than a key holding undefined",
+                    "The name with a value of undefined",
+                    "The name with a value of null",
+                    "An empty string"
+                ],
+                correct: 0,
+                explanation: "A key holding undefined is noise in every query that filters on it, and most log pipelines serialise it inconsistently. Absent means absent."
+            },
+            {
+                question: "Why is <code>Object.prototype.hasOwnProperty.call(fields, name)</code> preferred over <code>name in fields</code>?",
+                options: [
+                    "The in operator is also true for properties every object inherits",
+                    "It is faster",
+                    "It works on arrays",
+                    "It handles null fields"
+                ],
+                correct: 0,
+                explanation: "A log point that allow-lists a name like constructor or toString would otherwise find it always present, with a function as its value. Rare, and the safer form costs nothing."
+            },
+            {
+                question: "What is the honest limit of the code-shaped tripwire?",
+                options: [
+                    "It only catches a well-formed code — mangled, encoded or split values pass",
+                    "It cannot see inside arrays",
+                    "It produces too many false positives to be useful",
+                    "It only works on the top level of the object"
+                ],
+                correct: 0,
+                explanation: "Which is acceptable because the case that actually happens is a code copied verbatim from a row into a field. Stating the limit is what stops the tripwire being trusted as though it were the whole defence."
+            },
+            {
+                question: "Which of these describes the relationship between this lesson and X2/0002?",
+                options: [
+                    "X2 is for when you know something is wrong and can reproduce it; this is for knowing at all",
+                    "This lesson replaces the debugging one",
+                    "They cover the same ground for different audiences",
+                    "X2 covers production and this covers development"
+                ],
+                correct: 0,
+                explanation: "Breakpoints and stack traces need a machine you are sitting at and a bug you can trigger. A log line is what you have for a request that happened twenty minutes ago on a box in another country."
+            },
+            {
+                type: "predict-output",
+                code: "const line = { requestId: 'r-1' };\nline.tokenId = 7;\nconsole.log(JSON.stringify(Object.keys(line)));",
+                answer: "[\"requestId\",\"tokenId\"]",
+                explanation: "Insertion order is preserved for string keys, which is what lets requestId be first by simply being assigned first. Putting it first is a small kindness to whoever is scanning a thousand lines by eye."
+            },
+            {
+                question: "The self-hosted requirement for telemetry — what is it, and what does it cost?",
+                options: [
+                    "Telemetry describes a privacy product's users, so it stays on your disk; the cost is operating the thing that watches the thing",
+                    "It is cheaper than hosted services",
+                    "Hosted services cannot handle the volume",
+                    "It is required by the app stores"
+                ],
+                correct: 0,
+                explanation: "The same objection that rules out third-party comms SDKs. The cost is another container, another database, another backup, and its own opportunity to fail at the worst possible moment."
+            },
+            {
+                question: "Why is <code>looksLikeCode</code> injected rather than defined inside the function?",
+                options: [
+                    "The interesting logic is the assembly and the walk, and neither should need a real regex to exercise",
+                    "The pattern changes per environment",
+                    "Regular expressions cannot be used in this context",
+                    "It keeps the function shorter"
+                ],
+                correct: 0,
+                explanation: "The same technique as the injected clock in C1/0002 and the injected verifier in C3/0001. It also lets the self-check record every value the predicate was given, which is how the rule about only passing strings gets tested at all."
+            },
+            {
+                question: "What is the honest summary of this lesson?",
+                options: [
+                    "Name the fields you permit, log the id rather than the credential, and check what you are about to emit",
+                    "Redact secrets before logging them",
+                    "Log everything and filter at query time",
+                    "Use a logging library that handles this automatically"
+                ],
+                correct: 0,
+                explanation: "Three sentences, and each removes a different way of leaking: a field nobody listed, a value that should never have been chosen, and a container hiding something inside it."
+            },
+            {
+                question: "Which of these is a fair reason to keep both a structural rule and a value-shaped rule?",
+                options: [
+                    "Their blind spots do not overlap, so each covers what the other misses",
+                    "Two checks are twice as likely to catch a problem",
+                    "One of them will eventually be removed",
+                    "It satisfies two different reviewers"
+                ],
+                correct: 0,
+                explanation: "Redundancy is only worth its cost when the failures are independent. Two checks that fail together are one check with extra code, which is a different and much weaker thing."
+            }
+        ]);
+    </script>
+
+    <div class="lesson-nav">
+        <a href="./README.html">&larr; Module home</a>
+        <span class="disabled">Next: Errors, and the Body the Tracker Attaches by Default &rarr;</span>
+    </div>
+
+</body>
+</html>
