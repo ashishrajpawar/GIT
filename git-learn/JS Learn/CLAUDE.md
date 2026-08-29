@@ -20,14 +20,14 @@ Five steps, in order:
 
 **The audit should say `OK`.** It has since 2026-08-18, which is the first time
 in the project's history — so a red audit now means something rather than being
-the background state. If you touch `assets/` or `scripts/`, run the seven suites
+the background state. If you touch `assets/` or `scripts/`, run the eight suites
 too; together they take a few seconds:
 
 ```bash
 node scripts/test-quiz-shuffle.mjs      node scripts/test-dom-sandbox.mjs
 node scripts/test-check-pre-blocks.mjs  node scripts/test-playground-dom.mjs
 node scripts/test-explain.mjs           node scripts/test-strip-types.mjs
-node scripts/test-load-order.mjs
+node scripts/test-load-order.mjs        node scripts/test-token-scan.mjs
 ```
 
 ### Document precedence — one fact, one home
@@ -154,11 +154,12 @@ Derived figures, so nobody recomputes them wrongly again:
   12.5% more likely than the rest
 - indices 26–30 are `V, W, X, Y, Z`
 
-Note ~15 other example tokens still contain excluded characters. Some are
-accidental; some look like deliberate negative fixtures — `TEST-1234`,
-`NOPE-0000`, `IJKL-3333`, where being invalid is the point. Telling them apart
-needs reading each in context: rewriting a fixture meant to be rejected breaks
-its lesson. **Do not bulk-rewrite them.**
+Other example tokens contain excluded characters on purpose — `TEST-1234`,
+`NOPE-0000`, `IJKL-3333`, where being invalid is the point. Telling a fixture
+apart from a mistake needs reading each in context: rewriting one meant to be
+rejected breaks its lesson. **Do not bulk-rewrite them.** The live count of
+unclaimed ones is in `PROGRESS.md`; this file used to say "~15" and that was a
+number the audit computes, which is the drift this file forbids.
 
 **The audit now guards the alphabet itself, not just example codes.** Three
 lessons — including `b7/0001`, the server that actually generates codes —
@@ -171,8 +172,9 @@ A lesson that shows a wrong alphabet deliberately opts out by containing the
 string `audit-allow-alphabet`.
 
 **A lesson whose *subject* is invalid codes opts out of the example-code check
-with `audit-allow-token-fixtures`.** `02/0004` teaches the redemption field and
-`01/0012` validates codes before calling the API, so both carry deliberately
+with `audit-allow-token-fixtures`.** `02/0004` teaches the redemption field,
+`01/0012` validates codes before calling the API, and `a9/0002` refuses a
+malformed code in a deep link on eight separate lines — all three carry deliberately
 impossible codes as the thing being rejected — `01/0012`'s `MERC-8GH2-KP4O` is <!-- audit-allow-token-here: naming the fixture is the point of the sentence -->
 the canonical example with its last character swapped for an excluded letter,
 which is precisely why it is useful. Standing warnings about those would train
@@ -192,6 +194,29 @@ about the documentation of the bug it exists to prevent. A whole-file opt-out
 here would be actively dangerous — `CLAUDE.md` carries the canonical code a
 lesson copies, which is how the original spread to 36 files. **A marker must be
 claimable only by the content it guards.**
+
+**Which marker: count the reasons, not the lines you feel like editing.** The
+line marker is for a file with *one* legitimate bad code. `a9/0002` had eight
+and took the file marker; `b2/0001` and `c1/0003` have one each and take the
+line marker. Getting this backwards in either direction is a cost: eight
+inline markers is noise inside a self-check the student reads, and a file
+marker on a one-line offender stops checking every valid code in the file.
+
+**The scanner lives in `scripts/token-scan.mjs` and has a suite.** It was inline
+in `audit.mjs` and untested until 2026-08-29, when it was extracted because it
+had been warning about the phrase **`DENY-LIST`** — four letters, a hyphen, four
+letters, which is also `READ-ONLY`, `LEFT-JOIN`, `FAIL-FAST` and `SELF-HOST`,
+all of which this course writes about. So **a two-group match must now contain a
+digit**; three groups of four is the token shape itself and stays unconditional.
+Every example code here has a digit, including all three named fixtures, and an
+all-letters pair in capitals is English.
+
+`test-token-scan.mjs` asserts both directions — the bad codes it must still
+catch, the prose it must not, that the digit rule is not an escape hatch for
+three-group codes, and that a marker claims its own line and no other. **The
+narrowing is only safe because the suite exists**; that is the same bargain
+`test-check-pre-blocks.mjs` was written under, and the reason neither check may
+be quietly demoted to a warning instead.
 
 ### Token repo layout (one git repo, four folders)
 
@@ -1445,6 +1470,7 @@ node scripts/test-check-pre-blocks.mjs               # 14 assertions — see bel
 node scripts/test-quiz-shuffle.mjs                   # the option shuffle still shuffles
 node scripts/check-load-order.mjs                    # every widget defined before it is called
 node scripts/test-load-order.mjs                     # 15 assertions, both directions
+node scripts/test-token-scan.mjs                     # 22 assertions, both directions
 ```
 
 **`check-load-order.mjs` is the same family, one layer earlier: a `<pre>` block

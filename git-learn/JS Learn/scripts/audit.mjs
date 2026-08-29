@@ -26,14 +26,16 @@ import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 import { scanPreBlocks } from "./check-pre-blocks.mjs";
 import { scanLoadOrderIn } from "./check-load-order.mjs";
+import { badTokensIn, TOKEN_ALPHABET } from "./token-scan.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = new Set(process.argv.slice(2));
 const CHECK = args.has("--check");
 const QUIET = args.has("--quiet");
 
-/** Token code alphabet — see CLAUDE.md § Token code format. 0/O/1/I/L excluded. */
-const TOKEN_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+/* TOKEN_ALPHABET now lives in token-scan.mjs and is imported above, so the
+   alphabet and the scanner that uses it cannot drift apart. See CLAUDE.md
+   § Token code format — 0/O/1/I/L excluded. */
 
 /** A lesson counts as "deepened" once it carries all three spine sections. */
 const DEEPENED_MARKERS = [/why this way/i, /when this breaks/i, /what this costs/i];
@@ -524,18 +526,13 @@ for (const file of tokenScan) {
      exists to prevent, which is the SESSION.md/HANDOFF.md mistake again, one
      scope smaller. A whole-file marker is wrong here for the reason given
      below: CLAUDE.md carries the canonical code a lesson copies. */
-  const lineOf = (index) => text.slice(0, index).split("\n").length - 1;
-  const textLines = text.split("\n");
-  for (const m of text.matchAll(/\b([A-Z0-9]{4}-[A-Z0-9]{4}(?:-[A-Z0-9]{4})?)\b/g)) {
-    if ((textLines[lineOf(m.index)] || "").includes("audit-allow-token-here")) continue;
-    const bad = [...m[1].replace(/-/g, "")].filter((c) => !TOKEN_ALPHABET.includes(c));
-    if (!bad.length) continue;
-    /* "0001-0004" is a lesson range, not a token. Every real example code in
-       this course carries a letter label in the first group. */
-    if (/^\d{4}-/.test(m[1])) continue;
-    if (/^(TEST|NOPE|OLD1|NEW1|ABCD|IJKL|AAAA|EFGH|ZZZZ|DTLS|HMAC|XXXX)/.test(m[1])) continue; // fixtures
-    if (!badTokens.has(m[1])) badTokens.set(m[1], new Set());
-    badTokens.get(m[1]).add(rel(file));
+  /* The matching, the line-level marker, the lesson-range and fixture
+     exemptions and the two-group digit rule all live in token-scan.mjs, which
+     has a suite. See the note at the top of that file for why the digit rule
+     exists. */
+  for (const { token } of badTokensIn(text)) {
+    if (!badTokens.has(token)) badTokens.set(token, new Set());
+    badTokens.get(token).add(rel(file));
   }
 }
 for (const [t, files] of badTokens)

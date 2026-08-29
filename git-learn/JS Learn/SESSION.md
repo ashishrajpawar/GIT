@@ -85,7 +85,18 @@ playgrounds are live again.
 `CLAUDE.md`. Run `node scripts/audit.mjs` first; it regenerates that file. What
 this section records is only what a script cannot compute:
 
-- **Audit green, seven suites pass.** No errors.
+- **Audit green, eight suites pass, and for the first time there are no
+  warnings either.** The two standing ones were cleared 2026-08-29 and they
+  were different problems wearing the same jacket: `a9/0002` needed the
+  documented file-level fixture opt-out for eight deliberate malformed codes,
+  and **`DENY-LIST` was never a code at all.** The scanner matched four
+  letters, a hyphen and four letters, which is also `READ-ONLY`, `LEFT-JOIN`
+  and `SELF-HOST` — a recurring false positive, not a one-off to reword. A
+  two-group match now needs a digit; the three-group token shape is unchanged.
+- **`scripts/token-scan.mjs` is new**, extracted out of `audit.mjs` so the
+  narrowing could be tested, with `test-token-scan.mjs` asserting both
+  directions. Proven live as well as in unit tests: a probe file carrying a bad
+  code took the audit to one warning and removing it took it back to zero.
 - **Every lesson executes something.** No `unverifiable` entries and none
   absent from the log — the flag that covered 17 lessons on 2026-08-23 covers
   none.

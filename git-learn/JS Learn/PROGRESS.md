@@ -23,7 +23,7 @@ with this one, this one is right — everything below is measured, not asserted.
 | Ran clean but had nothing to run | 0 / 126 |
 | Errors | 0 |
 | Known and blocked | 0 |
-| Warnings | 2 |
+| Warnings | 0 |
 
 Student-completed lessons are **not** tracked here — that comes from the student
 or from `progress.js` localStorage, and is never inferred from the files.
@@ -148,17 +148,13 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | Broken relative links | ok |
 | Widgets defined before they are called | ok |
 | search-index.json | 143 entries, 0 dead, 0 unindexed |
-| Example tokens valid under alphabet | 2 invalid |
+| Example tokens valid under alphabet | ok |
 
 ## Errors
 
 None.
 
 
-## Warnings (2)
-
-- token: "MERC-8GH2-KP4O" uses characters excluded from the alphabet (1 file(s))
-- token: "DENY-LIST" uses characters excluded from the alphabet (1 file(s))
 
 ## Per-lesson detail
 
