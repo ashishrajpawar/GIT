@@ -28,11 +28,12 @@ how far it got.
 
 **W1 — C3, Trust Safety & Abuse.** Started 2026-08-29, straight after C2, and
 chosen on the dependency in *Next action* rather than on preference.
-`0001-reporting-without-reading.html` is written, verified and has its
-`--wrong` cases; README, index row and search entry are in. **`0002`–`0003`
-remain**: the metadata signals, and interim suspension. Each lands as its own
-green commit — the last written lesson's next-link is a disabled span until the
-one after it exists.
+`0001-reporting-without-reading.html` and `0002-signals-without-content.html`
+are written, verified and have their `--wrong` cases; README, index row and
+search entries are in. **`0003` remains** — interim suspension, its published
+reversal rate, and revocation as the control that needs no operator. It lands
+as its own green commit; the last written lesson's next-link is a disabled span
+until the one after it exists.
 
 C2 landed complete the same day: four lessons, each verified with `--wrong`
 cases, each its own commit.
