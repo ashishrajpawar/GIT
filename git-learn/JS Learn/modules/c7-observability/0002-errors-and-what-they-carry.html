@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>C7 — Errors, and the Body the Tracker Attaches by Default</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Observability</a> &rsaquo;
+        <span>Errors, and the Body the Tracker Attaches by Default</span>
+    </nav>
+
+    <h1>Errors, and the Body the Tracker Attaches by Default</h1>
+    <p class="lesson-meta">C7 &mdash; Lesson 2 of 4 &nbsp;|&nbsp; ~50 min</p>
+
+    <div class="callout">
+        <div class="callout-title">Why this matters for Token</div>
+        <p>ADR-0007 moved the token code <em>out of the URL and into the request body</em>. A path
+        reaches the proxy's access log, browser history, <code>Referer</code> and crash reports, so
+        <code>POST /api/redeem</code> takes <code>{ code }</code> in the body instead.</p>
+        <p><strong>An error tracker attaches the request body by default.</strong> Install it,
+        deploy, and the first failed redemption sends that code to the very place the decision was
+        made to keep it out of &mdash; a crash report. The library is not misbehaving; attaching the
+        body is the right default almost everywhere, which is exactly why nobody notices it here.</p>
+        <p>A default that is sensible in general and wrong for you is the hardest kind to catch,
+        because there is no error, no warning, and a review of your own code shows nothing at all.</p>
+    </div>
+
+    <h2>1 &middot; What a tracker gives you that a log does not</h2>
+
+    <p>Logs are a stream. A tracker is a set of <em>issues</em>, and the difference is grouping:</p>
+
+    <ul>
+        <li>Ten thousand occurrences of one bug are <strong>one issue</strong> with a count, rather
+        than ten thousand lines to scroll past.</li>
+        <li>First seen, last seen, and which release it started in.</li>
+        <li>A stack trace, mapped back through source maps to the line you actually wrote.</li>
+        <li>Context &mdash; the request, the environment, the breadcrumbs leading up to it.</li>
+    </ul>
+
+    <p>That last one is the useful bit and the dangerous bit, and they are the same feature.</p>
+
+    <div class="callout warning">
+        <div class="callout-title">Self-hosted, and what it costs</div>
+        <p>Token's crash reports describe a privacy product's users at the moment things went wrong.
+        Sending them to a hosted service puts that on somebody else's disk, which is the objection
+        that rules out the third-party comms SDKs. So: a self-hosted tracker, open source, on the
+        same VPS.</p>
+        <p><strong>You now operate the thing that watches the thing.</strong> Another container,
+        another database, another backup, and a real chance it is down at the exact moment you need
+        it &mdash; which is a reason to keep logs working independently rather than routing
+        everything through one system.</p>
+    </div>
+
+    <h2>2 &middot; Grouping, and the message that creates an issue per user</h2>
+
+    <p>A tracker groups by a <em>fingerprint</em>, and by default the fingerprint comes from the
+    error type and the stack trace &mdash; with the message contributing. So this is fine:</p>
+
+    <pre><code>throw new NotFoundError("token not found");</code></pre>
+
+    <p>and this quietly destroys the tool:</p>
+
+    <pre><code>throw new NotFoundError(`token ${id} not found for user ${userId}`);</code></pre>
+
+    <p>Every distinct pair of ids is a different message and therefore a different issue. One bug
+    becomes forty thousand issues, the dashboard is unreadable, and the alert that should have said
+    <em>&ldquo;this is happening 40,000 times an hour&rdquo;</em> says <em>&ldquo;a new issue&rdquo;</em>
+    forty thousand times.</p>
+
+    <h3>Try it yourself</h3>
+
+    <div id="pg-grouping"></div>
+    <script>
+        createPlayground("pg-grouping", `const failures = [];
+for (let i = 1; i <= 2000; i++) failures.push({ tokenId: i, userId: 4000 + i });
+
+const interpolated = new Set(
+  failures.map((f) => "token " + f.tokenId + " not found for user " + f.userId)
+);
+
+const stable = new Set(failures.map(() => "token not found"));
+
+console.log("issues, message with ids in it:", interpolated.size);
+console.log("issues, stable message:        ", stable.size);
+console.log("");
+console.log("The ids are not lost -- they go in structured fields beside the");
+console.log("message, where they are searchable and not part of the grouping.");`);
+    </script>
+
+    <p>The rule that falls out: <strong>the message identifies the <em>kind</em> of failure; the
+    fields identify the instance.</strong> Exactly the split structured logging asks for in the
+    previous lesson, arriving from a different direction.</p>
+
+    <h2>3 &middot; Normalising a message, and the order that matters</h2>
+
+    <p>You do not always control the message. A driver error, a validation library, somebody else's
+    thrown string &mdash; all arrive with values already baked in. So the last thing before sending
+    normalises it: replace the varying parts with placeholders, and group on the result.</p>
+
+    <p>Two patterns are worth replacing, and <strong>the order is not free</strong>:</p>
+
+    <div id="pg-order"></div>
+    <script>
+        createPlayground("pg-order", `const CODE = /\\b[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}\\b/g;
+const DIGITS = /\\d+/g;
+
+const raw = "redeem failed for MERC-8GH2-KP4X after 1274ms";
+
+const codeFirst = raw.replace(CODE, "<code>").replace(DIGITS, "<n>");
+const digitsFirst = raw.replace(DIGITS, "<n>").replace(CODE, "<code>");
+
+console.log("code first:  ", codeFirst);
+console.log("digits first:", digitsFirst);
+console.log("");
+console.log("Digits first breaks the code apart, so the code pattern never");
+console.log("matches -- and what is left still identifies the token.");`);
+    </script>
+
+    <p>Replacing digits first mangles the code into something the code pattern can no longer see, and
+    the remains are still specific enough to identify one token. So the ordering fixes two things at
+    once: <strong>the grouping, and a leak.</strong></p>
+
+    <h2>4 &middot; The request, rebuilt rather than filtered</h2>
+
+    <p>The tracker wants to attach the request. Give it one you constructed:</p>
+
+    <ul>
+        <li><strong>Method and URL</strong> &mdash; safe, and safe <em>because</em> ADR-0007 keeps
+        codes out of paths. If codes were still in the URL this field would be the leak instead.</li>
+        <li><strong>Headers, allow-listed</strong> &mdash; and header names are case-insensitive over
+        the wire, so the comparison has to be too. <code>Authorization</code> and
+        <code>Cookie</code> are the obvious ones to keep out, and an allow-list keeps out the ones
+        you have not thought of yet.</li>
+        <li><strong>The body: never.</strong> Not filtered, not redacted, not truncated &mdash;
+        absent. It is where the code lives by design, and a body you are carefully redacting is one
+        redaction bug away from the thing you moved it there to avoid.</li>
+    </ul>
+
+    <h2>5 &middot; Not everything that fails is an error</h2>
+
+    <p>A redemption of a dead code returns the same refusal whatever killed it &mdash; revoked,
+    expired, exhausted, never existed (ADR-0010). That is the product working exactly as designed,
+    and it will happen constantly.</p>
+
+    <p>Send those to the tracker and the tracker fills with them. Then the same thing happens that
+    happened to this course's own audit: everybody learns that the dashboard is noise, and the real
+    error arrives in a list nobody opens. <strong>A tracker full of expected failures is a tracker
+    nobody reads, which is worse than not having one, because it occupies the space where a working
+    one would go.</strong></p>
+
+    <h3>Try it yourself &mdash; broken on purpose</h3>
+    <p>Read the error. It happens for every failure that did not come from a request.</p>
+
+    <div id="pg-nohttp"></div>
+    <script>
+        createPlayground("pg-nohttp", `const fromRequest = {
+  error: { name: "TypeError", message: "x is not a function" },
+  request: { method: "POST", url: "/api/redeem", headers: { "x-request-id": "r-1" } }
+};
+
+const fromBackgroundJob = {
+  error: { name: "TypeError", message: "x is not a function" }
+};
+
+function headerNames(event) {
+  return Object.keys(event.request.headers);
+}
+
+console.log("http:", headerNames(fromRequest));
+console.log("job: ", headerNames(fromBackgroundJob));
+
+// Fix it. A nightly cleanup, a queue worker and a socket handler all
+// throw without any request being involved.`);
+    </script>
+
+    <h2>6 &middot; Stamp the release, or the stack trace is decoration</h2>
+
+    <p>C2/0004 made the point from the release side: a crash report naming a build you cannot map to
+    a revision is a crash you cannot fix. From this side it means every event carries a
+    <code>release</code>, and a build with no release attached still gets sent &mdash; tagged
+    <code>unknown</code>, visibly, rather than dropped or silently blank.</p>
+
+    <p><strong>Visibly is the point.</strong> An <code>unknown</code> release on a dashboard is a
+    question somebody will eventually ask; an empty field is one nobody notices.</p>
+
+    <h2>Now build it yourself</h2>
+
+    <div id="exercise-1"></div>
+    <script>
+        createSolution("exercise-1", {
+            exercise:
+                "Write <code>prepareEvent(event, config)</code> &mdash; the hook every tracker gives you, which runs on each event just before it leaves the process.<br><br>" +
+                "<code>event</code> is <code>{ error: { name, message }, request, release }</code>. <code>request</code> is <code>{ method, url, headers, body }</code> and <strong>may be absent entirely</strong> &mdash; a queue worker, a nightly job and a socket handler all throw with no request involved.<br><br>" +
+                "<code>config</code> is <code>{ expectedErrors, allowHeaders, codePattern }</code>. <code>codePattern</code> is a global regular expression matching a token code.<br><br>" +
+                "Return <code>{ send, reason, event }</code>.<br><br>" +
+                "1. If <code>error.name</code> is in <code>expectedErrors</code> &rarr; <code>{ send: false, reason: \"expected\", event: null }</code>. A dead code being refused is the product working; a tracker full of those is one nobody opens.<br>" +
+                "2. Otherwise <code>send: true</code>, <code>reason: \"reported\"</code>, and build the outgoing event <strong>field by field</strong> as <code>{ fingerprint, error, request, release }</code>.<br>" +
+                "3. Normalise the message: replace matches of <code>codePattern</code> with <code>\"&lt;code&gt;\"</code> <strong>first</strong>, then runs of one or more digits with <code>\"&lt;n&gt;\"</code>. The order is load-bearing &mdash; digits first breaks a code into pieces the code pattern can no longer match, and what survives still identifies one token.<br>" +
+                "4. <code>error</code> is <code>{ name, message }</code> where <code>message</code> is the <strong>normalised</strong> one. The raw message never leaves.<br>" +
+                "5. <code>fingerprint</code> is <code>name + \": \" + normalised message</code>. Two failures differing only in ids must produce the same string, or one bug becomes forty thousand issues.<br>" +
+                "6. <code>request</code> is <code>null</code> when there was none. Otherwise <code>{ method, url, headers }</code> &mdash; <strong>and never a body</strong>. Not filtered or redacted: absent.<br>" +
+                "7. <code>headers</code>: walk <code>allowHeaders</code> in order and include each one the request has, <strong>matching case-insensitively</strong> because header names are case-insensitive over the wire. Emit the names lowercased. A request with no headers gives <code>{}</code>.<br>" +
+                "8. <code>release</code> is <code>event.release</code>, or the string <code>\"unknown\"</code> when there is none. Visibly unknown, never blank.<br><br>" +
+                "Do not modify <code>event</code> or <code>config</code>.",
+            hints: [
+                "Do the cheap refusal first and return immediately, so everything below can assume the event is going to be sent. Then normalise the message once into a local, because rules 4 and 5 both need it and computing it twice is two places to get the order wrong.",
+                "For the headers, build a lowercased view of the request's headers first &mdash; one small object mapping the lowercased name to the value &mdash; then walk <code>allowHeaders</code> and look names up in it. Walking the allow-list is what gives you its ordering, exactly as in the previous lesson.",
+                "Rule 6's <em>never a body</em> is easier to guarantee than to remember: name the three fields you want in an object literal. There is then no code path that could include a fourth, whatever the request happens to carry."
+            ],
+            solution: `function prepareEvent(event, config) {
+  // Cheapest decision first, and everything below can then assume the
+  // event is going out.
+  if (config.expectedErrors.indexOf(event.error.name) !== -1) {
+    return { send: false, reason: "expected", event: null };
+  }
+
+  // Code first. Digits first would break MERC-8GH2-KP4X into pieces the
+  // code pattern can no longer match, and the remains still identify one
+  // token -- so the order fixes the grouping AND a leak.
+  const message = event.error.message
+    .replace(config.codePattern, "<code>")
+    .replace(/\\d+/g, "<n>");
+
+  let request = null;
+  if (event.request) {
+    const lowered = {};
+    const raw = event.request.headers || {};
+    for (const name of Object.keys(raw)) lowered[name.toLowerCase()] = raw[name];
+
+    // Walking the allow-list, so the output keeps its order and a header
+    // nobody listed has no path into the event.
+    const headers = {};
+    for (const name of config.allowHeaders) {
+      const key = name.toLowerCase();
+      if (Object.prototype.hasOwnProperty.call(lowered, key)) {
+        headers[key] = lowered[key];
+      }
+    }
+
+    // Three named fields. There is no path by which a body gets in.
+    request = { method: event.request.method, url: event.request.url, headers: headers };
+  }
+
+  return {
+    send: true,
+    reason: "reported",
+    event: {
+      fingerprint: event.error.name + ": " + message,
+      error: { name: event.error.name, message: message },
+      request: request,
+      // Visibly unknown beats blank: one is a question somebody asks.
+      release: event.release === undefined || event.release === null
+        ? "unknown"
+        : event.release
+    }
+  };
+}`
+        });
+    </script>
+
+    <div id="pg-exercise"></div>
+    <script>
+        createPlayground("pg-exercise", `// --- Write prepareEvent(event, config) here, then press Run ---
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label);
+  if (!passed && detail) console.log("      " + detail);
+}
+
+const CODE = "MERC-8GH2-KP4X";
+const OTHER = "WXYZ-2345-KP4X";
+
+const CONFIG = {
+  expectedErrors: ["TokenNotAvailableError", "ValidationError"],
+  allowHeaders: ["x-request-id", "content-type", "user-agent"],
+  codePattern: /\\b[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}\\b/g
+};
+
+function ev(extra) {
+  const base = {
+    error: { name: "TypeError", message: "boom" },
+    request: {
+      method: "POST", url: "/api/redeem",
+      headers: { "X-Request-Id": "r-1", "Authorization": "Bearer sekrit", "content-type": "application/json" },
+      body: { code: CODE }
+    },
+    release: "1.7.2"
+  };
+  if (extra) for (const k of Object.keys(extra)) base[k] = extra[k];
+  return base;
+}
+function prep(extra) { return prepareEvent(ev(extra), CONFIG); }
+
+try {
+  const ok = prep();
+  check("an unexpected error is reported",
+    ok.send === true && ok.reason === "reported", "got: " + JSON.stringify(ok.reason));
+
+  // Rule 1.
+  const expected = prep({ error: { name: "TokenNotAvailableError", message: "dead code" } });
+  check("an expected failure is not sent",
+    expected.send === false && expected.reason === "expected" && expected.event === null,
+    "got: " + JSON.stringify(expected) + " - a dead code being refused is the product working");
+
+  // Rule 3, and the order that carries it. Digits first would give
+  // "MERC-<n>GH<n>-KP<n>X", which is mangled and still identifies a token.
+  const noisy = prep({ error: { name: "RedeemError", message: "redeem failed for " + CODE + " after 1274ms" } });
+  check("the code is replaced before the digits are",
+    noisy.event.error.message === "redeem failed for <code> after <n>ms",
+    "got: " + JSON.stringify(noisy.event.error.message));
+  check("...so the normalised message contains no part of the code",
+    noisy.event.error.message.indexOf("MERC") === -1 &&
+      noisy.event.error.message.indexOf("KP4X") === -1,
+    "got: " + JSON.stringify(noisy.event.error.message));
+
+  // Rule 5. The grouping property, which is the whole reason for the
+  // normalising: two different codes and two different ids, one issue.
+  const a = prep({ error: { name: "RedeemError", message: "token 7 (" + CODE + ") not found for user 4102" } });
+  const b = prep({ error: { name: "RedeemError", message: "token 8123 (" + OTHER + ") not found for user 55" } });
+  check("two failures differing only in ids share a fingerprint",
+    a.event.fingerprint === b.event.fingerprint,
+    "got: " + JSON.stringify([a.event.fingerprint, b.event.fingerprint]) +
+    " - otherwise one bug becomes an issue per user");
+  check("...and a different error name does not",
+    a.event.fingerprint !== prep({ error: { name: "OtherError", message: a.event.error.message } }).event.fingerprint,
+    "the name has to be part of it, or unrelated bugs merge");
+
+  // Rule 6. The default that started the lesson.
+  const serialised = JSON.stringify(ok.event);
+  check("the request body never reaches the outgoing event",
+    serialised.indexOf(CODE) === -1 && serialised.indexOf("body") === -1,
+    "got: " + serialised + " - ADR-0007 moved the code into the body on purpose");
+  check("...and method and url do survive",
+    ok.event.request.method === "POST" && ok.event.request.url === "/api/redeem",
+    "got: " + JSON.stringify(ok.event.request));
+  check("...with exactly the three named fields",
+    JSON.stringify(Object.keys(ok.event.request).sort()) ===
+      JSON.stringify(["headers", "method", "url"]),
+    "got keys: " + JSON.stringify(Object.keys(ok.event.request)));
+
+  // Rule 7. Header names are case-insensitive over the wire.
+  check("an allow-listed header matches whatever case it arrived in",
+    ok.event.request.headers["x-request-id"] === "r-1",
+    "got: " + JSON.stringify(ok.event.request.headers) +
+    " - it arrived as X-Request-Id, and that is the same header");
+  check("...emitted lowercased, in the allow-list's order",
+    JSON.stringify(Object.keys(ok.event.request.headers)) ===
+      JSON.stringify(["x-request-id", "content-type"]),
+    "got: " + JSON.stringify(Object.keys(ok.event.request.headers)));
+  check("a header nobody allow-listed is gone",
+    ok.event.request.headers.authorization === undefined &&
+      ok.event.request.headers.Authorization === undefined,
+    "got: " + JSON.stringify(ok.event.request.headers));
+
+  const bare = prep({ request: { method: "GET", url: "/health" } });
+  check("a request with no headers gives an empty object, not a crash",
+    JSON.stringify(bare.event.request.headers) === "{}",
+    "got: " + JSON.stringify(bare.event.request));
+
+  // Rule 6 again: no request at all.
+  const job = prepareEvent(
+    { error: { name: "TypeError", message: "x is not a function" }, release: "1.7.2" }, CONFIG);
+  check("an error with no request is still reported",
+    job.send === true, "got: " + JSON.stringify(job));
+  check("...with request null rather than an empty shell",
+    job.event.request === null,
+    "got: " + JSON.stringify(job.event.request) +
+    " - a nightly job throws without any request involved");
+
+  // Rule 8.
+  const unreleased = prepareEvent(
+    { error: { name: "TypeError", message: "boom" } }, CONFIG);
+  check("a missing release becomes the string unknown",
+    unreleased.event.release === "unknown",
+    "got: " + JSON.stringify(unreleased.event.release) +
+    " - visibly unknown is a question somebody asks; blank is not");
+  check("a release that is present is passed through",
+    ok.event.release === "1.7.2", "got: " + JSON.stringify(ok.event.release));
+
+  // Nothing goes back into the caller's data.
+  const original = ev();
+  const snapshot = JSON.stringify(original);
+  prepareEvent(original, CONFIG);
+  check("the incoming event is not modified",
+    JSON.stringify(original) === snapshot,
+    "the input changed - the prepared event belongs on the returned object");
+
+  // The invariant.
+  const all = [ok, expected, noisy, a, b, bare, job, unreleased];
+  check("an event is present exactly when it is being sent",
+    all.every(function (r) { return (r.event !== null) === r.send; }),
+    "got: " + JSON.stringify(all.map(function (r) { return r.send + "/" + (r.event !== null); })));
+  check("every reason is one of expected or reported",
+    all.every(function (r) { return r.reason === "expected" || r.reason === "reported"; }),
+    "got: " + JSON.stringify(all.map(function (r) { return r.reason; })));
+} catch (err) {
+  console.log("FAIL  " + err.name + ": " + err.message);
+  console.log("      Usually this means prepareEvent is missing or misspelt, or that");
+  console.log("      request.headers was read on an event that had no request.");
+}`);
+    </script>
+
+    <h2>Explain it in your own words</h2>
+    <div id="explain-0002"></div>
+    <script>
+        createExplain("explain-0002", {
+            prompt: "Attaching the request body is the right default for almost every product using this tracker, and it is wrong for Token. Explain why that combination &mdash; a sensible default that happens to be wrong here &mdash; is harder to catch than a plain bug, and name the other place in this course where the same shape appeared."
+        });
+    </script>
+
+    <div id="lesson-quiz"></div>
+    <script>
+        createQuiz("lesson-quiz", [
+            {
+                question: "Why is the request body specifically dangerous in a Token crash report?",
+                options: [
+                    "ADR-0007 moved the token code into the body precisely to keep it out of logs and crash reports",
+                    "Bodies are usually large",
+                    "Bodies may contain unvalidated input",
+                    "The tracker cannot parse JSON bodies safely"
+                ],
+                correct: 0,
+                explanation: "The decision that made the URL safe made the body sensitive, and the tracker's default undoes it. That is the whole hazard: the fix in one place created the exposure in another, and nothing connects the two."
+            },
+            {
+                question: "What makes a sensible-but-wrong default harder to catch than a bug?",
+                options: [
+                    "There is no error, no warning, and a review of your own code shows nothing",
+                    "It only appears in production",
+                    "It is buried in a dependency",
+                    "It changes between library versions"
+                ],
+                correct: 0,
+                explanation: "The library is behaving correctly and your code is behaving correctly; the mismatch is between the library's assumptions and yours. The same shape appeared with rclone copy and rsync without --delete — safe defaults that made a published retention promise false."
+            },
+            {
+                type: "predict-output",
+                code: "const s = new Set();\nfor (let i = 1; i <= 3; i++) s.add('token ' + i + ' not found');\nconsole.log(s.size);",
+                answer: "3",
+                explanation: "Three ids, three distinct messages, three issues in a tracker that groups on the message. At production scale that is one bug arriving as forty thousand separate issues, each looking new."
+            },
+            {
+                question: "What is the rule about what goes in a message and what goes in fields?",
+                options: [
+                    "The message identifies the kind of failure; the fields identify the instance",
+                    "The message should contain everything, for searchability",
+                    "Fields are for numbers and the message is for text",
+                    "Neither should contain identifiers"
+                ],
+                correct: 0,
+                explanation: "The ids are not lost — they go in structured fields beside the message, where they are searchable and not part of the grouping. It is the same split structured logging asks for, arriving from a different direction."
+            },
+            {
+                type: "predict-output",
+                code: "const raw = 'code MERC-8GH2-KP4X here';\nconsole.log(raw.replace(/\\d+/g, '<n>'));",
+                answer: "code MERC-<n>GH<n>-KP<n>X here",
+                explanation: "The code has been broken into pieces that no code pattern will now match, and what is left is still specific enough to identify one token. Replacing the code first avoids both problems at once."
+            },
+            {
+                question: "Why does the normalising order fix a leak as well as the grouping?",
+                options: [
+                    "Digits-first mangles a code so the code pattern no longer matches, and the remains still identify it",
+                    "The code pattern is slower than the digit pattern",
+                    "Digits are more common than codes",
+                    "Replacing digits twice would double-escape"
+                ],
+                correct: 0,
+                explanation: "Two failures for the price of one ordering mistake. The message groups badly and it still carries enough of the code to be useful to anyone reading the dashboard."
+            },
+            {
+                question: "Why is the method and URL safe to attach when the body is not?",
+                options: [
+                    "Codes are kept out of paths by design, so the URL carries nothing sensitive",
+                    "URLs are always short",
+                    "The tracker strips query strings automatically",
+                    "The method and URL are not really part of the event"
+                ],
+                correct: 0,
+                explanation: "Safe because of a decision, not by nature. If codes were still in the URL — as several lessons in this course still show — the URL would be the leak and the body would be the safe half."
+            },
+            {
+                question: "The body is excluded rather than redacted. Why the stronger version?",
+                options: [
+                    "A body you are carefully redacting is one redaction bug away from the thing you moved it there to avoid",
+                    "Redaction is computationally expensive",
+                    "Redacted bodies are not useful for debugging",
+                    "The tracker cannot redact nested fields"
+                ],
+                correct: 0,
+                explanation: "Absent has no failure mode. It is the same argument as naming your output fields rather than deleting the dangerous ones — you are choosing a design where the mistake cannot be made, over a design where it must be avoided."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This throws for every failure that did not come from a request. Which line?",
+                code: "1  function headerNames(event) {\n2    return Object.keys(event.request.headers);\n3  }",
+                bugLine: 2,
+                options: ["Line 1", "Line 2", "Line 3"],
+                correct: 1,
+                explanation: "A nightly cleanup, a queue worker and a socket handler all throw with no request involved, and they are exactly the failures nobody is watching for. Both levels need guarding — the request may be absent and so may its headers."
+            },
+            {
+                question: "Why must the header allow-list be matched case-insensitively?",
+                options: [
+                    "Header names are case-insensitive over the wire, so the same header arrives in different cases",
+                    "It makes the comparison faster",
+                    "Uppercase headers are a sign of an attack",
+                    "The tracker lowercases them anyway"
+                ],
+                correct: 0,
+                explanation: "X-Request-Id and x-request-id are the same header, and an exact comparison silently loses whichever one you did not write down. Emitting them lowercased then gives every event the same shape to query."
+            },
+            {
+                question: "A redemption of a revoked code returns the standard refusal. Should that reach the error tracker?",
+                options: [
+                    "No — it is the product working exactly as designed and will happen constantly",
+                    "Yes, so the rate can be monitored",
+                    "Yes, but at a lower severity",
+                    "Only if the code was revoked recently"
+                ],
+                correct: 0,
+                explanation: "Every dead code answers identically by design, and it happens all day. Sending those fills the tracker with non-errors until everybody learns the dashboard is noise, which is the same failure this course's own audit had."
+            },
+            {
+                question: "\"A tracker full of expected failures is worse than not having one.\" Why worse rather than merely useless?",
+                options: [
+                    "It occupies the space where a working one would go",
+                    "It costs money to run",
+                    "It slows down the application",
+                    "It creates a false audit trail"
+                ],
+                correct: 0,
+                explanation: "The identical sentence appears in C2/0001 about a build that is always red. Nobody adds a second tracker because there is already one, and the real error lands in a list nobody opens."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the normalising so the code is replaced before the digits.",
+                code: "const message = event.error.message\n  .replace(config.___, \"<code>\")\n  .replace(/\\d+/g, \"<n>\");",
+                answer: "codePattern",
+                explanation: "Chained replaces run left to right, so the first one wins on any overlap. Getting them the other way round produces a message that groups badly and still identifies the token."
+            },
+            {
+                question: "Why does a missing release become the string <code>\"unknown\"</code> rather than being left blank?",
+                options: [
+                    "An unknown release on a dashboard is a question somebody eventually asks; an empty field is not",
+                    "The tracker rejects events without a release",
+                    "Blank strings break the grouping",
+                    "It is required for source map lookup"
+                ],
+                correct: 0,
+                explanation: "Making a gap visible is the recurring move: a dropped log field reported by name, an exclusion carrying a reason, a backup kept past its retention being listed as a breach. Silence about a gap is what lets it last."
+            },
+            {
+                question: "Why is the fingerprint built from the error name as well as the message?",
+                options: [
+                    "Without it, unrelated bugs that normalise to the same text would merge into one issue",
+                    "Names sort better",
+                    "The message alone may be empty",
+                    "Trackers require a two-part fingerprint"
+                ],
+                correct: 0,
+                explanation: "Normalising deliberately throws information away, so two different failures can end up with identical text. The name is what stops over-grouping, and over-grouping hides a bug just as effectively as under-grouping floods the dashboard."
+            },
+            {
+                type: "which-breaks",
+                question: "Which of these lets the request body into the outgoing event?",
+                variants: [
+                    "request = { method: r.method, url: r.url, headers: h }",
+                    "request = { ...r, headers: h }; delete request.body",
+                    "request = { url: r.url, method: r.method, headers: h }"
+                ],
+                correct: 1,
+                explanation: "Spreading includes everything the request happens to carry, and the deletion only removes the field somebody remembered — bodies also arrive as rawBody, text and parsed copies depending on the middleware. Naming the fields has no such gap."
+            },
+            {
+                question: "Why is the expected-error check done first, before any of the building?",
+                options: [
+                    "Everything below can then assume the event is going out, and the refusal is the cheapest decision",
+                    "Expected errors have no message",
+                    "It avoids normalising a message that might be null",
+                    "The order is arbitrary"
+                ],
+                correct: 0,
+                explanation: "An early return that removes a case is what lets the rest of the function stop worrying about it. The same shape as the absent-variable guard before a length check, and the no-key gate before a signature check."
+            },
+            {
+                question: "What does self-hosting the tracker cost?",
+                options: [
+                    "You operate the thing that watches the thing, and it can be down when you need it",
+                    "It cannot receive events from mobile clients",
+                    "Source maps stop working",
+                    "Events cannot be grouped"
+                ],
+                correct: 0,
+                explanation: "Another container, another database, another backup. It is also a reason to keep logs working independently — routing every signal through one system means one outage takes all of them."
+            },
+            {
+                type: "predict-output",
+                code: "const h = { 'X-Request-Id': 'r-1' };\nconst low = {};\nfor (const k of Object.keys(h)) low[k.toLowerCase()] = h[k];\nconsole.log(low['x-request-id'], h['x-request-id']);",
+                answer: "r-1 undefined",
+                explanation: "Looking the header up in the original object by its lowercase name finds nothing, which is how an allow-list silently drops the field you most wanted. Building the lowercased view first makes the lookup mean what you intended."
+            },
+            {
+                question: "What is a tracker's central advantage over a log stream?",
+                options: [
+                    "Grouping — ten thousand occurrences of one bug become one issue with a count",
+                    "It stores events for longer",
+                    "It is searchable",
+                    "It captures more context per event"
+                ],
+                correct: 0,
+                explanation: "Logs are searchable too. Grouping is what turns a stream into a list of distinct problems, which is why a message that varies per user destroys the tool rather than merely cluttering it."
+            },
+            {
+                question: "Which of these belongs in the outgoing event's message?",
+                options: [
+                    "\"token not found\"",
+                    "\"token 4102 not found\"",
+                    "\"token MERC-8GH2-KP4X not found\"",
+                    "\"token not found (see request body)\""
+                ],
+                correct: 0,
+                explanation: "The kind of failure, with nothing varying in it. The id belongs in a structured field where it is searchable without joining the grouping, and the code belongs nowhere near a crash report."
+            },
+            {
+                question: "An event has a request with no headers at all. What should <code>headers</code> be?",
+                options: [
+                    "An empty object",
+                    "null",
+                    "undefined, so the field is omitted",
+                    "The full set of default headers"
+                ],
+                correct: 0,
+                explanation: "One shape for every event with a request, so nothing downstream has to handle two. It is also the case that crashes a naive implementation, which is why it is worth a test of its own."
+            },
+            {
+                question: "How does this lesson connect to C2/0004?",
+                options: [
+                    "A crash report naming a build you cannot map to a commit is a crash you cannot fix",
+                    "Both are about staged rollouts",
+                    "Both require store review",
+                    "Both concern version skew between clients"
+                ],
+                correct: 0,
+                explanation: "C2 made the point from the release side — stamp the commit into the build. This is the same requirement seen from the receiving end, where the release tag is what turns a stack trace into a line of code you can open."
+            },
+            {
+                question: "Why does <code>prepareEvent</code> return a decision object rather than sending the event?",
+                options: [
+                    "The normalising, the scrubbing and the refusal are all decidable from plain values and worth testing on their own",
+                    "Sending requires network access",
+                    "The tracker's client is not available at that point",
+                    "It allows batching"
+                ],
+                correct: 0,
+                explanation: "The same shape as the handler in C1/0003, the plan review in C2/0003 and the suspension decision in C3/0003. A function that only decides is one a wrong-case file can interrogate properly."
+            },
+            {
+                question: "What is the honest summary of this lesson?",
+                options: [
+                    "Group on what does not vary, send only real failures, and build the attached context rather than accepting it",
+                    "Configure the tracker's scrubbing carefully",
+                    "Use a self-hosted tracker and enable all context",
+                    "Log errors instead of using a tracker"
+                ],
+                correct: 0,
+                explanation: "Three sentences, each removing a way the tool defeats itself: a dashboard of forty thousand issues, a dashboard nobody opens, and a dashboard containing the one field the whole architecture works to protect."
+            },
+            {
+                question: "Which of these is a fair reason the fingerprint is computed here rather than left to the tracker?",
+                options: [
+                    "The tracker cannot know which parts of your messages are identifiers",
+                    "The tracker's algorithm is unreliable",
+                    "It reduces the event size",
+                    "Custom fingerprints are required for self-hosted instances"
+                ],
+                correct: 0,
+                explanation: "Only you know that the number after 'token' is a row id and the hyphenated run is a credential. A default grouping algorithm is a reasonable guess about somebody else's messages."
+            }
+        ]);
+    </script>
+
+    <div class="lesson-nav">
+        <a href="./0001-the-log-line-you-can-publish.html">&larr; The Log Line You Can Publish</a>
+        <span class="disabled">Next: Metrics That Answer a Question &rarr;</span>
+    </div>
+
+</body>
+</html>
