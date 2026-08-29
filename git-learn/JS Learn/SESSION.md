@@ -97,6 +97,23 @@ this section records is only what a script cannot compute:
   narrowing could be tested, with `test-token-scan.mjs` asserting both
   directions. Proven live as well as in unit tests: a probe file carrying a bad
   code took the audit to one warning and removing it took it back to zero.
+- **The alphabet check moved there too**, for a stronger version of the same
+  reason: four suppression clauses, nothing testing any of them, and it is an
+  **error** rather than a warning. It gained a third verdict — *the right
+  characters in the wrong order*, which used to report "is 31 characters, not
+  31". Also probed live end to end.
+- **A page under `modules/` matching neither `README.html` nor `0NNN-*.html` is
+  now an error.** Every lesson-level check reads one filename pattern, so a page
+  outside it is invisible to all of them at once while still being served —
+  the `git-learn/index.html` hazard one directory in. Zero such pages today; the
+  guard is for the next one. **Found by accident**, which is the part worth
+  keeping: a probe named `_probe.html` produced no finding and the same content
+  named `0099-probe.html` did.
+- **`git-learn/index.html` checked by hand 2026-08-29** after C6 and C8 landed,
+  per the standing rule. Clean: the module count comes live from the GitHub API,
+  `learn-progress-fill` is a CSS rule with no hardcoded width anywhere, and
+  there are no "Complete" badges. No change needed — recorded because nothing
+  else will check it.
 - **Every lesson executes something.** No `unverifiable` entries and none
   absent from the log — the flag that covered 17 lessons on 2026-08-23 covers
   none.

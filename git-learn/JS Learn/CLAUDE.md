@@ -218,6 +218,24 @@ narrowing is only safe because the suite exists**; that is the same bargain
 `test-check-pre-blocks.mjs` was written under, and the reason neither check may
 be quietly demoted to a warning instead.
 
+**The alphabet check moved into the same module and the same suite**, because
+it carried four suppression clauses and nothing tested any of them — and it is
+an *error*, so a blind one is worse than a blind warning. The suite asserts the
+historical `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` is still caught, that plain
+English A-Z and a hex digest are still ignored, and that the same letters *with*
+digits are judged. It also gained a third verdict: **the right characters in the
+wrong order.** That used to report *"is 31 characters, not 31"* — a true error
+with a nonsense explanation, which is how a real finding gets dismissed as a bug
+in the checker. Order is load-bearing: the modulo bias and the index positions
+above are both derived from the canonical order.
+
+**A page under `modules/` that is neither `README.html` nor `0NNN-*.html` is now
+an error.** Every lesson-level check reads one filename pattern, so a page
+outside it is invisible to *all of them at once* while still being served. This
+is the `git-learn/index.html` hazard one directory in, and it was found by
+accident: a probe file called `_probe.html` produced no finding and the
+identical content called `0099-probe.html` produced one.
+
 ### Token repo layout (one git repo, four folders)
 
 **It is a separate git repo, beside this one, at `GIT/token/`** — not inside
@@ -1470,7 +1488,7 @@ node scripts/test-check-pre-blocks.mjs               # 14 assertions — see bel
 node scripts/test-quiz-shuffle.mjs                   # the option shuffle still shuffles
 node scripts/check-load-order.mjs                    # every widget defined before it is called
 node scripts/test-load-order.mjs                     # 15 assertions, both directions
-node scripts/test-token-scan.mjs                     # 22 assertions, both directions
+node scripts/test-token-scan.mjs                     # 34 assertions — example codes AND the alphabet
 ```
 
 **`check-load-order.mjs` is the same family, one layer earlier: a `<pre>` block

@@ -69,3 +69,70 @@ export function badTokensIn(text) {
 
   return found;
 }
+
+/* ------------------------------------------------------------------ *
+ * The alphabet check.
+ *
+ * The one above catches a bad *code*. This catches a bad *alphabet*, and that
+ * one is worse by a different order: a wrong example is one bad code, a wrong
+ * alphabet is an unlimited supply of them. Three lessons — including b7/0001,
+ * the server that actually generates codes — taught
+ * ABCDEFGHJKLMNPQRSTUVWXYZ23456789 and commented it "no 0/O/1/I/L" while
+ * including L, so the server emitted codes the client's validator rejects.
+ *
+ * It is an ERROR in the audit, never a warning, and unlike the code check it is
+ * never opt-outable at file level for a lesson that merely uses fixtures — only
+ * a lesson deliberately SHOWING a wrong alphabet may opt out, and it says so
+ * with `audit-allow-alphabet`.
+ *
+ * Extracted 2026-08-29 for the same reason as the scanner above: it carries
+ * four separate suppression clauses, each one a chance to have silenced the
+ * signal instead of the noise, and nothing tested any of them.
+ * ------------------------------------------------------------------ */
+
+const ALPHABET_LITERAL = /['"`]([A-Z0-9]{20,})['"`]/g;
+const EXCLUDED = "0O1IL";
+
+/**
+ * Every string literal in `text` that looks like a code alphabet and is not the
+ * canonical one.
+ *
+ * Returns `[{ literal, reason, excluded }]`, where reason is one of
+ * `excluded_characters`, `wrong_length` or `reordered`.
+ */
+export function badAlphabetsIn(text) {
+  const found = [];
+
+  for (const m of text.matchAll(ALPHABET_LITERAL)) {
+    const literal = m[1];
+
+    if (literal === TOKEN_ALPHABET) continue;
+
+    /* A token alphabet contains digits. Without this the plain English A-Z,
+       pasted into a maxLength question in 02/0004, reads as one. */
+    if (!/[0-9]/.test(literal)) continue;
+
+    /* Only judge strings that are plausibly an alphabet. A base64 blob or a
+       hex digest shares far fewer characters with the canonical set. */
+    const distinct = [...new Set(literal)];
+    if (distinct.filter((c) => TOKEN_ALPHABET.includes(c)).length < 20) continue;
+
+    const excluded = distinct.filter((c) => EXCLUDED.includes(c));
+
+    /* Three reasons, because "is 31 characters, not 31" is what the second one
+       used to say about a correctly-sized alphabet in the wrong order — a true
+       error reported with a nonsense explanation, which is how a real finding
+       gets read as a bug in the checker. Order is load-bearing here: CLAUDE.md
+       derives the modulo bias from the FIRST EIGHT characters and names indices
+       26–30 as V, W, X, Y, Z. Permute the alphabet and both are false. */
+    const reason = excluded.length
+      ? "excluded_characters"
+      : literal.length !== TOKEN_ALPHABET.length
+        ? "wrong_length"
+        : "reordered";
+
+    found.push({ literal: literal, reason: reason, excluded: excluded });
+  }
+
+  return found;
+}

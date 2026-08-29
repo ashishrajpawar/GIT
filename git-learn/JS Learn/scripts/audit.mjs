@@ -26,7 +26,7 @@ import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 import { scanPreBlocks } from "./check-pre-blocks.mjs";
 import { scanLoadOrderIn } from "./check-load-order.mjs";
-import { badTokensIn, TOKEN_ALPHABET } from "./token-scan.mjs";
+import { badTokensIn, badAlphabetsIn, TOKEN_ALPHABET } from "./token-scan.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = new Set(process.argv.slice(2));
@@ -297,9 +297,26 @@ const fixedOrder = { total: 0, positions: {} };
 
 // ---------------------------------------------------------------- scan
 
+const LESSON_NAME = /\/0\d{3}-/;
 const lessonFiles = walk(path.join(ROOT, "modules"))
-  .filter((p) => p.endsWith(".html") && /\/0\d{3}-/.test(rel(p)))
+  .filter((p) => p.endsWith(".html") && LESSON_NAME.test(rel(p)))
   .sort();
+
+/* Every lesson-level check in this file — the alphabet, example codes, pre
+   blocks, widget load order, quiz structure, verification status — reads
+   `lessonFiles`, and `lessonFiles` is a filename pattern. So a page under
+   `modules/` that does not match it is invisible to ALL of them at once,
+   silently, while still being served by GitHub Pages.
+   That is exactly how `git-learn/index.html` contradicted the course for two
+   months, one directory out; this is the same hazard one directory in. Found
+   2026-08-29 while probing the alphabet check, when a probe file named
+   `_probe.html` produced no finding and the identical content named
+   `0099-probe.html` produced one. */
+for (const p of walk(path.join(ROOT, "modules"))) {
+  if (!p.endsWith(".html")) continue;
+  if (path.basename(p) === "README.html" || LESSON_NAME.test(rel(p))) continue;
+  err(`unscanned page: ${rel(p)} is under modules/ but matches neither README.html nor 0NNN-*.html, so no lesson check reads it`);
+}
 
 const verificationLog = exists(path.join(ROOT, "scripts", "verification-log.json"))
   ? JSON.parse(read(path.join(ROOT, "scripts", "verification-log.json")))
@@ -556,25 +573,20 @@ for (const file of lessonFiles) {
      it — is doing the right thing. Marking the file opts it out, so a genuine
      counter-example never trains anyone to ignore this check. */
   if (html.includes("audit-allow-alphabet")) continue;
-  for (const m of html.matchAll(/['"`]([A-Z0-9]{20,})['"`]/g)) {
-    const literal = m[1];
-    if (literal === TOKEN_ALPHABET) continue;
-    /* A token alphabet contains digits. Without this, the plain English
-       A-Z — pasted into a maxLength question in 02/0004 — reads as one. */
-    if (!/[0-9]/.test(literal)) continue;
-    // Only judge strings that are plausibly an alphabet: mostly the canonical
-    // characters, in ascending runs. A base64 blob or a hash is neither.
-    const shared = [...new Set(literal)].filter((c) => TOKEN_ALPHABET.includes(c)).length;
-    if (shared < 20) continue;
-    const excluded = [...new Set(literal)].filter((c) => "0O1IL".includes(c));
-    if (!alphabetOffenders.has(literal)) alphabetOffenders.set(literal, { files: new Set(), excluded });
+  /* The matching and the four suppression clauses live in token-scan.mjs,
+     which has a suite. See the note above badAlphabetsIn for why. */
+  for (const { literal, reason, excluded } of badAlphabetsIn(html)) {
+    if (!alphabetOffenders.has(literal)) alphabetOffenders.set(literal, { files: new Set(), reason, excluded });
     alphabetOffenders.get(literal).files.add(rel(file));
   }
 }
-for (const [literal, { files, excluded }] of alphabetOffenders) {
-  const why = excluded.length
-    ? `includes ${excluded.join(", ")}, which the alphabet excludes`
-    : `is ${literal.length} characters, not ${TOKEN_ALPHABET.length}`;
+for (const [literal, { files, reason, excluded }] of alphabetOffenders) {
+  const why =
+    reason === "excluded_characters"
+      ? `includes ${excluded.join(", ")}, which the alphabet excludes`
+      : reason === "wrong_length"
+        ? `is ${literal.length} characters, not ${TOKEN_ALPHABET.length}`
+        : `has the right characters in the wrong order — the modulo bias and the index positions in CLAUDE.md are both derived from the canonical order`;
   err(`alphabet: "${literal}" ${why} — ${[...files].join(", ")}`);
 }
 
