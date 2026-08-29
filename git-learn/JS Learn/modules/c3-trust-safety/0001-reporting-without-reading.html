@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>C3 — Reporting Without Reading</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Trust, Safety &amp; Abuse</a> &rsaquo;
+        <span>Reporting Without Reading</span>
+    </nav>
+
+    <h1>Reporting Without Reading</h1>
+    <p class="lesson-meta">C3 &mdash; Lesson 1 of 3 &nbsp;|&nbsp; ~50 min</p>
+
+    <div class="callout">
+        <div class="callout-title">Why this matters for Token</div>
+        <p>Both app stores require a working way to report objectionable content. A review fails
+        without one, so this is not a feature that can wait.</p>
+        <p>And Token cannot build the normal version of it. The usual report button sends a message
+        id to a server that looks the message up and shows it to a moderator. Token's server holds
+        ciphertext and no key &mdash; there is nothing to look up and nothing to show. The row is
+        there and it is unreadable, by design, and that is the guarantee the whole product is sold
+        on.</p>
+        <p>So the report has to be assembled somewhere else: <strong>on the reporter's own device,
+        which is the one place the message exists in the clear.</strong> Everything awkward about
+        this lesson comes from that one relocation.</p>
+    </div>
+
+    <h2>1 &middot; The report is built by the reporter, not fetched by the server</h2>
+
+    <p>When a user reports a message, their phone decrypts what it already has and sends a package:</p>
+
+    <ul>
+        <li>The plaintext of the reported message.</li>
+        <li>The sender's public key and the message signature, so authorship can be proved.</li>
+        <li>Whatever surrounding context <em>the reporter chooses</em> to include.</li>
+        <li>The token the sender redeemed, and its redemption record &mdash; by <code>id</code>.</li>
+    </ul>
+
+    <p>Nothing about the server changed. It did not gain the ability to decrypt anything; a user
+    voluntarily disclosed one conversation they were already part of. This is how Signal and
+    WhatsApp do it, and it is a solved problem &mdash; with one condition attached that is easy to
+    miss and impossible to fix later.</p>
+
+    <div class="callout warning">
+        <div class="callout-title">The signature has to be in the message format from v1</div>
+        <p>A signature cannot be added retroactively to a message that has already been sent. If the
+        format ships without one, then every message in existence when you finally build reporting
+        is unverifiable &mdash; not merely inconvenient to check, <em>permanently</em> unverifiable,
+        because the evidence that would have proved authorship was never created.</p>
+        <p>This is the same shape as the version endpoint in C2/0004 and the key backup in C5: a
+        mechanism added after the fact does not reach what predates it. The difference is that here
+        the thing that predates it is every message anyone has ever sent.</p>
+    </div>
+
+    <h2>2 &middot; The author field is a claim until the signature makes it a fact</h2>
+
+    <p>This is the part that decides the whole design, so it is worth being blunt about. The report
+    arrives as JSON that the reporter's client constructed:</p>
+
+    <pre><code>{
+  "reportedUserId": 4102,
+  "items": [
+    { "messageId": 88, "authorId": 4102, "keyVersion": 2,
+      "plaintext": "...", "signature": "..." }
+  ]
+}</code></pre>
+
+    <p><code>authorId: 4102</code> is not evidence of anything. It is a number a client put in a
+    field, and a modified client can put any number there. Without a signature check, the report
+    mechanism is a way to have anyone you like suspended by typing their id into a form.</p>
+
+    <p>The signature is what converts it. Verified against the public key the directory held for
+    that user at that version, it says: <strong>this exact text was signed by the holder of that
+    private key.</strong> Which is why the checks have to run in a particular order.</p>
+
+    <h3>Try it yourself</h3>
+
+    <div id="pg-claim"></div>
+    <script>
+        createPlayground("pg-claim", `// A report submitted by a modified client.
+const item = { messageId: 88, authorId: 4102, plaintext: "threatening text" };
+
+// The trusting version.
+function actOn(item) {
+  return "suspend user " + item.authorId;
+}
+
+console.log(actOn(item));
+console.log(actOn({ messageId: 88, authorId: 7, plaintext: "threatening text" }));
+console.log(actOn({ messageId: 88, authorId: 1, plaintext: "threatening text" }));
+console.log("");
+console.log("Same message, three victims. The author field is client input,");
+console.log("and unchecked client input is a form that suspends strangers.");`);
+    </script>
+
+    <h2>3 &middot; The order of the checks, and why it is not arbitrary</h2>
+
+    <p>Each item in a report goes through three gates, and they have to run in this order:</p>
+
+    <table>
+        <thead>
+            <tr><th>#</th><th>Gate</th><th>Excluded as</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>1</td><td>Does the directory hold that author's key at that version?</td><td><code>unknown_key</code></td></tr>
+            <tr><td>2</td><td>Does the signature verify against it?</td><td><code>bad_signature</code></td></tr>
+            <tr><td>3</td><td>Is the author one of the two parties this report is about?</td><td><code>third_party</code></td></tr>
+        </tbody>
+    </table>
+
+    <p>Gate 1 before gate 2 is obvious once said: with no key there is nothing to verify against, and
+    calling a verifier with <code>undefined</code> either throws or, worse, returns something.</p>
+
+    <p><strong>Gate 2 before gate 3 is the interesting one.</strong> Gate 3 asks a question about
+    the author &mdash; is this person party to the conversation? &mdash; and until the signature
+    verifies, <em>the author field is a lie you have not caught yet</em>. Checking it first means
+    reasoning about an attribute of a claim rather than of a fact. Get the order wrong and a forged
+    item attributed to an uninvolved stranger is reported as "a message from a third party", which
+    sounds like a filing mistake, when what actually happened is that somebody tried to fabricate
+    evidence.</p>
+
+    <div class="callout">
+        <div class="callout-title">Why an exclusion carries a reason at all</div>
+        <p>A dropped item and a dropped item are not the same thing. <code>unknown_key</code> usually
+        means a client bug or an old message; <code>bad_signature</code> means either data corruption
+        or somebody attempting a fabrication, and those two go to different places. A pipeline that
+        silently discards what it cannot use throws away the most interesting signal it will ever
+        receive.</p>
+    </div>
+
+    <h2>4 &middot; The reporter's own messages are context, not evidence</h2>
+
+    <p>A report of one line is usually unreadable. &ldquo;Fine, send it&rdquo; means nothing without
+    what came before, so the reporter picks a few surrounding messages &mdash; and some of those are
+    their own.</p>
+
+    <p>Those belong in the package and are <strong>not</strong> evidence against anyone. Keeping them
+    in a separate role does two jobs: a reviewer can see at a glance which lines are being complained
+    about, and a report that turns out to contain <em>only</em> the reporter's own messages is
+    recognisably a report of nothing rather than a mysterious empty one.</p>
+
+    <div class="callout warning">
+        <div class="callout-title">And a report of nothing is still recorded</div>
+        <p>It is tempting to discard a report with no usable evidence. Do not. <strong>A pattern of
+        reports is itself one of the few abuse signals available to a system that cannot read
+        content</strong> &mdash; a reporter who files repeatedly against different people, with
+        nothing in any of them, is the clearest thing you will see all week.</p>
+        <p>So the verdict is <code>actionable: false</code>, and the row is written anyway. That
+        distinction &mdash; <em>cannot be acted on</em> versus <em>should be forgotten</em> &mdash;
+        recurs in ADR-0011, where the reporter who repeatedly triggers automatic suspensions is
+        himself the signal.</p>
+    </div>
+
+    <h2>5 &middot; What comes out is built key by key</h2>
+
+    <p>The client sends an object. The server does not store that object &mdash; it builds a new one
+    from the fields it wants:</p>
+
+    <pre><code>// Yes. Nothing arrives that is not named here.
+admitted.push({
+  messageId: item.messageId,
+  authorId: item.authorId,
+  role: role,
+  plaintext: item.plaintext
+});
+
+// No. This keeps whatever the client happened to send.
+const copy = Object.assign({}, item);
+delete copy.signature;
+admitted.push(copy);</code></pre>
+
+    <p>The second version is wrong even though it looks careful, and the reason is general:
+    <strong>the absence of one dangerous field is not evidence of an allow-list.</strong> It removes
+    the fields you thought of, on the day you wrote it, and passes everything a future client version
+    adds.</p>
+
+    <p>Token has a specific field in mind here. A report is about a token, and the token is referred
+    to by <code>id</code> &mdash; never by its code. Codes never go in a log, and a report ends up in
+    a review queue, an export and probably an email. A client that helpfully attaches
+    <code>code</code> to each item should find it has gone nowhere.</p>
+
+    <h3>Try it yourself &mdash; broken on purpose</h3>
+    <p>Read the output rather than an error &mdash; this one runs perfectly and is still wrong.</p>
+
+    <div id="pg-allowlist"></div>
+    <script>
+        createPlayground("pg-allowlist", `const fromClient = {
+  messageId: 88,
+  authorId: 4102,
+  plaintext: "...",
+  signature: "sig",
+  code: "MERC-8GH2-KP4X",
+  debugTrace: "captured on device"
+};
+
+function sanitise(item) {
+  const copy = Object.assign({}, item);
+  delete copy.signature;
+  return copy;
+}
+
+console.log(JSON.stringify(sanitise(fromClient)));
+
+// Fix it: build the result from the four fields that are wanted, rather
+// than from everything minus the one field you remembered.`);
+    </script>
+
+    <h2>Now build it yourself</h2>
+
+    <div id="exercise-1"></div>
+    <script>
+        createSolution("exercise-1", {
+            exercise:
+                "Write <code>screenReport(report, directory, config)</code> &mdash; what the server can actually act on.<br><br>" +
+                "<code>report</code> is <code>{ reporterId, reportedUserId, items }</code>. Each item is <code>{ messageId, authorId, keyVersion, plaintext, signature }</code> and may carry <strong>anything else the client felt like sending</strong>.<br><br>" +
+                "<code>directory</code> is the key directory: <code>directory[userId][keyVersion]</code> is a public key, or absent.<br><br>" +
+                "<code>config.verify(plaintext, signature, publicKey)</code> returns true or false. It is injected the same way the clock was in C1/0002, so the exercise is testable without real cryptography.<br><br>" +
+                "Return <code>{ actionable, items, excluded }</code>.<br><br>" +
+                "Walk the items <strong>in order</strong>, applying the first gate that catches each one:<br><br>" +
+                "1. <strong>The directory has no key for that author at that version</strong> &rarr; excluded, reason <code>\"unknown_key\"</code>. <strong>Do not call <code>config.verify</code> at all for such an item</strong> &mdash; there is nothing to verify against.<br>" +
+                "2. <strong><code>config.verify</code> returns false</strong> &rarr; excluded, reason <code>\"bad_signature\"</code>.<br>" +
+                "3. <strong>The author is neither <code>reportedUserId</code> nor <code>reporterId</code></strong> &rarr; excluded, reason <code>\"third_party\"</code>. This runs <em>after</em> the signature, because until the signature verifies the author field is only a claim.<br>" +
+                "4. Otherwise admitted, with <code>role: \"evidence\"</code> if the author is <code>reportedUserId</code>, or <code>role: \"context\"</code> if the author is the reporter.<br><br>" +
+                "<code>items</code> holds the admitted ones in input order, each built <strong>field by field</strong> as exactly <code>{ messageId, authorId, role, plaintext }</code> &mdash; nothing else the client sent may appear.<br><br>" +
+                "<code>excluded</code> holds <code>{ messageId, reason }</code> in input order.<br><br>" +
+                "<code>actionable</code> is true when at least one admitted item has <code>role: \"evidence\"</code>. A report containing only the reporter's own messages is a report of nothing &mdash; but still return everything, because a pattern of empty reports is itself a signal.<br><br>" +
+                "Never modify <code>report</code>, <code>directory</code> or anything inside them.",
+            hints: [
+                "One loop, one if/else-if chain, two arrays. The chain reads exactly like the four rules, and a <code>continue</code> after each exclusion keeps every branch short.",
+                "The key lookup has two levels and either can be absent: <code>const keys = directory[item.authorId]; const publicKey = keys ? keys[item.keyVersion] : undefined;</code>. Testing <code>publicKey === undefined</code> covers an unknown user and an unknown version in one condition.",
+                "For the last rule, work out the role first and push the object second, so there is exactly one place in the function that names the four output fields. Two push sites is two places for a fifth field to creep into later."
+            ],
+            solution: `function screenReport(report, directory, config) {
+  const items = [];
+  const excluded = [];
+
+  for (const item of report.items) {
+    // Gate 1. No key means nothing to check against, so verify is never
+    // called -- passing it undefined either throws or, worse, answers.
+    const keys = directory[item.authorId];
+    const publicKey = keys === undefined ? undefined : keys[item.keyVersion];
+
+    if (publicKey === undefined) {
+      excluded.push({ messageId: item.messageId, reason: "unknown_key" });
+      continue;
+    }
+
+    // Gate 2. Until this passes, item.authorId is a claim rather than a
+    // fact -- which is why gate 3 cannot come first.
+    if (!config.verify(item.plaintext, item.signature, publicKey)) {
+      excluded.push({ messageId: item.messageId, reason: "bad_signature" });
+      continue;
+    }
+
+    // Gate 3. A report is not a place to disclose an uninvolved person's
+    // messages. The reporter may waive their own privacy and accuse the
+    // person they are accusing, and that is the whole list.
+    const isReported = item.authorId === report.reportedUserId;
+    const isReporter = item.authorId === report.reporterId;
+
+    if (!isReported && !isReporter) {
+      excluded.push({ messageId: item.messageId, reason: "third_party" });
+      continue;
+    }
+
+    // Built field by field. An allow-list, never a copy with deletions --
+    // a client that attaches a token code should find it went nowhere.
+    items.push({
+      messageId: item.messageId,
+      authorId: item.authorId,
+      role: isReported ? "evidence" : "context",
+      plaintext: item.plaintext
+    });
+  }
+
+  return {
+    // Context alone is a report of nothing. Everything is still returned,
+    // because a pattern of empty reports is itself a signal.
+    actionable: items.some(function (i) { return i.role === "evidence"; }),
+    items: items,
+    excluded: excluded
+  };
+}`
+        });
+    </script>
+
+    <div id="pg-exercise"></div>
+    <script>
+        createPlayground("pg-exercise", `// --- Write screenReport(report, directory, config) here, then press Run ---
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label);
+  if (!passed && detail) console.log("      " + detail);
+}
+
+const REPORTER = 91;
+const REPORTED = 4102;
+const STRANGER = 7;
+
+const DIRECTORY = {
+  4102: { 2: "key-reported-v2" },
+  91:   { 1: "key-reporter-v1" },
+  7:    { 5: "key-stranger-v5" }
+};
+
+// Every signature is the literal "good" except where a case says otherwise,
+// so verify is a comparison rather than real cryptography -- and it records
+// what it was asked, which is how the "never called" rule gets tested.
+function makeConfig() {
+  const calls = [];
+  return {
+    calls: calls,
+    verify: function (plaintext, signature, publicKey) {
+      calls.push({ signature: signature, publicKey: publicKey });
+      return signature === "good";
+    }
+  };
+}
+
+function item(messageId, authorId, keyVersion, extra) {
+  const base = {
+    messageId: messageId,
+    authorId: authorId,
+    keyVersion: keyVersion,
+    plaintext: "line " + messageId,
+    signature: "good"
+  };
+  if (extra) for (const k of Object.keys(extra)) base[k] = extra[k];
+  return base;
+}
+
+function report(items) {
+  return { reporterId: REPORTER, reportedUserId: REPORTED, items: items };
+}
+
+function roles(r) {
+  return JSON.stringify(r.items.map(function (i) { return i.messageId + ":" + i.role; }));
+}
+function reasons(r) {
+  return JSON.stringify(r.excluded.map(function (e) { return e.messageId + ":" + e.reason; }));
+}
+
+try {
+  const cfg = makeConfig();
+  const ordinary = screenReport(report([
+    item(1, REPORTED, 2),
+    item(2, REPORTER, 1),
+    item(3, REPORTED, 2)
+  ]), DIRECTORY, cfg);
+
+  check("a message from the reported user is evidence",
+    roles(ordinary) === JSON.stringify(["1:evidence", "2:context", "3:evidence"]),
+    "got: " + roles(ordinary));
+  check("...and the report is actionable",
+    ordinary.actionable === true, "got: " + ordinary.actionable);
+  check("...with the admitted items in input order",
+    ordinary.items.length === 3, "got " + ordinary.items.length);
+
+  // The gate that stops the report form being a way to suspend strangers.
+  const forged = screenReport(report([
+    item(1, REPORTED, 2, { signature: "forged" }),
+    item(2, REPORTED, 2)
+  ]), DIRECTORY, makeConfig());
+  check("an item whose signature does not verify is excluded",
+    reasons(forged) === JSON.stringify(["1:bad_signature"]),
+    "got: " + reasons(forged));
+
+  const unknown = screenReport(report([
+    item(1, REPORTED, 9),
+    item(2, 55555, 1),
+    item(3, REPORTED, 2)
+  ]), DIRECTORY, makeConfig());
+  check("an unknown key version and an unknown user are both unknown_key",
+    reasons(unknown) === JSON.stringify(["1:unknown_key", "2:unknown_key"]),
+    "got: " + reasons(unknown) + " - neither has a key, for two different reasons");
+
+  // Never verify against a key you do not have.
+  const spy = makeConfig();
+  screenReport(report([item(1, REPORTED, 9)]), DIRECTORY, spy);
+  check("verify is never called for an item with no key",
+    spy.calls.length === 0,
+    "verify was called " + spy.calls.length + " time(s) - with what public key?");
+
+  // ...and always against the RIGHT key. A single wrong lookup here would
+  // verify the reported user's message against the reporter's key.
+  const which = makeConfig();
+  screenReport(report([item(1, REPORTED, 2), item(2, REPORTER, 1)]), DIRECTORY, which);
+  check("each signature is checked against its own author's key",
+    JSON.stringify(which.calls.map(function (c) { return c.publicKey; })) ===
+      JSON.stringify(["key-reported-v2", "key-reporter-v1"]),
+    "got: " + JSON.stringify(which.calls.map(function (c) { return c.publicKey; })));
+
+  const outsider = screenReport(report([
+    item(1, STRANGER, 5),
+    item(2, REPORTED, 2)
+  ]), DIRECTORY, makeConfig());
+  check("a message by someone outside the report is third_party",
+    reasons(outsider) === JSON.stringify(["1:third_party"]),
+    "got: " + reasons(outsider) + " - a report is not a place to disclose a bystander");
+
+  // The precedence that matters. Both gates apply; the signature is what
+  // decides whether the author field is even true, so it answers first.
+  const both = screenReport(report([
+    item(1, STRANGER, 5, { signature: "forged" })
+  ]), DIRECTORY, makeConfig());
+  check("a forged item attributed to an outsider is bad_signature",
+    reasons(both) === JSON.stringify(["1:bad_signature"]),
+    "got: " + reasons(both) +
+    " - calling it third_party describes a claim nobody has checked");
+
+  // A report of nothing.
+  const contextOnly = screenReport(report([
+    item(1, REPORTER, 1),
+    item(2, REPORTER, 1)
+  ]), DIRECTORY, makeConfig());
+  check("a report of only the reporter's own messages is not actionable",
+    contextOnly.actionable === false, "got: " + contextOnly.actionable);
+  check("...and is still returned rather than discarded",
+    contextOnly.items.length === 2,
+    "got " + contextOnly.items.length + " - a pattern of empty reports is itself a signal");
+
+  const nothing = screenReport(report([]), DIRECTORY, makeConfig());
+  check("an empty report is not actionable and has empty lists",
+    nothing.actionable === false && nothing.items.length === 0 && nothing.excluded.length === 0,
+    "got: " + JSON.stringify(nothing));
+
+  // Rule 5. The allow-list, tested by what the client sent and not by what
+  // the function remembered to delete.
+  const CODE = "MERC-8GH2-KP4X";
+  const noisy = screenReport(report([
+    item(1, REPORTED, 2, { code: CODE, debugTrace: "on device", signature: "good" })
+  ]), DIRECTORY, makeConfig());
+  const serialised = JSON.stringify(noisy.items);
+  check("the token code never reaches the output",
+    serialised.indexOf(CODE) === -1,
+    "got: " + serialised + " - a report ends up in a queue, an export and an email");
+  check("...nor does any other field the client invented",
+    serialised.indexOf("debugTrace") === -1 && serialised.indexOf("signature") === -1,
+    "got: " + serialised + " - absence of one dangerous field is not an allow-list");
+  check("...and the admitted item has exactly the four wanted keys",
+    JSON.stringify(Object.keys(noisy.items[0]).sort()) ===
+      JSON.stringify(["authorId", "messageId", "plaintext", "role"]),
+    "got keys: " + JSON.stringify(Object.keys(noisy.items[0])));
+
+  // Nothing goes back into the caller's data.
+  const original = report([item(1, REPORTED, 2), item(2, STRANGER, 5)]);
+  const before = JSON.stringify(original);
+  screenReport(original, DIRECTORY, makeConfig());
+  check("the submitted report is not modified",
+    JSON.stringify(original) === before,
+    "the input changed - roles and flags belong on the output object");
+
+  // The invariant, as in the C2 lessons.
+  const all = [ordinary, forged, unknown, outsider, both, contextOnly, nothing, noisy];
+  const disagreed = all.filter(function (r) {
+    return r.actionable !== r.items.some(function (i) { return i.role === "evidence"; });
+  });
+  check("actionable always agrees with the admitted evidence",
+    disagreed.length === 0, "disagreed in " + disagreed.length + " case(s)");
+} catch (err) {
+  console.log("FAIL  " + err.name + ": " + err.message);
+  console.log("      Usually this means screenReport is missing or misspelt, or that");
+  console.log("      a key version was read from a user the directory does not hold.");
+}`);
+    </script>
+
+    <h2>Explain it in your own words</h2>
+    <div id="explain-0001"></div>
+    <script>
+        createExplain("explain-0001", {
+            prompt: "The signature check runs <em>before</em> the check for whether the author is party to the report. Explain what goes wrong when those two are swapped &mdash; not in terms of the code, but in terms of what the operator reading the report would conclude."
+        });
+    </script>
+
+    <div id="lesson-quiz"></div>
+    <script>
+        createQuiz("lesson-quiz", [
+            {
+                question: "Why can Token not build the usual report flow, where the server looks up the reported message?",
+                options: [
+                    "The server holds ciphertext and no key, so there is nothing it can look up or show",
+                    "Message ids are not stable enough to reference",
+                    "The stores forbid server-side retrieval of reported content",
+                    "Messages are deleted too quickly to be fetched later"
+                ],
+                correct: 0,
+                explanation: "The row exists and is unreadable, on purpose, and that is the guarantee the product is sold on. Everything awkward in this lesson comes from relocating the assembly of the report onto the one device where the message exists in the clear."
+            },
+            {
+                question: "Who assembles a report in Token, and why?",
+                options: [
+                    "The reporter's device, because it is the only place the message exists as plaintext",
+                    "The server, from its copy of the conversation",
+                    "The reported user's device, since it holds the original",
+                    "A moderation service with a shared key"
+                ],
+                correct: 0,
+                explanation: "Nothing about the server's capabilities changes — a user voluntarily disclosed one conversation they were already part of. Signal and WhatsApp both work this way, which is why it is a solved problem rather than an experiment."
+            },
+            {
+                question: "Why must the message signature exist from the very first version?",
+                options: [
+                    "It cannot be added retroactively, so every message sent before it is permanently unverifiable",
+                    "Adding it later would require a database migration",
+                    "The stores check for it during review",
+                    "Older clients would reject unsigned messages"
+                ],
+                correct: 0,
+                explanation: "The evidence that would have proved authorship was never created, and no later work can create it. Same shape as the version endpoint that must ship in the first release, except that what predates it here is every message anyone ever sent."
+            },
+            {
+                type: "predict-output",
+                code: "const item = { messageId: 88, authorId: 4102 };\nconsole.log('suspend user ' + item.authorId);\nconsole.log('suspend user ' + { messageId: 88, authorId: 7 }.authorId);",
+                answer: "suspend user 4102\nsuspend user 7",
+                explanation: "Same code, two victims, chosen by whoever built the payload. An author field is client input, and acting on unchecked client input turns the report form into a way of suspending strangers."
+            },
+            {
+                type: "order-steps",
+                question: "Put the three gates in the order they must run.",
+                steps: [
+                    "Does the directory hold that author's key at that version?",
+                    "Does the signature verify against that key?",
+                    "Is the author one of the two parties this report is about?",
+                    "Admit it as evidence or as context"
+                ],
+                correctOrder: [0, 1, 2, 3],
+                explanation: "Each gate depends on the previous having passed. Without a key there is nothing to verify against, and without a verified signature the author field is a claim rather than a fact."
+            },
+            {
+                question: "Why does the signature check run before the check on who the author is?",
+                options: [
+                    "Until the signature verifies, the author field is only a claim",
+                    "Signature checks are faster",
+                    "The author check needs the public key",
+                    "It keeps the exclusion reasons in alphabetical order"
+                ],
+                correct: 0,
+                explanation: "Swapped, a forged item attributed to an uninvolved stranger is reported as a message from a third party, which reads like a filing mistake. What actually happened is an attempt to fabricate evidence, and the report should say so."
+            },
+            {
+                question: "An item's key version is not in the directory. What should happen?",
+                options: [
+                    "Exclude it as unknown_key without calling the verifier at all",
+                    "Verify against the author's most recent key instead",
+                    "Verify with an empty key and exclude on the result",
+                    "Admit it but mark it unverified"
+                ],
+                correct: 0,
+                explanation: "There is nothing to check against, and calling a verifier with undefined either throws or — much worse — returns something. Falling back to the latest key would accept a message signed by a key that was retired precisely because it was compromised."
+            },
+            {
+                question: "Why are the reporter's own messages admitted but given a different role?",
+                options: [
+                    "They give the complaint shape without being evidence against anybody",
+                    "They prove the reporter was present",
+                    "They are needed to compute the conversation id",
+                    "They can be verified more cheaply"
+                ],
+                correct: 0,
+                explanation: "A single reported line is usually unreadable without what came before. Keeping the roles apart lets a reviewer see at a glance what is being complained about, and makes a report containing only the reporter's own words recognisable as a report of nothing."
+            },
+            {
+                question: "A report contains only context items. What is returned?",
+                options: [
+                    "actionable false, with the items and exclusions still returned",
+                    "An empty result, since there is nothing to act on",
+                    "actionable true, with the items marked for review",
+                    "An error, so the client can correct it"
+                ],
+                correct: 0,
+                explanation: "It cannot be acted on and it should not be forgotten, which are different things. A reporter who files repeatedly against different people with nothing in any of them is the clearest abuse signal a system that cannot read content will ever get."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This sanitiser looks careful and passes the token code through. Where?",
+                code: "1  function sanitise(item) {\n2    const copy = Object.assign({}, item);\n3    delete copy.signature;\n4    return copy;\n5  }",
+                bugLine: 1,
+                options: ["Line 2", "Line 3", "Line 4"],
+                correct: 0,
+                explanation: "The whole approach is the bug rather than any single line, and line 2 is where it is chosen: starting from a copy means everything is included by default. The absence of one dangerous field is not evidence of an allow-list."
+            },
+            {
+                type: "which-breaks",
+                question: "Which of these lets a field the client invented reach the review queue?",
+                variants: [
+                    "out.push({ messageId: i.messageId, authorId: i.authorId, role: r, plaintext: i.plaintext })",
+                    "const c = { ...i }; delete c.signature; out.push(c)",
+                    "out.push({ messageId: i.messageId, plaintext: i.plaintext, authorId: i.authorId, role: r })"
+                ],
+                correct: 1,
+                explanation: "Spreading and then removing keeps everything the author of that line did not think of, including whatever a future client version starts attaching. The two that name their fields are identical in behaviour — key order in an object literal is not a difference."
+            },
+            {
+                question: "Why is a token referred to by <code>id</code> in a report rather than by its code?",
+                options: [
+                    "A report reaches a review queue, an export and probably an email, and the code is a capability",
+                    "Ids are shorter",
+                    "The code is not known at report time",
+                    "Ids are easier to index"
+                ],
+                correct: 0,
+                explanation: "An id identifies the row for someone who can already query the database and is worth nothing to anyone who cannot, which is the property an identifier in a log should have. A code is a working credential until the token is revoked."
+            },
+            {
+                question: "What does a verified signature actually establish?",
+                options: [
+                    "That this exact text was signed by the holder of that private key",
+                    "That the message was sent through Token's server",
+                    "That the reporter received the message",
+                    "That the message has not been reported before"
+                ],
+                correct: 0,
+                explanation: "It binds the text to a key, and the key directory binds the key to a user. Note what it does not establish: nothing about context, tone or whether the complaint is fair — that is a human's job and the signature only stops the human being lied to about who wrote it."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the two-level lookup so an unknown user does not throw.",
+                code: "const keys = directory[item.authorId];\nconst publicKey = keys === undefined ? undefined : keys[item.___];",
+                answer: "keyVersion",
+                explanation: "Both levels can be absent — an unknown user and a version that user never had. Testing the result for undefined once covers both, which is why the two failures share the exclusion reason."
+            },
+            {
+                question: "Why does an excluded item carry a reason rather than just being dropped?",
+                options: [
+                    "unknown_key and bad_signature have different causes and go to different places",
+                    "The reporter is shown the reasons",
+                    "It is required for the transparency report",
+                    "It makes the response easier to cache"
+                ],
+                correct: 0,
+                explanation: "One usually means a client bug or an old message; the other means corruption or an attempted fabrication. A pipeline that silently discards what it cannot use throws away the most interesting signal it will ever receive."
+            },
+            {
+                question: "Client-side scanning — checking outgoing content against a policy list before encrypting — was rejected. Why?",
+                options: [
+                    "It is surveillance running on the user's own device, and a modified client bypasses it anyway",
+                    "It would be too slow on older phones",
+                    "The policy list could not be kept up to date",
+                    "It duplicates what the server already does"
+                ],
+                correct: 0,
+                explanation: "It inverts the promise the product is sold on, and it does not even work against anyone motivated enough to install a patched build. The accepted cost of rejecting it is stated plainly: abuse in message content can never be detected proactively."
+            },
+            {
+                question: "What is the honest limit of this whole design?",
+                options: [
+                    "Only reported content is ever visible, so nothing can be caught proactively",
+                    "Reports can take up to 24 hours to process",
+                    "Only text messages can be reported",
+                    "Reports cannot be submitted by holders"
+                ],
+                correct: 0,
+                explanation: "That is the accepted cost of end-to-end encryption and it belongs in the store submission stated exactly that way. Claiming proactive detection you cannot perform is a worse problem than the limitation itself."
+            },
+            {
+                type: "predict-output",
+                code: "const a = { x: 1, y: 2, z: 3 };\nconst b = Object.assign({}, a);\ndelete b.y;\nconsole.log(Object.keys(b).join(\",\"));",
+                answer: "x,z",
+                explanation: "z survives because nobody thought about it. That is exactly what happens to a field a future client version starts attaching, and it is why the output is built from a named list rather than filtered down to one."
+            },
+            {
+                question: "Which of these is a fair reason for the server to store a report it cannot act on?",
+                options: [
+                    "The pattern across many reports is itself an abuse signal",
+                    "It may become actionable when the key directory is updated",
+                    "Storage is cheap",
+                    "The reporter may add evidence later"
+                ],
+                correct: 0,
+                explanation: "In a system that cannot read content, who reports whom and how often is one of the few things it can see. This is the same reasoning that later requires recording who triggers an automatic suspension."
+            },
+            {
+                question: "An item is authored by the reported user and its signature verifies. What role does it get?",
+                options: [
+                    "evidence",
+                    "context",
+                    "evidence only if it is the first item",
+                    "context, until a human confirms it"
+                ],
+                correct: 0,
+                explanation: "Evidence is a message by the person being complained about; context is a message by the person complaining. The role is decided by who wrote it and nothing else, which is what makes it derivable rather than something the client asserts."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This verifies every message against the same key. Which line?",
+                code: "1  const keys = directory[report.reportedUserId];\n2  const publicKey = keys[item.keyVersion];\n3  if (!config.verify(item.plaintext, item.signature, publicKey)) {\n4    excluded.push({ messageId: item.messageId, reason: 'bad_signature' });\n5  }",
+                bugLine: 1,
+                options: ["Line 1", "Line 2", "Line 3"],
+                correct: 0,
+                explanation: "The directory is read for the reported user rather than for the item's own author, so the reporter's own context messages are checked against somebody else's key and fail. It has to be the author of that item, which is the field the signature is about to make true or false."
+            },
+            {
+                question: "Why is <code>config.verify</code> injected rather than called directly?",
+                options: [
+                    "It makes the function testable without real cryptography",
+                    "Verification is too slow to run inline",
+                    "The verifier changes per user",
+                    "It avoids importing a library into the handler"
+                ],
+                correct: 0,
+                explanation: "Same technique as the injected clock and byte source in C1/0002. The interesting logic is the gate order and the allow-list, and none of that should require a key pair to exercise."
+            },
+            {
+                question: "The metadata the server can see without decrypting — what is it useful for?",
+                options: [
+                    "Signals like send rate and distinct recipients, which is the next lesson",
+                    "Reconstructing message content statistically",
+                    "Deciding which reports are genuine",
+                    "Nothing, since it is not evidence"
+                ],
+                correct: 0,
+                explanation: "Reports are what you can act on and metadata is what you can notice, and the two answer different questions. What metadata specifically cannot do is distinguish a harasser from an enthusiastic correspondent."
+            },
+            {
+                question: "Why does <code>actionable</code> get derived from the items rather than tracked as the loop runs?",
+                options: [
+                    "Two sources for one fact can disagree, and then every caller has to know which to trust",
+                    "It is faster to compute at the end",
+                    "The loop may exit early",
+                    "Callers ignore the items array"
+                ],
+                correct: 0,
+                explanation: "The same argument as ok in the previous module's exercises and as tokens.status beside revoked_at: duplication is tolerable only when something refuses to let the copies disagree, and deriving is the cheapest form of that."
+            },
+            {
+                question: "A report names a user id that does not exist. What comes back?",
+                options: [
+                    "Its items are excluded as unknown_key, because the directory holds nothing for them",
+                    "An error, since the user is invalid",
+                    "The items are admitted as third_party",
+                    "The whole report is rejected"
+                ],
+                correct: 0,
+                explanation: "An unknown user and a version that user never had fail at the same gate for the same reason: there is no key, so nothing can be checked. Handling both in one condition is why the two-level lookup guards each level."
+            },
+            {
+                question: "What is the honest summary of this lesson?",
+                options: [
+                    "The reporter's device supplies the plaintext, the signature makes the author real, and only named fields survive",
+                    "Reports should be reviewed within 24 hours",
+                    "End-to-end encryption makes abuse handling impossible",
+                    "The server should keep a moderation key for reported conversations"
+                ],
+                correct: 0,
+                explanation: "Three sentences, and each removes a specific way of being wrong: no server decryption, no suspending strangers by typing an id, and nothing reaching the review queue that nobody chose to put there."
+            }
+        ]);
+    </script>
+
+    <div class="lesson-nav">
+        <a href="./README.html">&larr; Module home</a>
+        <span class="disabled">Next: The Signals You Have Without the Content &rarr;</span>
+    </div>
+
+</body>
+</html>

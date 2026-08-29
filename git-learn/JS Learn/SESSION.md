@@ -26,13 +26,16 @@ how far it got.
 > files either.** Make no claims about it at all — not in prose, not in a
 > commit message, not as a reason for prioritising anything.
 
-**Nothing in flight.** C2 — CI/CD & Release Engineering — landed complete on
-2026-08-29: four lessons, each verified with its `--wrong` cases, each its own
-commit, README and search entries in.
+**W1 — C3, Trust Safety & Abuse.** Started 2026-08-29, straight after C2, and
+chosen on the dependency in *Next action* rather than on preference.
+`0001-reporting-without-reading.html` is written, verified and has its
+`--wrong` cases; README, index row and search entry are in. **`0002`–`0003`
+remain**: the metadata signals, and interim suspension. Each lands as its own
+green commit — the last written lesson's next-link is a disabled span until the
+one after it exists.
 
-**The next unit is `W1` again: pick one C-module, write it, stop.** Six remain
-— C3, C4, C6, C7, C8, C9. The launch queue is the other open front and none of
-it is code; see *Next action*.
+C2 landed complete the same day: four lessons, each verified with `--wrong`
+cases, each its own commit.
 
 ### State as of 2026-08-29
 
@@ -104,16 +107,16 @@ Drafts for four of Wave 0 are written and waiting in `token/docs/launch/` —
 fill the angle brackets and send. The folder README has the send order.
 
 **Writing side — `W1` continues, one module at a time.** C0, C1 and C2 have
-landed; **six C-modules remain**: C3, C4, C6, C7, C8, C9. Written just-in-time,
-never batched. `W2` is closed and there is no maintenance tail left to slot
-between units.
+landed and **C3 is in flight**; after it, **five remain**: C4, C6, C7, C8, C9.
+Written just-in-time, never batched. `W2` is closed and there is no maintenance
+tail left to slot between units.
 
-Of the six, **C3 — Trust, Safety & Abuse** is the one with a claim on being
-next, and the reason is a dependency rather than a preference: `L23` and `L26`
+**Why C3 was taken next**, recorded so it can be argued with: `L23` and `L26`
 in the launch queue are the UGC evidence both stores audit, `L23` is one of the
-three things this file lists as blocked, and C3 is where the argument for it
-gets worked out. That is a recommendation and not a decision — C6 (scale) and
-C7 (observability) both attach to work that is closer to hand.
+three items below that are blocked, and C3 is where the engineering argument
+behind it gets worked out. **The cost of that choice** is that C6 (scale) and
+C7 (observability) attach to work that is closer to hand, so this buys store
+readiness at the price of deferring two modules with a nearer use.
 
 ---
 
