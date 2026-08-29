@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>C2 — Releasing to Two Stores</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">CI/CD &amp; Release Engineering</a> &rsaquo;
+        <span>Releasing to Two Stores</span>
+    </nav>
+
+    <h1>Releasing to Two Stores</h1>
+    <p class="lesson-meta">C2 &mdash; Lesson 4 of 4 &nbsp;|&nbsp; ~50 min</p>
+
+    <div class="callout">
+        <div class="callout-title">Why this matters for Token</div>
+        <p>The previous lesson's asymmetry was that you cannot put a dropped column back. This one is
+        worse, because the thing you cannot take back is on somebody else's phone.</p>
+        <p>Token's clients set <code>iceTransportPolicy: 'relay'</code> so that a call never takes a
+        direct path &mdash; an ICE candidate <em>is</em> an IP address, and a direct path would hand a
+        delivery company the issuer's home IP. Suppose a build ships without it. You notice within
+        the hour. There is nothing you can do from the server: the policy is decided by the client,
+        the fix is a new build, the build needs review, and the phones that already have the old one
+        keep it until their owner chooses to update.</p>
+        <p><strong>The API can be fixed in a deploy. The app cannot.</strong> Everything in this
+        lesson follows from that, including the uncomfortable part: the oldest version still in use
+        decides what your server is allowed to stop doing.</p>
+    </div>
+
+    <h2>1 &middot; An installed app stays installed</h2>
+
+    <p>Three facts, none of which have a workaround:</p>
+
+    <ul>
+        <li><strong>You cannot uninstall a build.</strong> Removing it from the store stops new
+        installs. Every phone that already has it still has it, and still talks to your API.</li>
+        <li><strong>A fix takes days, not minutes.</strong> Apple's review is usually a day and
+        sometimes several; Google's is usually faster and occasionally not. Neither is a deploy
+        pipeline, and neither can be hurried on the day you need it hurried.</li>
+        <li><strong>The user decides when to update.</strong> Automatic updates are common and not
+        universal, and a phone that is short of storage quietly stops taking them.</li>
+    </ul>
+
+    <p>The only real control is <strong>slowing the spread</strong>: Play's staged rollout releases
+    to a percentage of users, the App Store's phased release does the same over seven days, and both
+    can be halted. Halting stops the <em>next</em> installs. It does nothing about the ones that
+    already happened, which is why the first few percent is where the bug has to be found.</p>
+
+    <div class="callout warning">
+        <div class="callout-title">Two stores means two of everything, permanently</div>
+        <p>Two review queues on different clocks, so the same release is live on one platform and
+        pending on the other for a day or more &mdash; <strong>every release has a window where the
+        two platforms are on different versions</strong>, and it is not an edge case, it is every
+        single time.</p>
+        <p>So the minimum supported version is <em>per platform</em>. A single global number forces
+        an update on people who cannot yet get it, which is the one failure in this lesson that
+        turns a working app into a dead one.</p>
+    </div>
+
+    <h2>2 &middot; Version skew: the API keeps every promise it ever made</h2>
+
+    <p>At any moment your API is serving several versions of the app at once &mdash; the current one,
+    last month's, and someone's six-month-old install. Which means the rule from the migrations
+    lesson reappears one layer up, in the same shape:</p>
+
+    <table>
+        <thead>
+            <tr><th>Change to the API</th><th>Safe?</th><th>Why</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>Add a new response field</td><td>Yes</td><td>An old client ignores what it does not read</td></tr>
+            <tr><td>Add an <em>optional</em> request field</td><td>Yes</td><td>An old client that omits it still gets the old behaviour</td></tr>
+            <tr><td>Add a new endpoint</td><td>Yes</td><td>Nothing old calls it</td></tr>
+            <tr><td>Remove a response field</td><td><strong>No</strong></td><td>Old code reads <code>undefined</code> and usually renders it</td></tr>
+            <tr><td>Make a request field required</td><td><strong>No</strong></td><td>Every old client's request becomes a 400</td></tr>
+            <tr><td>Change what a value means</td><td><strong>No</strong></td><td>The worst kind: nothing errors and everything is wrong</td></tr>
+        </tbody>
+    </table>
+
+    <p>Token has a live example of the last row. <code>max_uses</code> is <code>null</code> for
+    unlimited and <code>0</code> for none at all &mdash; opposite meanings, one of them falsy.
+    Redefining which is which on the server would leave every installed app confidently showing the
+    wrong thing, with no error anywhere.</p>
+
+    <h3>Try it yourself</h3>
+
+    <div id="pg-skew"></div>
+    <script>
+        createPlayground("pg-skew", `// The server drops a field that "nothing uses any more".
+const v1Response = { id: 7, label: "Courier", status: "active", timesUsed: 3 };
+const v2Response = { id: 7, label: "Courier", status: "active" };
+
+// The app installed on 40% of phones.
+function renderRow(t) {
+  return t.label + " - used " + t.timesUsed + " times";
+}
+
+console.log("old client, old server:", renderRow(v1Response));
+console.log("old client, new server:", renderRow(v2Response));
+console.log("");
+console.log("No error. No 500. A screen that reads 'used undefined times',");
+console.log("for as long as anyone still has that build.");`);
+    </script>
+
+    <h2>3 &middot; The two things that reach a phone without a store</h2>
+
+    <p>Not everything has to wait for review, and knowing which half is which is most of release
+    planning:</p>
+
+    <ul>
+        <li><strong>Over-the-air JavaScript updates</strong> (<code>expo-updates</code>). Token is an
+        Expo app, so a bug in JS or in a screen can be published straight to installed apps, in
+        minutes. This is the closest thing to a rollback that mobile has.</li>
+        <li><strong>The redemption web page</strong> at <code>tokn.app</code> is a normal web app.
+        It deploys like the API and has no version skew of its own &mdash; there is exactly one
+        version and everybody has it on the next page load.</li>
+    </ul>
+
+    <p>What an OTA update <em>cannot</em> touch is native code, and Token has more of that than most
+    apps: <code>react-native-webrtc</code>, the iOS Notification Service Extension that decrypts
+    push previews on the device, <code>expo-secure-store</code>'s Keychain and Keystore access. A
+    change to any of those is a new binary, which is a store review.</p>
+
+    <div class="callout">
+        <div class="callout-title">The skew nobody plans for: user versus holder</div>
+        <p>Because <code>web/</code> updates instantly and the app does not, the two sides of a Token
+        conversation drift apart. A courier on today's redemption page is talking to an issuer on a
+        three-month-old app, over a WebSocket and a shared encryption scheme.</p>
+        <p><strong>The web page is the side that has to bend</strong>, precisely because it is the
+        side you can change. It is tempting to ship the clever new thing on the surface you control
+        and wait for the app to catch up; that is exactly backwards.</p>
+    </div>
+
+    <h2>4 &middot; The force-upgrade lever, and how to not brick anyone</h2>
+
+    <p>Eventually a version really is too old to serve &mdash; a security fix, or a message format
+    the server can no longer produce. The lever is a policy the client asks about at launch:</p>
+
+    <pre><code>{
+  "ios":     { "minSupported": "1.4.0", "latest": "1.7.2", "storeUrl": "https://apps.apple.com/app/id..." },
+  "android": { "minSupported": "1.4.0", "latest": "1.7.0", "storeUrl": "https://play.google.com/store/apps/details?id=..." }
+}</code></pre>
+
+    <p>Two design points, both of which have to be right before you ever need them:</p>
+
+    <ul>
+        <li><strong>The endpoint has to be one the oldest client already calls.</strong> A force-
+        upgrade check that shipped in 1.5 cannot reach a phone running 1.2. In practice it belongs in
+        the very first release, and it is the reason to ship a version endpoint on day one.</li>
+        <li><strong>A forced update must have somewhere to go.</strong> Blocking the app while the
+        policy carries no store link for that platform is a screen with no button on it. If the link
+        is missing, the honest fallback is to <em>ask</em> rather than to insist &mdash; an app that
+        is annoying beats an app that is dead.</li>
+    </ul>
+
+    <h3>Try it yourself &mdash; broken on purpose</h3>
+    <p>Read the error. It happens for a client the policy simply does not describe, which is
+    every future platform and every request with a typo in it.</p>
+
+    <div id="pg-broken"></div>
+    <script>
+        createPlayground("pg-broken", `const policy = {
+  ios:     { minSupported: "1.4.0", latest: "1.7.2" },
+  android: { minSupported: "1.4.0", latest: "1.7.0" }
+};
+
+function mustUpdate(client) {
+  return client.version < policy[client.platform].minSupported;
+}
+
+console.log("ios 1.7.2:", mustUpdate({ platform: "ios", version: "1.7.2" }));
+console.log("web:      ", mustUpdate({ platform: "web", version: "1.0.0" }));
+
+// Fix it. And when you have, look hard at the comparison itself --
+// there is a second bug in this function that does not throw at all.`);
+    </script>
+
+    <p>The second bug is the comparison. <code>"1.10.0" &lt; "1.9.0"</code> is <strong>true</strong>,
+    because string comparison reads character by character and <code>"1"</code> comes before
+    <code>"9"</code>. Every version scheme survives this until the day the minor number reaches 10,
+    and then a force-update rule starts firing on the newest build in the wild.</p>
+
+    <h2>5 &middot; Build numbers, and being able to find the code again</h2>
+
+    <ul>
+        <li><strong>Android <code>versionCode</code> is an integer that must always increase</strong>,
+        and a value that has been uploaded can never be uploaded again &mdash; not even after
+        deleting the build. Same for the iOS build number within a version.</li>
+        <li><strong>The user-facing <code>version</code> is separate</strong> and is allowed to stay
+        put across several builds.</li>
+        <li><strong>Every build must be traceable to a commit.</strong> A crash report naming a build
+        you cannot map to a revision is a crash you cannot fix, and "it was roughly that Tuesday" is
+        not a map. Stamp the commit into the build and into whatever the app reports.</li>
+    </ul>
+
+    <h2>Now build it yourself</h2>
+
+    <div id="exercise-1"></div>
+    <script>
+        createSolution("exercise-1", {
+            exercise:
+                "Write <code>releaseVerdict(client, policy)</code> &mdash; what the server tells an app that has just launched.<br><br>" +
+                "<code>client</code> is <code>{ platform, version }</code>. <code>policy</code> is keyed by platform, each entry <code>{ minSupported, latest, storeUrl }</code>, and <code>storeUrl</code> may be absent. Versions are dotted numbers such as <code>\"1.10.0\"</code>.<br><br>" +
+                "Return <code>{ status, target, storeUrl }</code>, choosing the first rule that applies:<br><br>" +
+                "1. <strong>The policy has no entry for this platform</strong> &rarr; <code>status: \"unknown_platform\"</code>, <code>target: null</code>, <code>storeUrl: null</code>. A client you know nothing about is not one you can safely order around.<br>" +
+                "2. <strong>Older than <code>minSupported</code></strong> &rarr; <code>\"forced_update\"</code> &mdash; <em>unless</em> the platform has no <code>storeUrl</code>, in which case it is <code>\"optional_update\"</code>. A forced update with nowhere to go is a screen with no button on it.<br>" +
+                "3. <strong>Older than <code>latest</code></strong> &rarr; <code>\"optional_update\"</code>.<br>" +
+                "4. <strong>Otherwise</strong> &rarr; <code>\"ok\"</code>. This includes a client <em>newer</em> than <code>latest</code>: internal builds exist and a staged rollout routinely outruns the config, and telling such a client to update to something older is worse than saying nothing.<br><br>" +
+                "<code>target</code> is <code>latest</code> for both update statuses and <code>null</code> otherwise. <code>storeUrl</code> is the platform's URL when there is one, and <code>null</code> otherwise &mdash; never <code>undefined</code>.<br><br>" +
+                "<strong>Compare versions numerically, component by component</strong>, and treat a missing component as zero, so <code>\"1.9\"</code> and <code>\"1.9.0\"</code> are the same version. Comparing the strings is the bug that waits until a minor number reaches 10.",
+            hints: [
+                "Write <code>compareVersions(a, b)</code> first, returning a negative number, zero or a positive number. It is the only part with any subtlety, and having it separate means you can test it on its own.",
+                "Split on <code>\".\"</code>, map to numbers, and walk indices up to the longer of the two lengths &mdash; a component past the end of the shorter array is <code>undefined</code>, so read it as <code>0</code>. That is what makes 1.9 and 1.9.0 equal.",
+                "Rule 2's exception is easier to write as one decision than two: work out the status first, then downgrade it from forced to optional if there is no store link. Building the return object once, at the end, keeps the four fields from drifting apart between branches."
+            ],
+            solution: `function compareVersions(a, b) {
+  const left = String(a).split(".").map(Number);
+  const right = String(b).split(".").map(Number);
+  const length = Math.max(left.length, right.length);
+
+  for (let i = 0; i < length; i++) {
+    // A component past the end of the shorter version is zero, which is
+    // what makes "1.9" and "1.9.0" the same version.
+    const l = Number.isFinite(left[i]) ? left[i] : 0;
+    const r = Number.isFinite(right[i]) ? right[i] : 0;
+    if (l !== r) return l - r;
+  }
+  return 0;
+}
+
+function releaseVerdict(client, policy) {
+  const rules = policy[client.platform];
+
+  // Rule 1. No entry, so no store link, no target and nothing to demand.
+  if (rules === undefined) {
+    return { status: "unknown_platform", target: null, storeUrl: null };
+  }
+
+  const storeUrl = rules.storeUrl === undefined ? null : rules.storeUrl;
+  let status;
+
+  if (compareVersions(client.version, rules.minSupported) < 0) {
+    // Rule 2, and its exception: an app that is annoying beats an app
+    // that is dead.
+    status = storeUrl === null ? "optional_update" : "forced_update";
+  } else if (compareVersions(client.version, rules.latest) < 0) {
+    status = "optional_update";
+  } else {
+    // Rule 4 covers newer-than-latest too. Internal builds exist, and a
+    // staged rollout outruns the config as a matter of routine.
+    status = "ok";
+  }
+
+  return {
+    status: status,
+    target: status === "ok" ? null : rules.latest,
+    storeUrl: storeUrl
+  };
+}`
+        });
+    </script>
+
+    <div id="pg-exercise"></div>
+    <script>
+        createPlayground("pg-exercise", `// --- Write releaseVerdict(client, policy) here, then press Run ---
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label);
+  if (!passed && detail) console.log("      " + detail);
+}
+
+const APPLE = "https://apps.apple.com/app/id000";
+const PLAY = "https://play.google.com/store/apps/details?id=app.tokn";
+
+// The minor numbers are past 9 on purpose. A string comparison agrees with
+// a numeric one all the way up to 1.9, so a policy that never gets there
+// cannot tell a correct implementation from a broken one.
+const POLICY = {
+  ios:     { minSupported: "1.4.0", latest: "1.10.0", storeUrl: APPLE },
+  android: { minSupported: "1.4.0", latest: "1.10.0", storeUrl: PLAY }
+};
+
+function verdict(platform, version, policy) {
+  return releaseVerdict({ platform: platform, version: version }, policy || POLICY);
+}
+
+try {
+  const current = verdict("ios", "1.10.0");
+  check("a client on the latest version is ok",
+    current.status === "ok", "got: " + JSON.stringify(current));
+  check("...and is given no target",
+    current.target === null, "got target: " + JSON.stringify(current.target));
+
+  // The bug that waits for the minor number to reach 10. String comparison
+  // says "1.10.0" < "1.9.0", so this client is told to downgrade.
+  const ten = verdict("ios", "1.10.0", {
+    ios: { minSupported: "1.4.0", latest: "1.9.0", storeUrl: APPLE }
+  });
+  check("1.10.0 is newer than 1.9.0",
+    ten.status === "ok",
+    "got: " + JSON.stringify(ten) +
+    " - comparing the strings reads character by character, and \\"1\\" sorts before \\"9\\"");
+
+  // Missing components are zero, not absent.
+  const short = verdict("ios", "1.10", {
+    ios: { minSupported: "1.4", latest: "1.10.0", storeUrl: APPLE }
+  });
+  check("1.10 and 1.10.0 are the same version",
+    short.status === "ok", "got: " + JSON.stringify(short));
+
+  const behind = verdict("android", "1.8.0");
+  check("a client behind latest but above minimum is an optional update",
+    behind.status === "optional_update", "got: " + JSON.stringify(behind));
+  check("...pointed at latest, with the platform's own store link",
+    behind.target === "1.10.0" && behind.storeUrl === PLAY,
+    "got: " + JSON.stringify(behind));
+
+  const ancient = verdict("ios", "1.3.9");
+  check("a client below minSupported is forced",
+    ancient.status === "forced_update", "got: " + JSON.stringify(ancient));
+  check("...and gets the iOS link, not the Play one",
+    ancient.storeUrl === APPLE, "got: " + JSON.stringify(ancient.storeUrl));
+
+  // The boundary. A client on exactly the minimum is supported.
+  const exact = verdict("ios", "1.4.0");
+  check("a client on exactly minSupported is not forced",
+    exact.status === "optional_update",
+    "got: " + JSON.stringify(exact) + " - the rule is OLDER than the minimum");
+
+  // Rule 4, and the case a strict inequality gets wrong in the direction
+  // nobody notices until an internal build is in the room.
+  const ahead = verdict("ios", "1.11.0");
+  check("a client newer than latest is ok, not asked to update",
+    ahead.status === "ok" && ahead.target === null,
+    "got: " + JSON.stringify(ahead) +
+    " - internal builds exist, and a staged rollout outruns the config routinely");
+
+  // Rule 1.
+  const web = verdict("web", "1.0.0");
+  check("a platform the policy does not describe is unknown_platform",
+    web.status === "unknown_platform", "got: " + JSON.stringify(web));
+  check("...with no target and no store link",
+    web.target === null && web.storeUrl === null, "got: " + JSON.stringify(web));
+
+  // Rule 2's exception. Never a blocking screen with nowhere to go.
+  const noLink = verdict("android", "1.1.0", {
+    android: { minSupported: "1.4.0", latest: "1.10.0" }
+  });
+  check("a forced update with no store link is downgraded to optional",
+    noLink.status === "optional_update",
+    "got: " + JSON.stringify(noLink) +
+    " - an app that is annoying beats an app that is dead");
+  check("...still pointed at latest, with storeUrl null rather than undefined",
+    noLink.target === "1.10.0" && noLink.storeUrl === null,
+    "got: " + JSON.stringify(noLink));
+
+  // Per platform, because the two review queues are never in step.
+  const split = {
+    ios:     { minSupported: "1.9.0", latest: "1.10.0", storeUrl: APPLE },
+    android: { minSupported: "1.4.0", latest: "1.9.0", storeUrl: PLAY }
+  };
+  check("the same version is forced on one platform and fine on the other",
+    verdict("ios", "1.5.0", split).status === "forced_update" &&
+    verdict("android", "1.5.0", split).status === "optional_update",
+    "got ios: " + JSON.stringify(verdict("ios", "1.5.0", split)) +
+    " android: " + JSON.stringify(verdict("android", "1.5.0", split)));
+
+  // Every verdict is one of the four, and the shape never varies.
+  const all = [current, ten, short, behind, ancient, exact, ahead, web, noLink];
+  const known = ["ok", "optional_update", "forced_update", "unknown_platform"];
+  check("every verdict has a known status",
+    all.every(function (v) { return known.indexOf(v.status) !== -1; }),
+    "got: " + JSON.stringify(all.map(function (v) { return v.status; })));
+  check("target is present exactly when an update is offered",
+    all.every(function (v) {
+      return (v.target !== null) === (v.status === "optional_update" || v.status === "forced_update");
+    }),
+    "got: " + JSON.stringify(all.map(function (v) { return v.status + "/" + v.target; })));
+} catch (err) {
+  console.log("FAIL  " + err.name + ": " + err.message);
+  console.log("      Usually this means releaseVerdict is missing or misspelt, or");
+  console.log("      that the policy was read for a platform it does not describe.");
+}`);
+    </script>
+
+    <h2>Explain it in your own words</h2>
+    <div id="explain-0004"></div>
+    <script>
+        createExplain("explain-0004", {
+            prompt: "A client running a version <em>newer</em> than the policy's <code>latest</code> gets <code>ok</code> rather than being asked to update. Explain what real situation produces such a client, and why the alternative &mdash; treating anything that is not exactly <code>latest</code> as out of date &mdash; is a worse answer than it looks."
+        });
+    </script>
+
+    <div id="lesson-quiz"></div>
+    <script>
+        createQuiz("lesson-quiz", [
+            {
+                question: "A build ships with a bug that leaks the issuer's IP address on calls. What can the server do about it?",
+                options: [
+                    "Nothing that fixes it — the policy is the client's, so it takes a new build and a review",
+                    "Push a configuration change that disables direct connections",
+                    "Reject calls from that build until it is updated, which is equivalent to a fix",
+                    "Roll back the release so the old build is restored on phones"
+                ],
+                correct: 0,
+                explanation: "iceTransportPolicy is decided where the connection is constructed, which is on the phone. Refusing calls from that build is a real mitigation and is not a fix — it turns a privacy bug into an outage for those users, which may be the right trade and is a different thing."
+            },
+            {
+                question: "What does halting a staged rollout achieve?",
+                options: [
+                    "It stops further installs; every phone that already updated keeps the build",
+                    "It removes the build from phones that installed it",
+                    "It reverts those phones to the previous version",
+                    "It pauses the app for everyone until you resume"
+                ],
+                correct: 0,
+                explanation: "This is why the first few percent is where the bug has to be found — it is the only window in which stopping still helps most people. An installed app stays installed, and no store lever changes that."
+            },
+            {
+                type: "predict-output",
+                code: "console.log(\"1.10.0\" < \"1.9.0\");",
+                answer: "true",
+                explanation: "String comparison goes character by character, and '1' comes before '9' at the second position. Every version scheme survives this until the minor number reaches 10, at which point a force-update rule starts firing on the newest build in the wild."
+            },
+            {
+                question: "Why is <code>minSupported</code> a per-platform value rather than one number?",
+                options: [
+                    "The two review queues run on different clocks, so a release is live on one platform while pending on the other",
+                    "iOS and Android use different version formats",
+                    "Android users update more slowly",
+                    "It makes the policy file easier to read"
+                ],
+                correct: 0,
+                explanation: "Every release has a window in which the two platforms are on different versions, and it is every release rather than an edge case. A single global minimum forces an update on people who cannot yet obtain it."
+            },
+            {
+                type: "which-breaks",
+                question: "Which of these API changes breaks an already-installed client?",
+                variants: [
+                    "Adding a new field to the token response",
+                    "Removing the timesUsed field from the token response",
+                    "Adding a new optional query parameter to GET /tokens"
+                ],
+                correct: 1,
+                explanation: "Old code keeps reading the field it was written against and gets undefined, which it usually renders rather than checking. Additions are invisible to a client that does not know about them, which is the whole basis of serving several versions at once."
+            },
+            {
+                type: "predict-output",
+                code: "const t = { label: \"Courier\", status: \"active\" };\nconsole.log(t.label + \" - used \" + t.timesUsed + \" times\");",
+                answer: "Courier - used undefined times",
+                explanation: "No error, no 500, just a screen that reads wrongly for as long as anyone has that build. The quiet failures are the expensive ones, because nothing in your monitoring goes red."
+            },
+            {
+                question: "Which API change is the most dangerous of all?",
+                options: [
+                    "Changing what an existing value means",
+                    "Removing a response field",
+                    "Making a request field required",
+                    "Adding a new endpoint"
+                ],
+                correct: 0,
+                explanation: "Removing a field gives undefined and a required field gives a 400 — both are visible. Redefining max_uses so that null and 0 swap meanings leaves every installed app confidently showing the wrong thing with nothing erroring anywhere."
+            },
+            {
+                question: "What can an over-the-air update fix in Token?",
+                options: [
+                    "JavaScript and screens, but not WebRTC, the push extension or Keychain access",
+                    "Anything, since Expo bundles the whole app",
+                    "Only text and images",
+                    "Nothing — Apple prohibits it"
+                ],
+                correct: 0,
+                explanation: "OTA is the closest thing mobile has to a rollback and it stops exactly where native code starts. Token has more native surface than most apps, which shrinks the set of bugs that can be fixed in minutes."
+            },
+            {
+                question: "The redemption web page updates instantly and the app does not. Which side should absorb the difference?",
+                options: [
+                    "The web page, because it is the side that can be changed",
+                    "The app, because it is the primary product",
+                    "Neither — they should be released together",
+                    "Whichever has fewer users"
+                ],
+                correct: 0,
+                explanation: "It is tempting to ship the clever new thing on the surface you control and wait for the app to catch up, and that is exactly backwards. The side that cannot change is the side that sets the terms."
+            },
+            {
+                question: "Why must the version-check endpoint exist in the very first release?",
+                options: [
+                    "A check that ships in 1.5 cannot reach a phone running 1.2",
+                    "The stores require a version endpoint",
+                    "It is needed to compute the build number",
+                    "Later releases cannot add endpoints"
+                ],
+                correct: 0,
+                explanation: "The lever has to already be in the hands of the clients you will one day need to move. This is the same shape as designing key backup before anyone has keys — a mechanism added after the fact does not reach the builds that predate it."
+            },
+            {
+                question: "The policy has no store link for a platform and the client is below the minimum. What should the verdict be?",
+                options: [
+                    "An optional update — a forced one would be a screen with no button on it",
+                    "A forced update, since the version is genuinely unsupported",
+                    "unknown_platform, since the policy is incomplete",
+                    "An error, so the omission is noticed"
+                ],
+                correct: 0,
+                explanation: "An app that is annoying beats an app that is dead. Note the shape of the decision: the missing configuration is a mistake, and the response to a mistake in the configuration should not be to brick the user who had nothing to do with it."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This throws for a client the policy does not describe. Which line?",
+                code: "1  function mustUpdate(client) {\n2    return client.version < policy[client.platform].minSupported;\n3  }",
+                bugLine: 2,
+                options: ["Line 1", "Line 2", "Line 3"],
+                correct: 1,
+                explanation: "Reading minSupported of undefined throws for any platform not in the policy — a typo, a new platform, or the web page calling the same endpoint. The same line also compares versions as strings, which is a second bug that never throws at all."
+            },
+            {
+                type: "fill-blank",
+                question: "Complete the comparison so a missing component counts as zero.",
+                code: "const l = Number.isFinite(left[i]) ? left[i] : ___;",
+                answer: "0",
+                explanation: "Reading past the end of the array gives undefined, and treating that as zero is what makes 1.9 and 1.9.0 the same version. Left as undefined it poisons every comparison, since undefined is neither less than nor greater than anything."
+            },
+            {
+                question: "Why is a client running a version <em>newer</em> than <code>latest</code> reported as ok?",
+                options: [
+                    "Internal builds exist and a staged rollout routinely outruns the config",
+                    "It is impossible, so the case does not matter",
+                    "The server cannot tell how new it is",
+                    "Newer clients are always compatible"
+                ],
+                correct: 0,
+                explanation: "Testers, a release the config has not caught up with, a rollout partway through. Telling such a client to update to something older is worse than saying nothing, and an implementation using 'not equal to latest' produces exactly that."
+            },
+            {
+                type: "predict-output",
+                code: "console.log([\"1\", \"10\", \"9\"].map(Number).sort((a, b) => a - b).join(\".\"));",
+                answer: "1.9.10",
+                explanation: "Converting to numbers before comparing is the entire fix, and it is one map call. The default sort would give 1, 10, 9 for the same reason the string version comparison fails."
+            },
+            {
+                question: "Android's <code>versionCode</code> — what is the rule?",
+                options: [
+                    "An integer that must always increase, and a value once uploaded can never be reused",
+                    "It must match the user-facing version exactly",
+                    "It resets with each minor release",
+                    "It is optional if a version name is set"
+                ],
+                correct: 0,
+                explanation: "Not even deleting the build frees the number. The user-facing version is a separate string that is allowed to stay put across several builds, which is what lets you upload a fix without pretending it is a new release."
+            },
+            {
+                question: "Why must every build be traceable to a commit?",
+                options: [
+                    "A crash report naming a build you cannot map to a revision is a crash you cannot fix",
+                    "The stores require it",
+                    "It makes the download smaller",
+                    "It is needed for over-the-air updates"
+                ],
+                correct: 0,
+                explanation: "'It was roughly that Tuesday' is not a map, especially once several builds share a version number. Stamping the commit into the build costs one line in the pipeline and is the difference between a bug report and a bug."
+            },
+            {
+                question: "A client is on exactly <code>minSupported</code>. Forced or not?",
+                options: [
+                    "Not forced — the rule is older than the minimum",
+                    "Forced, since it is at the boundary",
+                    "It depends on the platform",
+                    "Forced on iOS and optional on Android"
+                ],
+                correct: 0,
+                explanation: "A boundary worth a case of its own, because it is where < and <= disagree and where the whole cohort you just declared supported actually sits. Getting it wrong forces an update on the version you intended to keep serving."
+            },
+            {
+                question: "Why does the verdict include <code>storeUrl: null</code> rather than leaving the field out?",
+                options: [
+                    "A field that is sometimes absent makes every caller handle two shapes",
+                    "JSON cannot represent a missing field",
+                    "null is smaller than undefined",
+                    "The client would crash otherwise"
+                ],
+                correct: 0,
+                explanation: "One shape with four fields is one thing to read. Absent-versus-null is the same class of distinction as missing-versus-empty in the environment check, and it is worth having only when the two states mean different things."
+            },
+            {
+                question: "How does version skew relate to the previous lesson's expand and contract?",
+                options: [
+                    "It is the same rule one layer up — add freely, remove only after the old readers are gone",
+                    "They are unrelated, since one is about schemas",
+                    "Skew is avoided by migrating the database first",
+                    "Expand and contract replaces the need for version checks"
+                ],
+                correct: 0,
+                explanation: "The old reader is a running container in one case and someone's phone in the other, and the phone is worse because it can outlive the release by months and you cannot drain it. Same discipline, longer clock."
+            },
+            {
+                type: "order-steps",
+                question: "Put the release steps in an order that keeps the oldest client working.",
+                steps: [
+                    "Add the new response field alongside the old one",
+                    "Ship the app version that reads the new field",
+                    "Wait until almost nobody is running a version that reads the old field",
+                    "Remove the old field from the response"
+                ],
+                correctOrder: [0, 1, 2, 3],
+                explanation: "Waiting is a step rather than an absence of one, and it is the step people leave out. On mobile it is measured in months, and the version numbers in your own logs are what tell you when it is over."
+            },
+            {
+                type: "spot-the-bug",
+                question: "This asks a perfectly current client to update. Which line?",
+                code: "1  if (client.version !== rules.latest) {\n2    return { status: 'optional_update', target: rules.latest };\n3  }\n4  return { status: 'ok', target: null };",
+                bugLine: 1,
+                options: ["Line 1", "Line 2", "Line 4"],
+                correct: 0,
+                explanation: "Not-equal treats newer and older the same, so a tester on an internal build is told to downgrade. The comparison has to have a direction, which means it has to be a comparison rather than an equality test."
+            },
+            {
+                question: "Which is a fair statement of what makes shipping an app different from shipping the API?",
+                options: [
+                    "The oldest version still in use decides what the server is allowed to stop doing",
+                    "Apps are larger and take longer to build",
+                    "App code is compiled and server code is not",
+                    "Stores test more thoroughly than a pipeline does"
+                ],
+                correct: 0,
+                explanation: "It is the same sentence as the module opener from the other direction. The server's freedom is bounded by a decision somebody else made months ago about whether to tap Update."
+            },
+            {
+                question: "Both platforms are on different versions during a release. What follows for a new API field the app needs?",
+                options: [
+                    "It has to be optional until both platforms have shipped and their users have updated",
+                    "It can be required once the first platform ships",
+                    "It should be added only after both reviews pass",
+                    "It should be versioned into a separate endpoint every time"
+                ],
+                correct: 0,
+                explanation: "The gap is not the review; it is the tail of users on the old build afterwards. A separate endpoint per change is a real technique and an expensive default — most changes only need to be additive."
+            },
+            {
+                question: "Which pair of statuses is the right response to a client the policy does not describe?",
+                options: [
+                    "unknown_platform, with no target and no store link",
+                    "forced_update, since an unknown client is untrusted",
+                    "ok, since there is nothing to compare it against",
+                    "optional_update, pointing at the iOS latest"
+                ],
+                correct: 0,
+                explanation: "There is no store link to send it to and no version to compare, so both an order and a reassurance would be invented. Saying that the answer is not known is a real answer, and it is one a caller can log."
+            },
+            {
+                question: "What is the honest summary of this lesson?",
+                options: [
+                    "You cannot take a client back, so the server keeps its old promises and the update lever must never brick anyone",
+                    "Release to one store first and the other later",
+                    "Use over-the-air updates for everything",
+                    "Keep the app and the API in the same repository"
+                ],
+                correct: 0,
+                explanation: "Three obligations, and the update lever is the one people skip: the force-upgrade path is written on a good day and used on a bad one, so it needs a store link, a per-platform minimum and a fallback that asks rather than insists."
+            }
+        ]);
+    </script>
+
+    <div class="lesson-nav">
+        <a href="./0003-migrations-you-can-deploy.html">&larr; Migrations You Can Deploy</a>
+        <a href="./README.html">Module home &rarr;</a>
+    </div>
+
+</body>
+</html>

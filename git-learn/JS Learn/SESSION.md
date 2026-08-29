@@ -26,17 +26,15 @@ how far it got.
 > files either.** Make no claims about it at all — not in prose, not in a
 > commit message, not as a reason for prioritising anything.
 
-**W1 — C2, CI/CD & Release Engineering.** Started 2026-08-28 on the student's
-say-so, immediately after C1. `0001-continuous-integration.html` , `0002-secrets-and-environments.html`
-and `0003-migrations-you-can-deploy.html` are written, verified and have their
-`--wrong` cases; the README and search entries are in. **`0004` remains** —
-releasing to two stores. It lands as its own green commit; the last written
-lesson's next-link is a disabled span until the one after it exists.
+**Nothing in flight.** C2 — CI/CD & Release Engineering — landed complete on
+2026-08-29: four lessons, each verified with its `--wrong` cases, each its own
+commit, README and search entries in.
 
-Planned: `0001` continuous integration · `0002` secrets and environments ·
-`0003` migrations you can deploy · `0004` releasing to two stores.
+**The next unit is `W1` again: pick one C-module, write it, stop.** Six remain
+— C3, C4, C6, C7, C8, C9. The launch queue is the other open front and none of
+it is code; see *Next action*.
 
-### State as of 2026-08-28
+### State as of 2026-08-29
 
 **Counts live in `PROGRESS.md` and are not restated here** — same rule as
 `CLAUDE.md`. Run `node scripts/audit.mjs` first; it regenerates that file. What
@@ -105,12 +103,17 @@ L7 RoPA ─┬▶ privacy policy   ├▶ L12 Play Data Safety   ├▶ L13 Appl
 Drafts for four of Wave 0 are written and waiting in `token/docs/launch/` —
 fill the angle brackets and send. The folder README has the send order.
 
-**Writing side — `W1` continues, one module at a time.** C0 and C1 have landed;
-**seven C-modules remain**: C2, C3, C4, C6, C7, C8, C9. Written just-in-time,
-never batched. **C2 — CI/CD & Release Engineering is the next one**, and it sits
-after C1 for a reason worth keeping: there is nothing to automate until tests
-exist. `W2` is closed and there is no maintenance tail left to slot between
-units.
+**Writing side — `W1` continues, one module at a time.** C0, C1 and C2 have
+landed; **six C-modules remain**: C3, C4, C6, C7, C8, C9. Written just-in-time,
+never batched. `W2` is closed and there is no maintenance tail left to slot
+between units.
+
+Of the six, **C3 — Trust, Safety & Abuse** is the one with a claim on being
+next, and the reason is a dependency rather than a preference: `L23` and `L26`
+in the launch queue are the UGC evidence both stores audit, `L23` is one of the
+three things this file lists as blocked, and C3 is where the argument for it
+gets worked out. That is a recommendation and not a decision — C6 (scale) and
+C7 (observability) both attach to work that is closer to hand.
 
 ---
 
@@ -147,7 +150,7 @@ Per-item status only. The plan is in `TOKEN-TRACK.md`; the counts are in
 | 1 — unblock where the student is | **done**, all five items |
 | 1.5 — the practice pattern in Module 02 | **done** — all 14, 2026-08-17 |
 | 2 — deepen the spine | done (16 of 16 deepenable; 4 skipped as rewrites) |
-| **3 — the C-modules** | **C0 written 2026-08-27, C1 written 2026-08-28** (2 and 5 lessons, all verified). C5 already existed; **seven remain** — C2, C3, C4, C6, C7, C8, C9. Queue item **W1** |
+| **3 — the C-modules** | **C0 written 2026-08-27, C1 2026-08-28, C2 2026-08-29** (2, 5 and 4 lessons, all verified). C5 already existed; **six remain** — C3, C4, C6, C7, C8, C9. Queue item **W1** |
 | 4 — the operating track | not started, deliberately. Queue item **W3** |
 | M1 — verify what was never executed | done |
 | M2 — the invalid example codes | done |

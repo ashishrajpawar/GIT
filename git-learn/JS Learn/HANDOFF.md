@@ -4428,3 +4428,120 @@ function in the product.
   call adds to the first one's answer", about calls rather than options, and the
   detector cannot tell. Both reworded. This is the watch item `SESSION.md`
   records after any batch of new questions, and it fired exactly as intended.
+
+---
+
+## 2026-08-29 — C2 complete: one asymmetry, followed down three layers
+
+Four lessons, four commits, `5f46c4d` through the one carrying this note. The
+module has a spine, and it is worth stating because it is what decided the
+lesson order rather than any textbook sequence:
+
+> **A container is replaceable. A dropped column is not. A phone in somebody's
+> pocket is not even reachable.**
+
+`0001` is about the machine that runs the checks, `0002` about the secrets that
+machine needs and must never print, `0003` about the step that cannot be undone,
+`0004` about the client that cannot be taken back. Each layer costs more to get
+wrong than the one before it, and the amount of ceremony each deserves follows
+from that rather than from taste.
+
+### What each lesson argues, in one line
+
+- **`0001` Continuous Integration.** A check that is ignored is worse than no
+  check, because it occupies the space where a working one would go. The course's
+  own audit is the worked example — it exited `FAIL` on the same three problems
+  every run for weeks, everyone learned to read the output and ignore the exit
+  code, and two checks were lost that way.
+- **`0002` Secrets and Environments.** Validate before anything listens, say
+  everything except the value, and say it all at once. `missing` and `empty` are
+  different diagnoses: an unresolved CI secret expands to `""`, which points at
+  the workflow rather than the environment settings.
+- **`0003` Migrations You Can Deploy.** Both versions of the code run at once
+  during a deploy, so a rename breaks production the instant it commits. Expand
+  and contract, with the drop in a **later release** — and the gap is not caution
+  for its own sake, it is the window in which the migration can still be found to
+  be wrong.
+- **`0004` Releasing to Two Stores.** The oldest version still installed decides
+  what the server is allowed to stop doing. Two review queues on different clocks
+  mean the minimum supported version is per platform, and a forced update with no
+  store link is a screen with no button on it.
+
+### Three deliberate contrasts across the module
+
+These are the parts most likely to be "tidied" into consistency by someone who
+has only read one of the lessons, so each is stated in the lesson that breaks
+the pattern, with the reason:
+
+- **Empty means different things in `0001` and `0003`.** A pipeline with no
+  steps is *not* a pass; a migration plan with no steps *is* ok. The question in
+  the first case is "did the checks run", where nothing is an absence of
+  evidence; in the second it is "does this contain a hazard", where nothing is
+  nothing.
+- **`0002` reports every problem and C1/0005 stops at the first.** Missing
+  environment variables are independent facts you would otherwise discover one
+  deploy at a time; a property checker's later failures are probably the same bug.
+- **`0003` reports at most one problem per step and `0002` reports all of them.**
+  A drop placed both before the switchover and in an earlier release trips two
+  rules for one underlying reason, and fixing the release order changes what the
+  other rule says.
+
+### Two fixture bugs, both mine, both aimed at the check rather than the answer
+
+Recorded because this is the failure mode the `--wrong` files exist to catch,
+and it caught me twice in two days:
+
+- **`0002`, a collision.** The leak assertion used `"short"` as a secret value,
+  and `"short"` is a substring of the problem name `"too_short"` — so the check
+  failed against a *correct* implementation. A fixture that collides with the
+  thing under test reports a bug that is not there, and the hour you spend on it
+  is spent reading correct code.
+- **`0002`, a fixture that could not discriminate.** The untrimmed-measurement
+  case used a padded 32-character key: 34 untrimmed, 32 trimmed, so *both*
+  implementations accepted it and the trimming mistake passed everything. It now
+  straddles the boundary. **Choose fixture values that differ from what the wrong
+  answer would produce**, or the check is decoration.
+
+And one in the same family in `0004`, caught before it shipped: **a string
+comparison of versions and a numeric one agree on every version up to 1.9.** A
+policy written with `latest` at `1.7.2` cannot tell a correct implementation
+from the commonest wrong one, so the self-check's policy uses `1.10.0` and
+`1.11.0` and says why in a comment.
+
+### A mistake case that was not a mistake
+
+`0003`'s wrong-cases originally claimed that updating the running values before
+the checks was a bug. It is not: as long as the update is a **maximum**,
+`max(a, x) < a` and `x < a` agree, so the order genuinely does not matter. Only
+a plain assignment destroys the comparison. The case, the hint and the quiz
+explanation all overstated it and were corrected.
+
+Worth keeping as a general caution: **a wrong-case that passes is evidence about
+the case, not only about the lesson.** The first instinct is to add an assertion
+to the self-check; the right first question is whether the "mistake" is wrong at
+all.
+
+### What the wrong-cases found in the lessons themselves
+
+- **`0003`'s two-subject fixture could not see a global phase tracker.** It ran
+  expand, expand, code, code, contract, contract — globally in phase order — so
+  an implementation with one highest-phase variable for the whole plan passed it.
+  The second subject now starts its expand *after* the first has reached `code`,
+  which is what two migrations written in the same release actually look like.
+- **`0004`'s store-link mistake trips earlier than expected.** Taking the store
+  URL from the first platform in the policy sends *Android* users to the App
+  Store, and that check runs before the iOS one. The `expect` names the check
+  that actually fires; a comment records why.
+
+### State
+
+Audit green. **112/112 verified**, `render-as-authored` back to 0 after three
+explanations across the module were reworded — every one of them mine, and every
+one a phrase like "the last one" or "the second one" that meant something other
+than an option. Seven suites pass. `known-issues.json` still empty. Two
+warnings, both the long-standing deliberate token fixtures.
+
+**Still unpushed** — `git log @{u}..HEAD` for the count, which includes the
+26-lesson widget repair of 2026-08-28. Until that is pushed, the F1 explain
+prompts and the B2/B3 playgrounds remain broken on the published site. Pushing
+publishes, so it is the student's call and not this session's.
