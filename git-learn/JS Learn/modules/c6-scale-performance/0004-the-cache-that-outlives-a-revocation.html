@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>C6 — The Cache That Outlives a Revocation</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <script src="../../assets/quiz.js"></script>
+    <script src="../../assets/playground.js"></script>
+    <script src="../../assets/solution.js"></script>
+    <script src="../../assets/explain.js"></script>
+    <script src="../../assets/progress.js"></script>
+    <script src="../../assets/copy-code.js"></script>
+</head>
+<body>
+    <nav class="breadcrumb">
+        <a href="../../index.html">Course Home</a> &rsaquo;
+        <a href="./README.html">Scale &amp; Performance</a> &rsaquo;
+        <span>The Cache That Outlives a Revocation</span>
+    </nav>
+
+    <h1>The Cache That Outlives a Revocation</h1>
+    <p class="lesson-meta">C6 &mdash; Lesson 4 of 5 &nbsp;|&nbsp; ~55 min</p>
+
+    <div class="callout">
+        <div class="callout-title">Why this matters for Token</div>
+        <p>Everything Token sells is one sentence: <strong>the user can revoke at any time.</strong>
+        Not "can stop future tokens", not "can ask us to stop" &mdash; can end it, now, from their
+        phone.</p>
+        <p>A cache is a promise that an answer stays true for a while. Put one on the path that
+        decides whether a holder may contact somebody, and you have changed the product's central
+        claim from <em>revoke</em> to <em>revoke within sixty seconds</em> &mdash; in a config value,
+        with no discussion, and with nothing in the interface that says so.</p>
+    </div>
+
+    <h2>1 &middot; Caching is a statement about time</h2>
+
+    <p>The reason to cache a token is obvious: <code>code_hash</code> lookups happen on every message
+    and every call, and none of the fields change often. Textbook material.</p>
+
+    <div id="pg-window"></div>
+    <script>
+        createPlayground("pg-window", `const ttlSeconds = 60;
+
+const revokedAt   = 12;   // the user taps Revoke
+const cachedUntil = 55;   // the entry was written at t=-5
+
+console.log("user revokes at        : t=" + revokedAt);
+console.log("cache still says active: until t=" + cachedUntil);
+console.log("messages the holder can still send:", cachedUntil - revokedAt, "seconds' worth");
+console.log("");
+console.log("Nothing failed. The cache did precisely what a cache is for.");`);
+    </script>
+
+    <p>That window is not a bug in the cache. It is the definition of a cache, applied to a fact whose
+    entire value is that it changes instantly.</p>
+
+    <h2>2 &middot; Two reads that look identical and are not</h2>
+
+    <p>Token asks about a token in two quite different situations, and almost every field is shared
+    between them, which is exactly why they get written as one function.</p>
+
+    <table>
+        <thead><tr><th></th><th>Display</th><th>Authorise</th></tr></thead>
+        <tbody>
+        <tr><td>The question</td><td>What should this row say?</td><td>May this holder send this
+        message?</td></tr>
+        <tr><td>Who asks</td><td>The owner's token list, many times a scroll</td><td>The server, once
+        per message or call</td></tr>
+        <tr><td>Cost of being stale</td><td>A badge is briefly out of date</td><td>A revoked holder
+        is still talking to somebody</td></tr>
+        <tr><td>Cacheable</td><td>Yes, with invalidation</td><td><strong>Never</strong></td></tr>
+        </tbody>
+    </table>
+
+    <p><strong>The purpose of the read decides, not the shape of the data.</strong> This is the same
+    move as <code>c7/0002</code>'s <em>expected errors are refused</em> &mdash; two things that are
+    structurally identical and are treated differently because of what they are for.</p>
+
+    <div id="pg-purpose"></div>
+    <script>
+        createPlayground("pg-purpose", `const reads = [
+  { purpose: "display",   what: "the token list badge" },
+  { purpose: "authorise", what: "may this message be delivered" },
+  { purpose: "display",   what: "the label on the detail screen" },
+  { purpose: "authorise", what: "may this call be connected" }
+];
+
+for (const r of reads) {
+  console.log(r.purpose.padEnd(10), r.what.padEnd(32),
+              r.purpose === "authorise" ? "-> origin, always" : "-> cache is allowed");
+}`);
+    </script>
+
+    <p>Note what the rule is <em>not</em>. It is not "cache the cheap fields and not the expensive
+    ones", and it is not "cache everything except <code>status</code>". Both of those are decisions
+    made per field, and a field-by-field rule is one somebody has to remember every time a column is
+    added.</p>
+
+    <h2>3 &middot; The key is an id, and never a code</h2>
+
+    <p>ADR-0007 says the token code is never stored in the clear. It is easy to read that as being
+    about the <code>tokens</code> table, and the table is where it is enforced &mdash;
+    <code>code_hash</code> and <code>code_enc</code>, no <code>code</code> column.</p>
+
+    <p>A cache key is storage too, and it is storage nobody lists as storage:</p>
+
+    <pre><code>redis.set(`token:MERC-8GH2-KP4X`, JSON.stringify(row), "EX", 60);</code></pre>
+
+    <p>That code is now in Redis, which has no encryption at rest by default, appears in
+    <code>MONITOR</code> output, in <code>SLOWLOG</code> entries, in keyspace notifications, and in an
+    <code>rdb</code> snapshot that gets backed up alongside everything else. <code>CLAUDE.md</code>
+    already lists the four places a code must not go &mdash; a URL path, a log line, a list response,
+    a socket payload. <strong>A cache key is the fifth, and it is the one nobody writes down because
+    it does not feel like a place.</strong></p>
+
+    <p>So the read plan refuses a code-shaped key outright, before it considers anything else &mdash;
+    the same reasoning as <code>c6/0002</code>'s envelope check. A refusal that only holds while the
+    checks above it are right is not a refusal.</p>
+
+    <h2>4 &middot; The cache that answers faster when the code exists</h2>
+
+    <p>Now the part that is specific to this product, and is a new instance of a rule the course has
+    now applied at five layers.</p>
+
+    <p>ADR-0010: <strong>a dead code says the same thing however it died.</strong> Revoked, expired,
+    exhausted, never-existed and account-deleted all produce one identical response, so that the
+    redemption page cannot be used to find out which codes are real.</p>
+
+    <p>Put a cache in front of it, and the responses stay identical while the <em>timings</em> stop
+    being:</p>
+
+    <div id="pg-oracle"></div>
+    <script>
+        createPlayground("pg-oracle", `// A cache populated only when a token is found.
+const cache = { "t-42": { status: "revoked" } };
+
+function lookup(id) {
+  if (cache[id]) return { ms: 1, body: "This link is no longer available." };
+  return { ms: 40, body: "This link is no longer available." };   // hit Postgres
+}
+
+const real = lookup("t-42");
+const fake = lookup("t-99");
+
+console.log("real code :", real.ms + "ms", JSON.stringify(real.body));
+console.log("fake code :", fake.ms + "ms", JSON.stringify(fake.body));
+console.log("");
+console.log("identical bodies:", real.body === fake.body);
+console.log("and a 40x difference in how long it took to say so.");`);
+    </script>
+
+    <p>The bodies are byte-identical and the defence is gone. An enumerator does not need to read the
+    response; they need any measurable difference, and <strong>latency is a channel nobody
+    diffs.</strong></p>
+
+    <p>Both problems &mdash; the revocation window and the timing oracle &mdash; are removed by one
+    rule rather than two mechanisms: <em>the redemption path is an authorise read, and authorise reads
+    do not touch the cache.</em> Note that this is worth having as an argument even though the
+    conclusion was already reached in section 2. A rule with two independent reasons survives somebody
+    disagreeing with one of them.</p>
+
+    <h2>5 &middot; Invalidate on write; the TTL is the backstop</h2>
+
+    <p>If display reads are cacheable, what stops the token list showing <em>Active</em> for a minute
+    after a revoke?</p>
+
+    <p>Not the TTL. The TTL is what happens when the invalidation <em>fails</em> &mdash; a dropped
+    Redis command, a crash between the database commit and the delete, a code path somebody added that
+    updates the row and does not know the cache exists.</p>
+
+    <div class="callout">
+        <div class="callout-title">Two mechanisms, and they are not alternatives</div>
+        <ul>
+            <li><strong>Invalidation on write</strong> is the mechanism. Every path that changes a
+            token bumps its version &mdash; revoke, pause, resume, edit label, add a rule.</li>
+            <li><strong>The TTL</strong> is the bound on how wrong you can be when the mechanism did
+            not run. Setting it to an hour because "we invalidate anyway" is trusting the thing you
+            added the TTL because you could not trust.</li>
+        </ul>
+    </div>
+
+    <p>The version is what makes a stale entry detectable <em>as a fact rather than as an age</em>. An
+    entry written five seconds ago is not fresh if the row changed four seconds ago, and only a
+    version comparison knows that.</p>
+
+    <div id="pg-version"></div>
+    <script>
+        createPlayground("pg-version", `const currentVersion = 7;
+const entries = [
+  { label: "written 5s ago, version 7", ageMs: 5000,  version: 7 },
+  { label: "written 5s ago, version 6", ageMs: 5000,  version: 6 },
+  { label: "written 90s ago, version 7", ageMs: 90000, version: 7 }
+];
+const ttlMs = 30000;
+
+for (const e of entries) {
+  const staleByFact = e.version !== currentVersion;
+  const staleByAge  = e.ageMs >= ttlMs;
+  console.log(e.label.padEnd(28),
+              staleByFact ? "stale: the row changed"
+            : staleByAge  ? "stale: too old"
+            : "usable");
+}`);
+    </script>
+
+    <h2>6 &middot; A cache holds objects your old code wrote</h2>
+
+    <p>This is the part people meet in production rather than in a tutorial. A cache entry was
+    serialised by the version of your code that was running when it was written &mdash; which, during
+    a rolling deploy, is a version you are actively replacing.</p>
+
+    <p><code>c2/0003</code> made the same point about the database: both versions of the code run at
+    once. A cache is the same hazard with none of the schema's protection, because Redis will happily
+    hand you a shape from three releases ago and nothing declares what shape that was.</p>
+
+    <p>The version field covers this too, which is why it is a version of the <em>entry</em> and not
+    only of the row.</p>
+
+    <h2>7 &middot; Clock skew, and which way the error goes</h2>
+
+    <p>An entry can carry a <code>storedAt</code> in the future, for the reason the last lesson gave:
+    replicas do not share a clock. The age then comes out negative, and a negative age is smaller than
+    any TTL, so a naive freshness test declares it fresh &mdash; possibly for hours.</p>
+
+    <p>Ask the question from <code>c6/0003</code>: <strong>which way does the error grant
+    access?</strong> Serving a stale entry is the permissive direction, so the conservative answer
+    here is to refetch. In the limiter the same anomaly was <em>kept</em>, because there discarding it
+    would have refunded a request. Same anomaly, opposite handling, one principle.</p>
+
+    <div id="pg-skew"></div>
+    <script>
+        createPlayground("pg-skew", `const now = 1000000;
+const ttlMs = 30000;
+
+for (const storedAt of [now - 5000, now - 45000, now + 5000]) {
+  const age = now - storedAt;
+  console.log("age " + String(age).padStart(7),
+              "  naive (age < ttl):", age < ttlMs ? "fresh" : "expired",
+              "  guarded:", age < 0 ? "refetch (skew)" : age < ttlMs ? "fresh" : "expired");
+}`);
+    </script>
+
+    <h2>8 &middot; Stale-while-revalidate, and why it is display-only</h2>
+
+    <p>One more state worth having. Just past the TTL, an entry can be served <em>and</em> refreshed in
+    the background, so a burst of traffic at expiry does not become a burst of database queries &mdash;
+    a stampede where hundreds of requests all miss at the same instant and all go to Postgres, which
+    lesson one told you is the limit that binds after descriptors.</p>
+
+    <p>It is a good idea and it is <strong>display-only</strong>, for a reason worth saying out loud
+    rather than deriving each time: stale-while-revalidate is the deliberate choice to serve an answer
+    you already believe is out of date. That is a fine trade for a badge and an unacceptable one for a
+    decision about whether somebody may reach a person.</p>
+
+    <h2>9 &middot; Broken on purpose</h2>
+
+    <p>An entry written by last week's code, read by this week's.</p>
+
+    <div id="pg-broken"></div>
+    <script>
+        createPlayground("pg-broken", `// Written before access_rules became rows: rules were a JSONB blob.
+const entry = { tokenId: "t-42", status: "active", rules: { maxPerDay: 10 } };
+
+// This release expects the shape the current API returns.
+function summarise(cached) {
+  return cached.tokenId + ": " + cached.accessRules.length + " rules";
+}
+
+console.log(summarise(entry));`);
+    </script>
+
+    <p>The crash is the friendly version. The unfriendly one is a shape that still <em>reads</em>
+    &mdash; <code>entry.rules</code> exists, so a check written as <code>if (entry.rules)</code>
+    passes, and a token is evaluated against a rules object the engine no longer understands. Which is
+    the same defect <code>b7/0002</code> shipped: an unknown rule type falling through to
+    <em>allowed</em>.</p>
+
+    <h2>10 &middot; Now build it yourself</h2>
+
+    <div id="exercise-1"></div>
+    <script>
+        createSolution("exercise-1", {
+            exercise: "Write <code>planTokenRead(request, cached, now, policy)</code>. It decides where an answer comes from and whether it may be written to the cache. It reads nothing and writes nothing.<br><br><code>request</code> is <code>{ purpose, key }</code>, where <code>purpose</code> is <code>\"display\"</code> or <code>\"authorise\"</code>. <code>cached</code> is <code>{ key, version, storedAt }</code> or <code>null</code>. <code>policy</code> is <code>{ ttlMs, currentVersion, staleWhileRevalidateMs, looksLikeCode }</code>, where <code>looksLikeCode</code> is a function taking a string.<br><br>Return <code>{ source, store, revalidate, reason }</code>. <code>source</code> is <code>\"cache\"</code> or <code>\"origin\"</code>; <code>store</code> says whether an answer fetched from origin as a result of this plan may be written to the cache; <code>revalidate</code> says whether to refresh in the background after serving.<br><br>The refusals, in this order, each with <code>source</code> origin and <code>store</code> and <code>revalidate</code> false:<br>1. <code>policy.looksLikeCode(request.key)</code> is true &mdash; reason <code>\"code_shaped_key\"</code>. First, and before the purpose is even looked at.<br>2. <code>purpose</code> is <code>\"authorise\"</code> &mdash; reason <code>\"authorisation_path\"</code>.<br>3. <code>purpose</code> is anything other than <code>\"display\"</code> &mdash; reason <code>\"unknown_purpose\"</code>.<br><br>Then, for a display read, in this order &mdash; the first four all give <code>source</code> origin, <code>store</code> true and <code>revalidate</code> false:<br>4. No cached entry &mdash; reason <code>\"miss\"</code>.<br>5. <code>cached.key</code> is not <code>request.key</code> &mdash; reason <code>\"key_mismatch\"</code>.<br>6. <code>cached.version</code> is not <code>policy.currentVersion</code> &mdash; reason <code>\"version_changed\"</code>.<br>7. <code>now - cached.storedAt</code> is negative &mdash; reason <code>\"clock_skew\"</code>.<br>8. The entry is fresh while its age is strictly below <code>ttlMs</code>: <code>source</code> cache, <code>store</code> false, <code>revalidate</code> false, reason <code>\"fresh\"</code>.<br>9. Otherwise, if <code>staleWhileRevalidateMs</code> is set and the age is at most <code>ttlMs + staleWhileRevalidateMs</code>: <code>source</code> cache, <code>store</code> true, <code>revalidate</code> true, reason <code>\"stale_while_revalidate\"</code>.<br>10. Otherwise: <code>source</code> origin, <code>store</code> true, <code>revalidate</code> false, reason <code>\"expired\"</code>.<br><br>Do not modify any argument.",
+            hints: [
+                "Two small helpers make the whole thing readable: one that builds an origin result from a reason and a store flag, and one for the two cache results. Almost every branch is then a single return.",
+                "Steps 4 to 7 all produce the same result and differ only in the reason, so they are four guards in a row rather than a nested structure. Getting them in the stated order is the whole of their difficulty.",
+                "Freshness is strictly below the TTL, which means an entry at exactly ttlMs is expired and falls through to the stale-while-revalidate test. That is the same edge convention as the rate limiter's window."
+            ],
+            solution: `function planTokenRead(request, cached, now, policy) {
+  const fromOrigin = (reason, store) => ({
+    source: "origin", store: store, revalidate: false, reason: reason
+  });
+
+  // Rule 1. A cache key is storage, and ADR-0007 does not have an exception
+  // for storage that does not feel like a place. Checked first so that it
+  // holds whatever else is wrong with the request.
+  if (policy.looksLikeCode(request.key)) return fromOrigin("code_shaped_key", false);
+
+  // Rules 2 and 3. The purpose decides, and anything unrecognised is denied
+  // the cache rather than given the benefit of the doubt.
+  if (request.purpose === "authorise") return fromOrigin("authorisation_path", false);
+  if (request.purpose !== "display") return fromOrigin("unknown_purpose", false);
+
+  if (cached === null || cached === undefined) return fromOrigin("miss", true);
+  if (cached.key !== request.key) return fromOrigin("key_mismatch", true);
+
+  // Stale as a fact, not as an age: an entry written five seconds ago is not
+  // fresh if the row changed four seconds ago.
+  if (cached.version !== policy.currentVersion) return fromOrigin("version_changed", true);
+
+  const age = now - cached.storedAt;
+
+  // A negative age is smaller than any TTL, so an unguarded test calls it
+  // fresh. Serving a stale entry is the permissive direction; refetch.
+  if (age < 0) return fromOrigin("clock_skew", true);
+
+  if (age < policy.ttlMs) {
+    return { source: "cache", store: false, revalidate: false, reason: "fresh" };
+  }
+
+  const grace = policy.staleWhileRevalidateMs;
+  if (grace && age <= policy.ttlMs + grace) {
+    return { source: "cache", store: true, revalidate: true, reason: "stale_while_revalidate" };
+  }
+
+  return fromOrigin("expired", true);
+}`
+        });
+    </script>
+
+    <div id="pg-exercise"></div>
+    <script>
+        createPlayground("pg-exercise", `// Write planTokenRead(request, cached, now, policy) here.
+
+
+
+
+// --- Self-check: leave everything below this line alone ---
+function check(label, passed, detail) {
+  console.log((passed ? "PASS  " : "FAIL  ") + label + (passed ? "" : "  -> " + detail));
+}
+
+const NOW = 1000000;
+const POLICY = {
+  ttlMs: 30000,
+  currentVersion: 7,
+  staleWhileRevalidateMs: 10000,
+  looksLikeCode: function (key) { return /^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(key); }
+};
+
+// The TTL and the grace window are different numbers on purpose, so an answer
+// that confuses them lands outside both. Do not make them equal.
+function entry(extra) {
+  return Object.assign({ key: "tok:t-42", version: 7, storedAt: NOW - 5000 }, extra || {});
+}
+function read(extra) {
+  return Object.assign({ purpose: "display", key: "tok:t-42" }, extra || {});
+}
+
+try {
+  if (typeof planTokenRead !== "function") throw new Error("planTokenRead is not defined yet");
+
+  try {
+    const r = planTokenRead(read(), entry(), NOW, POLICY);
+    check("a fresh display entry is served from cache and nothing is written back",
+      r.source === "cache" && r.store === false && r.revalidate === false && r.reason === "fresh",
+      JSON.stringify(r));
+  } catch (e) { check("a fresh display entry is served from cache and nothing is written back", false, e.message); }
+
+  try {
+    const r = planTokenRead(read({ purpose: "authorise" }), entry(), NOW, POLICY);
+    check("an authorise read goes to origin even when a perfectly fresh entry exists",
+      r.source === "origin" && r.store === false && r.reason === "authorisation_path",
+      JSON.stringify(r));
+  } catch (e) { check("an authorise read goes to origin even when a perfectly fresh entry exists", false, e.message); }
+
+  try {
+    const r = planTokenRead(read({ key: "MERC-8GH2-KP4X" }),
+                            entry({ key: "MERC-8GH2-KP4X" }), NOW, POLICY);
+    check("a code-shaped key is refused and never becomes a cache key",
+      r.source === "origin" && r.store === false && r.reason === "code_shaped_key",
+      JSON.stringify(r));
+  } catch (e) { check("a code-shaped key is refused and never becomes a cache key", false, e.message); }
+
+  try {
+    const r = planTokenRead(read({ purpose: "authorise", key: "MERC-8GH2-KP4X" }),
+                            entry({ key: "MERC-8GH2-KP4X" }), NOW, POLICY);
+    check("the code-shaped key is refused before the purpose is considered",
+      r.reason === "code_shaped_key",
+      "reason " + r.reason);
+  } catch (e) { check("the code-shaped key is refused before the purpose is considered", false, e.message); }
+
+  try {
+    const r = planTokenRead(read({ purpose: "prefetch" }), entry(), NOW, POLICY);
+    check("an unrecognised purpose is denied the cache rather than treated as display",
+      r.source === "origin" && r.store === false && r.reason === "unknown_purpose",
+      JSON.stringify(r));
+  } catch (e) { check("an unrecognised purpose is denied the cache rather than treated as display", false, e.message); }
+
+  try {
+    const r = planTokenRead(read(), null, NOW, POLICY);
+    check("a miss goes to origin and the answer may be stored",
+      r.source === "origin" && r.store === true && r.reason === "miss",
+      JSON.stringify(r));
+  } catch (e) { check("a miss goes to origin and the answer may be stored", false, e.message); }
+
+  try {
+    const r = planTokenRead(read(), entry({ key: "tok:t-99" }), NOW, POLICY);
+    check("an entry belonging to another key is not served",
+      r.source === "origin" && r.reason === "key_mismatch",
+      JSON.stringify(r));
+  } catch (e) { check("an entry belonging to another key is not served", false, e.message); }
+
+  try {
+    const r = planTokenRead(read(), entry({ version: 6 }), NOW, POLICY);
+    check("a five-second-old entry whose row has changed is stale as a fact, not as an age",
+      r.source === "origin" && r.store === true && r.reason === "version_changed",
+      JSON.stringify(r));
+  } catch (e) { check("a five-second-old entry whose row has changed is stale as a fact, not as an age", false, e.message); }
+
+  try {
+    const r = planTokenRead(read(), entry({ storedAt: NOW + 5000 }), NOW, POLICY);
+    check("an entry stamped in the future is refetched rather than treated as fresh",
+      r.source === "origin" && r.reason === "clock_skew",
+      JSON.stringify(r));
+  } catch (e) { check("an entry stamped in the future is refetched rather than treated as fresh", false, e.message); }
+
+  try {
+    const r = planTokenRead(read(), entry({ version: 6, storedAt: NOW + 5000 }), NOW, POLICY);
+    check("the version check is reached before the clock check",
+      r.reason === "version_changed",
+      "reason " + r.reason);
+  } catch (e) { check("the version check is reached before the clock check", false, e.message); }
+
+  try {
+    const r = planTokenRead(read(), entry({ storedAt: NOW - 30000 }), NOW, POLICY);
+    check("an entry aged exactly the TTL is out of the window, not in it",
+      r.reason === "stale_while_revalidate" && r.revalidate === true && r.source === "cache",
+      JSON.stringify(r));
+  } catch (e) { check("an entry aged exactly the TTL is out of the window, not in it", false, e.message); }
+
+  try {
+    const r = planTokenRead(read(), entry({ storedAt: NOW - 35000 }), NOW, POLICY);
+    check("inside the grace window the entry is served and refreshed behind it",
+      r.source === "cache" && r.store === true && r.revalidate === true
+        && r.reason === "stale_while_revalidate",
+      JSON.stringify(r));
+  } catch (e) { check("inside the grace window the entry is served and refreshed behind it", false, e.message); }
+
+  try {
+    const r = planTokenRead(read(), entry({ storedAt: NOW - 45000 }), NOW, POLICY);
+    check("past the grace window the entry is not served at all",
+      r.source === "origin" && r.store === true && r.revalidate === false && r.reason === "expired",
+      JSON.stringify(r));
+  } catch (e) { check("past the grace window the entry is not served at all", false, e.message); }
+
+  try {
+    const noGrace = Object.assign({}, POLICY, { staleWhileRevalidateMs: 0 });
+    // Aged exactly the TTL: with a grace of zero, ttlMs + grace is still ttlMs,
+    // so this is the one age at which "is grace configured" is the only thing
+    // separating stale-serving from a refetch.
+    const r = planTokenRead(read(), entry({ storedAt: NOW - 30000 }), NOW, noGrace);
+    check("with no grace configured an expired entry goes straight to origin",
+      r.source === "origin" && r.reason === "expired",
+      JSON.stringify(r));
+  } catch (e) { check("with no grace configured an expired entry goes straight to origin", false, e.message); }
+
+  try {
+    const req = read();
+    const ent = entry();
+    const reqBefore = JSON.stringify(req);
+    const entBefore = JSON.stringify(ent);
+    planTokenRead(req, ent, NOW, POLICY);
+    check("neither the request nor the cached entry is modified",
+      JSON.stringify(req) === reqBefore && JSON.stringify(ent) === entBefore,
+      "request now " + JSON.stringify(req));
+  } catch (e) { check("neither the request nor the cached entry is modified", false, e.message); }
+
+} catch (e) {
+  console.log("Nothing to check yet -- " + e.message);
+}`);
+    </script>
+
+    <h3>Say it in your own words</h3>
+    <div id="explain-0004"></div>
+    <script>
+        createExplain("explain-0004", {
+            prompt: "The bodies returned for a revoked code and for a code that never existed are byte-identical, exactly as ADR-0010 requires. Explain how adding a cache in front of that lookup breaks the defence anyway, and why a reviewer comparing the two responses would see nothing wrong."
+        });
+    </script>
+
+    <h2>Quiz</h2>
+    <div id="lesson-quiz"></div>
+    <script>
+        createQuiz("lesson-quiz", [
+            {
+                question: "What does a 60-second cache on the authorisation path change about Token's central claim?",
+                options: [
+                    "Revoke becomes revoke within sixty seconds, decided in a config value with nothing in the interface saying so",
+                    "Nothing, since the token is revoked in the database immediately",
+                    "It only affects the token list display",
+                    "It makes revocation permanent rather than reversible"
+                ],
+                correct: 0,
+                explanation: "The window is not a bug in the cache. It is the definition of a cache, applied to a fact whose whole value is that it changes instantly."
+            },
+            {
+                type: "predict-output",
+                code: "const revokedAt = 12, cachedUntil = 55;\nconsole.log(cachedUntil - revokedAt);",
+                answer: "43",
+                explanation: "Forty-three seconds during which a revoked holder is still able to send. Nothing failed; the cache did exactly what a cache is for."
+            },
+            {
+                question: "What decides whether a token read may be served from cache?",
+                options: [
+                    "The purpose of the read — display or authorise",
+                    "Which fields are being requested",
+                    "How recently the token was created",
+                    "Whether the token is currently active"
+                ],
+                correct: 0,
+                explanation: "A per-field rule is one somebody must remember every time a column is added. A per-purpose rule is decided once at the call site."
+            },
+            {
+                question: "Why is a field-by-field caching rule worse than a purpose-based one?",
+                options: [
+                    "Every new column becomes a decision somebody has to get right, and getting it wrong is silent",
+                    "It is slower to evaluate",
+                    "Fields change more often than purposes",
+                    "It cannot be expressed in Redis"
+                ],
+                correct: 0,
+                explanation: "Cache everything except status sounds precise until expires_at, max_uses and the rules join each arrive and quietly need the same treatment."
+            },
+            {
+                question: "Why is a Redis key holding a token code an ADR-0007 violation?",
+                options: [
+                    "A key is storage — it reaches MONITOR, SLOWLOG, keyspace notifications and the rdb snapshot that gets backed up",
+                    "Redis keys have a length limit",
+                    "Codes contain characters Redis cannot store",
+                    "It is not a violation, since the key is not the value"
+                ],
+                correct: 0,
+                explanation: "CLAUDE.md lists four places a code must not go. A cache key is the fifth, and the one nobody writes down because it does not feel like a place."
+            },
+            {
+                type: "which-breaks",
+                variants: [
+                    "const key = \"tok:\" + token.id;",
+                    "const key = \"token:\" + normalisedCode;",
+                    "const key = \"tok:\" + hashOf(normalisedCode);"
+                ],
+                correct: 1,
+                explanation: "Keying on the code puts it into a component nobody lists as a datastore, where it appears in operational output and in backups."
+            },
+            {
+                question: "ADR-0010 requires identical responses for every kind of dead code. How does a cache defeat that without changing a single byte of any response?",
+                options: [
+                    "A found token answers from memory and a nonexistent one queries Postgres, so latency distinguishes them",
+                    "The cache returns a different error code",
+                    "Cached responses include a hit header",
+                    "It does not — the responses remain identical"
+                ],
+                correct: 0,
+                explanation: "An enumerator needs any measurable difference, not a readable one, and latency is a channel nobody diffs."
+            },
+            {
+                type: "predict-output",
+                code: "const cache = { \"t-42\": 1 };\nconsole.log(cache[\"t-42\"] ? 1 : 40, cache[\"t-99\"] ? 1 : 40);",
+                answer: "1 40",
+                explanation: "Identical bodies, a fortyfold difference in how long it took to produce them."
+            },
+            {
+                question: "The redemption path being uncached has two independent justifications. Why is having both worth the space?",
+                options: [
+                    "A rule with two independent reasons survives somebody disagreeing with one of them",
+                    "The two reasons apply to different endpoints",
+                    "One is about performance and the other about correctness",
+                    "Redundant reasons make a rule harder to change, which is the goal"
+                ],
+                correct: 0,
+                explanation: "Somebody will eventually argue that a two-second cache on redemption is harmless for revocation. The timing oracle is still there and is unaffected by making the window shorter."
+            },
+            {
+                question: "What is the TTL for, if invalidation on write is the mechanism?",
+                options: [
+                    "It bounds how wrong you can be when the invalidation did not run",
+                    "It is the primary way stale entries are removed",
+                    "It limits Redis memory usage",
+                    "It keeps the cache warm"
+                ],
+                correct: 0,
+                explanation: "Setting it to an hour because we invalidate anyway is trusting the thing you added the TTL because you could not trust."
+            },
+            {
+                type: "predict-output",
+                code: "const currentVersion = 7, version = 6, ageMs = 5000, ttlMs = 30000;\nconsole.log(version !== currentVersion, ageMs >= ttlMs);",
+                answer: "true false",
+                explanation: "Stale as a fact rather than as an age. An entry written five seconds ago is not fresh if the row changed four seconds ago, and only the version comparison knows that."
+            },
+            {
+                type: "spot-the-bug",
+                code: "1  const age = now - cached.storedAt;\n2  if (age < policy.ttlMs) {\n3    return serveFromCache(cached);\n4  }\n5  return fetchFromOrigin();",
+                bugLine: 1,
+                options: ["Line 1", "Line 2", "Line 3", "Line 5"],
+                correct: 0,
+                explanation: "Nothing rejects a negative age, and a negative age is below any TTL, so an entry stamped in the future by a skewed clock is served as fresh for as long as the skew lasts."
+            },
+            {
+                question: "C6/0003 keeps future timestamps and this lesson refetches on them. What single principle produces both?",
+                options: [
+                    "Ask which way the error grants access — dropping a charge refunds a request, serving a stale entry extends one",
+                    "Timestamps are trusted in one system and not the other",
+                    "Rate limiters use a different clock source",
+                    "The two lessons disagree and the later one wins"
+                ],
+                correct: 0,
+                explanation: "The same anomaly, opposite handling, one question. In the limiter a discarded hit hands out a free request; here a trusted future stamp hands out a stale answer."
+            },
+            {
+                type: "fill-blank",
+                code: "if (age < 0) return fromOrigin(\"___\", true);",
+                answer: "clock_skew",
+                explanation: "Naming the reason rather than folding it into expired is what lets somebody notice that replicas are drifting, which is a real operational fact worth surfacing."
+            },
+            {
+                question: "Why does the entry carry a version rather than only the row's updated_at?",
+                options: [
+                    "It also detects an entry serialised by a previous release, whose shape the current code does not expect",
+                    "Timestamps cannot be compared reliably",
+                    "The row has no updated_at column",
+                    "Versions are cheaper to store"
+                ],
+                correct: 0,
+                explanation: "During a rolling deploy both versions of the code are running, which c2/0003 made about the database. A cache is the same hazard with none of the schema's protection."
+            },
+            {
+                question: "What is the dangerous version of a cache entry written by an older release?",
+                options: [
+                    "One that still reads without throwing, so a truthiness check passes and old data is evaluated by new logic",
+                    "One that throws when a missing field is accessed",
+                    "One whose TTL has expired",
+                    "One stored under a different key"
+                ],
+                correct: 0,
+                explanation: "The crash is the friendly outcome. b7/0002 shipped the unfriendly one: an unknown rule shape falling through to allowed."
+            },
+            {
+                question: "What problem does stale-while-revalidate solve?",
+                options: [
+                    "A stampede, where many requests miss at the same instant and all reach Postgres together",
+                    "Clock skew between replicas",
+                    "Entries written by an older release",
+                    "Codes appearing in cache keys"
+                ],
+                correct: 0,
+                explanation: "Lesson one identified the pool as the limit that binds after descriptors, and an expiry stampede spends it all at once."
+            },
+            {
+                question: "Why is stale-while-revalidate display-only?",
+                options: [
+                    "It is the deliberate choice to serve an answer you already believe is out of date",
+                    "Authorisation reads are too rare to benefit",
+                    "It requires a background worker that the auth path lacks",
+                    "The grace window is too short to help"
+                ],
+                correct: 0,
+                explanation: "A fine trade for a badge, and an unacceptable one for a decision about whether somebody may reach a person."
+            },
+            {
+                type: "order-steps",
+                steps: [
+                    "Refuse a key that is shaped like a token code",
+                    "Refuse to use the cache because this is an authorisation read",
+                    "Refuse a purpose that is neither display nor authorise",
+                    "Decide freshness from the entry's key, version and age"
+                ],
+                correctOrder: [0, 1, 2, 3],
+                explanation: "Three refusals then the freshness logic. The code check comes first so that it holds whatever else is wrong with the request."
+            },
+            {
+                question: "An entry whose age is exactly the TTL is…",
+                options: [
+                    "Out of the fresh window, and falls through to the grace test",
+                    "Fresh, since it has not exceeded the TTL",
+                    "Refetched immediately",
+                    "Invalid and deleted"
+                ],
+                correct: 0,
+                explanation: "Fresh is strictly below the TTL, the same edge convention as the rate limiter's window. One convention consistently applied beats an argument about which edge is fairer."
+            },
+            {
+                question: "Why is store false for a fresh cache hit but true inside the grace window?",
+                options: [
+                    "No origin value is obtained in the first case, and the background refresh in the second produces one worth writing",
+                    "Fresh entries are read-only in Redis",
+                    "The grace window resets the TTL",
+                    "It is an arbitrary distinction"
+                ],
+                correct: 0,
+                explanation: "store answers whether an answer fetched as a result of this plan may be written, and a fresh hit fetches nothing."
+            },
+            {
+                question: "Why is an unrecognised purpose denied the cache rather than treated as a display read?",
+                options: [
+                    "Deny by default — not being on the list of authorisation reads is not evidence that a read is safe to serve stale",
+                    "Unknown purposes are always typos",
+                    "It keeps the cache smaller",
+                    "Display is the more expensive path"
+                ],
+                correct: 0,
+                explanation: "The same reasoning as an unrecognised share target in a5/0005 and an unrecognised message source in c6/0002. A new call site added next year gets the safe behaviour without anybody remembering to give it one."
+            },
+            {
+                type: "predict-output",
+                code: "const entry = { rules: { maxPerDay: 10 } };\ntry { entry.accessRules.length; } catch (e) { console.log(e.constructor.name); }",
+                answer: "TypeError",
+                explanation: "The shape from before access_rules became rows. This throw is the good outcome; the bad one is a check written as if (entry.rules), which passes."
+            },
+            {
+                question: "Which check must run before the clock-skew check, and why?",
+                options: [
+                    "The version check, because an entry whose row has changed is stale for a reason that does not depend on any clock",
+                    "The grace check, because it is cheaper",
+                    "The freshness check, because it is the common case",
+                    "The order between them cannot matter"
+                ],
+                correct: 0,
+                explanation: "An entry that is both out of date and stamped in the future should report the fact that is actionable, and a bumped version tells you a write happened rather than that NTP is unhappy."
+            },
+            {
+                question: "What does this lesson share with the module's other four?",
+                options: [
+                    "A change that makes Token faster and can make it wrong instead, with nothing that errors either way",
+                    "All five are about Redis",
+                    "All five are about clock handling",
+                    "All five are about the database pool"
+                ],
+                correct: 0,
+                explanation: "A cache serving a revoked token still returns a token, exactly as a local counter still returns a number and a node's registry still returns recipients."
+            },
+            {
+                question: "A reviewer sees a two-second cache added to the redemption lookup and says the revocation window is negligible. What is the strongest response?",
+                options: [
+                    "The revocation window is only half the objection — the timing oracle is unaffected by how short the window is",
+                    "Two seconds is still too long for a revocation",
+                    "Redis cannot express a two-second TTL accurately",
+                    "The redemption path is not hot enough to need a cache"
+                ],
+                correct: 0,
+                explanation: "This is why the second justification was written down. Shortening the TTL answers one reason completely and the other not at all."
+            }
+        ]);
+    </script>
+
+    <div class="lesson-nav">
+        <a href="./0003-a-limit-that-holds-everywhere.html">&larr; A Limit That Holds on One Node Is Not a Limit</a>
+        <span class="disabled">Next: The Query on the Authorisation Path &rarr;</span>
+    </div>
+
+</body>
+</html>

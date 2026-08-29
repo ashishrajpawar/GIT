@@ -35,7 +35,7 @@ are verified, wired and committed.
 | `0001` | The ceiling is a minimum, not a number | **landed**, verified, 11 wrong-cases |
 | `0002` | One node's memory is not the system's state | **landed**, verified, 13 wrong-cases |
 | `0003` | A limit that holds on one node is not a limit | **landed**, verified, 11 wrong-cases |
-| `0004` | The cache that outlives a revocation | not started |
+| `0004` | The cache that outlives a revocation | **landed**, verified, 13 wrong-cases |
 | `0005` | The query on the authorisation path | not started |
 
 **Why C6 and not C8, with the cost of the rejection.** C6 had been deferred
