@@ -53,10 +53,12 @@
     <pre><code>// Implementation: clear consent screen during registration
 // NOT a 50-page terms of service with a single "I agree" checkbox
 
-// api/src/routes/auth.ts — registration endpoint
-const registrationSchema = z.object({
-  username: z.string().min(3).max(30),
-  password: z.string().min(8),
+// api/src/routes/auth.ts — the display-name screen, straight after the OTP.
+// There is no username and no password in Token: the OTP IS the login, and
+// the phone number is the only identifier. So consent is collected here,
+// on the first screen the user cannot skip.
+const signupSchema = z.object({
+  displayName: z.string().trim().min(1).max(50),
   consent: z.object({
     dataProcessing: z.literal(true),    // "I consent to Token storing my messages"
     pushNotifications: z.boolean(),      // Optional — separate consent
@@ -69,16 +71,45 @@ const registrationSchema = z.object({
 // api/migrations/015_consent_records.sql
 /*
 CREATE TABLE consent_records (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES users(id),
-  purpose VARCHAR(50) NOT NULL,        -- 'data_processing', 'push', 'analytics'
-  granted BOOLEAN NOT NULL,
+  id         SERIAL PRIMARY KEY,
+  -- INTEGER, because users.id is SERIAL. This column was UUID for months
+  -- and the table simply would not have been created -- see the callout.
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  purpose    TEXT NOT NULL
+    CHECK (purpose IN ('data_processing', 'push', 'analytics')),
+  granted    BOOLEAN NOT NULL,
   granted_at TIMESTAMPTZ NOT NULL,
   withdrawn_at TIMESTAMPTZ,
-  app_version VARCHAR(20),             -- Which version of the consent text
+  app_version  TEXT,                   -- Which version of the consent text
   UNIQUE(user_id, purpose)             -- One record per purpose per user
 );
 */</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">That table could never have been created, and it took a compliance exercise to notice</div>
+      <p>Until 2026-08-30 this migration read <code>id UUID PRIMARY KEY</code>
+      and <code>user_id UUID NOT NULL REFERENCES users(id)</code>. But
+      <code>users.id</code> is <code>SERIAL</code> &mdash; an integer. Postgres
+      refuses the constraint outright:</p>
+      <pre><code>ERROR:  foreign key constraint "consent_records_user_id_fkey" cannot be implemented
+DETAIL:  Key columns "user_id" and "id" are of incompatible types: uuid and integer.</code></pre>
+      <p>The surrounding code registered users with a <strong>username and a
+      password</strong>, which Token has never had. This was the deleted
+      product&rsquo;s schema, left in the one lesson whose subject is proving
+      what you did with people&rsquo;s data.</p>
+      <p><strong>Why it survived so long is the lesson.</strong> Every check
+      this course runs reads the page &mdash; that the code parses, that the
+      quiz keys are right, that the example codes are valid. <strong>Not one of
+      them runs a database.</strong> A schema is not source code that happens to
+      be in SQL; it is an instruction to another program, and the only review
+      that finds this class of error is the one where that program answers
+      back.</p>
+      <p>It was found while compiling the Record of Processing Activities
+      &mdash; the exercise whose entire method is <em>list every field you
+      store and go and look at it</em>. That is not a coincidence, and it is
+      the argument for doing the RoPA before you need it rather than the week a
+      store asks.</p>
+    </div>
 
     <h3>2. Right to Withdraw Consent</h3>
     <p>The user can withdraw consent at any time, and withdrawal must be as easy as granting it.</p>
@@ -119,8 +150,9 @@ router.get('/me/data-export', authenticateJWT, async (req, res) => {
 
   // Every column below is named on purpose. Check each one against
   // migrations/001 before adding to this list -- see the callout after.
-  const [user, tokens, messages, consents, redemptions] = await Promise.all([
-    // No SELECT * -- that would ship password_hash.
+  const [user, tokens, messages, consents, redemptions, calls] = await Promise.all([
+    // No SELECT *. There is no password_hash to leak -- Token has no
+    // password -- but phone_hash is here, and it is the sign-in credential.
     db.query('SELECT id, display_name, avatar_url, created_at FROM users WHERE id = $1', [userId]),
 
     // No 'code' column exists (ADR-0007), and no decryption happens here.
@@ -150,6 +182,19 @@ router.get('/me/data-export', authenticateJWT, async (req, res) => {
         WHERE t.user_id = $1`,
       [userId]
     ),
+
+    // The user's own call log is their personal data and was missing from
+    // this export until 2026-08-30. No SDP and no ICE candidates exist to
+    // leak -- b6/0001 does not store them -- so the row is safe to hand over
+    // whole.
+    db.query(
+      `SELECT k.id, k.conversation_id, k.initiated_by, k.media,
+              k.created_at, k.answered_at, k.ended_at, k.end_reason
+         FROM calls k
+         JOIN tokens t ON t.id = k.token_id
+        WHERE t.user_id = $1`,
+      [userId]
+    ),
   ]);
 
   const exportData = {
@@ -160,6 +205,7 @@ router.get('/me/data-export', authenticateJWT, async (req, res) => {
     messages: messages.rows,        // ciphertext; the app decrypts on download
     consentRecords: consents.rows,
     redemptionEvents: redemptions.rows,
+    calls: calls.rows,
     notes: {
       messages:
         'Message bodies are end-to-end encrypted. The server cannot decrypt ' +
@@ -184,7 +230,7 @@ router.get('/me/data-export', authenticateJWT, async (req, res) => {
     <h3>4. Right to Correction</h3>
     <p>Users must be able to correct inaccurate personal data.</p>
     <pre><code>// For Token, this means:
-// - Change username
+// - Change display_name (the one field holders actually see)
 // - Update token labels
 // - Edit access rules
 // All of these are already standard CRUD operations in your API.
@@ -204,11 +250,27 @@ router.delete('/me', authenticateJWT, async (req, res) => {
   try {
     await client.query('BEGIN');
 
+    // otp_requests is keyed by phone_hash and has NO foreign key, so it
+    // cannot be reached from userId once the users row is gone. Read the
+    // hash out FIRST or the sign-in history survives the erasure.
+    const { rows: [me] } = await client.query(
+      'SELECT phone_hash FROM users WHERE id = $1', [userId]);
+    if (!me) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'not found' }); }
+
     // The order is read off the foreign keys, not off intuition.
-    // conversations.token_id and redemption_events.token_id are both
-    // ON DELETE RESTRICT, and tokens.user_id is too -- so a parent row
-    // cannot go until every row pointing at it has gone first.
+    // conversations.token_id, redemption_events.token_id and calls' composite
+    // key are all ON DELETE RESTRICT, and tokens.user_id is too -- so a parent
+    // row cannot go until every row pointing at it has gone first.
     await client.query('DELETE FROM consent_records WHERE user_id = $1', [userId]);
+
+    // calls REFERENCES conversations (id, token_id) ON DELETE RESTRICT, so it
+    // must go before conversations. Miss this and erasure throws for any user
+    // who has ever taken a call -- which is to say, for a real account.
+    await client.query(
+      `DELETE FROM calls
+        WHERE token_id IN (SELECT id FROM tokens WHERE user_id = $1)`,
+      [userId]
+    );
 
     // messages cascades from conversations. Written out anyway: a cascade
     // you did not write is a cascade you will forget you are relying on.
@@ -239,8 +301,31 @@ router.delete('/me', authenticateJWT, async (req, res) => {
       [userId]
     );
 
+    // revocation_events REFERENCES tokens(id) with NO ON DELETE clause, which
+    // defaults to NO ACTION -- the same block as RESTRICT. It is easy to miss
+    // precisely because there is no keyword to notice.
+    await client.query(
+      `DELETE FROM revocation_events
+        WHERE token_id IN (SELECT id FROM tokens WHERE user_id = $1)`,
+      [userId]
+    );
+
     await client.query('DELETE FROM tokens WHERE user_id = $1', [userId]);
+
+    // These four CASCADE from users, so the next statement would take them.
+    // Written out for the same reason as messages above -- and because
+    // key_backups holds the wrapped key and device_keys the public directory,
+    // which are the two rows you least want left behind by a silent cascade.
+    await client.query('DELETE FROM push_receipts  WHERE user_id = $1', [userId]);
+    await client.query('DELETE FROM refresh_tokens WHERE user_id = $1', [userId]);
+    await client.query('DELETE FROM key_backups    WHERE user_id = $1', [userId]);
+    await client.query('DELETE FROM device_keys    WHERE user_id = $1', [userId]);
+
     await client.query('DELETE FROM users WHERE id = $1', [userId]);
+
+    // Last, using the hash read at the top. After this there is no way to
+    // find these rows at all -- which is why it could not have been first.
+    await client.query('DELETE FROM otp_requests WHERE phone_hash = $1', [me.phone_hash]);
 
     // The LIVE database is clean here. The backups are not, for another
     // seven days -- see the callout below. Record the tail so the promise
@@ -263,6 +348,54 @@ router.delete('/me', authenticateJWT, async (req, res) => {
     client.release();
   }
 });</code></pre>
+
+    <div class="callout danger">
+      <div class="callout-title">This transaction was wrong for months, and it was wrong in the way that does not show up</div>
+      <p>Until 2026-08-30 it deleted seven tables. The schema has eleven in the
+      chain. The two it missed both <strong>block the delete rather than
+      leaking</strong>, so the failure is an exception in a
+      <code>try/catch</code> that already had a <code>ROLLBACK</code> in it
+      &mdash; the user gets <em>&ldquo;erasure failed &mdash; please contact
+      support&rdquo;</em> and their data stays. <strong>A right you implemented
+      with a throwing job is worse than one you have not built, because the
+      policy already promises it.</strong></p>
+      <p>Read why each was missed, because the reasons are different and both
+      recur:</p>
+      <ul>
+        <li><strong><code>calls</code></strong> was invisible because it is
+        reached through <code>conversations</code>, and the author was thinking
+        in terms of &ldquo;the user&rsquo;s data&rdquo; &mdash; a call feels
+        like an event, not a record. The foreign key does not care what it
+        feels like.</li>
+        <li><strong><code>revocation_events</code></strong> is worse:
+        <code>REFERENCES tokens(id)</code> with <strong>no
+        <code>ON DELETE</code> clause at all</strong>. The default is
+        <code>NO ACTION</code>, which blocks exactly like
+        <code>RESTRICT</code> &mdash; but there is no keyword on the line to
+        catch your eye while you are scanning for the word RESTRICT.
+        <strong>The dangerous foreign key is the one with nothing written on
+        it.</strong></li>
+        <li><strong><code>otp_requests</code></strong> is the third kind: it
+        has <em>no</em> foreign key, so nothing blocks and nothing cascades. It
+        simply survives, holding the <code>phone_hash</code> of the account you
+        just erased. It is keyed by that hash and not by <code>user_id</code>,
+        so once <code>users</code> is gone <strong>there is no query that
+        finds it</strong> &mdash; which is why the hash is read out at the top
+        of the transaction rather than half way down.</li>
+      </ul>
+      <p><strong>Do not write this list from memory. Generate it:</strong></p>
+      <pre><code>SELECT tc.table_name, kcu.column_name, rc.delete_rule
+  FROM information_schema.table_constraints tc
+  JOIN information_schema.key_column_usage kcu
+    ON kcu.constraint_name = tc.constraint_name
+  JOIN information_schema.referential_constraints rc
+    ON rc.constraint_name = tc.constraint_name
+ WHERE tc.constraint_type = 'FOREIGN KEY'
+ ORDER BY rc.delete_rule, tc.table_name;</code></pre>
+      <p>Then check the answer against every table in the database &mdash; not
+      every table with a foreign key, or you will miss
+      <code>otp_requests</code> for the second time.</p>
+    </div>
 
     <p>The queue row is what makes the promise checkable. It is deliberately
     the thinnest possible table &mdash; and note what it <em>cannot</em> have:</p>
@@ -1013,13 +1146,14 @@ try {
             solution: `-- api/migrations/015_consent_records.sql
 
 CREATE TABLE consent_records (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  purpose VARCHAR(50) NOT NULL,
-  granted BOOLEAN NOT NULL,
+  id         SERIAL PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  purpose    TEXT NOT NULL
+    CHECK (purpose IN ('data_processing', 'push', 'analytics')),
+  granted    BOOLEAN NOT NULL,
   granted_at TIMESTAMPTZ NOT NULL,
   withdrawn_at TIMESTAMPTZ,
-  app_version VARCHAR(20),
+  app_version  TEXT,
   UNIQUE(user_id, purpose)
 );
 
@@ -1084,7 +1218,7 @@ export default router;
 router.get('/me/data-export', authenticateJWT, async (req, res) => {
   const userId = req.user.id;
 
-  const [user, tokens, messages, consents, redemptions] = await Promise.all([
+  const [user, tokens, messages, consents, redemptions, calls] = await Promise.all([
     db.query('SELECT id, display_name, avatar_url, created_at FROM users WHERE id = $1', [userId]),
 
     // No code column exists (ADR-0007) and none is reconstructed here.
@@ -1103,6 +1237,14 @@ router.get('/me/data-export', authenticateJWT, async (req, res) => {
 
     // holder_ip / holder_name / user_agent describe the redeemer.
     db.query('SELECT r.id, r.token_id, r.created_at FROM redemption_events r JOIN tokens t ON t.id = r.token_id WHERE t.user_id = $1', [userId]),
+
+    // The user's own call log. No SDP or ICE candidates are stored, so the
+    // row goes over whole.
+    db.query(\`SELECT k.id, k.conversation_id, k.initiated_by, k.media,
+                     k.created_at, k.answered_at, k.ended_at, k.end_reason
+                FROM calls k
+                JOIN tokens t ON t.id = k.token_id
+               WHERE t.user_id = $1\`, [userId]),
   ]);
 
   res.setHeader('Content-Disposition', 'attachment; filename="token-data-export.json"');
@@ -1114,6 +1256,7 @@ router.get('/me/data-export', authenticateJWT, async (req, res) => {
     messages: messages.rows,
     consentRecords: consents.rows,
     redemptionEvents: redemptions.rows,
+    calls: calls.rows,
     notes: {
       messages: 'End-to-end encrypted. Open in the Token app to read them.',
       tokenCodes: 'Not included. Request one code at a time; each is logged.',
@@ -1231,12 +1374,12 @@ router.delete('/me', authenticateJWT, async (req, res) => {
                 question: "What DPDP violation exists in this data export endpoint?",
                 code: "router.get('/me/data-export', auth, async (req, res) => {\n  const user = await db.query('SELECT * FROM users WHERE id = $1', [req.user.id]);\n  res.json({ user: user.rows[0] });\n});",
                 options: [
-                    "Line 2 — SELECT * exposes the password hash in the export",
+                    "Line 2 — SELECT * ships phone_hash, which is the sign-in credential",
                     "Line 1 — should use POST not GET",
                     "Line 3 — should set Content-Disposition header"
                 ],
                 correct: 0,
-                explanation: "SELECT * includes all columns, including password_hash. The data export must include personal data but EXCLUDE security credentials. Explicitly list columns: SELECT id, username, created_at. Also, a complete export should include all tables (tokens, messages, consents), not just the users table."
+                explanation: "SELECT * takes every column, and users holds phone_hash — the value the whole login rests on. Token has no password_hash to leak, which is exactly why this is easy to miss: the column you are trained to watch for is not there, and a different one has quietly taken its job. Name the columns: id, display_name, avatar_url, created_at. A complete export also spans tokens, messages, consents, redemptions and calls, not just users."
             },
             {
                 type: "fill-blank",
@@ -1290,31 +1433,31 @@ router.delete('/me', authenticateJWT, async (req, res) => {
             {
                 type: "fill-blank",
                 question: "Complete the consent_records table constraint ensuring one consent record per purpose per user:",
-                code: "CREATE TABLE consent_records (\n  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n  user_id UUID NOT NULL REFERENCES users(id),\n  purpose VARCHAR(50) NOT NULL,\n  granted BOOLEAN NOT NULL,\n  granted_at TIMESTAMPTZ NOT NULL,\n  withdrawn_at TIMESTAMPTZ,\n  ___(user_id, purpose)\n);",
+                code: "CREATE TABLE consent_records (\n  id SERIAL PRIMARY KEY,\n  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n  purpose TEXT NOT NULL,\n  granted BOOLEAN NOT NULL,\n  granted_at TIMESTAMPTZ NOT NULL,\n  withdrawn_at TIMESTAMPTZ,\n  ___(user_id, purpose)\n);",
                 answer: "UNIQUE",
                 explanation: "UNIQUE(user_id, purpose) ensures each user has exactly one consent record per purpose. If they re-consent, you UPDATE the existing row rather than inserting a duplicate. This prevents ambiguous consent states."
             },
             {
                 type: "spot-the-bug",
                 question: "What DPDP compliance issue exists in this registration flow?",
-                code: "const schema = z.object({\n  username: z.string(),\n  password: z.string(),\n  agreeToTerms: z.literal(true),\n  email: z.string().email(),\n  phoneNumber: z.string(),\n  fullName: z.string()\n});",
+                code: "const signupSchema = z.object({\n  displayName: z.string().trim().min(1).max(50),\n  email: z.string().email(),\n  fullName: z.string(),\n  agreeToTerms: z.literal(true)\n});",
                 options: [
-                    "Lines 5-6 — collecting email AND phone violates data minimisation (Token doesn't need either)",
-                    "Line 4 — bundled consent ('agree to terms') is not granular",
-                    "Both — the email/phone collection and the bundled consent"
+                    "It collects an email and a legal name Token never uses, and bundles every purpose into one checkbox",
+                    "displayName should be optional so the user can stay anonymous",
+                    "agreeToTerms should be a boolean rather than a literal true"
                 ],
-                correct: 2,
-                explanation: "Two violations: (1) Token's core principle is that you DON'T need email or phone — collecting them violates data minimisation. (2) A single 'agree to terms' checkbox bundles all consent into one, violating the requirement for specific, granular consent per purpose."
+                correct: 0,
+                explanation: "Two violations in five lines. Token signs users in by phone and stores a hash of it — an email and a legal name are collected for no purpose, which is what data minimisation forbids; there is no 'we might want it later'. And one 'agree to terms' checkbox bundles storage, push and analytics into a single yes, when DPDP wants each purpose consented to separately and withdrawable separately. Note what is NOT wrong: displayName is mandatory on purpose, because holders see it and a nullable name means a '?? Unnamed' fallback at every render site."
             },
             {
                 question: "Which approach to the 'right to correction' is DPDP-compliant?",
                 options: [
-                    "Users can edit their username and token labels via standard CRUD endpoints",
+                    "Users can edit their display name and token labels via standard CRUD endpoints",
                     "Users must email support and wait 30 days for corrections to be processed",
                     "Corrections are only available during a monthly 'edit window'"
                 ],
                 correct: 0,
-                explanation: "The right to correction must be easily exercisable. Standard CRUD endpoints (PUT /me/username, PATCH /tokens/:id) satisfy this — the user can correct their data immediately. Forcing email-based processes or time windows makes it unreasonably difficult."
+                explanation: "The right to correction must be easily exercisable. Standard CRUD endpoints (PATCH /me, PATCH /tokens/:id) satisfy it — the user corrects their data immediately. Waiting periods and edit windows make it unreasonably difficult. Display name is the one that matters here: it is the field holders actually see, so a stale one is wrong in front of other people."
             },
             {
                 question: "What happens under the DPDP Act if a user withdraws consent for core data processing?",
@@ -1398,9 +1541,31 @@ router.delete('/me', authenticateJWT, async (req, res) => {
             {
                 type: "fill-blank",
                 question: "Complete the SQL migration that ensures consent records are cascade-deleted when a user is deleted:",
-                code: "CREATE TABLE consent_records (\n  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n  user_id UUID NOT NULL REFERENCES users(id) ON DELETE ___,\n  purpose VARCHAR(50) NOT NULL\n);",
+                code: "CREATE TABLE consent_records (\n  id SERIAL PRIMARY KEY,\n  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE ___,\n  purpose TEXT NOT NULL\n);",
                 answer: "CASCADE",
-                explanation: "ON DELETE CASCADE automatically deletes consent_records rows when the referenced user is deleted. This ensures that when you exercise the right to erasure (DELETE FROM users), all related consent records are cleaned up in a single transaction without foreign key violations."
+                explanation: "ON DELETE CASCADE removes consent_records rows when the referenced user is deleted, so DELETE FROM users does not hit a foreign key violation. Note the column types: user_id must be INTEGER because users.id is SERIAL. A UUID here is not a style choice, it is a table Postgres refuses to create."
+            },
+            {
+                question: "The erasure transaction deletes consent_records, messages, conversations, redemption_events, access_rules, tokens and users — in that order. Running it against a real account still fails. Why?",
+                options: [
+                    "calls and revocation_events both point at rows it deletes, and neither is in the list",
+                    "The order is wrong — users must be deleted first to release the foreign keys",
+                    "Postgres cannot delete from seven tables inside one transaction",
+                    "messages is partitioned, so it must be dropped rather than deleted"
+                ],
+                correct: 0,
+                explanation: "calls references conversations with ON DELETE RESTRICT, and revocation_events references tokens with NO ON DELETE CLAUSE AT ALL — which defaults to NO ACTION and blocks exactly like RESTRICT. So the delete throws, the transaction rolls back, and the user is told erasure failed while their data stays. revocation_events is the nastier of the two: you can scan a whole schema for the word RESTRICT and never once see the foreign key that has nothing written on it. Generate the list from information_schema.referential_constraints instead of reading it."
+            },
+            {
+                question: "otp_requests holds a phone_hash and has no foreign key to users. What does the erasure job have to do about it?",
+                options: [
+                    "Read the user's phone_hash before deleting the users row, then delete by that hash",
+                    "Nothing — with no foreign key, the rows are removed automatically",
+                    "Delete it first, since tables with no foreign key are always safe to clear first",
+                    "Add ON DELETE CASCADE to it, which makes the explicit delete unnecessary"
+                ],
+                correct: 0,
+                explanation: "No foreign key means nothing blocks and nothing cascades — the rows simply survive, holding the hashed phone number of an account that no longer exists. And because they are keyed by phone_hash rather than user_id, once users is gone there is no query that finds them: the erasure becomes irreversible in the wrong direction. So the hash is read at the top of the transaction and used at the bottom. Adding a foreign key is a real option, but it changes what the table is — OTP rows exist before the user does, during sign-up."
             },
             {
                 question: "Your erasure transaction commits successfully at 09:00. Your backups are kept for 7 days. What may you honestly tell the user?",

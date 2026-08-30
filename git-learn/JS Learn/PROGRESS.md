@@ -4,7 +4,7 @@
      Regenerate with: node scripts/audit.mjs
      Hand-written session state lives in SESSION.md, never here. -->
 
-Generated 2026-08-29 from the files on disk. Where any other document disagrees
+Generated 2026-08-30 from the files on disk. Where any other document disagrees
 with this one, this one is right — everything below is measured, not asserted.
 
 ## Summary
@@ -14,8 +14,8 @@ with this one, this one is right — everything below is measured, not asserted.
 | Token-track lessons | 126 |
 | Founder-track lessons (F1, counted separately) | 16 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
-| Quiz questions (track) | 3407 |
-| Avg teaching prose per track lesson | 2038 words |
+| Quiz questions (track) | 3409 |
+| Avg teaching prose per track lesson | 2047 words |
 | Lessons with a playground | 126 / 126 |
 | Lessons with an exercise | 126 / 126 |
 | **Deepened** (all 3 spine sections) | 16 / 126 |
@@ -30,12 +30,12 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 ## Answer-position distribution — **authored order, not what the student sees**
 
-1973 keyed questions (multiple-choice, spot-the-bug, which-breaks).
+1975 keyed questions (multiple-choice, spot-the-bug, which-breaks).
 
 > **This clustering is expected and already handled. Do not "fix" it again.**
 > `quiz.js` shuffles options at render time (`optionDisplayOrder`), so the
 > displayed distribution is roughly even — measured at 26.9 / 28.5 / 26.9 / 17.6
-> across all 1973 questions, versus the authored figures below. Index 3 sits
+> across all 1975 questions, versus the authored figures below. Index 3 sits
 > lower only because many questions have three options.
 >
 > The numbers here read `correct` straight from the lesson data, which is
@@ -54,16 +54,16 @@ or from `progress.js` localStorage, and is never inferred from the files.
 
 | Position | Count | Share |
 |---|---|---|
-| index 0 | 594 | 30.1% |
+| index 0 | 597 | 30.2% |
 | index 1 | 987 | 50.0% |
-| index 2 | 358 | 18.1% |
+| index 2 | 357 | 18.1% |
 | index 3 | 34 | 1.7% |
 
 ## Question types
 
 | Type | Count |
 |---|---|
-| multiple-choice | 1248 |
+| multiple-choice | 1250 |
 | predict-output | 639 |
 | fill-blank | 496 |
 | spot-the-bug | 415 |
@@ -87,7 +87,7 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a8-redemption-web | 4 | 1807 | 8 | 8 | 115 | 0/4 | 4/4 |
 | a9-deep-linking | 2 | 1696 | 4 | 4 | 57 | 0/2 | 2/2 |
 | b1-sql-fundamentals | 4 | 1683 | 5 | 8 | 107 | 0/4 | 4/4 |
-| b10-security-compliance | 2 | 4022 | 5 | 4 | 53 | 1/2 | 2/2 |
+| b10-security-compliance | 2 | 4550 | 5 | 4 | 55 | 1/2 | 2/2 |
 | b2-schema-design | 3 | 2363 | 3 | 6 | 82 | 0/3 | 3/3 |
 | b3-node-http-server | 4 | 2120 | 5 | 8 | 117 | 2/4 | 4/4 |
 | b4-auth-server | 3 | 3014 | 6 | 6 | 81 | 2/3 | 3/3 |
@@ -228,7 +228,7 @@ None.
 | b1-sql-fundamentals/0003-indexes-transactions-constraints.html | 2370 | 13 | 2 | 2 | 30 | — | yes |
 | b1-sql-fundamentals/0004-postgres-specifics.html | 1436 | 9 | 1 | 2 | 26 | — | yes |
 | b10-security-compliance/0001-security-hardening.html | 4007 | 20 | 2 | 2 | 25 | yes | yes |
-| b10-security-compliance/0002-dpdp-act.html | 4036 | 12 | 3 | 2 | 28 | — | yes |
+| b10-security-compliance/0002-dpdp-act.html | 5092 | 14 | 3 | 2 | 30 | — | yes |
 | b2-schema-design/0001-token-schema.html | 3257 | 10 | 1 | 2 | 27 | — | yes |
 | b2-schema-design/0002-messaging-schema.html | 2245 | 8 | 1 | 2 | 26 | — | yes |
 | b2-schema-design/0003-migrations.html | 1588 | 11 | 1 | 2 | 29 | — | yes |
