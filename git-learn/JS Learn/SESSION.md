@@ -198,17 +198,33 @@ this section records is only what a script cannot compute:
 >
 > 47 launch units and 3 writing units, ordered by what unblocks what.
 
-**Launch side — start `L1` and `L7`.** They head the two chains that decide the
-launch date and neither is code:
+**Launch side — `L1` is the whole critical path now, and only you can start
+it.** The `L7` chain has been worked as far as it goes without you:
 
 ```
 L1 DLT ──▶ OTP works ──▶ L44 closed test ──▶ 14 continuous days ──▶ L46 production
-L7 RoPA ─┬▶ privacy policy   ├▶ L12 Play Data Safety   ├▶ L13 Apple labels
-         └▶ L10 retention ──▶ L16 deletion ──▶ the web deletion page Play requires
+L7 RoPA ─┬▶ L8 counsel brief  ─┬▶ L10 retention  ✔ drafted
+   ✔ done │                    ├▶ L12 Play Data Safety  ✔ drafted
+          │                    └▶ L13 Apple labels      ✔ drafted
+          └▶ L18 vendors + DPAs ✔ drafted
 ```
 
-Drafts for four of Wave 0 are written and waiting in `token/docs/launch/` —
-fill the angle brackets and send. The folder README has the send order.
+**Drafted 2026-08-30 in `token/docs/launch/`: `retention-policy.md` (L10),
+`store-privacy-declarations.md` (L12 + L13 in one file, because L13's gate is
+the cross-check), `vendor-inventory.md` (L18).** Each needs its angle brackets
+filled; six retention periods need counsel; the DPAs need requesting.
+
+Seven of Wave 0 and Wave 1 now have drafts. **The folder README has the send
+order, and sending is the part that needs you** — every one of them goes to
+somebody outside.
+
+> **Two hard blockers surfaced by this work, both in `In progress` above.**
+> The store forms answer *"users can request deletion: yes"* and **RoPA F1 says
+> that is currently false in the product** — the erasure transaction throws for
+> any account with a call or a revocation. And the error tracker's scrubbing
+> (L18) ships token codes to a third party until configured, **because** the
+> code was deliberately moved into the request body. Neither is a documentation
+> gap; both are launch blockers.
 
 **Writing side — `W1` may be finished for now.** C0, C1, C2, C3, C6, C7 and C8
 have landed; **two remain**: C4 and C9. `W2` is closed and there is no
@@ -316,6 +332,26 @@ is in `docs/archive/session-log-2026-08-17-to-25.md`.
 - **A lesson can argue for the right thing in prose and ship the wrong thing in
   the code block underneath**, and only the code block gets copied. Found five
   times out of five across A5.
+- **A schema is not source code that happens to be in SQL.** It is an
+  instruction to another program, and every check in this project reads the
+  page instead of running it — so `consent_records` carried a `UUID` foreign
+  key against a `SERIAL` primary key for months, in the compliance lesson, in a
+  table Postgres would have refused outright. **Nothing here can find that
+  class of error**, and there are no migrations in `token/` yet, so nothing has
+  ever answered back. Found by compiling the RoPA, whose entire method is *list
+  every field you store and go and look at it*.
+- **The dangerous foreign key is the one with nothing written on it.** A
+  missing `ON DELETE` clause defaults to `NO ACTION`, which blocks exactly like
+  `RESTRICT` — and you can scan a whole schema for the word RESTRICT and never
+  see it. `b10/0002`'s erasure transaction missed `revocation_events` this way
+  and `calls` by thinking in nouns instead of foreign keys. **Generate the list
+  from `information_schema.referential_constraints`; do not read it off the
+  page.**
+- **A check that can be wrong needs a suite before it needs another clause.**
+  Three inline `audit.mjs` checks went blind this way — example codes, the
+  alphabet, orphan tables — and the third was only found because the other two
+  had just been fixed. The pull is always to add the suppression inline: one
+  line, obviously correct, audit goes green immediately. **That is the move.**
 - **Two lessons can each be right and contradict each other.** Invisible from
   inside either and invisible to the audit. Grep the neighbour for the same
   noun — `code`, `max_uses`, `expires_at`, `clipboard`.
