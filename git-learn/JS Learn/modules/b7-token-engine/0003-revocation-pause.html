@@ -503,24 +503,58 @@ ws.close(1000, 'Token revoked');    // may close before the send flushes</code><
   <pre><code>-- Migration: create revocation_events table
 CREATE TABLE revocation_events (
   id            SERIAL PRIMARY KEY,
-  token_id      INTEGER NOT NULL REFERENCES tokens(id),
-  previous_status VARCHAR(10) NOT NULL,
-  new_status    VARCHAR(10) NOT NULL,
+
+  -- ON DELETE CASCADE. It had NO clause at all until 2026-08-30, which
+  -- defaults to NO ACTION and blocks a token delete exactly like RESTRICT.
+  token_id      INTEGER NOT NULL REFERENCES tokens(id) ON DELETE CASCADE,
+
+  previous_status TEXT NOT NULL CHECK (previous_status IN ('active','paused','revoked')),
+  new_status      TEXT NOT NULL CHECK (new_status      IN ('active','paused','revoked')),
+
+  -- Who ended it and why. Two constrained columns, NOT a JSONB blob.
+  actor         TEXT NOT NULL CHECK (actor IN ('owner','system','admin')),
+  reason        TEXT NOT NULL CHECK (reason IN (
+                  'user_action','expiry','exhausted','abuse_report','account_closure')),
+
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  metadata      JSONB DEFAULT '{}'
+
+  CHECK (previous_status &lt;&gt; new_status)
 );
 
-CREATE INDEX idx_revocation_events_token ON revocation_events(token_id);
+CREATE INDEX idx_revocation_events_token ON revocation_events(token_id, created_at DESC);
 
 -- Query: get full lifecycle of a token
 SELECT
   re.previous_status,
   re.new_status,
-  re.created_at,
-  re.metadata
+  re.actor,
+  re.reason,
+  re.created_at
 FROM revocation_events re
 WHERE re.token_id = $1
 ORDER BY re.created_at ASC;</code></pre>
+
+  <div class="callout danger">
+    <div class="callout-title">This table used to end with <code>metadata JSONB DEFAULT '{}'</code>, and that was the dangerous line</div>
+    <p>An unbounded bag on the token path is <strong>where a token code, an IP
+    address or a holder's name gets written by a well-meaning handler</strong>
+    — six months later, by someone adding "just a bit of context" to a log
+    line. Exactly the failure the push payload had before its <code>data</code>
+    field became an allow-list built key by key.</p>
+    <p><strong>The fix is not a code review rule, it is two columns.</strong>
+    <code>actor</code> and <code>reason</code> with <code>CHECK</code>
+    constraints mean the <em>database</em> refuses a value nobody designed
+    for — the same move <code>access_rules.rule_type</code> makes, and for the
+    same reason.</p>
+    <p><strong>The cost, so it can be reversed on evidence:</strong> adding a
+    new reason is a migration rather than a deploy. That is the price of
+    enforcement, and it is worth paying on a column that sits next to a
+    capability.</p>
+    <p>Notice also <code>CHECK (previous_status &lt;&gt; new_status)</code>. A
+    row saying a token went from <code>paused</code> to <code>paused</code> is
+    not history, it is a bug that wrote a row — and the audit trail is the last
+    place you want to be storing evidence of your own double-submits.</p>
+  </div>
 
   <h2>Preventing Actions on Non-Active Tokens</h2>
   <p>

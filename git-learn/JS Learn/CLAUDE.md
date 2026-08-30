@@ -785,9 +785,24 @@ summarised here rather than left in the ADR:
   catchable before it is stored. The payload stays JSONB because each rule
   type has different fields; the *type* does not get that latitude.
 
-  Second reason, the same one that made the key directory append-only: rows
-  give a rule change a history. "What could this token do last Tuesday" is a
-  question with an answer only if the old row still exists.
+  **The "second reason" that used to sit here was withdrawn on 2026-08-30, and
+  it was false the whole time.** It read: *rows give a rule change a history —
+  "what could this token do last Tuesday" is a question with an answer only if
+  the old row still exists.* But `access_rules` carries
+  `UNIQUE (token_id, rule_type)`, so an edit is an UPSERT that **overwrites**.
+  There is no history and never was.
+
+  It survived because it is a good argument for rows over JSONB *in general*,
+  and nobody checked it against this schema's own constraint. **A supporting
+  argument nobody verifies is how a decision acquires a reason it does not
+  have** — and the risk is not the wasted sentence, it is someone later relying
+  on the history and finding it absent.
+
+  The constraint stays and the claim goes: **the `rule_type` argument above
+  carries this decision on its own**, and it is the stronger half. *Rejected:*
+  `valid_from` / `valid_to` with a partial unique index, which would make the
+  claim true and costs a temporal table plus a retention question for
+  superseded rules. Reversible if that question is ever asked in anger.
 
 - **There are exactly three rule types** (decided 2026-08-23, after three
   lessons were found using three different vocabularies):
@@ -850,6 +865,53 @@ summarised here rather than left in the ADR:
   then inserts — see `b7/0001`. `idx_conversations_token_id` is load-bearing
   rather than an optimisation. The API may still *return* a computed count;
   `a5/0003`'s `displayStatus` takes one.
+
+### The schema now exists and has been run (2026-08-30)
+
+**`token/api/migrations/` is the schema of record.** Fifteen tables in
+dependency order, applied to Postgres 16, with `test/schema-test.sql` asserting
+the constraints and the erasure function. **Where a lesson and a migration
+disagree, the migration wins and the lesson is the bug.**
+
+Until that date no `CREATE TABLE` in this project had ever been executed. Two
+defects fell out of the first real run, and both had survived every check this
+course has:
+
+- `consent_records` had `user_id UUID` against a `SERIAL` primary key — a table
+  Postgres refuses outright, in the **compliance** lesson.
+- The erasure transaction deleted seven tables of an eleven-table chain.
+
+**Nothing here can find that class of error.** Every check reads the page; none
+runs a database. **A schema is an instruction to another program, and the only
+review that catches this is the one where that program answers back.**
+
+Three rules that fell out, all of them general:
+
+- **The dangerous foreign key is the one with nothing written on it.** A missing
+  `ON DELETE` clause defaults to `NO ACTION`, which blocks exactly like
+  `RESTRICT` — and you can scan a whole schema for the word RESTRICT and never
+  see it. Generate the list from `information_schema.referential_constraints`.
+- **A table with no foreign key neither blocks nor cascades — it just
+  survives.** `otp_requests` holds a `phone_hash` and is keyed by it, so after
+  `users` is gone *no query finds it*. Read the hash before you delete the row.
+- **When one field is held for two purposes, it has two clocks.** Collapsing
+  them into one answer silently serves whichever purpose you thought of first.
+  See ADR-0021.
+
+### Three decisions from 2026-08-30 that constrain lessons
+
+- **`holder_session_id` is per conversation, random, ≥32 chars** (ADR-0019). A
+  holder redeeming two tokens is two unlinkable strangers. **Never write a
+  lesson that recognises a returning holder**, and note that "per browser but
+  hashed" is not a middle ground — a hash of a stable value is a stable value.
+  The cost, stated: abuse handling is per token, not per person.
+- **`revocation_events` has `actor` and `reason` as `CHECK`-constrained
+  columns, not `metadata JSONB`** (ADR-0020). An unbounded bag next to a
+  capability is where a code or an IP gets written by a well-meaning handler.
+- **Erasure is `erase_account()`, eleven tables, ordered** (ADR-0020), and
+  **consent evidence outlives the account by three years in `consent_archive`**
+  — a second table because the clock runs from *erasure*, so a rule on the live
+  table would delete a four-year customer's consent while their account is open.
 
 ### What the server knows about the user (decided 2026-08-22)
 

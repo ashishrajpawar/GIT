@@ -15,7 +15,7 @@ with this one, this one is right — everything below is measured, not asserted.
 | Founder-track lessons (F1, counted separately) | 16 |
 | Legacy lessons (pre-pivot, excluded) | 0 |
 | Quiz questions (track) | 3409 |
-| Avg teaching prose per track lesson | 2047 words |
+| Avg teaching prose per track lesson | 2051 words |
 | Lessons with a playground | 126 / 126 |
 | Lessons with an exercise | 126 / 126 |
 | **Deepened** (all 3 spine sections) | 16 / 126 |
@@ -88,12 +88,12 @@ or from `progress.js` localStorage, and is never inferred from the files.
 | a9-deep-linking | 2 | 1696 | 4 | 4 | 57 | 0/2 | 2/2 |
 | b1-sql-fundamentals | 4 | 1683 | 5 | 8 | 107 | 0/4 | 4/4 |
 | b10-security-compliance | 2 | 4550 | 5 | 4 | 55 | 1/2 | 2/2 |
-| b2-schema-design | 3 | 2363 | 3 | 6 | 82 | 0/3 | 3/3 |
+| b2-schema-design | 3 | 2463 | 3 | 6 | 82 | 0/3 | 3/3 |
 | b3-node-http-server | 4 | 2120 | 5 | 8 | 117 | 2/4 | 4/4 |
 | b4-auth-server | 3 | 3014 | 6 | 6 | 81 | 2/3 | 3/3 |
 | b5-websocket-server | 3 | 1961 | 6 | 6 | 77 | 0/3 | 3/3 |
 | b6-webrtc-signalling | 2 | 3368 | 4 | 4 | 52 | 1/2 | 2/2 |
-| b7-token-engine | 3 | 3478 | 7 | 6 | 78 | 3/3 | 3/3 |
+| b7-token-engine | 3 | 3568 | 7 | 6 | 78 | 3/3 | 3/3 |
 | b8-push-notifications | 1 | 3020 | 2 | 2 | 25 | 0/1 | 1/1 |
 | b9-docker-deployment | 3 | 3199 | 6 | 6 | 81 | 2/3 | 3/3 |
 | c0-architecture | 2 | 1477 | 10 | 2 | 57 | 0/2 | 2/2 |
@@ -230,7 +230,7 @@ None.
 | b10-security-compliance/0001-security-hardening.html | 4007 | 20 | 2 | 2 | 25 | yes | yes |
 | b10-security-compliance/0002-dpdp-act.html | 5092 | 14 | 3 | 2 | 30 | — | yes |
 | b2-schema-design/0001-token-schema.html | 3257 | 10 | 1 | 2 | 27 | — | yes |
-| b2-schema-design/0002-messaging-schema.html | 2245 | 8 | 1 | 2 | 26 | — | yes |
+| b2-schema-design/0002-messaging-schema.html | 2544 | 8 | 1 | 2 | 26 | — | yes |
 | b2-schema-design/0003-migrations.html | 1588 | 11 | 1 | 2 | 29 | — | yes |
 | b3-node-http-server/0001-nodejs-fundamentals.html | 1657 | 10 | 2 | 2 | 29 | — | yes |
 | b3-node-http-server/0002-express-fastify-setup.html | 1283 | 13 | 1 | 2 | 30 | — | yes |
@@ -246,7 +246,7 @@ None.
 | b6-webrtc-signalling/0002-coturn-setup.html | 2499 | 9 | 2 | 2 | 26 | — | yes |
 | b7-token-engine/0001-token-generation-redemption.html | 3766 | 12 | 3 | 2 | 25 | yes | yes |
 | b7-token-engine/0002-access-rules-engine.html | 3620 | 8 | 2 | 2 | 27 | yes | yes |
-| b7-token-engine/0003-revocation-pause.html | 3047 | 9 | 2 | 2 | 26 | yes | yes |
+| b7-token-engine/0003-revocation-pause.html | 3318 | 9 | 2 | 2 | 26 | yes | yes |
 | b8-push-notifications/0001-fcm-apns-expo.html | 3020 | 12 | 2 | 2 | 25 | — | yes |
 | b9-docker-deployment/0001-docker-fundamentals.html | 3054 | 13 | 2 | 2 | 26 | yes | yes |
 | b9-docker-deployment/0002-coolify-setup.html | 3280 | 12 | 2 | 2 | 26 | yes | yes |
