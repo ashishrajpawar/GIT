@@ -26,43 +26,61 @@ how far it got.
 > files either.** Make no claims about it at all — not in prose, not in a
 > commit message, not as a reason for prioritising anything.
 
-**Nothing in flight.** `L7` — the RoPA — landed 2026-08-30, and it is the first
-**launch** item to land rather than a writing one.
+**Nothing in flight.** 2026-08-30 was a launch-and-product day, not a writing
+one. **Twelve open decisions were put to the student and settled**, and the work
+that followed from them landed: `L7`, `L10`, `L12`, `L13`, `L18`, send-prep for
+`L1`/`L4`/`L8`, and — the big one — **`token/api/migrations/` exists and has
+been run against Postgres 16.**
 
-C8 — Product Analytics — landed complete on 2026-08-29: two lessons, verified,
-wrong-cases, README, index row and search entries in. C2, C3, C7 and C6 landed
-complete the same day.
+### The schema has been executed for the first time
 
-### What L7 found, because it changes what other items can say
+Fifteen tables, twelve migration files, three retention functions, and
+`test/schema-test.sql` with eight assertion groups, all green. Run it with
+`sh api/migrations/test/run.sh` (needs Docker).
 
-The RoPA is at **v0.2** in `token/docs/launch/ropa.md`, cross-checked against
-the schema instead of from memory. Fifteen live tables; v0.1 accounted for
-nine. **Seven findings, F1 and F4 are defects:**
+**This closed RoPA F0 and proved F1 and F4 were real.** `erase_account()` is
+tested against a *maximal* account — every table populated, including the call
+and the revocation nobody had in their test data, which is exactly why they were
+missed. The suite also asserts **the naive erasure order still fails**, so the
+bug cannot come back silently.
 
-- **F1 — the erasure right is blocked by the schema.** Four foreign keys carry
-  `ON DELETE RESTRICT`, each justified in its own lesson, and nobody wrote down
-  the composite effect. `b10/0002`'s erasure transaction deleted seven tables
-  and the chain has eleven; it would **throw** for any account that has ever
-  had a call or a revocation. Fixed in the lesson, and the nine-step order is
-  now written down in both places.
-- **F4 — `consent_records` could never have been created.** `user_id UUID`
-  against a `SERIAL` primary key; Postgres refuses the constraint outright. It
-  sat in a `username`/`password` registration flow, in **the compliance
-  lesson**, in a product that has neither.
-- F0 (no migrations exist at all, so nothing in the schema has ever been run),
-  F2 (`otp_requests` and `push_receipts` grow for ever), F3 (eight blank
-  retention cells), F5 (`UNIQUE(token_id, rule_type)` means rules have no
-  history, contradicting one of the two stated arguments for rows over JSONB),
-  F6 (`display_name` is disclosed to holders and nothing says so on the screen
-  that collects it).
+### The twelve decisions, settled 2026-08-30
 
-**`L10` — the retention policy — is now unblocked and is the next launch item
-that needs no third party.** F3 is its input.
+| Decision | Outcome |
+|---|---|
+| `token/` backup | **Private GitHub repo** — *still to be created; no `gh` CLI on this machine, see Blocked* |
+| Erasure vs audit trail | Delete `redemption_events` with the token; anonymise at 90 days is a **separate clock** |
+| Consent evidence | **Survives 3 years** in `consent_archive`, disclosed |
+| Holder identity | **Per conversation, random, ≥32 chars** (ADR-0019) |
+| Holder IP retention | **90 days** |
+| Rules history | **Claim withdrawn**, constraint kept |
+| Analytics on store forms | **Declare on both** |
+| Backup floor | **`minVerified: 3`** |
+| CERT-In logs | **Separate store, own clock** |
+| Migrations | **Now** — done |
+| `revocation_events.metadata` | **Replaced** by `actor` + `reason`, `CHECK`-constrained |
+| Send prep | `L1`, `L4`, `L8` — done |
 
-> **Do not send `counsel-brief.md` with F1 and F4 unsettled.** They change what
-> the privacy policy can truthfully say about deletion, and a brief describing
-> an erasure process the schema refuses to perform buys an expensive answer to
-> the wrong question.
+> **One correction I made mid-task and flagged:** I had recommended anonymising
+> `redemption_events` as the fix for F1. It does not unblock erasure — the rows
+> still reference `tokens` under `RESTRICT`. The right shape is two clocks, and
+> ADR-0021 records the rejected version so nobody re-proposes it.
+
+### `L7` — the RoPA — found all of it
+
+The RoPA (`token/docs/launch/ropa.md`, v0.2) was cross-checked against the
+schema rather than from memory. Fifteen live tables; v0.1 accounted for nine.
+**Seven findings, all now settled — the table is in §7 of that file**, and the
+findings are kept in full beside the answers, because a decision without the
+problem it solved is what the next person undoes.
+
+The two that were defects: **F1**, the erasure right was blocked by four
+`RESTRICT` foreign keys whose composite effect nobody had written down; **F4**,
+`consent_records` had a `UUID` foreign key against a `SERIAL` primary key and
+could never have been created — in the compliance lesson, in a
+`username`/`password` flow, in a product that has neither.
+
+C8 landed complete 2026-08-29; C2, C3, C7 and C6 the same day.
 
 **The next unit is `W1` again: pick one C-module, write it, stop.** Two remain
 — **C4** (Data, Media & Offline, 4 lessons, follows A6) and **C9** (Launch,
@@ -85,9 +103,10 @@ produced ADR-0009 → 0015, caught earlier this time. Written 2026-08-29 as
 closed), plus a pointer from `ARCHITECTURE.md`'s revocation section to 0017,
 since *"not when a cache expires"* was an intention there and is now enforced.
 
-> **Committed in `GIT/token/`, which still has no remote and has never been
-> pushed.** Eighteen ADRs, `ARCHITECTURE.md` and the launch drafts exist on one
-> machine. Do not report anything in that repo as pushed.
+> **`GIT/token/` still has no remote.** **21 ADRs**, `ARCHITECTURE.md`, nine
+> launch documents and now `api/migrations/` exist on one machine. A private
+> repo was chosen on 2026-08-30 but **has not been created** — there is no `gh`
+> CLI here. See *Blocked on*. Do not report anything in that repo as pushed.
 
 **Why C6 and not C8, with the cost of the rejection.** C6 had been deferred
 twice, both times on the same argument — *you cannot tune what you cannot see*.
@@ -245,10 +264,11 @@ are waiting on.
 
 ## Blocked on
 
-**Three things, and only three. Everything else can start today.**
+**Four things. Everything else can start today.**
 
 | What | On whom | What it unblocks |
 |---|---|---|
+| **Create the private repo for `token/`** | the founder — **no `gh` CLI on this machine** | The only backup of 21 ADRs, `ARCHITECTURE.md`, nine launch docs and `api/migrations/`. Decided 2026-08-30; two commands, in the report |
 | **L23** — what a block attaches to, for a holder with no account | the technical founder | L26, the UGC evidence pack, and therefore **both store submissions** |
 | **L45** — replacement vs supplement, and which segment leads | the closed test (L44) | store copy stops being provisional. `F1/0007` has the signals table and the day-14 question |
 | **The Hindi question** inside L8 | counsel | whether English-only at launch stands. Ask it in the same brief as the privacy policy |

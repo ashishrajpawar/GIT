@@ -5101,3 +5101,97 @@ Audit green with no warnings. **126/126 verified**, `render-as-authored` 0,
 **nine suites** (250 assertions) pass, `known-issues.json` still empty. Seven
 launch documents drafted in `token/docs/launch/`; sending them is the part that
 needs the founder.
+
+---
+
+## 2026-08-30 (part two) — twelve decisions, and the first schema this project has ever run
+
+### Asking, for the first time since 2026-08-23
+
+The standing instruction has been *do not stop to ask*. The student lifted it
+explicitly — *"ask me all the decision related question with options and we go
+from there"* — so twelve open decisions went out in three rounds of four, each
+with the alternative it was competing against and what that alternative cost.
+
+Every one came back as the recommended option. **That is worth reading
+carefully rather than as a success.** Options presented with a recommendation
+attract the recommendation; the value was not in the picking but in the fact
+that twelve things which had been drifting are now written down with their
+costs, reversible on evidence.
+
+### The decision that mattered most was the boring one
+
+**Create `api/migrations/` now, and run it.**
+
+Until this day no `CREATE TABLE` in this product had ever been executed by
+Postgres. Fifteen tables existed as course HTML and nothing more.
+
+The first real run took under a minute and confirmed both defects the RoPA had
+predicted — the `UUID`/`SERIAL` foreign key, and the erasure chain — and then
+`schema-test.sql` was written to hold them down permanently. Eight assertion
+groups, including one that asserts **the naive erasure order still fails**, so
+the bug cannot come back quietly.
+
+The erasure test seeds a **maximal** account: every table populated, including
+the call and the revocation nobody had in their test data. That is not
+thoroughness for its own sake — **it is precisely why those two tables were
+missed**, and a test seeded the way the original author thought about the
+problem would have passed just as happily.
+
+### A correction I made mid-task, and flagged
+
+I had recommended *anonymise `redemption_events`* as the resolution to F1, and
+presented it as solving both the retention question and the erasure blockage.
+
+**It does not unblock erasure at all.** Anonymised rows still exist, so they
+still reference `tokens` under `ON DELETE RESTRICT`, and deleting the token
+still fails. It answered one question while appearing to answer two.
+
+The right shape is **two clocks** — anonymise at 90 days while the token lives
+and its use count matters; delete with the token at erasure. ADR-0021 records
+the rejected single-clock version explicitly, because the reasoning that
+produced it was appealing and will recur.
+
+The general form is now in `CLAUDE.md`: **when one field is held for two
+purposes it has two clocks, and collapsing them silently serves whichever
+purpose you thought of first.**
+
+### A false argument removed from `CLAUDE.md`
+
+`access_rules` is rows rather than a JSONB column, for two stated reasons. The
+second read: *rows give a rule change a history — "what could this token do last
+Tuesday" is a question with an answer only if the old row still exists.*
+
+The table carries `UNIQUE (token_id, rule_type)`. An edit is an UPSERT that
+overwrites. **There is no history and never was.**
+
+It survived because it is a genuinely good argument for rows over JSONB *in
+general*, and nobody checked it against this schema's own constraint. **A
+supporting argument nobody verifies is how a decision acquires a reason it does
+not have** — and the risk was never the wasted sentence. It was someone later
+relying on that history and finding it absent.
+
+The constraint stays; the claim goes. The `rule_type` argument carries the
+decision alone and is the stronger half.
+
+### What is left, and who it is left with
+
+Nine launch documents are written. `SEND-CHECKLIST.md` is the new entry point:
+**twelve facts only the founder has**, a covering note for each of the three
+that start other people's clocks, and the send order.
+
+Two traps are flagged where they actually bite, because each costs a week in a
+queue you cannot jump: the DLT entity name must match the incorporation
+certificate character for character, and testers give you the address they email
+from rather than the one signed in to Play.
+
+**And the repo still has no remote.** A private GitHub repo was chosen; there is
+no `gh` CLI on this machine, so it needs two commands from the founder. It is
+now the first row in *Blocked on*, above the store-submission blockers, because
+21 ADRs and the migrations exist on one disk.
+
+### State
+
+Audit green with no warnings. **126/126 verified**, `render-as-authored` 0,
+**nine suites** (250 assertions) pass, `known-issues.json` empty.
+`token/` at 8 commits ahead of nothing, unpushed and unbacked-up.
