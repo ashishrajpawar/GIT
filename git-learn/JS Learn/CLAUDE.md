@@ -20,7 +20,7 @@ Five steps, in order:
 
 **The audit should say `OK`.** It has since 2026-08-18, which is the first time
 in the project's history — so a red audit now means something rather than being
-the background state. If you touch `assets/` or `scripts/`, run the eight suites
+the background state. If you touch `assets/` or `scripts/`, run the nine suites
 too; together they take a few seconds:
 
 ```bash
@@ -28,6 +28,7 @@ node scripts/test-quiz-shuffle.mjs      node scripts/test-dom-sandbox.mjs
 node scripts/test-check-pre-blocks.mjs  node scripts/test-playground-dom.mjs
 node scripts/test-explain.mjs           node scripts/test-strip-types.mjs
 node scripts/test-load-order.mjs        node scripts/test-token-scan.mjs
+node scripts/test-schema-scan.mjs
 ```
 
 ### Document precedence — one fact, one home
@@ -235,6 +236,29 @@ outside it is invisible to *all of them at once* while still being served. This
 is the `git-learn/index.html` hazard one directory in, and it was found by
 accident: a probe file called `_probe.html` produced no finding and the
 identical content called `0099-probe.html` produced one.
+
+**The orphan-table check is the third to be extracted and suited**, into
+`scripts/schema-scan.mjs` with `test-schema-scan.mjs` (30 assertions), on
+2026-08-30. Same diagnosis all three times: an **error**-level check, several
+suppression clauses, nothing exercising any of them. It reported
+`information_schema` as a table nobody creates, after `b10/0002` gained a query
+against Postgres's own catalog — a false positive that is *correct about the
+text and wrong about the world*, and whose one-line fix is exactly the kind
+nothing would ever check again.
+
+The suppression is the **`pg_` prefix**, which Postgres reserves, plus
+`information_schema` and `pg_catalog` by name. The suite asserts a table merely
+*named* like the catalog — `pgboss_jobs` — is still judged, so the hatch cannot
+quietly widen to two characters. It also pins the `calls` defect that earned the
+check its keep: **the orphan was the symptom, and the reader existing while the
+writer never did was the disease.**
+
+> **Three extractions, one rule, and it is worth stating as a rule now:** a
+> check that can be *wrong* needs a suite before it needs another clause. The
+> pull is always to add the suppression inline — it is one line, it is obviously
+> correct, and the audit goes green immediately. That is precisely the move that
+> produced three blind checks, and the third one was found only because the
+> other two had just been fixed.
 
 ### Token repo layout (one git repo, four folders)
 
@@ -1489,6 +1513,7 @@ node scripts/test-quiz-shuffle.mjs                   # the option shuffle still 
 node scripts/check-load-order.mjs                    # every widget defined before it is called
 node scripts/test-load-order.mjs                     # 15 assertions, both directions
 node scripts/test-token-scan.mjs                     # 34 assertions — example codes AND the alphabet
+node scripts/test-schema-scan.mjs                    # 30 assertions — the orphan-table check
 ```
 
 **`check-load-order.mjs` is the same family, one layer earlier: a `<pre>` block

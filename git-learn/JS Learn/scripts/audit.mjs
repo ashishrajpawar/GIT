@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 import { scanPreBlocks } from "./check-pre-blocks.mjs";
 import { scanLoadOrderIn } from "./check-load-order.mjs";
 import { badTokensIn, badAlphabetsIn, TOKEN_ALPHABET } from "./token-scan.mjs";
+import { orphanTablesIn } from "./schema-scan.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = new Set(process.argv.slice(2));
@@ -371,47 +372,25 @@ for (const file of lessonFiles) {
 
 // -------------------------------------------------- cross-lesson: schema
 
-const created = new Map();
-const queried = new Map();
+/* Extracted to scripts/schema-scan.mjs on 2026-08-30, with a suite, after
+   `information_schema` was reported as a table nobody creates. See the header
+   there — an error check carrying untested suppressions is the same hazard the
+   token scanner had, for the third time. */
+const schemaSources = lessonFiles
+  .filter((file) => !isLegacy(file)) // pre-pivot Firebase lessons share no schema
+  .map((file) => {
+    const html = read(file).replace(/<script[\s\S]*?<\/script>/g, "");
+    return {
+      id: rel(file),
+      code: [...html.matchAll(/<pre[^>]*>([\s\S]*?)<\/pre>/g)]
+        .map((m) => decode(m[1].replace(/<[^>]+>/g, "")))
+        .join("\n"),
+    };
+  });
 
-/**
- * Match SQL *grammar*, not whole blocks. Two failure modes to avoid:
- *   - Scanning every <pre> for bare FROM/JOIN pulls in English from JS comments
- *     and invents dozens of tables.
- *   - Scanning only blocks that "look like SQL" misses SQL inside JS string
- *     literals — which is where most of the real queries live.
- * Requiring a SQL continuation token after the table name handles both.
- */
-const REFS = [
-  /\bINSERT\s+INTO\s+([a-z_]{3,})\s*\(/gi,
-  /\bUPDATE\s+([a-z_]{3,})\s+SET\b/gi,
-  /\bDELETE\s+FROM\s+([a-z_]{3,})\b/gi,
-  // A bare /FROM (\w+)/ matches English ("returned from the screen"), so the
-  // statement must actually open with SELECT.
-  /\bSELECT\b[\s\S]{0,400}?\bFROM\s+([a-z_]{3,})\b/gi,
-  /\bJOIN\s+([a-z_]{3,})(?:\s+(?:AS\s+)?[a-z_]{1,3})?\s+ON\b/gi,
-];
-const SQL_KEYWORDS = new Set(["select", "values", "where", "only", "dual", "set", "and", "not", "null"]);
-
-for (const file of lessonFiles) {
-  if (isLegacy(file)) continue; // pre-pivot Firebase lessons share no schema
-  const html = read(file).replace(/<script[\s\S]*?<\/script>/g, "");
-  const code = [...html.matchAll(/<pre[^>]*>([\s\S]*?)<\/pre>/g)]
-    .map((m) => decode(m[1].replace(/<[^>]+>/g, "")))
-    .join("\n");
-  for (const m of code.matchAll(/CREATE TABLE(?:\s+IF NOT EXISTS)?\s+([a-z_]+)/gi))
-    if (!created.has(m[1].toLowerCase())) created.set(m[1].toLowerCase(), rel(file));
-  for (const re of REFS)
-    for (const m of code.matchAll(re)) {
-      const t = m[1].toLowerCase();
-      if (SQL_KEYWORDS.has(t)) continue;
-      if (!queried.has(t)) queried.set(t, new Set());
-      queried.get(t).add(rel(file));
-    }
-}
-const orphanTables = [...queried.entries()].filter(([t]) => !created.has(t));
-for (const [t, files] of orphanTables)
-  err(`schema: table "${t}" is queried in ${[...files].length} lesson(s) but never created`);
+const orphanTables = orphanTablesIn(schemaSources);
+for (const { table, files } of orphanTables)
+  err(`schema: table "${table}" is queried in ${files.length} lesson(s) but never created`);
 
 // -------------------------------------------------- cross-lesson: links
 
@@ -732,7 +711,7 @@ ${founder.map((l) => `| ${l.id.replace("modules/f1-founder-track/", "")} | ${l.w
 |---|---|
 | Inline \`<script>\` blocks parse | ${errors.some((e) => /does not parse|threw/.test(e)) ? "FAIL" : "ok"} |
 | Quiz structure valid | ${errors.some((e) => /\bq\d+:/.test(e)) ? "FAIL" : "ok"} |
-| Tables queried but never created | ${orphanTables.length === 0 ? "ok" : orphanTables.map(([t]) => t).join(", ")} |
+| Tables queried but never created | ${orphanTables.length === 0 ? "ok" : orphanTables.map((o) => o.table).join(", ")} |
 | Broken relative links | ${brokenLinks === 0 ? "ok" : brokenLinks} |
 | Widgets defined before they are called | ${loadScan.findings.length === 0 ? "ok" : loadScan.findings.length + " that never render"} |
 | search-index.json | ${indexStatus} |

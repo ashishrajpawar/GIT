@@ -26,9 +26,43 @@ how far it got.
 > files either.** Make no claims about it at all — not in prose, not in a
 > commit message, not as a reason for prioritising anything.
 
-**Nothing in flight.** C8 — Product Analytics — landed complete on 2026-08-29:
-two lessons, verified, wrong-cases, README, index row and search entries in.
-C2, C3, C7 and C6 landed complete the same day.
+**Nothing in flight.** `L7` — the RoPA — landed 2026-08-30, and it is the first
+**launch** item to land rather than a writing one.
+
+C8 — Product Analytics — landed complete on 2026-08-29: two lessons, verified,
+wrong-cases, README, index row and search entries in. C2, C3, C7 and C6 landed
+complete the same day.
+
+### What L7 found, because it changes what other items can say
+
+The RoPA is at **v0.2** in `token/docs/launch/ropa.md`, cross-checked against
+the schema instead of from memory. Fifteen live tables; v0.1 accounted for
+nine. **Seven findings, F1 and F4 are defects:**
+
+- **F1 — the erasure right is blocked by the schema.** Four foreign keys carry
+  `ON DELETE RESTRICT`, each justified in its own lesson, and nobody wrote down
+  the composite effect. `b10/0002`'s erasure transaction deleted seven tables
+  and the chain has eleven; it would **throw** for any account that has ever
+  had a call or a revocation. Fixed in the lesson, and the nine-step order is
+  now written down in both places.
+- **F4 — `consent_records` could never have been created.** `user_id UUID`
+  against a `SERIAL` primary key; Postgres refuses the constraint outright. It
+  sat in a `username`/`password` registration flow, in **the compliance
+  lesson**, in a product that has neither.
+- F0 (no migrations exist at all, so nothing in the schema has ever been run),
+  F2 (`otp_requests` and `push_receipts` grow for ever), F3 (eight blank
+  retention cells), F5 (`UNIQUE(token_id, rule_type)` means rules have no
+  history, contradicting one of the two stated arguments for rows over JSONB),
+  F6 (`display_name` is disclosed to holders and nothing says so on the screen
+  that collects it).
+
+**`L10` — the retention policy — is now unblocked and is the next launch item
+that needs no third party.** F3 is its input.
+
+> **Do not send `counsel-brief.md` with F1 and F4 unsettled.** They change what
+> the privacy policy can truthfully say about deletion, and a brief describing
+> an erasure process the schema refuses to perform buys an expensive answer to
+> the wrong question.
 
 **The next unit is `W1` again: pick one C-module, write it, stop.** Two remain
 — **C4** (Data, Media & Offline, 4 lessons, follows A6) and **C9** (Launch,
