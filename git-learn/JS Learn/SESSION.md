@@ -108,38 +108,19 @@ since *"not when a cache expires"* was an intention there and is now enforced.
 > repo was chosen on 2026-08-30 but **has not been created** — there is no `gh`
 > CLI here. See *Blocked on*. Do not report anything in that repo as pushed.
 
-**Why C6 and not C8, with the cost of the rejection.** C6 had been deferred
-twice, both times on the same argument — *you cannot tune what you cannot see*.
-**C7 landing discharges it.** That is a new fact, not a re-argument, and it is
-the only thing that changed. Two further pointers, both already in this file:
-C6's own plan row is the one row in the table carrying an explicit warning
-against deferring it, and *Blocked on* has said **"monitor TURN bandwidth from
-the first deploy"** since 2026-08-20 with no module teaching the arithmetic.
+> **The C6-versus-C8 sequencing argument, the C7 dependency cost, and the
+> 2026-08-29 push are closed history and moved to `HANDOFF.md`.** All three
+> modules landed; the reasoning survives where narrative lives, and repeating it
+> here is how this file reached 4,486 lines last time.
 
-*Cost of deferring C8:* the plan sequences it directly after C7, and it is the
-cheapest of the four at two lessons. The reason that cost is low rather than
-zero: **the boundary C8 turns on is already written down** — `C7/0003`'s
-callout argues that an analytics event has no subject and that a label
-identifying a person reopens ADR-0012. A deferred module whose central argument
-is already on record is not at risk of being written wrong later. Reverse this
-if the build reaches a point where a shipping decision needs the numbers.
-
-**C7 was itself taken on a dependency and that cost is on record**: three of
-`CLAUDE.md`'s logging rules had no module that owned them and the same defect
-had been swept out twice.
-
-**All 18 commits pushed 2026-08-29**, on the student's instruction — the first
-push since the widget repair, so the F1 `createExplain` prompts and the B2/B3
-playgrounds are live again.
-
-### State as of 2026-08-29
+### State as of 2026-08-30
 
 **Counts live in `PROGRESS.md` and are not restated here** — same rule as
 `CLAUDE.md`. Run `node scripts/audit.mjs` first; it regenerates that file. What
 this section records is only what a script cannot compute:
 
-- **Audit green, eight suites pass, and for the first time there are no
-  warnings either.** The two standing ones were cleared 2026-08-29 and they
+- **Audit green, nine suites pass (250 assertions), and there are no warnings
+  either.** The two standing ones were cleared 2026-08-29 and they
   were different problems wearing the same jacket: `a9/0002` needed the
   documented file-level fixture opt-out for eight deliberate malformed codes,
   and **`DENY-LIST` was never a code at all.** The scanner matched four
@@ -186,16 +167,8 @@ this section records is only what a script cannot compute:
 | **F1 — the founder track** | 16 lessons, the non-technical half of shipping Token. No quizzes by instruction; a `createExplain` prompt is mandatory instead and the audit errors without one |
 | **18 decisions settled** | Put to the student in four batches. Each lives in the lesson that owns it, with its rejected alternative and reversal condition. Register in the F1 README |
 | **ADR-0009 → 0015** | Seven of those were *product* facts whose argument existed only in course HTML. Now in `token/docs/adr/` |
-| **`token/docs/launch/`** | Four drafts for the items that start other people's clocks: DLT registration, the tester pack, the RoPA skeleton, the counsel brief |
+| **`token/docs/launch/`** | Started here with four drafts for the items that start other people's clocks. **Now nine documents — see `SEND-CHECKLIST.md`, which is the entry point** |
 | **C0 — Architecture & System Design** | 2 lessons, verified. **Phase 3 has started**, and stops here — one module at a time |
-
-> ### ⚠ The Token repo has no git remote
->
-> `GIT/token/` is a separate repository and **nothing in it has ever been
-> pushed anywhere.** The ADRs, `ARCHITECTURE.md`, the launch documents and the
-> Module 01 capstone exist on this machine only. That is fine as a decision and
-> dangerous as a surprise — it is the one place in this project where a disk
-> failure is unrecoverable.
 
 > ### The course is published, and one page is outside the tooling
 >
@@ -208,6 +181,11 @@ this section records is only what a script cannot compute:
 > stats computed live from the GitHub API. It is now computed too. **When a
 > decision changes what the course *is*, check that page by hand.** Nothing
 > else will.
+>
+> **Hand-checked 2026-08-30 and clean**: module count comes from the GitHub
+> API, `learn-progress-fill` has no hardcoded width, no "Complete" badges, no
+> WhatsApp copy. Recorded here because there is no other record — a check with
+> no output is indistinguishable from a check nobody ran.
 
 ---
 
@@ -217,48 +195,60 @@ this section records is only what a script cannot compute:
 >
 > 47 launch units and 3 writing units, ordered by what unblocks what.
 
-**Launch side — `L1` is the whole critical path now, and only you can start
-it.** The `L7` chain has been worked as far as it goes without you:
+### 1 · Create the `token/` remote — two commands, and it is the only unbacked-up thing here
+
+There is no `gh` CLI on this machine, so this needs the student. Create a
+**private** repo named `token` at github.com/new, with no README, then:
+
+```bash
+cd "C:/Users/aspawar/Desktop/Digital/Ashish/GIT/token"
+git remote add origin https://github.com/ashishrajpawar/token.git
+git push -u origin main
+```
+
+Checked safe to push on 2026-08-30: 39 tracked files, no secrets, `.gitignore`
+covers `.env`, `*.pem`, `*.key` and the keystores.
+
+### 2 · Send the three that start other people's clocks
+
+**Everything writable is written. What remains is twelve facts only the student
+has**, listed once in `token/docs/launch/SEND-CHECKLIST.md` along with a
+covering note for each.
 
 ```
-L1 DLT ──▶ OTP works ──▶ L44 closed test ──▶ 14 continuous days ──▶ L46 production
-L7 RoPA ─┬▶ L8 counsel brief  ─┬▶ L10 retention  ✔ drafted
-   ✔ done │                    ├▶ L12 Play Data Safety  ✔ drafted
-          │                    └▶ L13 Apple labels      ✔ drafted
-          └▶ L18 vendors + DPAs ✔ drafted
+L1 DLT ────── 1–3 wks ──▶ OTP works ──▶ L44 closed test ──▶ 14 days ──▶ L46 production
+L4 testers ── 3–5 wks ──▶ (parallel; asking can start today)
+L8 counsel ── 2–4 wks ──▶ privacy policy ──▶ store submission
 ```
 
-**Drafted 2026-08-30 in `token/docs/launch/`: `retention-policy.md` (L10),
-`store-privacy-declarations.md` (L12 + L13 in one file, because L13's gate is
-the cross-check), `vendor-inventory.md` (L18).** Each needs its angle brackets
-filled; six retention periods need counsel; the DPAs need requesting.
+**All three can go out the same day.** None blocks another. Send `L1` to *two*
+aggregators at once — L2's whole value is identical template wording, which is
+only free before either has shaped it.
 
-Seven of Wave 0 and Wave 1 now have drafts. **The folder README has the send
-order, and sending is the part that needs you** — every one of them goes to
-somebody outside.
+Nine documents now sit in `token/docs/launch/`. `L7`, `L10`, `L12`, `L13` and
+`L18` are drafted and folded together; the RoPA's §7 findings are all settled.
 
-> **Two hard blockers surfaced by this work, both in `In progress` above.**
-> The store forms answer *"users can request deletion: yes"* and **RoPA F1 says
-> that is currently false in the product** — the erasure transaction throws for
-> any account with a call or a revocation. And the error tracker's scrubbing
-> (L18) ships token codes to a third party until configured, **because** the
-> code was deliberately moved into the request body. Neither is a documentation
-> gap; both are launch blockers.
+### 3 · Then `L16` — the deletion endpoint and page
 
-**Writing side — `W1` may be finished for now.** C0, C1, C2, C3, C6, C7 and C8
-have landed; **two remain**: C4 and C9. `W2` is closed and there is no
-maintenance tail left to slot between units.
+**This is the highest-value thing a technical session can do next**, because
+both store forms already answer *"users can request deletion: yes"*.
 
-**Both remaining modules are gated on something other than available hours**,
-which is new — every earlier `W1` unit could have been written on any day. C4
-follows A6. C9 builds the mechanisms F1 states the obligations for, and F1's
-launch items have not started. **Writing either now means writing against a
-version of the project that does not exist yet**, which is the failure mode
-Phase 3's just-in-time rule was written against.
+`erase_account()` exists, is correct and is tested. **Nothing calls it.** The
+endpoint and the web-accessible deletion page Play requires are both missing,
+and Play tests that answer.
 
-So the honest reading is that **the launch queue is now the work**, and `W1`
-resumes when A6 lands or the launch documents come back from the people they
-are waiting on.
+### Writing side — `W1` is still paused
+
+C0, C1, C2, C3, C6, C7 and C8 have landed; **C4 and C9 remain**, both gated.
+C4 follows A6. C9's gate softened on 2026-08-30 — it teaches *operating* the
+thing, and the migrations plus the erasure and retention functions are now real
+code to teach against — but it still wants the launch documents to have **come
+back**, not merely to have been sent.
+
+`W2` is closed and there is no maintenance tail left to slot between units.
+
+> **The launch queue is the work.** `W1` resumes when A6 lands or the documents
+> come back from the people they are waiting on.
 
 ---
 

@@ -8,15 +8,20 @@
 node scripts/audit.mjs        # ground truth: writes PROGRESS.md
 cat SESSION.md                # what was in flight
 git status && git log -5      # what landed, what is mid-edit
+git -C ../../token status && git -C ../../token log -3   # THE OTHER REPO
 ```
 
-Five steps, in order:
+Six steps, in order:
 
 1. Read this file for architecture and conventions
 2. `node scripts/audit.mjs` — recomputes state from the files
 3. `SESSION.md` — **In progress / Next action / Blocked**
 4. `git status` + `git log -5` — uncommitted work is the only thing at risk
-5. Reconcile and continue
+5. **`git -C ../../token status`** — there are *two* repositories, and the
+   second one **has no remote**, so uncommitted work there is not merely at
+   risk, it is the only copy. This step is easy to skip and was missing from
+   this list until 2026-08-30
+6. Reconcile and continue
 
 **The audit should say `OK`.** It has since 2026-08-18, which is the first time
 in the project's history — so a red audit now means something rather than being
@@ -42,6 +47,7 @@ node scripts/test-schema-scan.mjs
 | `CLAUDE.md` (this file) | Architecture invariants, conventions, product rules | Hand |
 | `HANDOFF.md` | Narrative — why decisions were made, what failed, session log | Hand, appended each session |
 | `ARCHITECTURE.md` + `docs/adr/` | Technical design and the decisions behind it | Hand |
+| `token/api/migrations/` | **The schema.** What the tables actually are — column types, constraints, `ON DELETE` behaviour, the erasure order | Hand, and **applied to a real Postgres before committing** |
 | `TOKEN-TRACK.md` | Lesson map, sequencing, and the phase **plan** — what the work is, never how far it has got | Hand |
 
 **Where "how far along are we?" is answered:** the phase-level headline is in
@@ -266,21 +272,34 @@ writer never did was the disease.**
 `git-learn/`. Its own commits, its own history. `ARCHITECTURE.md`, the ADRs and
 the launch documents live there.
 
-> **⚠ It has no remote and has never been pushed.** Everything in it —
-> fifteen ADRs, `ARCHITECTURE.md`, `docs/launch/`, the Module 01 capstone —
-> exists on one machine. The course repo is public and backed up by being
-> pushed; this one is not backed up at all. Do not assume a `git push` in
-> `token/` will work, and do not report work there as "pushed".
+> **⚠ It has no remote and has never been pushed.** Every ADR,
+> `ARCHITECTURE.md`, all of `docs/launch/`, `api/migrations/` and the Module 01
+> capstone exist on one machine. The course repo is public and backed up by
+> being pushed; this one is not backed up at all. **Do not assume a `git push`
+> in `token/` will work, and never report work there as "pushed".**
+>
+> A private GitHub repo was chosen on 2026-08-30 and **has not been created** —
+> there is no `gh` CLI here, so it needs two commands from the student. It is
+> the first row in `SESSION.md` § *Blocked on*. **Check whether it has happened
+> before repeating the warning above.**
 
 ```
 token/
   app/          ← React Native + Expo (mobile client)
   web/          ← Vite + React (redemption web page)
   api/          ← Node.js + Express/Fastify (backend)
+    migrations/ ← THE SCHEMA OF RECORD. Fifteen tables, run against Postgres 16
+      test/     ← run.sh + schema-test.sql; needs Docker, takes ~40s
   shared/       ← TypeScript types, API client, zod validation schemas
   practice/     ← lesson exercises; 01-token-issuer is the Module 01 capstone
   docs/adr/     ← the decisions, numbered and append-only
+  docs/launch/  ← the launch documents. START AT SEND-CHECKLIST.md
 ```
+
+**Counts of things in `token/` are deliberately absent from this file.** The
+audit does not reach that repo, so any number written here is hand-maintained
+and drifts — which is the same failure `search-index.json` had at 65 of 95.
+`ls token/docs/adr/` is the answer.
 No monorepo tooling — plain folders with tsconfig path aliases.
 `web/` is a plain web app (Vite + React), NOT React Native Web.
 `web/` and `api/` both deploy as containers on the same Coolify VPS.

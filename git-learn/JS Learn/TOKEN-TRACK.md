@@ -767,7 +767,7 @@ whole launch.
 
 | # | Unit | Owns the detail | Gate |
 |---|---|---|---|
-| W1 | **Phase 3 — the C-modules. C0 landed 2026-08-27, C1 on 2026-08-28, C2, C3, C7, C6 and C8 on 2026-08-29**; C5 already existed. **Two remain**: C4 (follows A6) and C9 (follows the launch work). Written **just-in-time**, one module then stop — never batched, and both remaining modules are now genuinely waiting on something | this file, § Phase 3 | A6 for C4; the F1 launch items for C9 |
+| W1 | **Phase 3 — the C-modules. C0 landed 2026-08-27, C1 on 2026-08-28, C2, C3, C7, C6 and C8 on 2026-08-29**; C5 already existed. **Two remain**: C4 (follows A6) and C9 (follows the launch work). Written **just-in-time**, one module then stop — never batched, and both remaining modules are still waiting on something | this file, § Phase 3 | A6 for C4. **C9's gate moved on 2026-08-30**: it teaches operating the thing, and `api/migrations/` plus the erasure and retention functions are now real code it can teach against. It still wants the launch documents to have *come back* from counsel and the aggregator, not merely to have been sent |
 | W3 | **Phase 4 — the operating track.** C6, C7, C8, C9 studied after launch, but instrumented into the product from Phase 3 onward | this file, § Phase 4 | W1 |
 
 > **W2 was the maintenance tail — `--wrong` cases for every self-check that had
@@ -779,12 +779,20 @@ whole launch.
 
 ## What is genuinely blocked
 
-Three things, and only three:
+Four things, and only four:
 
 | What | On whom | Unblocks |
 |---|---|---|
+| **The `token/` remote** | the founder — no `gh` CLI on the machine | Nothing downstream. It is here because **every ADR, the launch documents and `api/migrations/` exist on one disk with no backup**, which outranks anything about ship dates |
 | **L23** — what a block attaches to | the technical founder | L26, and therefore both store submissions |
 | **L45** — replacement vs supplement, and the lead segment | the closed test | store copy stops being provisional |
 | **The Hindi question** inside L8 | counsel | whether English-only launch stands |
 
 Everything else in this queue can be started today by one person.
+
+> **This table answers "who is it waiting on", not "how far along is it".**
+> Per-item status is `SESSION.md`'s job, and the queue tables above have no
+> status column on purpose — a fact with three homes has three chances to be
+> wrong. As of 2026-08-30 several Wave 0 and Wave 1 units have drafts sitting in
+> `token/docs/launch/`; **`SESSION.md` § *Next action* says which**, and
+> `token/docs/launch/SEND-CHECKLIST.md` says what is still needed to send them.
