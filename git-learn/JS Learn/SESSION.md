@@ -346,10 +346,12 @@ is in `docs/archive/session-log-2026-08-17-to-25.md`.
   instruction to another program, and every check in this project reads the
   page instead of running it — so `consent_records` carried a `UUID` foreign
   key against a `SERIAL` primary key for months, in the compliance lesson, in a
-  table Postgres would have refused outright. **Nothing here can find that
-  class of error**, and there are no migrations in `token/` yet, so nothing has
-  ever answered back. Found by compiling the RoPA, whose entire method is *list
-  every field you store and go and look at it*.
+  table Postgres would have refused outright. **Nothing in the course tooling
+  can find that class of error.** Found by compiling the RoPA, whose entire
+  method is *list every field you store and go and look at it*.
+  **`token/api/migrations/` now exists and is applied to a real Postgres before
+  anything is committed** — `sh api/migrations/test/run.sh`. Keep it that way:
+  the moment a table changes only on a page, this failure is available again.
 - **The dangerous foreign key is the one with nothing written on it.** A
   missing `ON DELETE` clause defaults to `NO ACTION`, which blocks exactly like
   `RESTRICT` — and you can scan a whole schema for the word RESTRICT and never
