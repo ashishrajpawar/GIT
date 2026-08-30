@@ -4962,3 +4962,142 @@ resumes when A6 lands or the launch documents come back.
 Audit green. **126/126 verified**, `render-as-authored` 0, all seven suites
 pass, `known-issues.json` still empty. Seven C-modules written in three days
 (C0, C1, C2, C3, C6, C7, C8) plus C5 already existing.
+
+---
+
+## 2026-08-30 — L7, and what happens when a document goes and looks
+
+### The launch queue produced its first landed item
+
+`L7` is the Record of Processing Activities. On paper it is transcription: list
+every field you store, say why you store it, say how long for. The skeleton had
+been sitting in `token/docs/launch/ropa.md` since 2026-08-27 with an instruction
+at the top — *"sit with the technical founder and read the migration files, not
+this table."*
+
+**There are no migration files.** `api/` contains a README. Every `CREATE TABLE`
+in this product exists only as course HTML, which means **no constraint in this
+schema has ever been executed by Postgres.** That became finding F0, and it is
+the one that explains the other six.
+
+So the extraction ran against the eleven lessons that define tables. Fifteen
+live tables plus one that deliberately does not exist. **v0.1 accounted for
+nine.**
+
+### The five tables nobody remembered, and the one column that mattered most
+
+`otp_requests`, `push_receipts`, `consent_records`, `deletion_queue`,
+`revocation_events`. Each was missed for a different and instructive reason —
+`otp_requests` because sign-up feels like a process rather than a store,
+`deletion_queue` because it is *part of* the compliance machinery and nobody
+audits the auditor.
+
+But the row that should worry anyone is **`conversations.holder_session_id`**: a
+`UNIQUE`, durable identifier for a person who never signed up, in no document
+anywhere. Whether it is per conversation or per browser is the difference
+between a holder who redeems two tokens being two unlinkable strangers and being
+one person with a history — **which is precisely the linkage this product exists
+to prevent**, arrived at by accident through a column nobody had written down.
+
+### F1: the erasure right was blocked by the schema, and the code proved it
+
+`ON DELETE RESTRICT` appears on four foreign keys. Each is individually
+justified in its own lesson, with a good argument. **Nobody had written down the
+composite effect**, which is that `DELETE FROM users` fails, and so does
+deleting a token, and so does deleting a conversation.
+
+Then `b10/0002` turned out to have shipped exactly that bug. Its erasure
+transaction deletes seven tables; the chain has eleven. And it was not careless
+— **its own comment says "the order is read off the foreign keys, not off
+intuition"**, and the seven it had were correctly ordered. It missed:
+
+- **`calls`**, because a call feels like an event rather than a record. The
+  foreign key does not care what it feels like.
+- **`revocation_events`**, which references `tokens(id)` with **no `ON DELETE`
+  clause at all**. The default is `NO ACTION`, which blocks exactly like
+  `RESTRICT` — but there is no keyword on the line to catch your eye while you
+  are scanning for the word RESTRICT. **The dangerous foreign key is the one
+  with nothing written on it.**
+- **`otp_requests`**, which has no foreign key, so nothing blocks and nothing
+  cascades. It simply survives, holding the `phone_hash` of the account just
+  erased — and since it is keyed by that hash rather than `user_id`, once
+  `users` is gone **no query finds it**.
+
+**Note the failure shape.** Both blockers *throw* rather than leak, inside a
+`try/catch` that already rolls back. The user sees *"erasure failed — please
+contact support"* and their data stays. **A right implemented with a throwing
+job is worse than one you have not built, because the policy already promises
+it** — and both store forms answer *"users can request deletion: yes"*.
+
+### F4: a table that could never have been created, in the compliance lesson
+
+```
+user_id UUID NOT NULL REFERENCES users(id)   -- users.id is SERIAL
+```
+
+Postgres refuses this outright. It sat inside a registration flow taking a
+`username` and a `password`, in a product that has had neither since the pivot.
+
+**Why it survived is the transferable part.** Every check this project runs
+reads the page: that the code parses, that quiz keys are right, that example
+codes are valid, that widgets are defined before they are called. **Not one of
+them runs a database.** A schema is not source code that happens to be in SQL;
+it is an instruction to another program, and the only review that finds this
+class of error is the one where that program answers back.
+
+It was found by the exercise whose entire method is *go and look at every field*.
+That is the argument for doing the RoPA before you need it rather than the week
+a store asks for it.
+
+### The third blind check, and a rule instead of a fourth
+
+Fixing `b10/0002` meant teaching that you **generate** the foreign-key list from
+`information_schema` rather than reading it off the page. The audit promptly
+reported `information_schema` as a table queried but never created.
+
+That is a false positive of the worst kind — **correct about the text and wrong
+about the world** — and its fix is a one-line ignore entry that nothing would
+ever check again. Which is exactly how the example-code scanner and the alphabet
+check had gone blind in the two commits before it.
+
+So the orphan check became `scripts/schema-scan.mjs` with a 30-assertion suite,
+and the three suppressions it already had — SQL keywords, English prose
+containing "from", SQL inside JS strings — got asserted for the first time. The
+new one is the `pg_` prefix, and the suite pins that `pgboss_jobs` is **still
+judged**, so the hatch cannot widen to two characters.
+
+**Written down as a rule this time**, in `CLAUDE.md`: *a check that can be wrong
+needs a suite before it needs another clause.* The pull is always to add the
+suppression inline — one line, obviously correct, audit goes green immediately.
+**That is the move that produced three blind checks**, and the third was found
+only because the other two had just been fixed.
+
+### Three more documents, because the RoPA unblocks four
+
+`L10` retention, `L12`+`L13` store declarations, `L18` vendors. All drafted.
+The decisions worth surfacing, each recorded with the cost of the rejected
+option:
+
+- **`redemption_events` is anonymised, not deleted.** Dropping `holder_ip` and
+  `holder_name` while keeping `token_id` and `created_at` satisfies both the
+  audit-trail argument its `RESTRICT` was chosen for and the erasure right.
+- **`consent_records` outlives the account by three years**, a deliberate
+  exception to erasure that must be disclosed. *Rejected:* deleting it on
+  request, which means that when someone later alleges you never had consent,
+  "we deleted the proof because they asked" is your answer.
+- **CERT-In's 180 days and the 7-day backup promise do not conflict if you keep
+  them apart.** They collide only when one store does both jobs.
+- **The phone number is "collected" on both store forms.** We keep a hash, but
+  the number goes to the aggregator. Declaring otherwise is a false declaration
+  about an event that plainly happened.
+- **The error tracker ships token codes until scrubbing is configured** —
+  *because* the code was deliberately moved into the request body, away from
+  paths and access logs. The control that protects it creates the exposure one
+  layer out.
+
+### State
+
+Audit green with no warnings. **126/126 verified**, `render-as-authored` 0,
+**nine suites** (250 assertions) pass, `known-issues.json` still empty. Seven
+launch documents drafted in `token/docs/launch/`; sending them is the part that
+needs the founder.
